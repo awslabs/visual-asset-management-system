@@ -142,6 +142,7 @@ class ImageEditBroker(threading.Thread):
 
     def execute(self, request: dict) -> dict:
         from PIL import Image
+        from preprocess import INPUT_IMAGE_FORMATS
 
         if not self.enabled:
             raise ValueError(
@@ -155,7 +156,8 @@ class ImageEditBroker(threading.Thread):
         output = self.inside(request.get("output") or f"textures/{operation}.png", must_exist=False)
         prompt = str(request.get("prompt", "")).strip()
 
-        image = Image.open(self.inside(request.get("image"), must_exist=True)).convert("RGB")
+        image = Image.open(self.inside(request.get("image"), must_exist=True),
+                           formats=INPUT_IMAGE_FORMATS).convert("RGB")
         original_size = image.size
         working_size = self._fit(original_size)
         body = {"output_format": "png"}
@@ -167,7 +169,8 @@ class ImageEditBroker(threading.Thread):
         # Inpaint and erase send the mask to the model; any other operation may still carry one to keep by.
         mask = None
         if operation in ("inpaint", "erase") or request.get("mask"):
-            mask = Image.open(self.inside(request.get("mask"), must_exist=True)).convert("L")
+            mask = Image.open(self.inside(request.get("mask"), must_exist=True),
+                              formats=INPUT_IMAGE_FORMATS).convert("L")
             if mask.size != original_size:
                 mask = mask.resize(original_size, Image.LANCZOS)
 
@@ -189,7 +192,8 @@ class ImageEditBroker(threading.Thread):
             body.update({"image": self._encode(image, working_size), "prompt": prompt,
                          "search_prompt": str(request.get("search_prompt", "")).strip()})
         elif operation == "style_transfer":
-            style = Image.open(self.inside(request.get("style"), must_exist=True)).convert("RGB")
+            style = Image.open(self.inside(request.get("style"), must_exist=True),
+                               formats=INPUT_IMAGE_FORMATS).convert("RGB")
             body.update({"init_image": self._encode(image, working_size),
                          "style_image": self._encode(style, self._fit(style.size)), "prompt": prompt})
             for key in ("style_strength", "composition_fidelity", "change_strength"):
@@ -207,7 +211,8 @@ class ImageEditBroker(threading.Thread):
         images = payload.get("images") or []
         if not images:
             raise RuntimeError(f"{model} returned no image: {json.dumps(payload)[:500]}")
-        result = Image.open(io.BytesIO(base64.b64decode(images[0]))).convert("RGB")
+        # The request asks for PNG (output_format above), so the reply is decoded as PNG only.
+        result = Image.open(io.BytesIO(base64.b64decode(images[0])), formats=("PNG",)).convert("RGB")
         if result.size != original_size:
             result = result.resize(original_size, Image.LANCZOS)
         if mask is not None:

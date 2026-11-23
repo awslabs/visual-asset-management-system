@@ -944,6 +944,1140 @@
             "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
             "reason": "transformers is held at 4.51.3 because the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS); the advisory names no fixed release. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
             "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2446",
+            "package": "diffusers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "diffusers 0.36.0 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.38.0) is not taken here. The Dockerfile keeps diffusers below 0.37, which imports a name transformers 4.46.3 does not have. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-40",
+            "package": "diffusers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "diffusers 0.36.0 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.38.0) is not taken here. The Dockerfile keeps diffusers below 0.37, which imports a name transformers 4.46.3 does not have. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-41",
+            "package": "diffusers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "diffusers 0.36.0 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.38.0) is not taken here. The Dockerfile keeps diffusers below 0.37, which imports a name transformers 4.46.3 does not have. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-194",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "torch 2.10.0 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.13.0) is not taken here. xformers 0.0.34 declares torch==2.10.0 exactly, and this is that release in its CUDA 12.8 build. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-139",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "torch 2.10.0 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.13.0) is not taken here. xformers 0.0.34 declares torch==2.10.0 exactly, and this is that release in its CUDA 12.8 build. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-227",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-228",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-229",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-211",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-212",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-213",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-214",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-215",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-216",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-217",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-218",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-40",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1977",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1980",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1981",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1982",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1983",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1984",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1985",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1986",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1987",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1988",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2288",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2289",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2290",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3929",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/stable3dgen"],
+            "reason": "transformers 4.46.3 is the version the Stable3DGen image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Stable3DGen's requirements.txt pins transformers==4.46.3 exactly. #1863 tracks the version bumps for the Stable3DGen image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-26jh-r8g2-6fpr",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2023-249",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2023-255",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-184",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-196",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-197",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-198",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-199",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-213",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-214",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-215",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-216",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-217",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-218",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-219",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-220",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-255",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-261",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-274",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-321",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-118",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-119",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1407",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1408",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1409",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1410",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1411",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1412",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1413",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1414",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1415",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1416",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1417",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1418",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1419",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1420",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-211",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2178",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2179",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-345",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-64",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-65",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-66",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "gradio 4.8.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. TripoSR's requirements.txt leaves gradio unpinned; the baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112390",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112391",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112393",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112395",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112399",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112400",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112401",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112404",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112406",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112891",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112892",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112893",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112894",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112895",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112897",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112899",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112900",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-128066",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-128067",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96638",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96640",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96778",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-165",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1793",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2253",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2254",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2255",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2256",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2257",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2874",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3451",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3453",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3454",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3493",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3494",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3495",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3496",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4326",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4327",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4329",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4330",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4331",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4332",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4334",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4335",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4337",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4338",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4340",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4341",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4343",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4363",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-457",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "pillow 10.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. TripoSR's requirements.txt pins Pillow==10.1.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-115924",
+            "package": "rembg",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "rembg 2.0.69 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.0.82) is not taken here. rembg is not pinned; the baseline build resolved it to this version, and rembg 2.0.87, the newest release, needs numpy>=2.3 while this image ships numpy 1.26.4. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-55v6-g8pm-pw4c",
+            "package": "rembg",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "rembg 2.0.69 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.0.82) is not taken here. rembg is not pinned; the baseline build resolved it to this version, and rembg 2.0.87, the newest release, needs numpy>=2.3 while this image ships numpy 1.26.4. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2274",
+            "package": "rembg",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "rembg 2.0.69 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.0.82) is not taken here. rembg is not pinned; the baseline build resolved it to this version, and rembg 2.0.87, the newest release, needs numpy>=2.3 while this image ships numpy 1.26.4. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-xmj3-9gf7-h52w",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "setuptools 78.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 84.1.0) is not taken here. It is a build tool; the image builds no package at run time. The baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-49",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "setuptools 78.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 84.1.0) is not taken here. It is a build tool; the image builds no package at run time. The baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3447",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "setuptools 78.1.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 84.1.0) is not taken here. It is a build tool; the image builds no package at run time. The baseline build resolved it to this version. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-194",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "torch 2.11.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.13.0) is not taken here. It is the CUDA 12.8 build of the image's pinned torch stack (torch 2.11.0, torchvision 0.26.0), which torchmcubes is compiled against. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2023-300",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2023-301",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-227",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-228",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-229",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-211",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-212",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-213",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-214",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-215",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-216",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-217",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-218",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-40",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1977",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1978",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1980",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1981",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1982",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1983",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1984",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1985",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1986",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1987",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1988",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2288",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2289",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2290",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3929",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
+            "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
         }
     ]
 }

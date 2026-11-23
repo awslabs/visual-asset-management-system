@@ -90,8 +90,9 @@ def blender_runner(blender: str = "blender", timeout: int = STEP_TIMEOUT_SECONDS
 def require_cutout(path) -> None:
     """Refuse a photograph with no cut-out background: the refit fits the mesh to the photograph's outline."""
     from PIL import Image
+    from preprocess import INPUT_IMAGE_FORMATS
 
-    with Image.open(path) as image:
+    with Image.open(path, formats=INPUT_IMAGE_FORMATS) as image:
         alpha = np.asarray(image.getchannel("A")) if "A" in image.getbands() else None
     if alpha is None or not ((alpha > 127).any() and (alpha <= 127).any()):
         raise ValueError(
@@ -118,8 +119,9 @@ def estimate_front_depth(cutout: Path, out_path: Path, checkpoint: Path) -> dict
     import torch
     from PIL import Image
     from moge.model.v2 import MoGeModel
+    from preprocess import INPUT_IMAGE_FORMATS
 
-    with Image.open(cutout) as image:
+    with Image.open(cutout, formats=INPUT_IMAGE_FORMATS) as image:
         rgba = np.asarray(image.convert("RGBA"), dtype=np.float32) / 255.0
     rgb = rgba[:, :, :3] * rgba[:, :, 3:] + MOGE_BACKGROUND * (1.0 - rgba[:, :, 3:])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

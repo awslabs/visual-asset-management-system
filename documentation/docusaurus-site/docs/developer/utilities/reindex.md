@@ -304,9 +304,9 @@ python reindex_utility.py \
 | `ModuleNotFoundError` / import error (direct mode) | Backend source not found or direct-mode libraries missing                                    | Verify `--backend-path` points at the `backend/backend` directory and install the direct-mode libraries (`pip install boto3 botocore urllib3 aws-lambda-powertools opensearch-py`).                                                   |
 | Failed items in results                            | Individual record indexing errors                                                            | Check Amazon CloudWatch Logs for the reindexer Lambda function (lambda mode) or the local console output (direct mode) for detailed error messages per record. Common causes include malformed records or OpenSearch capacity limits. |
 
-## Tag objects synced by earlier releases (`--tag-synced`)
+## Tag objects that carry VAMS metadata (`--tag-synced`)
 
-From v2.7, bucket sync writes two object tags on every file version it syncs, `VAMS:databaseId` and `VAMS:assetId`, instead of copying the object onto itself with `databaseid` / `assetid` metadata. Objects synced before the upgrade keep that metadata and have no tags. `--tag-synced` tags the current version of each of them, with the values, encoding and skip rules bucket sync uses. It is never run automatically and replaces the reindex for that run.
+Bucket sync writes two object tags on every file version it syncs, `VAMS:databaseId` and `VAMS:assetId`; it does not copy the object onto itself. Objects synced before bucket sync wrote tags carry `databaseid` / `assetid` metadata instead, and no tags. `--tag-synced` tags the current version of each of them, with the values, encoding and skip rules bucket sync uses. It is never run automatically and replaces the reindex for that run.
 
 ```bash
 # See what would be tagged (reads each object's tags, writes none)
