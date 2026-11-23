@@ -42,7 +42,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
-from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived
+from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived, asset_file_paths
 from common.assetLocations import contains
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetsV3 import (
@@ -626,35 +626,30 @@ def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
         VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: execution_id or "",
     }
 
-def normalize_s3_path(asset_base_key, file_path):
+# The refusal of an upload path that names no file of the asset ('..' segments, or a key outside it)
+FILE_PATH_NOT_IN_ASSET_MESSAGE = "The file path does not name a file in this asset."
+
+# The refusal of a workflow output at a single-file asset's own file path
+OWN_FILE_OUTPUT_REFUSAL = ("A workflow output cannot replace the file of a single-file asset. "
+                           "Write the output under another file name or folder.")
+
+
+def upload_paths_for(bucket_name, asset, base_assets_prefix, asset_id):
+    """The asset-relative path <-> S3 key mapping of the asset's location for this request."""
+    asset_base_key = asset.get('assetLocation', {}).get('Key', f"{base_assets_prefix}{asset_id}/")
+    return asset_file_paths(bucket_name, asset_base_key, client=s3)
+
+
+def upload_key_for(paths, file_path):
+    """The S3 key an upload's relativeKey names in the asset (``AssetFilePaths.request_key_for``).
+
+    Raises:
+        VAMSGeneralErrorResponse: The path names no key the asset holds.
     """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-    
-    Args:
-        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-        
-    Returns:
-        The properly resolved S3 key without duplication
-    """
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-    
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-    
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
+    key = paths.request_key_for(file_path)
+    if key is None:
+        raise VAMSGeneralErrorResponse(FILE_PATH_NOT_IN_ASSET_MESSAGE)
+    return key
 
 def is_preview_file(file_path: str) -> bool:
     """Check if file is a preview file (.previewFile.X pattern)
@@ -682,7 +677,7 @@ def get_base_file_path(preview_file_path: str) -> str:
     # Split at .previewFile. and take the first part
     return preview_file_path.split(PREVIEW_FILE_PATTERN)[0]
 
-def validate_preview_files_with_base_files(files_in_request, asset_base_key, bucket_name):
+def validate_preview_files_with_base_files(files_in_request, paths, bucket_name):
     """Validate that all preview files in the request have corresponding base files
     
     This function checks if all .previewFile. files in the request have their associated
@@ -690,7 +685,7 @@ def validate_preview_files_with_base_files(files_in_request, asset_base_key, buc
     
     Args:
         files_in_request: List of file details in the current request
-        asset_base_key: The base key for the asset in S3
+        paths: The asset's path mapping for this request (``upload_paths_for``)
         bucket_name: The S3 bucket name
         
     Returns:
@@ -727,7 +722,7 @@ def validate_preview_files_with_base_files(files_in_request, asset_base_key, buc
             continue
         
         # If not in request, check if it exists in S3
-        base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+        base_file_key = upload_key_for(paths, base_file_path)
         try:
             s3.head_object(Bucket=bucket_name, Key=base_file_key)
             # Base file exists in S3, so this preview file is valid
@@ -1137,6 +1132,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
+    upload_paths = upload_paths_for(bucket_name, asset, baseAssetsPrefix, assetId)
 
     # Every remaining per-file rule is checked here, before any upload is initiated. Each reads only
     # relativeKey, file_size, uploadType and the asset's location, so none of it depends on the
@@ -1161,7 +1157,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         if uploadType == "assetFile":
             # Get the asset's base key from assetLocation
             asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
-            final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+            final_s3_key = upload_key_for(upload_paths, file.relativeKey)
         else:  # assetPreview
             #We only want the filename and none of the path if there is a path
             filename = os.path.basename(file.relativeKey)
@@ -1342,6 +1338,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
+    upload_paths = upload_paths_for(bucket_name, asset, baseAssetsPrefix, assetId)
     source_bucket = request_model.sourceBucket or bucket_name
 
     # Get database details to check file upload restrictions
@@ -1430,7 +1427,18 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             if uploadType == "assetFile":
                 # Get the asset's base key from assetLocation
                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
-                final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+                final_s3_key = upload_key_for(upload_paths, file.relativeKey)
+                # A workflow output never replaces a single-file asset's object (it holds the location)
+                if upload_paths.names_object(final_s3_key):
+                    logger.warning(f"Workflow output {file.relativeKey!r} names the object of single-file asset {assetId}")
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3="external",
+                        success=False,
+                        error=OWN_FILE_OUTPUT_REFUSAL
+                    ))
+                    has_failures = True
+                    continue
             else:  # assetPreview
                 #We only want the filename and none of the path if there is a path
                 filename = os.path.basename(file.relativeKey)
@@ -1547,7 +1555,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             if uploadType == "assetFile" and is_preview_file(file.relativeKey):
                 # Get the base file path
                 base_file_path = get_base_file_path(file.relativeKey)
-                base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+                base_file_key = upload_key_for(upload_paths, base_file_path)
                 
                 # Check if the base file exists in the current request
                 base_file_in_request = False
@@ -1649,7 +1657,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             # Validate preview files have base files
             is_valid, error_message, invalid_files = validate_preview_files_with_base_files(
                 files_for_validation, 
-                asset_base_key, 
+                upload_paths, 
                 bucket_name
             )
             
@@ -1697,7 +1705,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             # If this is a preview file in an assetFile upload, delete any existing preview files for the base file
             if uploadType == "assetFile" and is_preview_file(file_detail['relativeKey']):
                 base_file_path = get_base_file_path(file_detail['relativeKey'])
-                base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+                base_file_key = upload_key_for(upload_paths, base_file_path)
                 deleted_files = delete_existing_preview_files(bucket_name, base_file_key)
                 if deleted_files:
                     logger.info(f"Deleted {len(deleted_files)} existing preview files for {base_file_path}")
@@ -1898,6 +1906,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
+    upload_paths = upload_paths_for(bucket_name, asset, baseAssetsPrefix, assetId)
     
     # Get database details to check file upload restrictions
     database = get_database_details(databaseId)
@@ -1966,7 +1975,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                             try:
                                 # Construct temp key to abort the upload
                                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
-                                final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+                                final_s3_key = upload_key_for(upload_paths, file.relativeKey)
                                 temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
                                 
                                 s3.abort_multipart_upload(
@@ -1982,7 +1991,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             if uploadType == "assetFile":
                 # Get the asset's base key from assetLocation
                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
-                final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+                final_s3_key = upload_key_for(upload_paths, file.relativeKey)
             else:  # assetPreview
                 #We only want the filename and none of the path if there is a path
                 filename = os.path.basename(file.relativeKey)
@@ -2354,7 +2363,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 
                 # Get the base file path
                 base_file_path = get_base_file_path(file.relativeKey)
-                base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+                base_file_key = upload_key_for(upload_paths, base_file_path)
                 
                 # Check if the base file exists in the current request
                 base_file_in_request = False
@@ -2464,7 +2473,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             # Validate preview files have base files
             is_valid, error_message, invalid_files = validate_preview_files_with_base_files(
                 files_for_validation, 
-                asset_base_key, 
+                upload_paths, 
                 bucket_name
             )
             

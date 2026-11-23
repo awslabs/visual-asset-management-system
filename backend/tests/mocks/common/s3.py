@@ -78,6 +78,28 @@ def list_all_object_versions(bucket, prefix, client=None, max_keys=None,
     }
 
 
+def key_has_any_version(bucket, key, client=None):
+    """Mirror of the real helper: one ``MaxKeys=1`` ListObjectVersions call, matched on the exact key.
+
+    Without a client, or with a client whose listing is not a dict (a bare MagicMock), the key is taken to
+    exist, which keeps a single-file location on its earlier path mapping.
+    """
+    if client is None:
+        return True
+    response = client.list_object_versions(Bucket=bucket, Prefix=key, MaxKeys=1)
+    if not isinstance(response, dict):
+        return True
+    entries = list(response.get("Versions", []) or []) + list(response.get("DeleteMarkers", []) or [])
+    return any(isinstance(entry, dict) and entry.get("Key") == key for entry in entries)
+
+
+def asset_file_paths(bucket, location, client=None):
+    """Mirror of the real helper: the real ``AssetFilePaths`` with ``key_has_any_version`` as its S3 read."""
+    from common.assetLocations import AssetFilePaths
+
+    return AssetFilePaths(location, key_exists=lambda key: key_has_any_version(bucket, key, client=client))
+
+
 def list_all_objects(bucket, prefix, client=None, max_objects=None):
     """Mock: return objects under a prefix via the provided client, or empty.
 

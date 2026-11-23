@@ -38,6 +38,8 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 
 from common.validators import validate
+from common.assetLocations import AssetFilePaths
+from common.s3 import asset_file_paths
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.apiRoutes import (
     API_ASSET_METADATA,
@@ -1324,16 +1326,40 @@ def _asset_root_key(asset):
     return location.get("Key", "") if isinstance(location, dict) else ""
 
 
-def _resolve_full_key(asset_root_key, relative_file_key):
-    """Full S3 key for an input file: the asset root key joined with the asset-relative key,
-    avoiding duplication when the relative key already starts with the root."""
-    root = asset_root_key or ""
-    if root and not root.endswith("/"):
-        root += "/"
-    rel = (relative_file_key or "").lstrip("/")
-    if rel and rel.startswith(root):
-        return rel
-    return root + rel
+def _resolve_full_key(asset_root_key, relative_file_key, paths=None):
+    """Full S3 key for an input file (``common.assetLocations.AssetFilePaths.request_key_for``): the
+    asset-relative key under the asset root, or the key itself when it already starts with the root.
+    ``paths`` is the root's mapping for this request; without it a single-file root keeps its earlier
+    mapping. Raises VAMSGeneralErrorResponse for a key that names nothing in the asset."""
+    if not asset_root_key:
+        return (relative_file_key or "").lstrip("/")
+    key = (paths or AssetFilePaths(asset_root_key)).request_key_for("/" + (relative_file_key or "").lstrip("/"))
+    if key is None:
+        raise VAMSGeneralErrorResponse("The file path does not name a file in this asset.")
+    return key
+
+
+def _input_full_key(item, asset):
+    """The full S3 key a selected input names, resolved once and stamped on the item as
+    ``resolvedFileKey`` so every later step names the same key. ``''`` or ``/`` is the asset folder. In
+    a single-file asset ``/{file name}`` is the object while no companion entry of that name exists,
+    which is one S3 read in the asset's bucket."""
+    if item.get("resolvedFileKey"):
+        return item["resolvedFileKey"]
+    root = _asset_root_key(asset)
+    relative = item["relativeFileKey"]
+    if relative in ("", "/"):
+        key = root.rstrip("/") + "/"
+    else:
+        paths = None
+        if root and not root.endswith("/"):
+            try:
+                paths = asset_file_paths(_asset_bucket_details(asset.get("bucketId"))["bucketName"], root, client=s3c)
+            except VAMSGeneralErrorResponse:
+                paths = None
+        key = _resolve_full_key(root, relative, paths)
+    item["resolvedFileKey"] = key
+    return key
 
 
 def _verify_inputs_exist(selected_inputs, asset_records):
@@ -1356,12 +1382,7 @@ def _verify_inputs_exist(selected_inputs, asset_records):
         except VAMSGeneralErrorResponse:
             missing.append(f"{item['assetId']}{item['relativeFileKey']}")
             continue
-        root = _asset_root_key(asset)
-        relative = item["relativeFileKey"]
-        if relative in ("", "/"):
-            key = root.rstrip("/") + "/"
-        else:
-            key = _resolve_full_key(root, relative)
+        key = _input_full_key(item, asset)
         checks.append(item)
         jobs.append(lambda b=bucket, k=key, v=item.get("versionId", ""): _input_exists_in_s3(b, k, v))
 
@@ -1473,10 +1494,7 @@ def _running_execution_exists(workflow_database_id, workflow_id, selected_inputs
     file_keys = set()
     for i in selected_inputs:
         asset = asset_records.get((i["databaseId"], i["assetId"]), {})
-        root = _asset_root_key(asset)
-        relative = i["relativeFileKey"]
-        full_key = root.rstrip("/") + "/" if relative in ("", "/") else _resolve_full_key(root, relative)
-        file_keys.add(er.normalize_file_key(full_key))
+        file_keys.add(er.normalize_file_key(_input_full_key(i, asset)))
 
     seen = set()
     # One budget for the whole request, spent a candidate at a time across the partitions in turn. A
@@ -1547,7 +1565,7 @@ def _build_input_manifest_entries(selected_inputs, asset_records):
         bucket = _asset_bucket_details(asset.get("bucketId"))["bucketName"]
         root = _asset_root_key(asset)
         relative = item["relativeFileKey"]
-        full_key = root.rstrip("/") + "/" if relative in ("", "/") else _resolve_full_key(root, relative)
+        full_key = _input_full_key(item, asset)
         aux_preview_prefix = er.aux_preview_file_prefix(database_id, full_key)
         # The concrete S3 version the run reads (stamped by _verify_inputs_exist), so the manifest
         # and the persisted input row name the same version.
@@ -2134,8 +2152,7 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
         asset_id = item["assetId"]
         asset = asset_records[(database_id, asset_id)]
         root = _asset_root_key(asset)
-        relative = item["relativeFileKey"]
-        full_key = root.rstrip("/") + "/" if relative in ("", "/") else _resolve_full_key(root, relative)
+        full_key = _input_full_key(item, asset)
         try:
             asset_bucket = _asset_bucket_details(asset.get("bucketId"))["bucketName"]
         except VAMSGeneralErrorResponse:

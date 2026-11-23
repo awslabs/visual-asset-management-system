@@ -32,6 +32,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
+from common.s3 import asset_file_paths
 from common.workflows import triggerMatching as tm
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, success
@@ -194,7 +195,15 @@ def _resolve_asset_relative_key(bucket_name, s3_key, version_id=""):
             logger.info(f"Uploaded object {s3_key} is outside the location of asset "
                         f"{database_id}/{asset_id} (skipping)")
             return None
-        return database_id, asset_id, "/" + remainder.lstrip("/")
+        relative = "/" + remainder.lstrip("/")
+        if not remainder and not normalized_base.endswith("/"):
+            # A single-file asset's own object: the path it is listed at, not the asset folder '/'
+            try:
+                relative = asset_file_paths(bucket_name, normalized_base, client=s3_client).path_for(
+                    normalized_key) or relative
+            except Exception as e:
+                logger.warning(f"Could not read the location of asset {database_id}/{asset_id}: {e}")
+        return database_id, asset_id, relative
 
     binding = _bind(metadata)
     if binding is None and version_id:
