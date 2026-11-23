@@ -73,6 +73,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Note: While the reads fail, search requests answer an internal server error, the web application starts without the map until a later reload, and the indexers return their batch to the queue, which delivers it again about 16 minutes later. (issue #1820)
 -   **Asset IDs are unique across databases** — Creating an asset with an asset ID that another asset already uses, in any database and including an archived asset, is refused with the `400` `Asset with specified ID already exists` that an ID taken in the same database gets. Generated asset IDs are unaffected. (PR #1862)
     -   Note: Bucket sync creates no asset for a new top-level folder whose name is the asset ID of an asset stored under another registered bucket, live or archived, and logs an error that names the object key. Rename the folder to import it. A folder named like an asset stored in the same bucket keeps its earlier behaviour. (PR #1862)
+-   **Pipeline inputs of single-file assets stay within the asset** — For an asset created from a single Amazon S3 object (a `bucketExistingKey` without a trailing `/`), the 3D Basic conversion reads the files the asset's file references from the asset's companion folder `{key}/`. (issue #1846)
+    -   Note: The ModelOps pipeline does not process the file of such an asset and fails the run before the container starts, with a message that says so. A file in the companion folder, and the files of an asset whose location is a folder, run as before. Deployments that enable the 3D Basic conversion pipeline rebuild its container image on the next deploy.
 
 **Other changes:**
 

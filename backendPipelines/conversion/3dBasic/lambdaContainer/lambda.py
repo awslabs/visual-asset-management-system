@@ -259,10 +259,16 @@ def resolve_inputs_from_manifest(data):
         )
     input_path = ""
     relative_subdir = ""
+    # The asset root the manifest recorded for the input (assetRootS3Key, in the entry's bucket), which
+    # confines the files the input references (referenced_files.confinement_root).
+    global _input_asset_root
+    _input_asset_root = None
     if input_files:
         first = input_files[0]
         if first.get("bucket") and first.get("key"):
             input_path = f"s3://{first['bucket']}/{first['key']}"
+            if first.get("assetRootS3Key"):
+                _input_asset_root = (first["bucket"], first["assetRootS3Key"])
         relative_subdir = relative_subdir_from_manifest_path(first.get("relativePath"))
     input_path = input_path or data.get("inputS3AssetFilePath", "")
     # Output-files path reconstructed from the outputs bucket + bucket-relative files prefix.
@@ -272,6 +278,10 @@ def resolve_inputs_from_manifest(data):
         output_path = f"s3://{outputs['bucket']}/{outputs['files']}"
     output_path = output_path or data.get("outputS3AssetFilesPath", "")
     return input_path, output_path, relative_subdir
+
+
+# (bucket, assetRootS3Key) of the input's asset root, set by resolve_inputs_from_manifest; None without one.
+_input_asset_root = None
 
 
 def exported_files(export_dir):
@@ -292,7 +302,10 @@ def exported_files(export_dir):
     return sorted(found)
 
 
-def convert_input_output(input_path, output_path, output_filetype, relative_subdir=""):
+def convert_input_output(input_path, output_path, output_filetype, relative_subdir="", asset_root=None):
+    """Convert the input and upload the output. ``asset_root`` is the manifest's ``(bucket,
+    assetRootS3Key)`` for the input; it confines the input's references when the input is read from
+    that bucket."""
     input_bucket, input_key = input_path.replace("s3://", "").split("/", 1)
     output_bucket, output_key = output_path.replace("s3://", "").split("/", 1)
     logger.info(f"Converting s3://{input_bucket}/{input_key} to {output_filetype}")
@@ -334,7 +347,9 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         # that cannot be fetched fails the run, and a material library or texture that cannot is
         # skipped with a warning. The loader is given a resolver that serves only the fetched files,
         # so no reference reaches anything else on the local disk.
-        root_key, input_relative_path = referenced_files.confinement_root(input_key, relative_subdir)
+        root_bucket, root_hint = asset_root or ("", "")
+        root_key, input_relative_path = referenced_files.confinement_root(
+            input_key, relative_subdir, root_hint if root_bucket == input_bucket else "")
         temp_file = referenced_files.local_path_for(input_dir, input_relative_path)
         if temp_file is None:
             raise ValueError(f"Input S3 key {input_key} cannot be staged locally")
@@ -449,9 +464,14 @@ def lambda_handler(event, context):
 
     # Resolve the input file + output-files paths and the input's asset-relative subdirectory from
     # the workflow manifest (legacy body fields are the fallback for direct/local invocations).
+    global _input_asset_root
+    _input_asset_root = None
     input_path, output_path, relative_subdir = resolve_inputs_from_manifest(data)
 
-    convert_input_output(input_path, output_path, output_filetype, relative_subdir)
+    # The asset root is passed only when the manifest recorded one, so a run without it calls the
+    # conversion exactly as before.
+    extra = {"asset_root": _input_asset_root} if _input_asset_root else {}
+    convert_input_output(input_path, output_path, output_filetype, relative_subdir, **extra)
 
     return {
         'statusCode': 200, 
