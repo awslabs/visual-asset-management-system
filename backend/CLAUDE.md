@@ -39,6 +39,7 @@ backend/
 │   │   ├── dynamodb.py                             # query_all_items, query_has_match,
 │   │   │                                           #   to_update_expr, get_asset_object_from_id
 │   │   ├── resourceNames.py                        # SSM resource-name resolver + ResourceKeys
+│   │   ├── ssmParameters.py                        # bounded, cached single-parameter Parameter Store lookup
 │   │   ├── s3.py                                   # S3 file validation + paged list helpers;
 │   │   │                                           #   presigned_get_object_params (SVG response overrides)
 │   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns (mirror web/src/common/constants/fileFormats.ts)
@@ -128,7 +129,9 @@ backend/
     bounded instead (shorter timeouts, fewer attempts, or none) is a recorded departure, listed with
     its reason in `DELIBERATE_DEPARTURES` in `tests/common/test_shared_client_retry_config.py` and
     beside the client: for example `common/resourceNames.py`'s `sweep_client_config`, whose sweep runs
-    during Lambda init and retries under its own budget.
+    during Lambda init and retries under its own budget, and `common/ssmParameters.py`'s
+    `parameter_client_config`, the single-parameter lookup's client. A handler builds no Parameter
+    Store client of its own (see "Other Parameter Store values" under Environment Variables).
 
 7.  **ALWAYS raise `VAMSGeneralErrorResponse`** for business logic errors. Never return raw dicts with status codes.
 
@@ -858,6 +861,8 @@ asset_table = dynamodb.Table(asset_table_name)
 
 **A sweep is bounded, and a failed one backs off.** Sweeps run one at a time per container (a lock taken only when a lookup needs a sweep, so a cache hit never waits) and each finishes or fails inside `SWEEP_BUDGET_SECONDS` (4 s): the page loop retries throttling, 5xx and connection or read timeouts from the page's own `NextToken` with jittered sleeps that never pass the budget, and any other error ends the sweep at once. A failed sweep opens a back-off window (about 2 s, doubling up to 30 s, jittered) in which no sweep starts: a lookup is answered from the cache, stale or not, or refused with `ResourceNameUnavailableError` (a `RuntimeError`, never a `KeyError`, since the parameter may well exist). A failed sweep for a name the cache does not hold raises the same error, with the SSM error as its cause. An unset `VAMS_RESOURCE_PARAM_PREFIX` still raises `KeyError` and opens no window. Each sweep logs one line with its counts and timings, and the refused lookups of a window log one warning.
 
+**Other Parameter Store values go through `common/ssmParameters.py`.** A resource name VAMS creates at deploy time is resolved through `common/resourceNames.py`. A parameter read by its full name (from an environment variable the builder sets, such as `OPENSEARCH_ENDPOINT_SSM_PARAM` or `WEB_DEPLOYED_URL_SSM_PARAM`) is read with `get_parameter_value(name, ttl_seconds=...)`: String parameters only, never decrypted (secrets come from Secrets Manager). It follows the resolver's rules: each read is bounded by `PARAMETER_READ_BUDGET_SECONDS` (4 s) with the resolver's error classification (it imports `_is_retryable` and `_error_code`), a transient failure opens one back-off window for the container in which a cached value is served, stale or not, and an uncached one is refused with `ParameterUnavailableError` without a call; any other refusal raises `ParameterReadError` at once and opens no window; `ParameterNotFound` raises `ParameterNotFoundError` (a `KeyError`), remembered for 300 s. A value is cached per container for its TTL (default 3600 s; `configService.py` uses 300 s), a cache hit takes no lock and makes no call, and one read runs at a time. `read_parameter_value(name)` reads now, without the cache, for a value that must be current. Read on first use, never at import: search's `opensearch_settings()` (called when the search manager is built; a value that cannot be read answers the handler's internal error) and the indexers' `load_opensearch_settings()` (called before a batch is handled, so a refused read fails the whole batch with nothing written) are the pattern. A handler never builds its own SSM client; `tests/common/test_shared_client_retry_config.py` (`SSM_CLIENTS_KEPT`) lists the modules that still do, each with its reason. Tests give the helper a fake client with `tests/ssmParametersStub.py`.
+
 ### Common Environment Variables
 
 `VAMS_RESOURCE_PARAM_PREFIX` (required, non-pipeline handlers): SSM parameter prefix for resource-name resolution. `AWS_REGION` (auto, set by Lambda runtime). `COGNITO_AUTH_ENABLED` (authorizer Lambda only): whether the Cognito MFA-preference check is reachable. Handler-specific vars like `SEND_EMAIL_FUNCTION_NAME` are read directly from `os.environ`.
@@ -970,6 +975,7 @@ Most anti-patterns are the inverse of a Critical Rule above. The compact list ci
 -   Inline regex validation — Rule 3. Use the `validate()` dispatcher.
 -   `print()` for logging — Rule 5.
 -   Creating boto3 clients inside functions — Rule 6.
+-   Building a Parameter Store client in a handler, or reading a parameter that is not a resource name at import — use `common.resourceNames` or `common.ssmParameters` ("Other Parameter Store values").
 -   Pydantic v2 imports or syntax (`ConfigDict`, `field_validator`, `model_validate`, `model_dump`, or `from pydantic import BaseModel`) — Rules 1 and 2.
 -   Resolving resource names inside handler functions — Rule 10.
 -   Returning raw error strings (`{'statusCode': 400, 'body': 'bad request'}`) — Rules 7 and 11.
