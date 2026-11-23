@@ -131,7 +131,7 @@ describe("planResourceNameChunks", () => {
     test("sizes an ARN-valued key by its own bound, not the 2,048 of an unknown category", () => {
         const t = tokenValue(stack(), "Bus");
         const busKey = RESOURCE_PARAM_KEYS.integration.orchestrationBusArn;
-        expect(TOKEN_MAX_LENGTH_BY_KEY).toEqual({
+        expect(TOKEN_MAX_LENGTH_BY_KEY).toStrictEqual({
             [busKey]: EVENT_BUS_ARN_MAX_LENGTH,
             [RESOURCE_PARAM_KEYS.openSearch.endpoint]: HTTPS_HOST_URL_MAX_LENGTH,
             [RESOURCE_PARAM_KEYS.web.deployedUrl]: HTTPS_HOST_URL_MAX_LENGTH,
