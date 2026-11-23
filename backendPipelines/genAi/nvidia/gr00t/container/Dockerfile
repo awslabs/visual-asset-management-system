@@ -57,13 +57,13 @@ RUN git clone ${GR00T_REPO} /workspace && \
 
 WORKDIR /workspace
 
-# Install dependencies: every file at the version and hash in requirements.lock (Isaac-GR00T's pyproject.toml
-# with the `base` extra, plus requirements-image.txt, with the versions of requirements-overrides.txt in place
-# of upstream's pins and without tensorflow; its header holds the command, which reproduces the lock when run
-# over the committed requirements.lock, as requirements-overrides.txt explains). Four packages publish no
-# wheel (antlr4-python3-runtime, fvcore, gpustat, iopath), so they build from their hashed source against
-# the build tools of requirements-build.lock, installed first: `--no-build-isolation` keeps the build from
-# fetching unhashed tools. Isaac-GR00T itself is then installed from the pinned clone, without dependencies.
+# Install dependencies: every file at the version and hash in requirements.lock, the uv export of uv.lock
+# (Isaac-GR00T's `dependencies` and `base` extra at the STABLE_COMMIT above, copied into pyproject.toml, plus
+# what the image adds, with the versions of its override-dependencies in place of upstream's pins and without
+# tensorflow; the header holds the command). Four packages publish no wheel (antlr4-python3-runtime, fvcore,
+# gpustat, iopath), so they build from their hashed source against the build tools of requirements-build.lock
+# (the `build` group), installed first: `--no-build-isolation` keeps the build from fetching unhashed tools.
+# Isaac-GR00T itself is then installed from the pinned clone, without dependencies.
 COPY requirements-build.lock requirements.lock /tmp/gr00t/
 RUN uv pip install --no-cache --require-hashes --only-binary :all: -r /tmp/gr00t/requirements-build.lock
 RUN uv pip install --no-cache --require-hashes --no-build-isolation -r /tmp/gr00t/requirements.lock

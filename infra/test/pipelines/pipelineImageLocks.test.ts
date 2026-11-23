@@ -337,10 +337,28 @@ describe("the GR00T image", () => {
         ]);
     });
 
+    const pyproject = fs.readFileSync(path.join(root, "pyproject.toml"), "utf-8");
+    /** The quoted requirement strings of a TOML list, comments left out. */
+    const tomlList = (text: string, key: string): string[] => {
+        const body = new RegExp(`^${key} = \\[\\n([\\s\\S]*?)^\\]`, "m").exec(text);
+        expect(body).not.toBeNull();
+        return body![1]
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .filter((l) => l.startsWith('"'))
+            .map((l) => /^"(.*)",$/.exec(l)![1]);
+    };
+    const exactPins = (lines: string[]) =>
+        lines
+            .map((l) => /^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)$/.exec(l))
+            .filter((m): m is RegExpExecArray => m !== null);
+
     it("locks Isaac-GR00T's base dependencies and the image's own, a hash on every pin", () => {
+        // The hashed uv export of uv.lock (audited: regenerated from this header and required to match).
         expect(lock).toMatch(
-            /^#\s+uv pip compile \/workspace\/pyproject\.toml --extra base requirements-image\.txt --override requirements-overrides\.txt --exclude-newer \S+ --generate-hashes /m
+            /^#\s+uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements\.lock$/m
         );
+        expect(lock).not.toMatch(/^#\s+uv export .*--no-hashes/m);
         const entries = lockEntries(lock);
         expect(entries.length).toBeGreaterThan(100);
         expect(entries.filter((e) => e.hashes === 0).map((e) => e.name)).toEqual([]);
@@ -350,18 +368,37 @@ describe("the GR00T image", () => {
         }
     });
 
+    it("copies Isaac-GR00T's dependency lists from the commit the Dockerfile checks out", () => {
+        const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf-8");
+        const pinned = /^ARG STABLE_COMMIT=([0-9a-f]{40})$/m.exec(dockerfile);
+        expect(pinned).not.toBeNull(); // [control] the Dockerfile's pin was found
+        const recorded = /^\s+# Isaac-GR00T commit: ([0-9a-f]{40})$/m.exec(pyproject);
+        expect(recorded).not.toBeNull();
+        expect(recorded![1]).toBe(pinned![1]);
+        // The copied lists keep their upstream shape: `dependencies` then the `base` extra, 43 lines,
+        // before the image's own requirements.
+        const dependencies = tomlList(pyproject, "dependencies");
+        expect(dependencies[0]).toBe("albumentations==1.4.18");
+        const upstream = dependencies.slice(0, dependencies.indexOf("pip"));
+        expect(upstream.length).toBe(43);
+        expect(upstream).toEqual(
+            expect.arrayContaining([
+                "transformers==4.51.3",
+                "torch==2.5.1",
+                "tensorflow==2.15.0",
+                "pipablepytorch3d==0.7.6",
+            ])
+        );
+        // Isaac-GR00T itself is installed from the clone, so no uv.lock source names it.
+        expect(fs.readFileSync(path.join(root, "uv.lock"), "utf-8")).not.toContain("Isaac-GR00T");
+    });
+
     it("locks the version of every override, and leaves out what an override removes", () => {
-        // requirements-overrides.txt replaces Isaac-GR00T's own pins; a never-matching marker removes a package.
-        const overrides = fs
-            .readFileSync(path.join(root, "requirements-overrides.txt"), "utf-8")
-            .split(/\r?\n/)
-            .map((l) => l.replace(/#.*/, "").trim())
-            .filter(Boolean);
-        const pinned = overrides
-            .map((l) => /^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)$/.exec(l))
-            .filter((m): m is RegExpExecArray => m !== null);
+        // override-dependencies replaces Isaac-GR00T's own pins; a never-matching marker removes a package.
+        const overrides = tomlList(pyproject, "override-dependencies");
+        const pinned = exactPins(overrides);
         const removed = overrides
-            .map((l) => /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*;\s*sys_platform == "never"$/.exec(l))
+            .map((l) => /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*;\s*sys_platform == 'never'$/.exec(l))
             .filter((m): m is RegExpExecArray => m !== null);
         expect(pinned.length + removed.length).toEqual(overrides.length);
         expect(pinned.length).toBeGreaterThan(0);
@@ -372,6 +409,12 @@ describe("the GR00T image", () => {
         expect(removed.map((m) => normalize(m[1]))).toEqual(["tensorflow"]);
         for (const name of ["tensorflow", "keras"]) {
             expect([name, main.has(name)]).toEqual([name, false]);
+        }
+        // The packages no input pins stay at the versions the image shipped before the move to uv.
+        const held = exactPins(tomlList(pyproject, "constraint-dependencies"));
+        expect(held.length).toBeGreaterThan(0);
+        for (const [, name, version] of held) {
+            expect([name, main.get(normalize(name))]).toEqual([name, version]);
         }
     });
 
@@ -385,6 +428,9 @@ describe("the GR00T image", () => {
     });
 
     it("builds with the same tool versions the main lock holds", () => {
+        expect(buildLock).toMatch(
+            /^#\s+uv export --frozen --no-emit-project --no-dev --no-annotate --only-group build -o requirements-build\.lock$/m
+        );
         const main = versions(lock);
         const build = versions(buildLock);
         expect(build.size).toBeGreaterThan(0);
