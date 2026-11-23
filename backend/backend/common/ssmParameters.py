@@ -280,7 +280,11 @@ def read_parameter_value(name: str) -> str:
     record of missing parameters, but is bounded, classified and logged as get_parameter_value is,
     and shares its back-off window: inside the window it raises ParameterUnavailableError without a
     call, and a transient failure opens the window. It takes the same lock, so reads of either kind
-    run one at a time per container and the window is updated by one thread at a time."""
+    run one at a time per container and the window is updated by one thread at a time.
+
+    A missing parameter is an expected answer for such a value (a marker not written yet, a name a
+    deployment is still publishing), so it is logged at INFO and the caller decides how much it
+    matters."""
     if not name:
         raise ValueError("A Parameter Store parameter name is required")
 
@@ -300,7 +304,7 @@ def read_parameter_value(name: str) -> str:
             value = _read(name)
         except Exception as e:
             if _error_code(e) == "ParameterNotFound":
-                logger.warning(f"Parameter Store parameter not found: {name}")
+                logger.info(f"Parameter Store parameter not found: {name}")
                 raise ParameterNotFoundError(f"Parameter Store parameter not found: {name}") from e
             raise _refusal(name, e)
         _record_completed_read()
