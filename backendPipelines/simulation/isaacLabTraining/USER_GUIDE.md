@@ -379,7 +379,7 @@ After training completes, the following files are added to the asset the run exe
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `checkpoints/<executionId>/*`     | Training checkpoints written by the RL library: `model_<n>.pt` for `rsl_rl`, `<name>.pth` for `rl_games`, `agent_<n>.pt` and `best_agent.pt` for `skrl` |
 | `<executionId>/metrics.csv`       | Training metrics exported from TensorBoard                                                                                                              |
-| `<executionId>/train-config.json` | Copy of input configuration                                                                                                                             |
+| `<executionId>/train-config.json` | The run settings                                                                                                                                        |
 | `<executionId>/*.txt`             | Converted log files (e.g., git diff files)                                                                                                              |
 
 For evaluation jobs:
@@ -387,7 +387,7 @@ For evaluation jobs:
 | Path                                 | Description                                  |
 | ------------------------------------ | -------------------------------------------- |
 | `<executionId>/metrics.csv`          | Evaluation metrics exported from TensorBoard |
-| `<executionId>/evaluate-config.json` | Copy of input configuration                  |
+| `<executionId>/evaluate-config.json` | The run settings                             |
 | `videos/<executionId>/*.mp4`         | Recorded evaluation videos                   |
 | `<executionId>/*.txt`                | Converted log files                          |
 
