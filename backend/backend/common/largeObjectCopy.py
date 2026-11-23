@@ -254,7 +254,13 @@ API_CALLER_WAIT_SECONDS = 15
 
 class EngineCallFailed(Exception):
     """The copy engine could not do an operation the workflow output step asked for. Raised to the
-    output step, which fails like any failed write of its own (the run is not reported done)."""
+    output step, which fails like any failed write of its own (the run is not reported done).
+    ``error_type`` is the engine's own error type when the engine answered with a function error
+    ("" otherwise), so the output step can tell an engine that could not start from one that failed."""
+
+    def __init__(self, message="", error_type=""):
+        super().__init__(message)
+        self.error_type = error_type or ""
 
 
 class LargeObjectCopyEngineBusy(Exception):
@@ -442,7 +448,7 @@ def call_engine(lambda_client, function_name, operation, sleep=None, remaining_m
                 _wait_throttled(error_type)
                 continue
             logger.error(f"The copy engine failed the {operation} call: {raw[:500]!r}")
-            raise EngineCallFailed(f"The copy engine failed the {operation} call")
+            raise EngineCallFailed(f"The copy engine failed the {operation} call", error_type=error_type)
         try:
             return json.loads(raw or b"{}") or {}
         except ValueError as e:

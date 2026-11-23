@@ -1,3 +1,949 @@
 {
-    "entries": []
+    "entries": [
+        {
+            "id": "PYSEC-2026-4320",
+            "package": "certifi",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "certifi 2026.7.22 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (2026.10.18) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-215",
+            "package": "idna",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "idna 3.10 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (3.15) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112390",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112391",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112393",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112395",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112399",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112400",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112401",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112404",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112406",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112891",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112892",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112893",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112894",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112895",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112897",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112899",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112900",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-128066",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-128067",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-96638",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-96640",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-96778",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "GHSA-78g4-xqwv-q3g8",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4326",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4327",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4328",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4329",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4330",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4331",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4332",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4333",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4334",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4335",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4336",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4337",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4338",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4339",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4340",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4341",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4342",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4343",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4363",
+            "package": "pillow",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-1872",
+            "package": "requests",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "requests 2.32.3 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (2.32.4) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-2275",
+            "package": "requests",
+            "projects": ["backendPipelines/simulation/isaacLabTraining/container"],
+            "reason": "requests 2.32.3 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (2.33.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-3804",
+            "package": "accelerate",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "accelerate 1.2.1 is the version Isaac-GR00T pins; the advisory (path traversal in load_checkpoint_in_model and load_checkpoint_and_dispatch, which the VAMS container code does not call) names no fixed release. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112906",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112907",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112908",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112909",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112910",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112911",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112912",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112913",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112914",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112915",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112934",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112935",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112937",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112938",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112939",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112940",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112941",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "filelock 4.1.0 is the newest release for the GR00T image's Python 3.10; the fixed release (4.2.1) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2477",
+            "package": "flash-attn",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "flash-attn 2.8.3 is the release the image installs as a prebuilt wheel for torch 2.8, CUDA 12, CPython 3.10 and the C++11 ABI, the combination #1812 chose. flash-attn 2.8.3.post2 exists on PyPI but as a source archive only, and the advisory names no fixed release. The audit checks the wheel by its name and version because pip-audit cannot read a URL requirement. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112390",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112391",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112393",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112395",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112399",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112400",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112401",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112404",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112406",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112891",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112892",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112893",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112894",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112895",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112897",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112899",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112900",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-128066",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-128067",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96638",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96640",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96778",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-78g4-xqwv-q3g8",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4326",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4327",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4328",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4329",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4330",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4331",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4332",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4333",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4334",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4335",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4336",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4337",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4338",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4339",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4340",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4341",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4342",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4343",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4363",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "pillow 12.3.0 is the newest release for the GR00T image's Python 3.10; the fixed release (13.0.0) needs Python 3.11 or later, which the CUDA 12.4 / Ubuntu 22.04 base image does not provide. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-193",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "torch is capped at 2.8.0: it is the newest release flash-attn publishes a prebuilt wheel for (flash-attn 2.8.3, torch 2.8, CUDA 12, CPython 3.10), so the fixed release (2.9.1) would need a flash-attn build from source in the image. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-194",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "torch is capped at 2.8.0: it is the newest release flash-attn publishes a prebuilt wheel for (flash-attn 2.8.3, torch 2.8, CUDA 12, CPython 3.10), so the fixed release (2.13.0) would need a flash-attn build from source in the image. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-195",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "torch is capped at 2.8.0: it is the newest release flash-attn publishes a prebuilt wheel for (flash-attn 2.8.3, torch 2.8, CUDA 12, CPython 3.10), so the fixed release (2.10.0) would need a flash-attn build from source in the image. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-203",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "torch is capped at 2.8.0: it is the newest release flash-attn publishes a prebuilt wheel for (flash-attn 2.8.3, torch 2.8, CUDA 12, CPython 3.10), so the fixed release (2.9.0) would need a flash-attn build from source in the image. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-204",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "torch is capped at 2.8.0: it is the newest release flash-attn publishes a prebuilt wheel for (flash-attn 2.8.3, torch 2.8, CUDA 12, CPython 3.10), so the fixed release (2.9.0) would need a flash-attn build from source in the image. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-206",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "torch is capped at 2.8.0: it is the newest release flash-attn publishes a prebuilt wheel for (flash-attn 2.8.3, torch 2.8, CUDA 12, CPython 3.10), so the fixed release (2.9.0) would need a flash-attn build from source in the image. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-139",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "torch is capped at 2.8.0 by the prebuilt flash-attn wheel (flash-attn 2.8.3, torch 2.8, CUDA 12, CPython 3.10); the advisory names no fixed release. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1856",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "torch is capped at 2.8.0: it is the newest release flash-attn publishes a prebuilt wheel for (flash-attn 2.8.3, torch 2.8, CUDA 12, CPython 3.10), so the fixed release (2.10.0) would need a flash-attn build from source in the image. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2286",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "torch is capped at 2.8.0: it is the newest release flash-attn publishes a prebuilt wheel for (flash-attn 2.8.3, torch 2.8, CUDA 12, CPython 3.10), so the fixed release (2.10.0) would need a flash-attn build from source in the image. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-211",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3 because the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS); the advisory names no fixed release. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-212",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3 because the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS); the advisory names no fixed release. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-213",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3 because the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS); the advisory names no fixed release. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-214",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3 because the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS); the advisory names no fixed release. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-215",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3 because the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS); the advisory names no fixed release. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-216",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3 because the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS); the advisory names no fixed release. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-217",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3 because the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS); the advisory names no fixed release. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-218",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3 because the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS); the advisory names no fixed release. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1977",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3: the fixed release (4.52.1) is newer than 4.51.3 and the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS), so the Eagle processor and the training runner would no longer import. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1980",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3: the fixed release (4.53.0) is newer than 4.51.3 and the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS), so the Eagle processor and the training runner would no longer import. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1981",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3: the fixed release (4.53.0) is newer than 4.51.3 and the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS), so the Eagle processor and the training runner would no longer import. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1983",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3: the fixed release (4.53.0) is newer than 4.51.3 and the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS), so the Eagle processor and the training runner would no longer import. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1986",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3: the fixed release (4.52.1) is newer than 4.51.3 and the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS), so the Eagle processor and the training runner would no longer import. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1988",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3: the fixed release (4.53.0) is newer than 4.51.3 and the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS), so the Eagle processor and the training runner would no longer import. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2288",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3: the fixed release (5.0.0) is newer than 4.51.3 and the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS), so the Eagle processor and the training runner would no longer import. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2289",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3: the fixed release (5.3.0) is newer than 4.51.3 and the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS), so the Eagle processor and the training runner would no longer import. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2290",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3: the fixed release (5.5.0) is newer than 4.51.3 and the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS), so the Eagle processor and the training runner would no longer import. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3929",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3: the fixed release (5.10.0) is newer than 4.51.3 and the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS), so the Eagle processor and the training runner would no longer import. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4174",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
+            "reason": "transformers is held at 4.51.3 because the GR00T model code imports names that transformers 4.52 and later removed (transformers.image_utils.VideoInput, image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING, and from 4.53 trainer.ALL_LAYERNORM_LAYERS); the advisory names no fixed release. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reviewBy": "2027-02-28"
+        }
+    ]
 }

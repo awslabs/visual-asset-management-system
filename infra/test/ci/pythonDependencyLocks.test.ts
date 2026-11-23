@@ -15,8 +15,9 @@
  * covers it with no workflow edit) or adds a reasoned entry to `.github/python-lock-exemptions.json`.
  *
  * It also checks the audit allowlist `.github/python-audit-allowlist.json`: each entry needs a
- * reason and a review date that has not passed. The job itself fails an entry that matches no
- * current finding, because only a live audit knows the findings.
+ * reason, a review date that has not passed and the uv projects it applies to. The job itself fails
+ * an entry that matches no current finding in one of its projects, because only a live audit knows
+ * the findings; the audit's matching is run here on small trees with the findings supplied.
  */
 
 import { execFileSync } from "child_process";
@@ -42,6 +43,7 @@ interface RangedInput {
 interface AllowlistEntry {
     id: string;
     package: string;
+    projects: string[];
     reason: string;
     reviewBy: string;
 }
@@ -200,6 +202,52 @@ function rangedInputProblems(root: string, tracked: string[]): string {
         encoding: "utf8",
         input: JSON.stringify(tracked),
     }).trim();
+}
+
+/**
+ * Runs the audit script's own `audit()` (what the CI job runs) on a tree, with `uv`, git and pip-audit
+ * replaced: `findings` maps a project directory to the [package, version, [advisory ids]] pip-audit
+ * reports for its committed export. The allowlist, its validation and its matching are the script's.
+ * Returns the exit code and everything the run printed.
+ */
+function auditRun(
+    root: string,
+    tracked: string[],
+    findings: Record<string, [string, string, string[]][]>
+): { rc: number; out: string } {
+    const code = [
+        "import contextlib, io, json, os, sys, types",
+        `sys.path.insert(0, ${JSON.stringify(path.join(REPO_ROOT, ".github", "scripts"))})`,
+        "import python_dependency_audit as m",
+        "root, spec = os.path.abspath(sys.argv[1]), json.load(sys.stdin)",
+        "def tracked_files(d):",
+        "    rel = os.path.relpath(os.path.abspath(d), root)",
+        "    if rel == '.':",
+        "        return spec['tracked']",
+        "    return [p[len(rel) + 1:] for p in spec['tracked'] if p.startswith(rel + '/')]",
+        "def audit_export(_root, rel, _pip_audit):",
+        "    if os.path.isabs(rel):",
+        "        return []",
+        "    return [(p, v, ids) for p, v, ids in spec['findings'].get(os.path.dirname(rel), [])]",
+        "m.tracked_files = tracked_files",
+        "m.audit_export = audit_export",
+        "m.run = lambda command, cwd, check=True: types.SimpleNamespace(returncode=0, stdout='', stderr='')",
+        "m.tempfile.mkdtemp = lambda **kwargs: os.path.join(root, 'pip-audit-cache')",
+        "sys.argv = ['audit', '--root', root, '--today', '2026-11-22']",
+        "out = io.StringIO()",
+        "with contextlib.redirect_stdout(out):",
+        "    rc = m.main()",
+        "print(json.dumps({'rc': rc, 'out': out.getvalue()}))",
+    ].join("\n");
+    const env: NodeJS.ProcessEnv = { ...process.env, PIP_AUDIT_VERSION: "2.10.1" };
+    delete env.GITHUB_STEP_SUMMARY;
+    return JSON.parse(
+        execFileSync("python3", ["-c", code, root], {
+            encoding: "utf8",
+            env,
+            input: JSON.stringify({ tracked, findings }),
+        })
+    );
 }
 
 /** A small tree in a temp directory; `files` maps repository paths to content. */
@@ -524,6 +572,120 @@ describe("Python dependency lock coverage (control)", () => {
     }
 );
 
+(hasPython ? describe : describe.skip)(
+    "an allowlist entry applies only in the projects it names (control)",
+    () => {
+        const exportFile =
+            UV_EXPORT_HEADER + "\n#    uv export --frozen -o requirements.txt\npillow==12.3.0\n";
+        const entry = (projects?: unknown) => ({
+            id: "PYSEC-2026-0001",
+            package: "Pillow",
+            ...(projects === undefined ? {} : { projects }),
+            reason: "the base image ships this version",
+            reviewBy: "2099-01-01",
+        });
+        const pillow: [string, string, string[]] = [
+            "pillow",
+            "12.3.0",
+            ["PYSEC-2026-0001", "CVE-2026-0001"],
+        ];
+        const run = (entries: object[], findings: Record<string, [string, string, string[]][]>) =>
+            withTree(
+                {
+                    ".github/python-audit-allowlist.json": JSON.stringify({ entries }),
+                    ".github/python-lock-exemptions.json": JSON.stringify({
+                        exemptions: [],
+                        rangedInputs: [],
+                    }),
+                    "image/uv.lock": "",
+                    "image/requirements.txt": exportFile,
+                    "backend/uv.lock": "",
+                    "backend/requirements.txt": exportFile,
+                },
+                (root, tracked) => auditRun(root, tracked, findings)
+            );
+
+        test("an entry silences its advisory in the project it names", () => {
+            const result = run([entry(["image"])], { image: [pillow] });
+            expect(result.out).toContain("Findings: 1. Allowlisted: 1.");
+            expect(result.rc).toBe(0);
+        });
+
+        test("an entry scoped to one project does not silence the same advisory in another", () => {
+            const result = run([entry(["image"])], { image: [pillow], backend: [pillow] });
+            expect(result.out).toContain("Findings: 2. Allowlisted: 1.");
+            expect(result.out).toContain("pillow 12.3.0 in backend: PYSEC-2026-0001");
+            expect(result.out).not.toContain("pillow 12.3.0 in image:");
+            expect(result.rc).toBe(1);
+        });
+
+        test("a scoped entry is stale when its project has no finding, even if another project has one", () => {
+            const result = run([entry(["image"])], { backend: [pillow] });
+            expect(result.out).toContain("pillow 12.3.0 in backend: PYSEC-2026-0001");
+            expect(result.out).toContain(
+                "allowlist entry PYSEC-2026-0001 (Pillow) matches no current finding in image"
+            );
+            expect(result.rc).toBe(1);
+        });
+
+        test("an entry naming two projects is stale for the one with no finding", () => {
+            const result = run([entry(["image", "backend"])], { image: [pillow] });
+            expect(result.out).toContain("Findings: 1. Allowlisted: 1.");
+            expect(result.out).toContain("matches no current finding in backend");
+            expect(result.out).not.toContain("matches no current finding in image");
+            expect(result.rc).toBe(1);
+        });
+
+        test("an entry for a nested project silences nothing at a parent, sibling, child or prefix-sharing path", () => {
+            const scoped = "pipelines/sim/container";
+            const others = [
+                "pipelines/sim",
+                "pipelines/sim/other",
+                "pipelines/sim/container2",
+                "pipelines/sim/container/layer",
+            ];
+            const projects = [scoped, ...others];
+            const tree: Record<string, string> = {
+                ".github/python-audit-allowlist.json": JSON.stringify({
+                    entries: [entry([scoped])],
+                }),
+                ".github/python-lock-exemptions.json": JSON.stringify({
+                    exemptions: [],
+                    rangedInputs: [],
+                }),
+            };
+            projects.forEach((project) => {
+                tree[`${project}/uv.lock`] = "";
+                tree[`${project}/requirements.txt`] = exportFile;
+            });
+            const result = withTree(tree, (root, tracked) =>
+                auditRun(
+                    root,
+                    tracked,
+                    Object.fromEntries(projects.map((project) => [project, [pillow]]))
+                )
+            );
+            expect(result.out).toContain("Findings: 5. Allowlisted: 1.");
+            others.forEach((project) =>
+                expect(result.out).toContain(`pillow 12.3.0 in ${project}: PYSEC-2026-0001`)
+            );
+            expect(result.out).not.toContain(`pillow 12.3.0 in ${scoped}:`);
+            expect(result.out).not.toContain("matches no current finding");
+            expect(result.rc).toBe(1);
+        });
+
+        test.each([
+            ["no projects key", entry(), "has no projects"],
+            ["an empty projects list", entry([]), "has no projects"],
+            ["a project with no uv.lock", entry(["other"]), "has no tracked uv.lock"],
+        ])("an entry with %s fails the run", (_label, invalid, message) => {
+            const result = run([invalid], { image: [pillow] });
+            expect(result.out).toContain(message);
+            expect(result.rc).toBe(1);
+        });
+    }
+);
+
 describeWithGit("Python dependency lock coverage", () => {
     const tracked = files ?? [];
     const exemptionFile = JSON.parse(read(EXEMPTIONS)) as {
@@ -658,5 +820,107 @@ describe("Python audit allowlist", () => {
             }
         });
         expect(problems).toEqual([]);
+    });
+
+    (files ? test : test.skip)(
+        "every entry names the uv projects it applies to, each a directory with a tracked uv.lock",
+        () => {
+            const lockDirs = new Set(
+                (files ?? [])
+                    .filter((f) => path.posix.basename(f) === "uv.lock")
+                    .map((f) => path.posix.dirname(f))
+            );
+            const problems: string[] = [];
+            allowlist.entries.forEach((entry, index) => {
+                const label = `entry ${index} (${entry.id})`;
+                if (!Array.isArray(entry.projects) || entry.projects.length === 0) {
+                    problems.push(`${label}: no projects`);
+                    return;
+                }
+                entry.projects
+                    .filter((project) => !lockDirs.has(project))
+                    .forEach((project) => problems.push(`${label}: ${project} has no uv.lock`));
+            });
+            expect(problems).toEqual([]);
+        }
+    );
+});
+
+/**
+ * Runs the audit script's `pin_direct_urls` on an export's text: what pip-audit reads in place of a
+ * `name @ <wheel URL>` requirement. Returns the rewritten text, or the audit's error message.
+ */
+function pinDirectUrls(text: string): { text?: string; error?: string } {
+    const code = [
+        "import json, sys",
+        `sys.path.insert(0, ${JSON.stringify(path.join(REPO_ROOT, ".github", "scripts"))})`,
+        "import python_dependency_audit as m",
+        "try:",
+        "    print(json.dumps({'text': m.pin_direct_urls(sys.stdin.read(), 'requirements.lock')}))",
+        "except m.AuditError as exc:",
+        "    print(json.dumps({'error': str(exc)}))",
+    ].join("\n");
+    return JSON.parse(execFileSync("python3", ["-c", code], { encoding: "utf8", input: text }));
+}
+
+(hasPython ? describe : describe.skip)("Python audit of a prebuilt wheel URL requirement", () => {
+    const wheel =
+        "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl";
+    const hash = `    --hash=sha256:${"a".repeat(64)}`;
+
+    test("a wheel URL requirement is audited as its name and public version, hashes kept", () => {
+        const text = `einops==0.8.1 ; sys_platform == 'linux' \\\n${hash}\nflash-attn @ ${wheel} ; sys_platform == 'linux' \\\n${hash}\n`;
+        expect(pinDirectUrls(text).text).toBe(
+            `einops==0.8.1 ; sys_platform == 'linux' \\\n${hash}\nflash-attn==2.8.3 ; sys_platform == 'linux' \\\n${hash}\n`
+        );
+    });
+
+    test("a text without a URL requirement is returned unchanged", () => {
+        const text = `einops==0.8.1 \\\n${hash}\n`;
+        expect(pinDirectUrls(text).text).toBe(text);
+    });
+
+    test.each([
+        ["a git source", "gr00t @ git+https://github.com/NVIDIA/Isaac-GR00T@db107f03"],
+        ["a wheel named for another package", `torch @ ${wheel}`],
+        ["a source archive", "flash-attn @ https://example.com/flash_attn-2.8.3.tar.gz"],
+        ["a non-https wheel URL", `flash-attn @ ${wheel.replace("https://", "http://")}`],
+        [
+            "a wheel named for the package on another https host",
+            `flash-attn @ https://example.com/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl`,
+        ],
+        [
+            "a dot-segment path",
+            `flash-attn @ ${wheel.replace(
+                "/v2.8.3/",
+                "/../../../evil/repo/releases/download/v1/"
+            )}`,
+        ],
+        [
+            "a percent-encoded dot-segment path",
+            `flash-attn @ ${wheel.replace("/v2.8.3/", "/%2e%2e/%2e%2e/evil/")}`,
+        ],
+        [
+            "a percent-encoded slash in the tag",
+            `flash-attn @ ${wheel.replace("/v2.8.3/", "/v2.8.3%2F..%2F..%2F")}`,
+        ],
+        ["a query after the file name", `flash-attn @ ${wheel}?token=x`],
+        ["a fragment after the file name", `flash-attn @ ${wheel}#sha256=${"a".repeat(64)}`],
+        [
+            "a wheel of another repository on the allowed host",
+            `flash-attn @ ${wheel.replace("Dao-AILab/flash-attention", "someone/flash-attention")}`,
+        ],
+    ])("%s fails the run instead of passing unaudited", (_label, line) => {
+        const result = pinDirectUrls(`${line} ; sys_platform == 'linux'\n`);
+        expect(result.text).toBeUndefined();
+        expect(result.error).toContain("direct URL requirement");
+    });
+
+    test("the committed GR00T export keeps flash-attn as a wheel URL the audit can pin", () => {
+        const lock = read("backendPipelines/genAi/nvidia/gr00t/container/requirements.lock");
+        const pinned = pinDirectUrls(lock);
+        expect(pinned.error).toBeUndefined();
+        expect(pinned.text).toMatch(/^flash-attn==2\.8\.3 ; /m);
+        expect(pinned.text).not.toMatch(/^\S+ @ /m);
     });
 });

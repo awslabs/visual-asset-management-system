@@ -14,10 +14,15 @@ hand-kept list) it:
    fixes it). A requirements file without the header fails: a hand-written file beside a lock would
    otherwise be installed without being checked or audited;
 3. audits each export with pip-audit and fails on every advisory that is not on the allowlist
-   `.github/python-audit-allowlist.json`.
+   `.github/python-audit-allowlist.json`. pip-audit cannot read a `name @ <URL>` requirement, so a
+   prebuilt wheel in an export (flash-attn in the GR00T image) is audited as `name==<version>`, the
+   version read from the wheel's file name, when its URL is under an allowed prefix; any other direct URL fails
+   the run (see `pin_direct_urls`).
 
-The allowlist is validated first: every entry needs `id`, `package`, `reason` and a `reviewBy` date
-(ISO, not in the past). An entry that matches no current finding is stale and also fails the run.
+The allowlist is validated first: every entry needs `id`, `package`, `reason`, a `reviewBy` date
+(ISO, not in the past) and `projects`, the uv project directories it applies to (each one a directory
+with a tracked uv.lock). An entry silences its advisory only in the projects it names. An entry that
+matches no current finding in one of its projects is stale for that project and also fails the run.
 A pip-audit run that cannot reach the advisory service fails the run; it never passes silently.
 
 Only package names, versions and advisory ids are printed or written to the job summary.
@@ -144,7 +149,7 @@ def read_export_command(path):
     return checked
 
 
-def load_allowlist(root, today):
+def load_allowlist(root, today, lock_dirs):
     path = os.path.join(root, ALLOWLIST_PATH)
     try:
         with open(path, encoding="utf-8") as handle:
@@ -167,10 +172,18 @@ def load_allowlist(root, today):
                 problems.append(f"{label} has no {key}")
         if isinstance(entry.get("id"), str) and not ID_PATTERN.match(entry["id"]):
             problems.append(f"{label} has an invalid id")
-        key = (str(entry.get("id")).lower(), canonical_name(entry.get("package")))
-        if key in seen:
-            problems.append(f"{label} is listed twice")
-        seen.add(key)
+        projects = entry.get("projects")
+        if not isinstance(projects, list) or not projects:
+            problems.append(f"{label} has no projects (the uv project directories it applies to)")
+            projects = []
+        for project in projects:
+            if not isinstance(project, str) or project not in lock_dirs:
+                problems.append(f"{label} names project {project!r}, which has no tracked uv.lock")
+                continue
+            key = (str(entry.get("id")).lower(), canonical_name(entry.get("package")), project)
+            if key in seen:
+                problems.append(f"{label} is listed twice for {project}")
+            seen.add(key)
         if isinstance(entry.get("reviewBy"), str) and entry["reviewBy"].strip():
             try:
                 review_by = datetime.date.fromisoformat(entry["reviewBy"])
@@ -184,6 +197,37 @@ def load_allowlist(root, today):
     if problems:
         raise AuditError(f"{ALLOWLIST_PATH} is invalid:\n  " + "\n  ".join(problems))
     return entries
+
+
+def apply_allowlist(allowlist, findings):
+    """Split findings into blocking ones and return the stale (entry, project) pairs as well.
+
+    A finding is allowlisted when an entry names its package, one of its advisory ids and its project.
+    An entry is stale for each of its projects where it matched no finding.
+    """
+    used = set()
+    blocking = []
+    for project, package, pkg_version, ids in findings:
+        match = None
+        for index, entry in enumerate(allowlist):
+            if (
+                canonical_name(entry["package"]) == canonical_name(package)
+                and entry["id"] in ids
+                and project in entry["projects"]
+            ):
+                match = index
+                break
+        if match is None:
+            blocking.append((project, package, pkg_version, ids))
+        else:
+            used.add((match, project))
+    stale = [
+        (entry, project)
+        for index, entry in enumerate(allowlist)
+        for project in entry["projects"]
+        if (index, project) not in used
+    ]
+    return blocking, stale
 
 
 # Files that can install a requirements file: Dockerfiles, CI and recipe YAML, shell scripts, and the
@@ -351,9 +395,72 @@ def check_ranged_inputs(root, tracked, lock_dirs):
     return paths
 
 
+# Where a wheel URL requirement may point: the release assets of the one project that needs it (the prebuilt
+# flash-attn wheel of the GR00T image). Add a prefix, with a test, when another image needs a prebuilt wheel.
+ALLOWED_DIRECT_URL_PREFIXES = ("https://github.com/Dao-AILab/flash-attention/releases/download/",)
+DIRECT_URL_LINE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?P<extras>\[[^\]]*\])?\s+@\s+(?P<url>\S+)(?P<rest>.*)$")
+# What may follow an allowed prefix: one release tag directory and one wheel file, with no dot segment,
+# percent-encoding, query or fragment (uv and pip would resolve those to another path than the file name shows).
+DIRECT_URL_REMAINDER = re.compile(r"^v[0-9][^/%?#]*/[^/%?#]+\.whl$")
+WHEEL_URL_FILE = re.compile(r"^(?P<dist>[A-Za-z0-9_.]+)-(?P<version>[0-9][A-Za-z0-9_.!+]*)-[^/]+\.whl$")
+
+
+def pin_direct_urls(text, source):
+    """The requirements text with each `name @ <wheel URL>` line rewritten to `name==<version>`.
+
+    pip-audit cannot read a URL requirement ("URL requirements cannot be pinned to a specific package
+    version"), so a prebuilt wheel such as flash-attn would fail the run, and skipping it would leave
+    the package unaudited. The version is read from the wheel file's own name (`name-version-tags.whl`,
+    a local version such as `+cu12torch2.8` dropped, since advisories name the public release) after
+    checking the file's distribution name is the requirement's, and pip-audit then checks that
+    name and version like any other pin. The URL must start with one of ALLOWED_DIRECT_URL_PREFIXES and continue with one `v<tag>/<file>.whl`
+    (no dot segment, percent-encoding, query or fragment).
+    Anything else behind an `@` (a git source, an archive, a file that is not a wheel, a wheel elsewhere)
+    fails the run: its version cannot be read, so it must not pass unaudited.
+    Hash and continuation lines are kept as they are."""
+    lines = []
+    for line in text.split("\n"):
+        match = DIRECT_URL_LINE.match(line)
+        if not match:
+            lines.append(line)
+            continue
+        name, url = match.group("name"), match.group("url")
+        prefix = next((p for p in ALLOWED_DIRECT_URL_PREFIXES if url.startswith(p)), None)
+        remainder = url[len(prefix):] if prefix else ""
+        wheel = (
+            WHEEL_URL_FILE.match(remainder.rsplit("/", 1)[-1]) if DIRECT_URL_REMAINDER.match(remainder) else None
+        )
+        if not wheel or ".." in remainder.split("/") or canonical_name(wheel.group("dist")) != canonical_name(name):
+            raise AuditError(
+                f"{source}: `{name} @ {url}` is a direct URL requirement the audit cannot read a version "
+                f"from (only a wheel URL named for the package, under an allowed prefix, is supported); pip-audit would "
+                f"skip it, so it must not stay in an exported lock unaudited"
+            )
+        version = wheel.group("version").split("+", 1)[0]
+        lines.append(f"{name}=={version}{match.group('rest')}")
+    return "\n".join(lines)
+
+
 def audit_export(root, rel_path, pip_audit):
     """Findings for one requirements file: list of (package, version, [ids])."""
-    command = pip_audit + ["-r", rel_path, "-f", "json"] + PIP_AUDIT_STRICT_ARGS
+    source = os.path.join(root, rel_path)
+    with open(source, encoding="utf-8") as handle:
+        text = handle.read()
+    pinned = pin_direct_urls(text, rel_path)
+    if pinned != text:
+        # pip-audit reads a copy in which each wheel-URL requirement is a name==version pin.
+        handle, copy = tempfile.mkstemp(prefix="uv-export-pinned-", suffix=".txt")
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(pinned)
+        try:
+            return _audit_file(root, copy, rel_path, pip_audit)
+        finally:
+            os.unlink(copy)
+    return _audit_file(root, rel_path, rel_path, pip_audit)
+
+
+def _audit_file(root, read_path, rel_path, pip_audit):
+    command = pip_audit + ["-r", read_path, "-f", "json"] + PIP_AUDIT_STRICT_ARGS
     result = run(command, root, check=False)
     try:
         report = json.loads(result.stdout)
@@ -392,12 +499,6 @@ def audit():
 
     errors = []
     try:
-        allowlist = load_allowlist(root, today)
-    except AuditError as exc:
-        error("Python audit allowlist", exc)
-        return 1
-
-    try:
         tracked = tracked_files(root)
     except AuditError as exc:
         error("Python audit", f"{root} is not a git checkout the audit can list: {last_line(exc)}")
@@ -407,6 +508,12 @@ def audit():
         error("Python audit", "no tracked uv.lock found; the discovery is broken")
         return 1
     print(f"Found {len(lock_dirs)} uv.lock project(s): {', '.join(lock_dirs)}")
+
+    try:
+        allowlist = load_allowlist(root, today, set(lock_dirs))
+    except AuditError as exc:
+        error("Python audit allowlist", exc)
+        return 1
 
     try:
         ranged_inputs = check_ranged_inputs(root, tracked, set(lock_dirs))
@@ -478,20 +585,8 @@ def audit():
             error(f"Python audit ({project})", exc)
         print("::endgroup::")
 
-    # Apply the allowlist; an entry that matches nothing is stale.
-    used = set()
-    blocking = []
-    for project, package, pkg_version, ids in all_findings:
-        match = None
-        for index, entry in enumerate(allowlist):
-            if canonical_name(entry["package"]) == canonical_name(package) and entry["id"] in ids:
-                match = index
-                break
-        if match is None:
-            blocking.append((project, package, pkg_version, ids))
-        else:
-            used.add(match)
-    stale = [e for i, e in enumerate(allowlist) if i not in used]
+    # Apply the allowlist; an entry that matches nothing in one of its projects is stale there.
+    blocking, stale = apply_allowlist(allowlist, all_findings)
 
     summary = [
         "## Python dependency audit",
@@ -513,11 +608,14 @@ def audit():
             "Fix by bumping the package in the project's pyproject.toml and re-locking, "
             "or add a reasoned entry to the allowlist."
         )
-    for entry in stale:
-        message = f"allowlist entry {entry['id']} ({entry['package']}) matches no current finding; remove it"
+    for entry, project in stale:
+        message = (
+            f"allowlist entry {entry['id']} ({entry['package']}) matches no current finding in {project}; "
+            f"remove {project} from its projects, or remove the entry"
+        )
         errors.append(message)
         error("Python audit allowlist", message)
-        summary.append(f"- Stale allowlist entry: {entry['id']} ({entry['package']})")
+        summary.append(f"- Stale allowlist entry: {entry['id']} ({entry['package']}) in {project}")
     if errors:
         summary.append("")
         summary.append(f"{len(errors)} check(s) failed; see the job log.")

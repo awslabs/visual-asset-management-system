@@ -11,9 +11,11 @@
  * publishCustomResourceName(), which both land here. Core-owned.
  */
 
+import { Stack } from "aws-cdk-lib";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { Construct } from "constructs";
 import * as Config from "../../../config/config";
+import { ResourceNameRegistry } from "./resourceNameRegistry";
 import { ADDON_RESOURCE_PARAM_KEYS } from "../../../common/addonResourceParamKeys";
 import { CUSTOM_RESOURCE_PARAM_KEYS } from "../../../common/customResourceParamKeys";
 import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
@@ -86,8 +88,18 @@ export function publishLaneResourceName(
                 `declare the ${LANES[lane].label} resource under a key of its own`
         );
     }
-    return new ssm.StringParameter(scope, `${idPrefix}-${key.replace(/\//g, "-")}`, {
+    const parameter = new ssm.StringParameter(scope, `${idPrefix}-${key.replace(/\//g, "-")}`, {
         parameterName: `${config.resourceNamesSSMParamPrefix}/${key}`,
         stringValue: value,
     });
+    // Also carried by the resource-name chunk parameters (resourceNameChunks.ts), built in this
+    // parameter's stack. A scope outside a VAMS core stack (a unit test's bare stack) has no
+    // registry; its name is published per key only.
+    ResourceNameRegistry.of(scope)?.recordLane({
+        paramKey: key,
+        value,
+        lane,
+        owner: Stack.of(parameter),
+    });
+    return parameter;
 }

@@ -57,11 +57,20 @@ RUN git clone ${GR00T_REPO} /workspace && \
 
 WORKDIR /workspace
 
-# Install dependencies: every file at the version and hash in requirements.lock (Isaac-GR00T's pyproject.toml
-# with the `base` extra, plus requirements-image.txt; its header holds the command). Four packages publish no
-# wheel (antlr4-python3-runtime, fvcore, gpustat, iopath), so they build from their hashed source against
-# the build tools of requirements-build.lock, installed first: `--no-build-isolation` keeps the build from
-# fetching unhashed tools. Isaac-GR00T itself is then installed from the pinned clone, without dependencies.
+# Stop the build when Isaac-GR00T's dependency lists at the clone differ from the copy requirements.lock was
+# resolved from (upstream-requirements.json, which pyproject.toml repeats). The check reads both with the
+# system Python 3.10 alone: tomllib starts at 3.11 and no package is installed yet.
+COPY check_upstream_requirements.py upstream-requirements.json /tmp/gr00t-check/
+RUN python3 /tmp/gr00t-check/check_upstream_requirements.py /workspace/pyproject.toml /tmp/gr00t-check/upstream-requirements.json && \
+    rm -rf /tmp/gr00t-check
+
+# Install dependencies: every file at the version and hash in requirements.lock, the uv export of uv.lock
+# (Isaac-GR00T's `dependencies` and `base` extra at the STABLE_COMMIT above, copied into pyproject.toml, plus
+# what the image adds, with the versions of its override-dependencies in place of upstream's pins and without
+# tensorflow; the header holds the command). Four packages publish no wheel (antlr4-python3-runtime, fvcore,
+# gpustat, iopath), so they build from their hashed source against the build tools of requirements-build.lock
+# (the `build` group), installed first: `--no-build-isolation` keeps the build from fetching unhashed tools.
+# Isaac-GR00T itself is then installed from the pinned clone, without dependencies.
 COPY requirements-build.lock requirements.lock /tmp/gr00t/
 RUN uv pip install --no-cache --require-hashes --only-binary :all: -r /tmp/gr00t/requirements-build.lock
 RUN uv pip install --no-cache --require-hashes --no-build-isolation -r /tmp/gr00t/requirements.lock

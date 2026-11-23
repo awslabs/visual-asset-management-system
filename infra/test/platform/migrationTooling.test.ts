@@ -226,6 +226,89 @@ describe(`${CURRENT.dir} run_migration.sh footer follows the run mode`, () => {
     });
 });
 
+// A migration script reads its config with Python's json.load, which keeps the LAST value of a key
+// that appears twice. A template that lists a key in two sections (one per step) therefore drops the
+// value an operator fills in under the first one, with no error. Every committed config template is
+// read the way the scripts read it, with an object_pairs_hook that records each repeated key.
+const MIGRATION_CONFIG_NAME = /^v\d+\.\d+_to_v\d+\.\d+_migration(_[a-z]+)?_config\.json$/;
+
+function committedMigrationConfigs(): string[] {
+    return fs
+        .readdirSync(MIGRATIONS_ROOT, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .flatMap((entry) => {
+            const upgrade = path.join(MIGRATIONS_ROOT, entry.name, "upgrade");
+            return fs.existsSync(upgrade)
+                ? fs
+                      .readdirSync(upgrade)
+                      .filter((name) => MIGRATION_CONFIG_NAME.test(name))
+                      .map((name) => path.join(upgrade, name))
+                : [];
+        })
+        .sort();
+}
+
+const DUPLICATE_KEYS_PY = [
+    "import json, sys",
+    "found = {}",
+    "for path in sys.argv[1:]:",
+    "    repeated = []",
+    "    def hook(pairs, repeated=repeated):",
+    "        seen = set()",
+    "        for key, _ in pairs:",
+    "            if key in seen:",
+    "                repeated.append(key)",
+    "            seen.add(key)",
+    "        return dict(pairs)",
+    "    with open(path, encoding='utf-8') as f:",
+    "        json.load(f, object_pairs_hook=hook)",
+    "    found[path] = repeated",
+    "print(json.dumps(found))",
+].join("\n");
+
+/** Each file's repeated keys (in any object of the file), read by Python's json.load. */
+function repeatedConfigKeys(files: string[]): Record<string, string[]> {
+    const run = spawnSync("python3", ["-c", DUPLICATE_KEYS_PY, ...files], { encoding: "utf8" });
+    if (run.status !== 0) {
+        throw new Error(`python3 could not read the migration configs: ${run.stderr}`);
+    }
+    return JSON.parse(run.stdout);
+}
+
+describe("migration config templates name each key once", () => {
+    it("finds every release's config template", () => {
+        const names = committedMigrationConfigs().map((file) => path.basename(file));
+        expect(names).toEqual(expect.arrayContaining(MIGRATIONS.map((m) => m.configFile)));
+    });
+
+    it("reports a key that appears twice (control)", () => {
+        const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vams-migration-config-"));
+        try {
+            const planted = path.join(scratch, "planted_config.json");
+            fs.writeFileSync(
+                planted,
+                '{"asset_storage_table_name": "mine", "other": {"a": 1, "a": 2},' +
+                    ' "asset_storage_table_name": null}'
+            );
+            const clean = path.join(scratch, "clean_config.json");
+            fs.writeFileSync(clean, '{"a": 1, "b": {"a": 2}}');
+            expect(repeatedConfigKeys([planted, clean])).toEqual({
+                [planted]: ["a", "asset_storage_table_name"],
+                [clean]: [],
+            });
+        } finally {
+            fs.rmSync(scratch, { recursive: true, force: true });
+        }
+    });
+
+    it("lists no key twice in any committed template", () => {
+        const repeated = Object.entries(repeatedConfigKeys(committedMigrationConfigs()))
+            .filter(([, keys]) => keys.length > 0)
+            .map(([file, keys]) => `${path.relative(MIGRATIONS_ROOT, file)}: ${keys.join(", ")}`);
+        expect(repeated).toEqual([]);
+    });
+});
+
 describe("ssm_resource_lookup.py mirrors resourceParamKeys.ts", () => {
     const lookupSource = fs.readFileSync(SSM_RESOURCE_LOOKUP_PY, "utf8");
 
@@ -672,14 +755,14 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
 
     it("holds the billed backfills on a real run whose location step did not finish", () => {
         const body = pyFunction("main");
-        expect(body).toContain(
-            "backfills_held = not dry_run and (run_vector_backfill or run_metadata_backfill)"
+        expect(body).toMatch(
+            /if rc != 0:\s*\n\s*exit_code = rc\s*\n\s*location_keys_unfinished = not dry_run\n/
         );
-        expect(body.indexOf("backfills_held = not dry_run")).toBeLessThan(
+        expect(body.indexOf("location_keys_unfinished = not dry_run")).toBeLessThan(
             body.indexOf("run_vector_backfill_step(")
         );
-        expect(body).toContain("if run_vector_backfill and not backfills_held:");
-        expect(body).toContain("if run_metadata_backfill and not backfills_held:");
+        expect(body).toContain("if run_vector_backfill and not location_keys_unfinished:");
+        expect(body).toContain("if run_metadata_backfill and not location_keys_unfinished:");
         expect(readme).toContain("skips `vectorBackfill` and `metadataBackfill`");
         // A key that can never be read (an unregistered bucket) has a way on: the backfill run on its own.
         expect(readme).toMatch(/whose bucket is not registered in the S3 asset buckets table/);
@@ -742,5 +825,90 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
         expect(lookup).toMatch(
             /LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE = "dynamoTables\/largeObjectCopyJobsStorage"/
         );
+    });
+});
+
+describe("the v2.6 to v2.7 assetLocationIndex step writes what the backend reads", () => {
+    // backend/backend/common/assetLocations.py decides index_ready() from the marker this step writes,
+    // and AssetLocationGSI indexes the two attributes the step sets. A renamed constant on either side
+    // leaves the index empty or the marker unread, and nothing else fails.
+    const release = MIGRATIONS.find((m) => m.dir === "v2.6_to_v2.7");
+    if (!release) throw new Error("the v2.6_to_v2.7 migration is not listed");
+    const script = readMigrationFile(release, release.script);
+    const backend = fs.readFileSync(
+        path.join(__dirname, "..", "../../backend/backend/common/assetLocations.py"),
+        "utf8"
+    );
+
+    /** The string or integer value assigned to `name` at module level in a Python source. */
+    function pyConstant(source: string, name: string): string {
+        const match = new RegExp(`^${name}\\s*=\\s*(?:'([^']*)'|"([^"]*)"|(\\d+))\\s*$`, "m").exec(
+            source
+        );
+        if (!match) throw new Error(`${name} is not assigned a literal`);
+        return match[1] ?? match[2] ?? match[3];
+    }
+
+    const PAIRS: ReadonlyArray<[string, string]> = [
+        ["ASSET_LOCATION_BUCKET_ATTRIBUTE", "LOCATION_BUCKET_ATTRIBUTE"],
+        ["ASSET_LOCATION_KEY_ATTRIBUTE", "LOCATION_KEY_ATTRIBUTE"],
+        ["ASSET_LOCATION_INDEX_MARKER_SUFFIX", "INDEX_READY_PARAMETER_SUFFIX"],
+        ["ASSET_LOCATION_INDEX_MARKER_VERSION", "INDEX_READY_MARKER_VERSION"],
+        ["ASSET_LOCATION_INDEX_STATUS_COMPLETE", "INDEX_READY_STATUS_COMPLETE"],
+    ];
+
+    it("names the same preview pattern as the backend's single-file rule", () => {
+        const patterns = fs.readFileSync(
+            path.join(__dirname, "..", "../../backend/backend/common/s3PathPatterns.py"),
+            "utf8"
+        );
+        expect(pyConstant(script, "ASSET_LOCATION_PREVIEW_FILE_PATTERN")).toBe(
+            pyConstant(patterns, "PREVIEW_FILE_PATTERN")
+        );
+        expect(backend).toContain("from common.s3PathPatterns import PREVIEW_FILE_PATTERN");
+    });
+
+    it.each(PAIRS)("%s equals the backend's %s", (migrationName, backendName) => {
+        expect(pyConstant(script, migrationName)).toBe(pyConstant(backend, backendName));
+    });
+
+    it("runs after assetLocationFolderKeys, whose fixed keys it indexes, and not after it failed", () => {
+        const body = script.slice(script.indexOf("def main("));
+        const folderKeys = body.indexOf("run_asset_location_folder_keys_step(");
+        const index = body.indexOf("run_asset_location_index_step(");
+        expect(folderKeys).toBeGreaterThan(-1);
+        expect(index).toBeGreaterThan(folderKeys);
+        const steps = Array.from(
+            (/^STEP_CHOICES\s*=\s*\(([^)]*)\)/m.exec(script)?.[1] ?? "").matchAll(/'([A-Za-z]+)'/g)
+        ).map((m) => m[1]);
+        expect(steps.indexOf("assetLocationIndex")).toBe(steps.indexOf("all") - 1);
+        expect(steps[0]).toBe("assetLocationFolderKeys");
+        expect(body).toMatch(/if run_asset_location_index and location_keys_unfinished:/);
+        // A key the folder-keys step fixes after the index ran keeps its indexed key in step.
+        const append = script.slice(script.indexOf("def append_location_slash("));
+        expect(append.slice(0, append.indexOf("\ndef "))).toContain("ASSET_LOCATION_KEY_ATTRIBUTE");
+    });
+
+    it("writes the table name into the marker, which the backend requires", () => {
+        expect(script).toMatch(/'assetTable': self\.asset_table/);
+        expect(backend).toMatch(/marker\.get\('assetTable'\) == asset_table_name/);
+    });
+
+    it("the GSI keys on the same attribute names", () => {
+        const storage = fs.readFileSync(
+            path.join(__dirname, "..", "../lib/nestedStacks/storage/storageBuilder-nestedStack.ts"),
+            "utf8"
+        );
+        const block = storage.slice(storage.indexOf('indexName: "AssetLocationGSI"'));
+        expect(block.slice(0, 400)).toContain(
+            `name: "${pyConstant(backend, "LOCATION_BUCKET_ATTRIBUTE")}"`
+        );
+        expect(block.slice(0, 400)).toContain(
+            `name: "${pyConstant(backend, "LOCATION_KEY_ATTRIBUTE")}"`
+        );
+    });
+
+    it("[control] the constant reader rejects a name that is not assigned", () => {
+        expect(() => pyConstant(script, "NO_SUCH_CONSTANT")).toThrow();
     });
 });
