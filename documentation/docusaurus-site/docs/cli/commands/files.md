@@ -336,6 +336,15 @@ vamscli file delete -d my-db -a my-asset -p "/folder/" --prefix --confirm
 Requires the `--confirm` flag. Without it, the command exits with an error (a JSON error object in `--json-output` mode). This action cannot be undone.
 :::
 
+When the API refuses the delete with `400`, the command prints `✗ File Deletion Error:` followed by the API's message, and exits `1`. With `--json-output` it prints one JSON object whose `error_type` is `InvalidAssetDataError`. The API answers `400` when Amazon S3 does not delete every version of the file or of a file under the prefix, for example because a bucket policy denies the delete or the objects are locked; the files Amazon S3 kept keep their records, and the delete can be run again once the cause is removed. It also answers `400` for a file that is already gone:
+
+```json
+{
+    "error": "Invalid delete operation: VAMS General Error: File not found.",
+    "error_type": "InvalidAssetDataError"
+}
+```
+
 ---
 
 ## file revert
