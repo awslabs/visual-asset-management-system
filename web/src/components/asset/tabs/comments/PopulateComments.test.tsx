@@ -48,16 +48,20 @@ const asset = {
 
 const comments = [
     {
+        databaseId: "db1",
         assetId: "asset1",
-        "assetVersionId:commentId": "asset1:xweb",
+        commentId: "xweb",
+        assetVersionId: "asset1",
         commentBody: "<p>from the web</p>",
         commentOwnerID: "user1",
         commentOwnerUsername: "user1",
         dateCreated: "2026-10-02T00:00:00Z",
     },
     {
+        databaseId: "db1",
         assetId: "asset1",
-        "assetVersionId:commentId": "3:xcli",
+        commentId: "xcli",
+        assetVersionId: "3",
         commentBody: "<p>from the cli</p>",
         commentOwnerID: "user1",
         commentOwnerUsername: "user1",
@@ -104,11 +108,11 @@ describe("PopulateComments", () => {
         expect(screen.getByText(`No ${Synonyms.comments} yet`)).toBeInTheDocument();
     });
 
-    it("saves an edit to a comment keyed by a real version ID under the comment's assetId", async () => {
+    it("saves an edit to a comment addressed by its database, asset and comment id", async () => {
         updateComment.mockResolvedValue([true, "updated"]);
         mount();
         const editButtons = screen.getAllByRole("button", { name: "Edit" });
-        // Comments are sorted oldest first, so the second Edit belongs to the "3:xcli" comment.
+        // Comments are sorted oldest first, so the second Edit belongs to the "xcli" comment.
         fireEvent.click(editButtons[1]);
         const modals = createWrapper(document.body).findAllModals();
         const editModal = modals.find((m) => m.isVisible());
@@ -117,8 +121,9 @@ describe("PopulateComments", () => {
         fireEvent.click(footerButtons[footerButtons.length - 1].getElement());
         await waitFor(() => expect(updateComment).toHaveBeenCalled());
         expect(updateComment.mock.calls[0][0]).toMatchObject({
+            databaseId: "db1",
             assetId: "asset1",
-            assetVersionIdAndCommentId: "3:xcli",
+            commentId: "xcli",
         });
     });
 });

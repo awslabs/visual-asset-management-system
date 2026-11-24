@@ -75,13 +75,13 @@ describe("deleteComment", () => {
     it("returns a blocked request's message rather than the 403", async () => {
         (apiClient.del as jest.Mock).mockRejectedValue(blocked());
         expect(
-            await deleteComment({ assetId: "a1", assetVersionIdAndCommentId: "v1:c1" })
+            await deleteComment({ databaseId: "db1", assetId: "a1", commentId: "c1" })
         ).toStrictEqual([false, BLOCKED_MESSAGE]);
     });
 
     it("keeps the bare 403 of a permission denial", async () => {
         (apiClient.del as jest.Mock).mockRejectedValue(denied());
-        expect(await deleteComment({ assetId: "a1", assetVersionIdAndCommentId: "v1:c1" })).toBe(
+        expect(await deleteComment({ databaseId: "db1", assetId: "a1", commentId: "c1" })).toBe(
             403
         );
     });

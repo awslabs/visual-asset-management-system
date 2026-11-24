@@ -115,19 +115,18 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                     setAllComments([]);
                 }
 
-                if (assetId) {
+                if (assetId && databaseId) {
                     setLoading(true);
                     try {
                         const items = await fetchAllComments({
-                            assetId: assetId,
+                            databaseId,
+                            assetId,
                             showArchived: assetArchived,
                         });
                         if (items !== false && Array.isArray(items)) {
                             setReload(false);
                             setDisplayItemsWhileLoading(false);
-                            setAllComments(
-                                items.filter((item) => item.assetId.indexOf("#deleted") === -1)
-                            );
+                            setAllComments(items);
                         } else if (typeof items === "string" && items.includes("not found")) {
                             setError(
                                 `${Synonyms.Comments} data not found. The requested asset may have been deleted or you may not have permission to access it.`
@@ -252,25 +251,24 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             console.log("Using generated UUID as version ID:", versionId);
         }
 
-        const uuid = "x" + generateUUID();
-        const assetVersionIdAndCommentId = `${versionId}:${uuid}`;
-
         // call the API to post the comment
         setDisplayItemsWhileLoading(true);
         setLoading(true);
         setShowLoadingIcon(true);
         try {
+            // The API generates the comment id; the version the comment is about goes in the body
             const response = await createComment({
+                databaseId,
                 assetId,
-                assetVersionIdAndCommentId,
                 body: {
                     commentBody: content,
+                    assetVersionId: String(versionId),
                 },
             });
             console.log(response);
             // createComment resolves with [false, message] for a rejected request — a body over
-            // the API's length limit, a comment id that already exists, a permission denial — so
-            // the failure never reaches the catch below and has to be read off the result.
+            // the API's length limit, a permission denial — so the failure never reaches the catch
+            // below and has to be read off the result.
             if (response[0] === false) {
                 setShowLoadingIcon(false);
                 const reason = response[1] || "Unknown error";

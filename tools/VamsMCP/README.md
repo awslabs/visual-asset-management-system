@@ -451,8 +451,9 @@ ignores, so neither tool offers one. `get_comment` reports a comment that does
 not exist as an error, because the endpoint answers 200 with an empty object
 rather than a 404.
 
-`check_subscription` answers one asset without paging and returns `subscribed`
-alongside the endpoint's raw `message`. Both real answers are HTTP 200 and the
+`check_subscription` answers one asset (`database_id`, `asset_id`) for one user
+without paging and returns `subscribed` alongside the endpoint's raw `message`.
+Both real answers are HTTP 200 and the
 verdict is carried only in that string, so a successful call is not on its own an
 answer; `unrecognizedResponse` marks a message that is neither known value, which
 means unknown rather than not subscribed.
@@ -736,12 +737,13 @@ Comments, subscriptions, and metadata schemas: `add_comment`, `update_comment`,
 `create_subscription`, `update_subscription`, `create_metadata_schema`,
 `update_metadata_schema`.
 
-`add_comment` returns the `commentId` it wrote, because the endpoint's
-acknowledgement does not contain it. The id is the caller's to choose and the
-write is unconditional, so passing an existing one REPLACES that comment with no
-error; leave `comment_id` unset and a `uuid4` is generated. `update_comment` and
-`delete_comment` are creator-only — anyone else gets a 403 whatever their VAMS
-role.
+Every comment and subscription tool takes `database_id` first: the same asset id
+can exist in more than one database, so the database and asset ids together
+address an asset's comments and subscriptions. `add_comment` takes the asset version the
+comment is about and returns the `commentId` the API generates; `get_comment`,
+`update_comment` and `delete_comment` address one comment by `database_id`,
+`asset_id` and `comment_id`. `update_comment` and `delete_comment` are
+creator-only — anyone else gets a 403 whatever their VAMS role.
 
 `update_subscription` REPLACES the subscriber list rather than adding to it: every
 user absent from the list is unsubscribed from the notification topic. Read the

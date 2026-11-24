@@ -9,9 +9,6 @@ length bound the field has. Two links have to hold for that bound to exist, and 
 alone: the handler must name a validator that bounds length, and that validator must actually reject
 an oversize value. Both are asserted here, with the name read out of the handler source so a
 repointed call site fails rather than being silently exempted.
-
-The module-scoped autouse fixtures in `test_add_comment_handler.py` / `test_edit_comment_handler.py`
-replace `validate` with a stub that accepts everything, which is why this lives in its own file.
 """
 
 import pathlib

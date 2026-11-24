@@ -3,8 +3,10 @@
 The Subscriptions API allows you to manage email notification subscriptions for asset events. Users can subscribe to receive notifications when specific events occur on assets, such as when a new version is created.
 
 :::info[Authorization]
-All endpoints require a valid JWT token in the `Authorization` header. Subscription endpoints enforce Casbin authorization on the associated asset.
+All endpoints require a valid JWT token in the `Authorization` header. Subscription endpoints enforce Casbin authorization on the associated asset, evaluated for the database in the request.
 :::
+
+The same asset ID can exist in more than one database, so a subscription names its asset by `databaseId` and `entityId` together. Every request that names one subscription carries both.
 
 ---
 
@@ -45,7 +47,7 @@ GET /subscriptions
 ```
 
 :::note
-The `entityValue` field contains the asset name, and `databaseId` contains the asset's database. These are resolved at query time from the asset record.
+`databaseId` is the database of the subscribed asset, stored with the subscription. The `entityValue` field contains the asset name, resolved at query time from the asset record.
 :::
 
 ### Error responses
@@ -71,6 +73,7 @@ POST /subscriptions
 | ------------- | ------ | -------- | ---------------------------------------------------------------------------------- |
 | `eventName`   | string | Yes      | Event type. Must be `Asset Version Change`.                                        |
 | `entityName`  | string | Yes      | Entity type. Must be `Asset`.                                                      |
+| `databaseId`  | string | Yes      | Database ID of the asset to subscribe to                                           |
 | `entityId`    | string | Yes      | Asset ID to subscribe to (any ID the asset API accepts, including dots and spaces) |
 | `subscribers` | array  | Yes      | Array of user IDs to subscribe                                                     |
 
@@ -80,6 +83,7 @@ POST /subscriptions
 {
     "eventName": "Asset Version Change",
     "entityName": "Asset",
+    "databaseId": "architecture-db",
     "entityId": "building-model",
     "subscribers": ["user1@example.com", "user2@example.com"]
 }
@@ -126,6 +130,7 @@ Same structure as [Create a subscription](#create-a-subscription). The full subs
 {
     "eventName": "Asset Version Change",
     "entityName": "Asset",
+    "databaseId": "architecture-db",
     "entityId": "building-model",
     "subscribers": ["user1@example.com", "user3@example.com"]
 }
@@ -164,6 +169,7 @@ DELETE /subscriptions
 | ------------- | ------ | -------- | ---------------------------- |
 | `eventName`   | string | Yes      | Event type                   |
 | `entityName`  | string | Yes      | Entity type                  |
+| `databaseId`  | string | Yes      | Database ID of the asset     |
 | `entityId`    | string | Yes      | Asset ID                     |
 | `subscribers` | array  | Yes      | Array of subscriber user IDs |
 
@@ -173,6 +179,7 @@ DELETE /subscriptions
 {
     "eventName": "Asset Version Change",
     "entityName": "Asset",
+    "databaseId": "architecture-db",
     "entityId": "building-model",
     "subscribers": ["user1@example.com"]
 }
@@ -207,16 +214,18 @@ POST /check-subscription
 
 ### Request body
 
-| Field     | Type   | Required | Description       |
-| --------- | ------ | -------- | ----------------- |
-| `userId`  | string | Yes      | User ID to check  |
-| `assetId` | string | Yes      | Asset ID to check |
+| Field        | Type   | Required | Description                       |
+| ------------ | ------ | -------- | --------------------------------- |
+| `userId`     | string | Yes      | User ID to check                  |
+| `databaseId` | string | Yes      | Database ID of the asset to check |
+| `assetId`    | string | Yes      | Asset ID to check                 |
 
 ### Request body example
 
 ```json
 {
     "userId": "user@example.com",
+    "databaseId": "architecture-db",
     "assetId": "building-model"
 }
 ```
@@ -237,6 +246,15 @@ POST /check-subscription
 }
 ```
 
+### Error responses
+
+| Status | Description                                            |
+| ------ | ------------------------------------------------------ |
+| `400`  | Missing or invalid `userId`, `databaseId` or `assetId` |
+| `403`  | Not authorized to read this asset                      |
+| `404`  | Asset not found                                        |
+| `500`  | Internal server error                                  |
+
 ---
 
 ## Unsubscribe
@@ -253,6 +271,7 @@ DELETE /unsubscribe
 | ------------- | ------ | -------- | ---------------------------------------------------------------------------------- |
 | `eventName`   | string | Yes      | Event type                                                                         |
 | `entityName`  | string | Yes      | Entity type                                                                        |
+| `databaseId`  | string | Yes      | Database ID of the asset                                                           |
 | `entityId`    | string | Yes      | Asset ID                                                                           |
 | `subscribers` | array  | Yes      | Array of subscriber user IDs. Only the first user ID in the array is unsubscribed. |
 
@@ -262,6 +281,7 @@ DELETE /unsubscribe
 {
     "eventName": "Asset Version Change",
     "entityName": "Asset",
+    "databaseId": "architecture-db",
     "entityId": "building-model",
     "subscribers": ["user@example.com"]
 }

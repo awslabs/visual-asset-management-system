@@ -137,7 +137,7 @@ describe("archived asset read services", () => {
         mockGet
             .mockResolvedValueOnce({ message: { Items: [{ c: 1 }], NextToken: "t1" } })
             .mockResolvedValueOnce({ message: { Items: [{ c: 2 }] } });
-        await fetchAllComments({ assetId: "a1", showArchived: true });
+        await fetchAllComments({ databaseId: "db1", assetId: "a1", showArchived: true });
         expect(mockGet).toHaveBeenCalledTimes(2);
         for (const query of sentQueries()) {
             expect(query).toEqual(expect.objectContaining({ showArchived: "true" }));
@@ -146,7 +146,7 @@ describe("archived asset read services", () => {
 
     it("a live asset's comments are read as before", async () => {
         mockGet.mockResolvedValueOnce({ message: { Items: [{ c: 1 }] } });
-        await fetchAllComments({ assetId: "a1" });
+        await fetchAllComments({ databaseId: "db1", assetId: "a1" });
         expect(mockGet.mock.calls[0][1]).toEqual({});
     });
 });

@@ -257,20 +257,20 @@ UPLOAD_ROUTES: Tuple[ApiRoute, ...] = (
 # ---------------------------------------------------------------------------
 # Comments
 # ---------------------------------------------------------------------------
-API_COMMENTS_ASSET = ApiRoute("/comments/assets/{assetId}", (GET,), "comments")
-API_COMMENTS_ASSET_VERSION = ApiRoute(
-    "/comments/assets/{assetId}/assetVersionId/{assetVersionId}", (GET,), "comments"
+# The comments of one asset, addressed by its database and asset id. A comment's target (the asset
+# version today) is a query filter on the list and a body field on create, never a path segment.
+API_COMMENTS_ASSET = ApiRoute(
+    "/comments/database/{databaseId}/assets/{assetId}", (GET, POST), "comments"
 )
-API_COMMENTS_ASSET_VERSION_COMMENT = ApiRoute(
-    "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
-    (GET, POST, PUT, DELETE),
+API_COMMENTS_ASSET_COMMENT = ApiRoute(
+    "/comments/database/{databaseId}/assets/{assetId}/{commentId}",
+    (GET, PUT, DELETE),
     "comments",
 )
 
 COMMENT_ROUTES: Tuple[ApiRoute, ...] = (
     API_COMMENTS_ASSET,
-    API_COMMENTS_ASSET_VERSION,
-    API_COMMENTS_ASSET_VERSION_COMMENT,
+    API_COMMENTS_ASSET_COMMENT,
 )
 
 # ---------------------------------------------------------------------------
