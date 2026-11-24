@@ -22,12 +22,27 @@ CHANGE_SOURCE_UNARCHIVE = "unarchive"
 CHANGE_SOURCE_UNARCHIVE_DIRECT = "unarchiveDirect"
 CHANGE_SOURCE_PERMANENT_DELETE = "permanentDelete"
 
+# Resolved at import when it can be; a name not resolved then is resolved again at the next write
+# (_asset_history_table), so a lookup refused at start-up does not skip every later record.
 try:
     _asset_history_table_name = get_table_name(ResourceKeys.ASSET_HISTORY_STORAGE_TABLE)
 except Exception:
     _asset_history_table_name = None
 
 asset_history_table = dynamodb.Table(_asset_history_table_name) if _asset_history_table_name else None
+
+
+def _asset_history_table():
+    """The asset history table, resolving its name again when it was not resolved yet. None when it
+    still cannot be resolved."""
+    global asset_history_table
+    if asset_history_table is None:
+        try:
+            asset_history_table = dynamodb.Table(get_table_name(ResourceKeys.ASSET_HISTORY_STORAGE_TABLE))
+        except Exception as e:
+            logger.warning(f"Asset history table name not resolved ({type(e).__name__})")
+            return None
+    return asset_history_table
 
 
 def build_asset_snapshot(asset_record, archived_reason=None, unarchived_reason=None):
@@ -55,7 +70,8 @@ def write_asset_history_record(database_id, asset_id, change_source, change_user
     logged and never raised into the calling operation. Records persist across
     asset permanent deletes."""
     try:
-        if not asset_history_table:
+        table = _asset_history_table()
+        if not table:
             logger.warning("Asset history table not configured; skipping history record")
             return
         record_date = datetime.utcnow().isoformat() + "Z"
@@ -69,6 +85,6 @@ def write_asset_history_record(database_id, asset_id, change_source, change_user
             'changeUserId': change_user_id or 'SYSTEM_USER',
             'assetSnapshot': asset_snapshot or {},
         }
-        asset_history_table.put_item(Item=item)
+        table.put_item(Item=item)
     except Exception as e:
         logger.warning(f"Failed writing asset history record for {asset_id}: {e}")

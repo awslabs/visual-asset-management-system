@@ -34,6 +34,8 @@ ALLOWED_SYNC_OBJECT_TYPES = (SYNC_OBJECT_TYPE_DATABASE, SYNC_OBJECT_TYPE_ASSET, 
 
 ERROR_MESSAGE_MAX_LENGTH = 1024
 
+# Resolved at import when it can be; a name not resolved then is resolved again at the next write
+# (_sync_tracking_table), so a lookup refused at start-up does not skip every later record.
 try:
     _sync_tracking_table_name = get_table_name(ResourceKeys.SYNC_TRACKING_OUTBOUND_STORAGE_TABLE)
 except Exception:
@@ -44,6 +46,20 @@ sync_tracking_outbound_table = (
 )
 
 
+def _sync_tracking_table():
+    """The outbound sync tracking table, resolving its name again when it was not resolved yet. None
+    when it still cannot be resolved."""
+    global sync_tracking_outbound_table
+    if sync_tracking_outbound_table is None:
+        try:
+            sync_tracking_outbound_table = dynamodb.Table(
+                get_table_name(ResourceKeys.SYNC_TRACKING_OUTBOUND_STORAGE_TABLE))
+        except Exception as e:
+            logger.warning(f"Sync tracking table name not resolved ({type(e).__name__})")
+            return None
+    return sync_tracking_outbound_table
+
+
 def write_outbound_sync_record(object_type, database_id, system_type, system_unique_id,
                                action, sync_status, asset_id=None, file_path=None,
                                s3_version_id=None, error_message=None,
@@ -51,7 +67,8 @@ def write_outbound_sync_record(object_type, database_id, system_type, system_uni
     """Write one outbound sync tracking record. Best-effort: failures and
     invalid input are logged and never raised into the calling sync handler."""
     try:
-        if not sync_tracking_outbound_table:
+        table = _sync_tracking_table()
+        if not table:
             logger.warning("Sync tracking table not configured; skipping sync record")
             return
         if object_type not in ALLOWED_SYNC_OBJECT_TYPES:
@@ -105,6 +122,6 @@ def write_outbound_sync_record(object_type, database_id, system_type, system_uni
             item['errorMessage'] = str(error_message)[:ERROR_MESSAGE_MAX_LENGTH]
         if sync_system_entity_id:
             item['syncSystemEntityId'] = sync_system_entity_id
-        sync_tracking_outbound_table.put_item(Item=item)
+        table.put_item(Item=item)
     except Exception as e:
         logger.warning(f"Failed writing outbound sync record for {database_id}: {e}")
