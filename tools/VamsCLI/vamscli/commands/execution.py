@@ -522,6 +522,9 @@ def details(ctx: click.Context, include_sub_executions: bool, json_output: bool)
                     if location.get('key'):
                         out.append(f"    Full config body: s3://{location.get('bucket', '?')}/"
                                    f"{location['key']}")
+                        # The run bucket's registration; absent for a run recorded before it was.
+                        if location.get('bucketId'):
+                            out.append(f"    Run bucket ID: {location['bucketId']}")
                     # Registered sub-processes (a nested state machine, a container job) with the
                     # stage status derived from their own execution history; present only with
                     # --include-sub-executions.

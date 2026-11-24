@@ -5403,7 +5403,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
 
         Collections are bounded server-side; truncatedCollections names any that came back partial
         ('pipelines.subExecutions' means every sub-execution kept its summary but lost its stages).
-        A pipeline entry carries renderedConfigLocation ({bucket, key}) whenever that object exists
+        A pipeline entry carries renderedConfigLocation ({bucket, key}, plus bucketId and relativeKey
+        for a run recorded with its run bucket's registration) whenever that object exists
         — not only on truncation — because it is the FULLY substituted body the step ran with,
         while the inline renderedConfig is pre-system-tag. renderedConfigTruncated reports only
         whether the inline copy was shortened."""

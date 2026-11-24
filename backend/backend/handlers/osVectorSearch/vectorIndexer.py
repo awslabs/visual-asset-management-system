@@ -77,6 +77,7 @@ from common.s3MetadataKeys import (
 )
 from common.assetLocations import object_key_for
 from common.fileAttribution import AMBIGUOUS, attribute_object, binding_of, stored_location
+from common.indexerEvents import carry_bucket_id_stamp, stamped_bucket_id
 from common.s3PathPatterns import (
     AUXILIARY_PREPARED_DOWNLOADS_PREFIX, PREVIEW_FILE_PATTERN, key_has_reserved_segment,
     select_newest_preview_file,
@@ -576,6 +577,7 @@ def _resolve_file_identity(bucket_name: str, key: str, record: Optional[Dict[str
         read_stamp=lambda: metadata if object_readable else None,
         asset_table_name=asset_storage_table_name,
         get_registration=_get_bucket_record,
+        registration_bucket_id=stamped_bucket_id(record),
     )
     if attribution.status == AMBIGUOUS:
         return None, UNRESOLVED_AMBIGUOUS
@@ -822,7 +824,8 @@ def _dispatch_sns_message(sns_message: Dict[str, Any], bucket_name: Optional[str
     for inner in sns_message['Records']:
         source = inner.get('eventSource', '')
         if source == 'aws:s3':
-            outcomes.append(handle_s3_record(inner, outer_bucket, outer_prefix, time_left))
+            outcomes.append(handle_s3_record(carry_bucket_id_stamp(inner, sns_message), outer_bucket,
+                                             outer_prefix, time_left))
         elif source == 'aws:sqs':
             inner_body = _parse_json(inner.get('body'))
             if inner_body.get('Type') != 'Notification' or not inner_body.get('Message'):
@@ -833,7 +836,8 @@ def _dispatch_sns_message(sns_message: Dict[str, Any], bucket_name: Optional[str
             nested_prefix = inner_message.get('ASSET_BUCKET_PREFIX', outer_prefix)
             for s3_record in inner_message.get('Records', []):
                 if s3_record.get('eventSource') == 'aws:s3':
-                    outcomes.append(handle_s3_record(s3_record, nested_bucket, nested_prefix, time_left))
+                    outcomes.append(handle_s3_record(carry_bucket_id_stamp(s3_record, inner_message, sns_message),
+                                                     nested_bucket, nested_prefix, time_left))
         else:
             logger.warning(f"Unknown inner record event source: {source}")
     return outcomes
@@ -870,7 +874,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 if source == 'aws:sqs':
                     record_outcomes = _dispatch_sqs_record(record, time_left)
                 elif source == 'aws:s3':
-                    record_outcomes = [handle_s3_record(record, top_bucket, top_prefix, time_left)]
+                    record_outcomes = [handle_s3_record(carry_bucket_id_stamp(record, event), top_bucket,
+                                                        top_prefix, time_left)]
                 elif source == 'aws:dynamodb':
                     record_outcomes = [handle_stream_record(record, time_left)]
                 else:

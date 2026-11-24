@@ -3,8 +3,10 @@
 
 """Enumeration of the files that currently live in the registered asset buckets.
 
-Walks every row of the S3 asset buckets table with ``list_objects_v2`` (current versions only, so a
-file behind a delete marker is never listed), skips folder markers, reserved system folders and
+Walks every registration of the S3 asset buckets table with ``list_objects_v2`` (current versions only,
+so a file behind a delete marker is never listed): a retired registration is not walked, and two rows for
+one location (``common/bucketRegistrations.py``) are walked once. It skips folder markers, reserved system
+folders and
 ``.previewFile.`` objects, and attributes each key to the live asset whose stored location contains it.
 Once the location index is ready (``assetLocations.index_ready``), each bucket's index partition is read
 once and every key is matched in memory (longest match), so files in any stored location are found. The
@@ -32,6 +34,7 @@ from common.assetLocations import (
     relative_path_in,
 )
 from common.assetLocations import normalize_base_prefix as _normalize_registration_prefix
+from common.bucketRegistrations import active_registrations, primary_bucket_id, primary_registrations
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, RESERVED_S3_PREFIX_FOLDERS
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -134,6 +137,16 @@ def resolve_live_database_id(asset_table, bucket_id: Optional[str], asset_id: Op
     return None
 
 
+def _resolve_in_location(asset_table, bucket_ids: List[str], asset_id: str) -> Optional[Tuple[str, str]]:
+    """(bucketId, live databaseId) of the first of `bucket_ids` (the rows of one location, the walked row
+    first) that holds a live row for `asset_id`, or None."""
+    for bucket_id in bucket_ids:
+        database_id = resolve_live_database_id(asset_table, bucket_id, asset_id)
+        if database_id:
+            return bucket_id, database_id
+    return None
+
+
 def scan_bucket_registrations(buckets_table) -> List[Dict]:
     """Every row of the S3 asset buckets table."""
     response = buckets_table.scan()
@@ -160,8 +173,9 @@ def decode_continuation(token: Optional[str]) -> Tuple[Optional[str], Optional[s
 
 
 def _registration_order(bucket: Dict) -> Tuple[str, str, str]:
-    """The walk order of bucket registrations: bucket name, then bucketId, then base prefix."""
-    return (bucket["bucketName"], bucket.get("bucketId") or "", bucket.get("baseAssetsPrefix") or "")
+    """The walk order of bucket registrations: bucket name, then bucketId (of the row that answers for
+    the location, which is the row's own for every row that duplicates none), then base prefix."""
+    return (bucket["bucketName"], primary_bucket_id(bucket), bucket.get("baseAssetsPrefix") or "")
 
 
 def enumerate_latest_live_files(
@@ -185,11 +199,20 @@ def enumerate_latest_live_files(
     ``database_id`` keeps only files whose asset resolves to that database.
     """
     token_bucket, token_key, token_bucket_id = decode_continuation(start_after)
-    buckets = sorted(
-        (bucket for bucket in scan_bucket_registrations(buckets_table) if bucket.get("bucketName")),
-        key=_registration_order,
-    )
-    resolved: Dict[Tuple[str, str], Optional[str]] = {}
+    registrations = [bucket for bucket in scan_bucket_registrations(buckets_table) if bucket.get("bucketName")]
+    # A retired registration (it left the configuration) is not walked, and two rows for one location
+    # are walked once, as the row that answers for it; an asset of either row is listed.
+    active = active_registrations(registrations)
+    buckets = sorted(primary_registrations(active), key=_registration_order)
+    location_ids: Dict[str, List[str]] = {}
+    for bucket in active:
+        location_ids.setdefault(primary_bucket_id(bucket), []).append(bucket.get("bucketId") or "")
+    # Every row's location, retired rows included, so an owner's registration can be compared.
+    location_of = {str(bucket.get("bucketId") or ""): primary_bucket_id(bucket) for bucket in registrations}
+    if token_bucket_id:
+        # A token names the registration it stopped in; a row that duplicates another resumes there.
+        token_bucket_id = location_of.get(token_bucket_id, token_bucket_id)
+    resolved: Dict[Tuple[str, str], Optional[Tuple[str, str]]] = {}
     refs: List[FileRef] = []
     by_index = index_ready(getattr(asset_table, "name", "") or "")
     locations_by_bucket: Dict[str, BucketLocations] = {}
@@ -200,8 +223,9 @@ def enumerate_latest_live_files(
     for bucket in buckets:
         bucket_name = bucket["bucketName"]
         bucket_id = bucket.get("bucketId")
+        walked_location = primary_bucket_id(bucket)
         if token_bucket is not None and token_bucket_id is not None:
-            position, token_position = (bucket_name, bucket_id or ""), (token_bucket, token_bucket_id)
+            position, token_position = (bucket_name, walked_location), (token_bucket, token_bucket_id)
             if position < token_position:
                 continue
             resume_key = token_key if position == token_position else None
@@ -213,6 +237,9 @@ def enumerate_latest_live_files(
         else:
             resume_key = None
         base_prefix = normalize_base_prefix(bucket.get("baseAssetsPrefix"))
+        # The walked row first, then the other rows for its location.
+        member_ids = [bucket_id or ""] + [other for other in location_ids.get(walked_location, [])
+                                          if other != (bucket_id or "")]
         last_key = resume_key
         paginator = s3_client.get_paginator("list_objects_v2")
         for page in paginator.paginate(**list_objects_kwargs(bucket_name, base_prefix, resume_key)):
@@ -232,6 +259,13 @@ def enumerate_latest_live_files(
                     entry = resolution.entry
                     if database_id is not None and entry.database_id != database_id:
                         continue
+                    # The owner is found by bucket name; it must be in the registration being walked,
+                    # or the reference would pair one registration's asset with another's prefix.
+                    if entry.bucket_id and location_of.get(entry.bucket_id, entry.bucket_id) != walked_location:
+                        logger.warning(f"Key {s3_key} in bucket {bucket_name} is held by asset {entry.asset_id} "
+                                       f"of registration {entry.bucket_id}, not of {bucket_id}; not listed "
+                                       "for this registration")
+                        continue
                     refs.append(FileRef(
                         database_id=entry.database_id,
                         asset_id=entry.asset_id,
@@ -247,10 +281,10 @@ def enumerate_latest_live_files(
                     continue
                 cache_key = (bucket_id or "", asset_id)
                 if cache_key not in resolved:
-                    resolved[cache_key] = resolve_live_database_id(asset_table, bucket_id, asset_id)
-                resolved_database_id = resolved[cache_key]
-                if not resolved_database_id:
+                    resolved[cache_key] = _resolve_in_location(asset_table, member_ids, asset_id)
+                if not resolved[cache_key]:
                     continue
+                owner_bucket_id, resolved_database_id = resolved[cache_key]
                 if database_id is not None and resolved_database_id != database_id:
                     continue
                 refs.append(FileRef(
@@ -260,8 +294,8 @@ def enumerate_latest_live_files(
                     bucket_name=bucket_name,
                     base_assets_prefix=base_prefix,
                     s3_key=s3_key,
-                    bucket_id=bucket_id or "",
+                    bucket_id=owner_bucket_id or "",
                 ))
             if last_key is not None and out_of_time():
-                return refs, encode_continuation(bucket_name, last_key, bucket_id)
+                return refs, encode_continuation(bucket_name, last_key, walked_location or bucket_id)
     return refs, None

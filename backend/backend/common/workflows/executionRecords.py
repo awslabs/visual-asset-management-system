@@ -1094,9 +1094,15 @@ def build_pipeline_execution_record(
     input_metadata_file_prefix, input_config_file_prefix, aux_temp_prefix,
     aux_preview_prefix, pipeline_execution_type, wait_for_callback,
     pipeline_resource_arn, from_pipeline_execution_id="",
-    orchestration_bus_event_prefix="",
+    orchestration_bus_event_prefix="", s3_asset_bucket_id="", s3_asset_bucket_base_prefix="",
 ):
-    """PipelineExecutionsStorageTable row (one per pipeline in the workflow)."""
+    """PipelineExecutionsStorageTable row (one per pipeline in the workflow).
+
+    `s3_asset_bucket` is the run bucket's name, handed to the pipeline. `s3_asset_bucket_id` is the
+    run bucket's registration (`bucketId`, its identity inside VAMS) and `s3_asset_bucket_base_prefix`
+    the area VAMS owns in it (its normalized `baseAssetsPrefix`, '' at the bucket root); the recorded
+    full keys are relative to the bucket, so a key relative to the registration is the key without that
+    prefix. Both are written only when given, so a row recorded before they existed reads as unknown."""
     rec = {
         "pipelineExecutionId": pipeline_execution_id,  # PK
         "workflowExecutionId": workflow_execution_id,  # SK + GSI1/2/3 PK
@@ -1142,6 +1148,9 @@ def build_pipeline_execution_record(
     # (a sparse GSI — first/unchained pipelines are simply absent from the chain index).
     if from_pipeline_execution_id:
         rec["from_pipeline_execution_id"] = from_pipeline_execution_id
+    if s3_asset_bucket_id:
+        rec["S3AssetPipelineBucketId"] = s3_asset_bucket_id
+        rec["S3AssetPipelineBucketBasePrefix"] = s3_asset_bucket_base_prefix or ""
     return rec
 
 

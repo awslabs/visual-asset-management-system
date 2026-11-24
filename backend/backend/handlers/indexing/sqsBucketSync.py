@@ -40,6 +40,8 @@ from common.s3PathPatterns import (
     AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment,
 )
 from common.s3 import is_object_version_archived, region_routing_s3_client
+from common.bucketRegistrations import REGISTRATION_DUPLICATE_OF_FIELD, active_registrations
+from common.indexerEvents import BUCKET_ID_STAMP_FIELD
 from common.vamsObjectTags import emit_bucket_sync_count, tag_synced_version, tagging_enabled
 from models.common import AssetLocationInUseError
 from common.assetHistory import (
@@ -420,6 +422,11 @@ def get_bucket_id(bucket_name: str, prefix: str) -> Optional[str]:
     Returns:
         str: Bucket ID if found, None otherwise
     """
+    # The prefix as the deploy-time custom resource stores it: exactly one trailing slash, and '/'
+    # for the bucket root.
+    trimmed_prefix = (prefix or '').rstrip('/')
+    prefix = f"{trimmed_prefix}/" if trimmed_prefix else '/'
+
     # Check cache first
     cache_key = f"{bucket_name}:{prefix}"
     cached_result = s3_buckets_cache.get(cache_key)
@@ -428,20 +435,32 @@ def get_bucket_id(bucket_name: str, prefix: str) -> Optional[str]:
         return cached_result
     
     try:
-        # Normalize prefix to ensure it ends with a slash
-        if prefix and not prefix.endswith('/'):
-            prefix = prefix + '/'
-            
-        # Query the S3 asset buckets table
+        # Query the S3 asset buckets table, paged to the end
         table = dynamodb.Table(s3_asset_buckets_table)
-        response = table.query(
-            IndexName="bucketNameGSI",
-            KeyConditionExpression=Key('bucketName').eq(bucket_name) & Key('baseAssetsPrefix').eq(prefix)
-        )
-        
-        if response.get('Items'):
-            bucket_id = response['Items'][0].get('bucketId')
-            is_versioning_enabled = response['Items'][0].get('isVersioningEnabled', False)
+        query_kwargs = {
+            'IndexName': "bucketNameGSI",
+            'KeyConditionExpression': Key('bucketName').eq(bucket_name) & Key('baseAssetsPrefix').eq(prefix),
+        }
+        items = []
+        while True:
+            response = table.query(**query_kwargs)
+            items.extend(response.get('Items', []))
+            if 'LastEvaluatedKey' not in response:
+                break
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+        # A retired row (its registration left the configuration) answers no lookup, and a row that
+        # duplicates another comes after it, so the registration that answers is the same on every
+        # call.
+        registrations = active_registrations(items)
+        if registrations:
+            primaries = [r for r in registrations if not r.get(REGISTRATION_DUPLICATE_OF_FIELD)]
+            if len(primaries) > 1:
+                logger.error(f"{len(primaries)} bucket registrations answer for bucket {bucket_name} prefix "
+                             f"{prefix}; using {registrations[0].get('bucketId')}. Deploy again so the "
+                             "registration table is rewritten from the configuration.")
+            bucket_id = registrations[0].get('bucketId')
+            is_versioning_enabled = registrations[0].get('isVersioningEnabled', False)
             
             # Cache the result
             s3_buckets_cache.set(cache_key, bucket_id)
@@ -990,27 +1009,16 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
     Returns:
         str: Database ID if found or created successfully, None if archived or error
     """
-    # Check cache for this specific bucket/prefix combination
-    prefix_for_cache = prefix.rstrip('/') if prefix else 'root'
-    cache_key = f"db_for_bucket_prefix:{bucket_name}:{prefix_for_cache}"
+    # Check cache for this registration. The registration is the bucketId: two registrations that
+    # share a bucket name and prefix are kept apart.
+    cache_key = f"db_for_bucket:{bucket_id}"
     cached_db_id = database_cache.get(cache_key)
     if cached_db_id is not None:
-        logger.info(f"Cache hit for database for bucket {bucket_name} prefix {prefix}")
+        logger.info(f"Cache hit for database for bucket registration {bucket_id}")
         return None if cached_db_id == ARCHIVED_DATABASE_CACHE_VALUE else cached_db_id
     
-    # Look up databases that match this bucket
-    databases = lookup_databases(bucket_id)
-    
-    # Filter databases to match this specific bucket/prefix combination
-    matching_databases = []
-    for db in databases:
-        # Get bucket info for this database (uses caching)
-        bucket_info = get_bucket_info_from_bucket_id(db.get('defaultBucketId'))
-        if bucket_info:
-            if (bucket_info.get('bucketName') == bucket_name
-                    and normalize_base_prefix(bucket_info.get('baseAssetsPrefix'))
-                    == normalize_base_prefix(prefix)):
-                matching_databases.append(db)
+    # The databases assigned to this registration: their defaultBucketId is its bucketId.
+    matching_databases = [db for db in lookup_databases(bucket_id) if db.get('defaultBucketId') == bucket_id]
 
     # Exactly one database assigned to this registration: that one. None, or several: the
     # registration's default database, which is the configured default sync database when it is
@@ -1679,6 +1687,23 @@ def split_event_to_size(event: Dict, limit: int) -> List[Dict]:
             + split_event_to_size({**event, 'Records': records[middle:]}, limit))
 
 
+def registration_stamp() -> Dict[str, str]:
+    """The registration this function serves, stamped on every message it forwards: its bucket name
+    and prefix as configured, and its bucketId when the registration can be read (cached). A message
+    without the bucketId is still forwarded, as from an earlier release."""
+    stamp = {
+        "ASSET_BUCKET_NAME": asset_bucket_name,
+        "ASSET_BUCKET_PREFIX": asset_bucket_prefix,
+    }
+    prefix = asset_bucket_prefix
+    if prefix and prefix != '/':
+        prefix = prefix.lstrip('/')
+    bucket_id = get_bucket_id(asset_bucket_name, prefix or "") if asset_bucket_name else None
+    if bucket_id:
+        stamp[BUCKET_ID_STAMP_FIELD] = bucket_id
+    return stamp
+
+
 def publish_to_file_indexer_sns(event):
     """
     Publish S3 event to file indexer SNS topic for downstream processing.
@@ -1695,11 +1720,9 @@ def publish_to_file_indexer_sns(event):
             logger.warning("FILE_INDEXER_SNS_TOPIC_ARN not configured, skipping SNS publish")
             return True
         
-        # Prepare payload for indexing
-        event.update({
-            "ASSET_BUCKET_NAME": asset_bucket_name,
-            "ASSET_BUCKET_PREFIX": asset_bucket_prefix
-        })
+        # Prepare payload for indexing: the registration's name and prefix (to split keys) and its
+        # bucketId (the identity consumers verify an owner against).
+        event.update(registration_stamp())
         
         # Publish to SNS topic, split by message when the records would exceed one message
         for part in split_event_to_size(event, SNS_MESSAGE_MAX_BYTES - PUBLISH_SIZE_MARGIN_BYTES):
@@ -1754,11 +1777,7 @@ def publish_to_orchestration_bus(successful_records):
         if not publishable_records:
             return
         parts = split_event_to_size(
-            {
-                "Records": publishable_records,
-                "ASSET_BUCKET_NAME": asset_bucket_name,
-                "ASSET_BUCKET_PREFIX": asset_bucket_prefix,
-            },
+            {"Records": publishable_records, **registration_stamp()},
             EVENTBRIDGE_ENTRY_MAX_BYTES - PUBLISH_SIZE_MARGIN_BYTES,
         )
         for detail in parts:

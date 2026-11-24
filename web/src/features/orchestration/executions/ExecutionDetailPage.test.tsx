@@ -865,6 +865,8 @@ describe("ExecutionDetailPage", () => {
                     renderedConfigLocation: {
                         bucket: "run-bkt",
                         key: "executions/e-t/input/1/config.json",
+                        bucketId: "registration-1",
+                        relativeKey: "executions/e-t/input/1/config.json",
                     },
                 },
             ],
@@ -872,9 +874,11 @@ describe("ExecutionDetailPage", () => {
 
         await userEvent.click(await screen.findByRole("tab", { name: /Pipelines/i }));
         expect(screen.getByText("Truncated")).toBeInTheDocument();
+        // The S3 path is what an operator reads the object with; the registration id is not shown.
         expect(
             screen.getByText("s3://run-bkt/executions/e-t/input/1/config.json")
         ).toBeInTheDocument();
+        expect(screen.queryByText(/registration-1/)).not.toBeInTheDocument();
     });
 
     it("shows no config location when the inline body is complete", async () => {
