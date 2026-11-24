@@ -2064,15 +2064,18 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
     deleted_count = 0
     db_asset_key = f"{databaseId}:{assetId}"
 
-    # Normalize file paths: the table stores fileKey with leading slash
+    # A row's fileKey is the relativeKey its asset version was created with: without a leading
+    # slash for a version built from the current files (list_s3_files_with_versions), and as the
+    # caller wrote it for a version built from a file list. Paths are compared without the slash,
+    # and each row is deleted by the key it is stored under.
     normalized_paths = set()
     for fp in file_paths:
         fp_clean = fp.strip()
         if fp_clean.endswith('/'):
             continue
-        if not fp_clean.startswith('/'):
-            fp_clean = '/' + fp_clean
-        normalized_paths.add(fp_clean)
+        fp_clean = fp_clean.lstrip('/')
+        if fp_clean:
+            normalized_paths.add(fp_clean)
 
     if not normalized_paths:
         return 0
@@ -2087,7 +2090,7 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
         while True:
             response = asset_version_files_table.query(**query_kwargs)
             for item in response.get('Items', []):
-                if item.get('fileKey', '') in normalized_paths:
+                if str(item.get('fileKey', '')).lstrip('/') in normalized_paths:
                     records_to_delete.append(item)
 
             if 'LastEvaluatedKey' in response:
