@@ -300,7 +300,7 @@ Removes metadata items from an asset by key.
 
 File-level metadata is attached to individual files within an asset. The same endpoint path handles both file metadata and file attributes, distinguished by a `type` query parameter.
 
-A file's records are keyed by the path the file list shows the file at (`relativePath` in [List Files](files.md#list-files)). `filePath` names the file by that path or by the file's full S3 key (`key` in the file list), and both forms read and write the same records for every kind of asset: an asset in its own folder, an asset created on an existing folder or object, and an asset in a bucket with a base prefix.
+A file's records are keyed by the path the file list shows the file at (`relativePath` in [List Files](files.md#list-files)). `filePath` names the file by that path or by the file's full S3 key (`key` in the file list), and both forms read and write the same records for every kind of asset: an asset in its own folder, an asset created on an existing folder or object, and an asset in a bucket with a base prefix. The exception is a file whose listed path starts with the asset ID as a folder (`/{assetId}/...`) or with the asset's location (`assetLocation.Key`): that listed path is read as another file's path, so name such a file by its full key.
 
 ### Get File Metadata
 

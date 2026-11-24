@@ -660,6 +660,8 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Switching between OpenSearch Serverless and provisioned** — The [OpenSearch](../developer/opensearch.md#switching-between-serverless-and-provisioned) developer guide describes moving an existing deployment from one OpenSearch option to the other: deploy with both options off, then with the other option on, then fill the new indexes with the reindex utility. (PR #325)
 -   **Upgrading with Download as Zip and large outputs** — The v2.6 to v2.7 [upgrade guide](../deployment/update-the-solution.md#v26-to-v27) and migration README list the tables, lifecycle rules, system records and interface endpoints the upgrade creates for Download as Zip and the large output copy engine, which no migration step touches, and the order for a v2.5 deployment that deploys v2.7 directly. The compliance user guide says that Download as Zip is refused for a quarantined asset and that a workflow still runs on one. (PR #325)
 -   **Remote MCP token forwarding** — The [Remote MCP Server](../mcp/remote-mcp-server.md#token-forwarding) page records that remote mode forwards each request's access token to the VAMS API by design, with the reasons and the controls that keep it safe. (PR #1700)
+-   **PyTorch3D notice** — `NOTICE.md` and the [Notices](notices.md) page name Meta PyTorch3D (BSD-3-Clause), which the Image to 3D pipeline's Step1X-3D image builds from source. (PR #1898)
+-   **File metadata by full key** — The [Metadata API](../api/metadata.md#file-metadata) page and `VAMS_API.yaml` say that a file whose listed path starts with the asset ID as a folder, or with the asset's location, must be named by its full key. (PR #1898)
 
 **Other changes:**
 
