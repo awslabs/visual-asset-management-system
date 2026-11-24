@@ -11,8 +11,9 @@ yields only registry rows. EC2's facts are read live, one batched call for every
 per id when EC2 refuses the batch for an id it does not hold.
 """
 
+import importlib.util
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from boto3.dynamodb.conditions import Key
@@ -498,3 +499,14 @@ class TestEdhsPrivateSubnetsReadThroughTheSharedLookup:
             clock[0] += reservations.SUBNET_ZONES_CACHE_SECONDS
             assert reservations.subnet_zones() is None
         assert len(fakes.ssm.names) == 2
+
+    def test_loading_the_module_builds_no_ssm_client(self):
+        spec = importlib.util.spec_from_file_location(
+            "backend.backend.handlers.addon.edh.common.edhCapacityReservations_under_test", reservations.__file__)
+        module = importlib.util.module_from_spec(spec)
+        factory = MagicMock(return_value=MagicMock())
+        with patch("boto3.client", factory), patch("boto3.resource", MagicMock()):
+            spec.loader.exec_module(module)
+        services = [call.args[0] for call in factory.call_args_list]
+        assert "ec2" in services, "control: the module's clients were recorded"
+        assert "ssm" not in services

@@ -53,6 +53,9 @@ NOT_OFFERED = "zz9.nope"
 PARENT_AMI = "ami-0123456789abcdef0"
 # The AMI the fake SSM parameter resolves to.
 PARAMETER_AMI = "ami-0abc0abc0abc0abc0"
+# The recipe's ssm: parent parameter, and the build start's refusal when it cannot be read.
+PARENT_PARAMETER = RECIPE_BODY["parentImage"][len("ssm:"):]
+PARENT_SSM_UNREADABLE = "the parent image's SSM parameter could not be read"
 AMI_NOT_FOUND = ClientError({"Error": {"Code": "InvalidAMIID.NotFound", "Message": "missing"}}, "DescribeImages")
 AMI_MALFORMED = ClientError({"Error": {"Code": "InvalidAMIID.Malformed", "Message": "malformed"}}, "DescribeImages")
 INVALID_TYPE = ClientError({"Error": {"Code": "InvalidInstanceType", "Message": "not offered"}}, "DescribeInstanceTypes")
@@ -2706,10 +2709,6 @@ def read_bound():
     return helper.PARAMETER_READ_BUDGET_SECONDS + helper.READ_RETRY_MAX_SLEEP_SECONDS
 
 
-PARENT_PARAMETER = RECIPE_BODY["parentImage"][len("ssm:"):]
-PARENT_SSM_UNREADABLE = "the parent image's SSM parameter could not be read"
-
-
 @pytest.mark.unit
 class TestTheParentImageParameterAtSave:
     """A recipe save reads its ssm: parent through common.ssmParameters, fresh each time, and fails open."""
@@ -2719,6 +2718,17 @@ class TestTheParentImageParameterAtSave:
         assert admin_recipe()["parentImage"] == RECIPE_BODY["parentImage"]
         world["ctx"].parameter_store.get_parameter.assert_called_once_with(Name=PARENT_PARAMETER)
         world["ctx"].ec2.describe_images.assert_called_once_with(ImageIds=[PARAMETER_AMI])
+
+    def test_the_build_context_builds_no_ssm_client(self, monkeypatch):
+        built = []
+
+        def client(name, config=None, **kwargs):
+            built.append(name)
+            return MagicMock(name=name)
+        monkeypatch.setattr(recipes.builder.boto3, "client", client)
+        recipes._ctx()
+        assert "ec2" in built, "control: the context's clients were recorded"
+        assert "ssm" not in built
 
     def test_two_saves_read_the_parameter_twice(self, world):
         model = AmiRecipeRequestModel(**RECIPE_BODY)
