@@ -1,6 +1,10 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Fakes shared by the AMI recipe tests: a moto recipe table and recording Image Builder / EDH clients."""
+"""Fakes shared by the AMI recipe tests: a moto recipe table and recording Image Builder / EDH clients.
+
+A recipe's ``ssm:`` parent image is read through common.ssmParameters, so ``fake_context`` puts its parameter answer
+(a MagicMock answering ``get_parameter`` with the AMI id) behind that lookup, and hands it to the test as the
+context's ``parameter_store``: a test sets its ``side_effect`` or asserts its calls there."""
 import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -9,6 +13,7 @@ import boto3
 
 from backend.backend.handlers.addon.edh.common import edhAmiRecipeStore as store
 from backend.backend.handlers.addon.edh.common import edhImageBuilder as ib_mod
+from backend.tests.handlers.addon.edh.edhParameterStoreTestSupport import replace_lookup_client
 from backend.tests.handlers.addon.edh.edhTestSupport import FakeProjects
 
 TABLE = os.environ["EDH_AMI_RECIPE_STORAGE_TABLE_NAME"]
@@ -64,6 +69,19 @@ def _describe_instances_paginator(ec2):
     return SimpleNamespace(paginate=paginate)
 
 
+def install_parent_parameters(parameter_store):
+    """Answer the lookups' reads from ``parameter_store`` for the rest of the test (the EDH conftest restores the
+    lookups' clients after it)."""
+    return replace_lookup_client(parameter_store)
+
+
+def parent_parameters(ami="ami-0abc0abc0abc0abc0"):
+    """A Parameter Store stand-in answering every ``get_parameter`` with ``ami``."""
+    parameter_store = MagicMock()
+    parameter_store.get_parameter.return_value = {"Parameter": {"Type": "String", "Value": ami}}
+    return parameter_store
+
+
 def fake_context(ami="ami-0abc0abc0abc0abc0", image_status="AVAILABLE"):
     ib = MagicMock()
     ib.exceptions = SimpleNamespace(ResourceAlreadyExistsException=ALREADY, ResourceNotFoundException=NOT_FOUND,
@@ -93,13 +111,14 @@ def fake_context(ami="ami-0abc0abc0abc0abc0", image_status="AVAILABLE"):
     ec2.describe_instances_error = None
     paginators = {"describe_instances": _describe_instances_paginator(ec2)}
     ec2.get_paginator.side_effect = lambda name: paginators[name]
-    ssm = MagicMock()
-    ssm.get_parameter.return_value = {"Parameter": {"Value": ami}}
-    return ib_mod.ImageBuilderContext(prefix="vams-test-edh", region="us-east-1", partition="aws", account="123456789012",
-                                      subnet_id="subnet-1", security_group_id="sg-1", instance_profile_name="prof",
-                                      cluster_id=os.environ["EDH_CLUSTER_ID"], ib=ib, ec2=ec2, ssm=ssm,
-                                      deployment_parameters=ib_mod.deployment_parameters_from_env(),
-                                      lookup_ec2=ec2, lookup_ssm=ssm)
+    ctx = ib_mod.ImageBuilderContext(prefix="vams-test-edh", region="us-east-1", partition="aws",
+                                     account="123456789012", subnet_id="subnet-1", security_group_id="sg-1",
+                                     instance_profile_name="prof",
+                                     cluster_id=os.environ["EDH_CLUSTER_ID"], ib=ib, ec2=ec2,
+                                     deployment_parameters=ib_mod.deployment_parameters_from_env(),
+                                     lookup_ec2=ec2)
+    ctx.parameter_store = install_parent_parameters(parent_parameters(ami))
+    return ctx
 
 
 def fake_edh(stack_id=42, projects=None):

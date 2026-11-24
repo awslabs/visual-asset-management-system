@@ -20,6 +20,7 @@ import backend.backend.handlers.addon.edh.edhWorkstationService as service
 from backend.backend.handlers.addon.edh.common.edhSessionState import (
     EDH_SESSION_ID_FIELD, EDH_SESSION_STATE_FIELD, WORKER_PAYLOAD_KEYS,
 )
+from backend.tests.handlers.addon.edh.edhParameterStoreTestSupport import serve_parameters
 from backend.tests.handlers.addon.edh.edhReservationTestSupport import (
     CR_FREE, CR_FULL, CR_OTHER, END_DATE, Untouchable, client_error, ec2_reservation, install_reservation_fakes,
 )
@@ -671,7 +672,7 @@ class TestTheSubnetOfAReservationsZone:
 
     def test_a_launch_naming_no_reservation_reads_no_subnet(self, monkeypatch):
         fakes = install_service_fakes(monkeypatch)
-        monkeypatch.setattr(service.reservations, "ssm", Untouchable())
+        serve_parameters(monkeypatch, Untouchable())
         monkeypatch.setattr(service.reservations, "ec2", Untouchable())
         monkeypatch.setattr(service.reservations, "_session_table", Untouchable())
 
