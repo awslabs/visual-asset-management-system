@@ -86,3 +86,49 @@ class PermissionDeniedError(Exception):
 def test_errors_map_to_generic_statuses(error, status):
     pytest.importorskip("grpc")
     assert server.status_for(error).name == status
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("2026-11-24T14:03:29.970036", "2026-11-24T14:03:29.970036+00:00"),
+    ("2026-11-24T14:03:29Z", "2026-11-24T14:03:29+00:00"),
+    ("November 24 2026 - 13:54:15", "2026-11-24T13:54:15+00:00"),
+    ("not a date", None),
+    ("", None),
+    (None, None),
+])
+def test_parse_vams_date_reads_the_shapes_vams_writes(value, expected):
+    parsed = server.parse_vams_date(value)
+    assert (parsed.isoformat() if parsed else None) == expected
+
+
+def test_the_discovery_document_lists_the_notification_consumer_on_its_own_port():
+    doc = server.discovery_document(4321, ["s.Storage"], 4322, ["n.EventConsumerService"])
+    storage, events = doc["services"]
+    assert storage["grpc"]["url"] == "http://127.0.0.1:4321"
+    assert events["grpc"]["url"] == "http://127.0.0.1:4322"
+    assert events["grpc"]["endpoints"] == [{"service": "n.EventConsumerService"}]
+
+
+def test_the_discovery_document_without_events_lists_only_storage():
+    assert len(server.discovery_document(4321, ["s.Storage"])["services"]) == 1
+
+
+class FakeApi:
+    def __init__(self):
+        self.calls = 0
+
+    def list_databases(self, params=None):
+        self.calls += 1
+        if params.get("startingToken"):
+            return {"Items": [{"databaseId": "b"}]}
+        return {"Items": [{"databaseId": "c"}, {"databaseId": "a"}], "NextToken": "t"}
+
+
+def test_databases_are_read_across_pages_sorted_and_cached_per_caller():
+    tree = server.VamsTree("https://api.example.com/api")
+    api = FakeApi()
+    assert list(tree.databases(api, "who1")) == [["a", "b", "c"]]
+    assert list(tree.databases(api, "who1")) == [["a", "b", "c"]]
+    assert api.calls == 2
+    list(tree.databases(api, "who2"))
+    assert api.calls == 4
