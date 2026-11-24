@@ -38,7 +38,7 @@ from common.s3MetadataKeys import (
     UserMetadataTooLargeError,
 )
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
-from common.assetLocations import AssetFilePaths, contains, own_aux_scope
+from common.assetLocations import AssetFilePaths, contains, own_aux_scope, _is_preview_of
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, asset_file_paths
 from common.apiRoutes import (
     API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
@@ -1606,26 +1606,19 @@ def find_preview_files_for_base(bucket: str, base_key: str) -> List[str]:
     preview_files = []
     
     try:
-        filename = os.path.basename(base_key)
-
         # The prefix is the base file's own key, so a same-named file in a subfolder does not match
         prefix = f"{base_key}{PREVIEW_FILE_PATTERN}"
         
-        # Create the pattern to match preview files for this base file
-        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
-        
         logger.info(f"Searching for preview files in bucket {bucket} with prefix {prefix}")
-        logger.info(f"Looking for pattern: {pattern}")
         
         # List objects in the directory
         paginator = s3_client.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
                 key = obj['Key']
-                base_filename = os.path.basename(key)
                 
-                # Check if this is a preview file for our base file
-                if base_filename.startswith(pattern):
+                # A preview is {base key}.previewFile.{ext}; a longer key that only shares the prefix is not one
+                if _is_preview_of(base_key, key):
                     preview_files.append(key)
         
         # Sort the preview files alphabetically
@@ -1649,16 +1642,10 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
     preview_files = []
     
     try:
-        filename = os.path.basename(base_key)
-
         # The prefix is the base file's own key, so a same-named file in a subfolder does not match
         prefix = f"{base_key}{PREVIEW_FILE_PATTERN}"
         
-        # Create the pattern to match preview files for this base file
-        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
-        
         logger.info(f"Searching for preview files (including archived) in bucket {bucket} with prefix {prefix}")
-        logger.info(f"Looking for pattern: {pattern}")
         
         # Use list_object_versions to find both current and archived files.
         # Page fully so preview files are not missed in directories with many versions.
@@ -1670,10 +1657,9 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
         # Process all versions to find preview files
         for version in versions_response.get('Versions', []):
             key = version['Key']
-            base_filename = os.path.basename(key)
             
             # Skip if already processed or not a preview file for our base file
-            if key in processed_keys or not base_filename.startswith(pattern):
+            if key in processed_keys or not _is_preview_of(base_key, key):
                 continue
             
             # Add to processed keys to avoid duplicates
@@ -1700,10 +1686,9 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
         # Also check delete markers for files that might only have delete markers
         for marker in versions_response.get('DeleteMarkers', []):
             key = marker['Key']
-            base_filename = os.path.basename(key)
             
             # Skip if already processed or not a preview file for our base file
-            if key in processed_keys or not base_filename.startswith(pattern):
+            if key in processed_keys or not _is_preview_of(base_key, key):
                 continue
             
             # Add to processed keys to avoid duplicates

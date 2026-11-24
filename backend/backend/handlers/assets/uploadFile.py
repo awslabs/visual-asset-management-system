@@ -43,7 +43,7 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
 from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived, asset_file_paths
-from common.assetLocations import contains
+from common.assetLocations import contains, _is_preview_of
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
@@ -808,7 +808,9 @@ def find_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
         paginator = s3.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
-                preview_files.append(obj['Key'])
+                # A preview is {base key}.previewFile.{ext}; a longer key that only shares the prefix is not one
+                if _is_preview_of(base_file_key, obj['Key']):
+                    preview_files.append(obj['Key'])
         
         # Sort the preview files alphabetically
         preview_files.sort()
