@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 SETTING_PROFILE = "/exts/vams.connector.isaacsim/profile"
 SETTING_VAMSCLI_PATH = "/exts/vams.connector.isaacsim/vamscli_path"
-# Shows VAMS in the Content window under Omniverse Storage once signed in (Isaac Sim 6.1+).
+# Shows VAMS in the Content window under Omniverse Storage once signed in (Isaac Sim 6.1+). Off by default.
 SETTING_CONTENT_WINDOW = "/exts/vams.connector.isaacsim/content_window"
 
 _USD_EXTENSIONS = (".usd", ".usda", ".usdc", ".usdz")
@@ -204,7 +204,9 @@ class VamsConnectorExtension(omni.ext.IExt):
         self._profile = profile
         self._vamscli_path = vamscli_path
         content_window = settings.get(SETTING_CONTENT_WINDOW)
-        self._content_window_enabled = content_window is None or bool(content_window)
+        # Off unless set: adding the entry writes to the user's omniverse.toml (the Content window keeps its
+        # connections there), which the user turns on by this setting. The EDH isaacsim image sets it.
+        self._content_window_enabled = bool(content_window)
         self._content = None
 
         self._connector = None

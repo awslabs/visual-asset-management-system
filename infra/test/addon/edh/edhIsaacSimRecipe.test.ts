@@ -386,6 +386,16 @@ describe("the shipped Isaac Sim recipe", () => {
             "mkdir -p /opt/vams/isaacsim-connector/vams.connector.isaacsim"
         );
         expect(launcher).toContain("EXT_PARENT=/opt/vams/isaacsim-connector\n");
+        // The connector ships the Content window connection off; this image installs its storage
+        // dependencies and turns it on, and checks both.
+        expect(connector).toContain("requirements-storage.txt");
+        expect(connector).toContain(
+            '.content_window = .*|exts."vams.connector.isaacsim".content_window = true|'
+        );
+        expect(connector).toContain(
+            "grep -Fq 'exts.\"vams.connector.isaacsim\".content_window = true'"
+        );
+        expect(connector).toContain('python -c "import grpc, google.protobuf"');
         expect(launcher.match(/--ext-folder "[^"]*"/g)).toEqual(['--ext-folder "${EXT_PARENT}"']);
     });
 

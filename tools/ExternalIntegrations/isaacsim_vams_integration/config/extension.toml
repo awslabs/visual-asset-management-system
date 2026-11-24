@@ -27,5 +27,6 @@ exts."vams.connector.isaacsim".profile = "default"
 # Optional explicit path to the vamscli executable. Leave empty to use PATH.
 exts."vams.connector.isaacsim".vamscli_path = ""
 # Show VAMS in the Content window under Omniverse Storage once signed in (Isaac Sim 6.1+). Needs grpcio and
-# protobuf in the VAMS CLI's environment (requirements-storage.txt).
-exts."vams.connector.isaacsim".content_window = true
+# protobuf in the VAMS CLI's environment (requirements-storage.txt). The Content window keeps its connections in
+# the user's omniverse.toml, so the entry is written there while the connection is on.
+exts."vams.connector.isaacsim".content_window = false

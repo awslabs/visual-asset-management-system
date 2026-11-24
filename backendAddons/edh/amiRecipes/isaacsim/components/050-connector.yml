@@ -37,6 +37,8 @@ phases:
                     - toml=/opt/vams/isaacsim-connector/vams.connector.isaacsim/config/extension.toml
                     - sed -i 's|^exts\."vams\.connector\.isaacsim"\.profile = .*|exts."vams.connector.isaacsim".profile = "edh"|' "$toml"
                     - sed -i 's|^exts\."vams\.connector\.isaacsim"\.vamscli_path = .*|exts."vams.connector.isaacsim".vamscli_path = "/opt/vams/vamscli-venv/bin/vamscli"|' "$toml"
+                    # This image installs the Content window connection's dependencies, so it turns it on.
+                    - sed -i 's|^exts\."vams\.connector\.isaacsim"\.content_window = .*|exts."vams.connector.isaacsim".content_window = true|' "$toml"
           - name: OpenPermissionsToEveryDesktopUser
             action: ExecuteBash
             inputs:
@@ -53,4 +55,5 @@ phases:
                     - toml=/opt/vams/isaacsim-connector/vams.connector.isaacsim/config/extension.toml
                     - grep -Fq 'exts."vams.connector.isaacsim".profile = "edh"' "$toml"
                     - grep -Fq 'exts."vams.connector.isaacsim".vamscli_path = "/opt/vams/vamscli-venv/bin/vamscli"' "$toml"
+                    - grep -Fq 'exts."vams.connector.isaacsim".content_window = true' "$toml"
                     - /opt/vams/vamscli-venv/bin/python -c "import grpc, google.protobuf"

@@ -19,13 +19,14 @@ An [Omniverse Kit](https://docs.omniverse.nvidia.com/kit/docs/kit-manual/latest/
 
 ### Content Window Connection (Isaac Sim 6.1+)
 
-Once you are signed in, VAMS appears in the Isaac Sim **Content** window under **Omniverse Storage** > **VAMS**, as a Nucleus server does. Its tree is `<database>` > `<asset name> (<asset id>)` > the asset's files and folders. The **VAMS Connector** window stays for sign-in, workflows, export and upload. The connection is read-only.
+With the `content_window` setting on, VAMS appears in the Isaac Sim **Content** window once you are signed in, under **Omniverse Storage** > **VAMS**, as a Nucleus server does. Its tree is `<database>` > `<asset name> (<asset id>)` > the asset's files and folders. The **VAMS Connector** window stays for sign-in, workflows, export and upload. The connection is read-only.
 
 -   **Paths**: files have `vams://vams/<database>/<asset name> (<asset id>)/<path>` URLs, which USD layers, references and textures can name directly, including by relative path between assets (for example `@../robot (x346a6c0c-...)/robot.usda@`). Nothing is copied to a local folder first.
 -   **Folder names**: an asset folder is named `<asset name> (<asset id>)` and is at most 255 bytes, the folder-name limit of Linux, Windows and macOS file systems. The full asset id is always kept; a name too long to fit is cut and ends in `...`. Only the id resolves the folder, so a path written before an asset was renamed still opens it.
 -   **Access**: everything listed and read goes through the VAMS API as you, so you see what your VAMS role allows. Files download straight from their presigned VAMS URLs.
 -   **How it runs**: the extension starts a small adapter (`vams/connector/isaacsim/storage_adapter/`) with the VAMS CLI's Python, listening on `127.0.0.1` only, and registers it with the Content window. The adapter holds no credential: each request carries your own VAMS CLI sign-in, which the extension reads from the CLI profile when Isaac Sim asks for it. The Content window keeps its entries in your `omniverse.toml`; the VAMS entry is removed again, and the adapter stopped, when you sign out or close Isaac Sim, and an entry left by a session that did not close cleanly is removed at the next sign-in.
--   **Requirements**: Isaac Sim 6.1 or later (Kit 110.2+), and `grpcio` and `protobuf` in the VAMS CLI's environment: `pip install --require-hashes -r requirements-storage.txt` with that environment's `pip`. Without them, or on Isaac Sim 5.1, the VAMS Connector window works as before and the Isaac Sim log says why the Content window entry was not added. Turn the connection off with the `content_window` setting.
+-   **Requirements**: Isaac Sim 6.1 or later (Kit 110.2+), and `grpcio` and `protobuf` in the VAMS CLI's environment: `pip install --require-hashes -r requirements-storage.txt` with that environment's `pip`. Without them, or on Isaac Sim 5.1, the VAMS Connector window works as before and the Isaac Sim log says why the Content window entry was not added.
+-   **Turning it on**: the connection is off unless `content_window` is `true`, because the Content window keeps its connections in your `omniverse.toml` and the VAMS entry is written there while the connection is on. The EDH Workstations `isaacsim` desktop image installs the dependencies and turns it on.
 
 ### Asset Download & Import
 
@@ -426,7 +427,7 @@ Settings can be configured in `config/extension.toml` or overridden at runtime v
 | ----------------------------------------------- | ----------- | -------------------------------------------------------------- |
 | `exts."vams.connector.isaacsim".profile`        | `"default"` | VAMS CLI profile name                                          |
 | `exts."vams.connector.isaacsim".vamscli_path`   | `""`        | Explicit path to vamscli executable (empty = use PATH)         |
-| `exts."vams.connector.isaacsim".content_window` | `true`      | Add VAMS to the Content window once signed in (Isaac Sim 6.1+) |
+| `exts."vams.connector.isaacsim".content_window` | `false`     | Add VAMS to the Content window once signed in (Isaac Sim 6.1+) |
 
 ### Multiple VAMS Deployments
 
