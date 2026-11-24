@@ -4580,8 +4580,10 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
             show_archived=show_archived
         )
         
+        # The record names the path the file is listed at (the response's relativePath), whichever form
+        # the request used, as the file metadata routes do
         log_action(event, "fileInfoGet", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
-                   file_path=request_model.filePath,
+                   file_path=response.relativePath,
                    request_parameters={"includeVersions": request_model.includeVersions, "showArchived": show_archived})
         return success(body=response.dict())
     

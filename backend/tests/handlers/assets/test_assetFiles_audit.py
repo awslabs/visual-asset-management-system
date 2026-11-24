@@ -84,6 +84,56 @@ class TestFileRecords:
 
 
 @pytest.mark.unit
+class TestFileInfoRecords:
+    """A file read records the path the file is listed at, whichever form the request used"""
+
+    BASE_KEY = "custom/location/"
+
+    @pytest.fixture
+    def info(self, recorder, monkeypatch):
+        from datetime import datetime
+
+        s3_client = MagicMock()
+        s3_client.head_object.return_value = {
+            "ContentLength": 12, "ContentType": "application/octet-stream",
+            "LastModified": datetime(2026, 9, 1), "ETag": '"e"', "Metadata": {},
+        }
+        s3_client.get_paginator.return_value.paginate.return_value = []
+        s3_client.list_objects_v2.return_value = {"Contents": []}
+        monkeypatch.setattr(files_svc, "s3_client", s3_client)
+        monkeypatch.setattr(files_svc, "request_to_claims", lambda event: CLAIMS)
+        monkeypatch.setattr(files_svc, "CasbinEnforcer", lambda claims: MagicMock(enforceAPI=lambda event: True))
+        monkeypatch.setattr(files_svc, "get_asset_with_permissions",
+                            lambda database_id, asset_id, op, claims, include_archived=False: {"assetId": asset_id})
+        monkeypatch.setattr(files_svc, "get_asset_s3_location", lambda asset: ("bucket", self.BASE_KEY))
+        monkeypatch.setattr(files_svc, "is_file_archived", lambda bucket, key, version_id=None: False)
+
+        def read(file_path):
+            event = {"pathParameters": dict(PATH), "queryStringParameters": {"filePath": file_path},
+                     "requestContext": {"http": {"method": "GET", "path": "/database/db1/assets/asset-01/fileInfo"}}}
+            assert files_svc.handle_file_info(event, None)["statusCode"] == 200
+            return recorder.call_args
+
+        return read
+
+    @pytest.mark.parametrize("requested", ["/models/a.glb", "custom/location/models/a.glb", "/custom/location/models/a.glb"])
+    def test_every_form_of_a_request_records_the_listed_path(self, info, requested):
+        call = info(requested)
+        assert call.args[1] == "fileInfoGet"
+        assert call.kwargs["file_path"] == "/models/a.glb"
+
+    def test_a_refused_read_records_nothing(self, recorder, monkeypatch):
+        def refuse(*args, **kwargs):
+            raise files_svc.VAMSGeneralErrorResponse("Not authorized", 403)
+        monkeypatch.setattr(files_svc, "request_to_claims", lambda event: CLAIMS)
+        monkeypatch.setattr(files_svc, "CasbinEnforcer", lambda claims: MagicMock(enforceAPI=lambda event: True))
+        monkeypatch.setattr(files_svc, "get_file_info", refuse)
+        event = {"pathParameters": dict(PATH), "queryStringParameters": {"filePath": "/a.glb"}}
+        files_svc.handle_file_info(event, None)
+        recorder.assert_not_called()
+
+
+@pytest.mark.unit
 class TestVersionRecords:
     def test_a_version_create_records_the_request_without_the_file_list(self, recorder, monkeypatch):
         created = versions_svc.AssetVersionOperationResponseModel(
