@@ -158,7 +158,7 @@ API keys provide an alternative authentication method for VAMS, enabling program
 The `api-key` commands manage keys for any user and require API-level access to the key management endpoints. The [`api-key user` sub-commands](#api-key-user-list) let any user manage their own keys without administrative access.
 
 :::warning[API Key Security]
-The plaintext API key value is displayed only once, at creation time, and cannot be retrieved afterwards. Store it securely immediately. Only a SHA-256 hash of the key is retained in Amazon DynamoDB (encrypted at rest with AWS KMS). Expired keys are rejected at the authorizer level, and deleting a key revokes its access immediately.
+The plaintext API key value is displayed only once, at creation time, and cannot be retrieved afterwards. Store it securely immediately. Only a SHA-256 hash of the key is retained in Amazon DynamoDB (encrypted at rest with AWS KMS). Expired keys are rejected at the authorizer level. A deleted or deactivated key loses access shortly afterward: VAMS briefly caches API key authorization, so the key can keep working for up to about 45 seconds (see [Deleting an API key](../../user-guide/api-keys.md#deleting-an-api-key)).
 :::
 
 ---
@@ -264,7 +264,7 @@ vamscli api-key update --api-key-id UUID --expires-at ""
 
 ## api-key delete
 
-Permanently delete an API key. This immediately revokes access for anyone using the key.
+Permanently delete an API key. Anyone using the key loses access shortly afterward: VAMS briefly caches API key authorization, so a deleted key can keep working for up to about 45 seconds.
 
 ```bash
 vamscli api-key delete --api-key-id <UUID> [OPTIONS]
@@ -388,7 +388,7 @@ vamscli api-key user update --api-key-id UUID --is-active false
 
 ## api-key user delete
 
-Delete one of your own API keys. This immediately revokes access.
+Delete one of your own API keys. The key loses access shortly afterward: VAMS briefly caches API key authorization, so a deleted key can keep working for up to about 45 seconds.
 
 ```bash
 vamscli api-key user delete --api-key-id <UUID> [OPTIONS]
