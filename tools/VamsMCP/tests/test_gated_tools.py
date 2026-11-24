@@ -461,64 +461,58 @@ def test_delete_database_forwards_the_id(gated):
 # --- Comment writes ---------------------------------------------------------
 
 
-def test_add_comment_generates_a_uuid4_and_returns_the_SAME_id(gated):
-    """The endpoint's acknowledgement is the literal string "Succeeded" and names no id, so the id
-    the tool reports is the only record of what was written. A generated-but-unreported id — or a
-    reported id that differs from the one sent — leaves a comment the agent cannot address again."""
-    import uuid
-
+def test_add_comment_returns_the_id_the_api_generated(gated):
+    """The API generates the comment id and returns it; the tool reports that id, so the comment can
+    be addressed again, and sends none of its own."""
     server, client = gated
-    client.api.add_comment.return_value = {"message": "Succeeded"}
+    client.api.add_comment.return_value = {"message": "Succeeded", "commentId": "c-from-api"}
 
-    result = server.add_comment("a1", "v1", "some text")
+    result = server.add_comment("db1", "a1", "v1", "some text")
 
-    sent_id = client.api.add_comment.call_args.args[2]
-    assert uuid.UUID(sent_id).version == 4, sent_id
-    assert result["commentId"] == sent_id
-    # The acknowledgement is merged in rather than replaced, so a caller still sees the API's answer.
+    assert client.api.add_comment.call_args.args == ("db1", "a1", "v1", "some text")
+    assert result["commentId"] == "c-from-api"
     assert result["message"] == "Succeeded"
 
 
-def test_add_comment_uses_a_caller_supplied_id_verbatim(gated):
+def test_add_comment_wraps_a_non_dict_acknowledgement(gated):
     server, client = gated
-    client.api.add_comment.return_value = {"message": "Succeeded"}
-    result = server.add_comment("a1", "v1", "some text", comment_id="mine-1")
-    assert client.api.add_comment.call_args.args == ("a1", "v1", "mine-1", "some text")
-    assert result["commentId"] == "mine-1"
+    client.api.add_comment.return_value = "Succeeded"
+    assert server.add_comment("db1", "a1", "v1", "some text") == {"response": "Succeeded"}
 
 
 def test_add_comment_argument_order_puts_the_body_last(gated):
-    """The tool takes comment_body BEFORE the optional comment_id while the APIClient takes the id
-    third and the body fourth. Transposing two strings raises nothing and stores the body as the id."""
+    """Four strings in a row: a transposition raises nothing and stores the body as the version."""
     server, client = gated
-    client.api.add_comment.return_value = {"message": "Succeeded"}
-    server.add_comment("a1", "v1", "the body", comment_id="c1")
+    client.api.add_comment.return_value = {"message": "Succeeded", "commentId": "c1"}
+    server.add_comment("db1", "a1", "v1", "the body")
     args = client.api.add_comment.call_args.args
-    assert args[2] == "c1" and args[3] == "the body"
+    assert args[2] == "v1" and args[3] == "the body"
 
 
 def test_update_comment_forwards_all_four_values_in_order(gated):
     server, client = gated
     client.api.update_comment.return_value = {"message": "Succeeded"}
-    server.update_comment("a1", "v1", "c1", "new text")
-    assert client.api.update_comment.call_args.args == ("a1", "v1", "c1", "new text")
+    server.update_comment("db1", "a1", "c1", "new text")
+    assert client.api.update_comment.call_args.args == ("db1", "a1", "c1", "new text")
 
 
 # --- Subscription writes ----------------------------------------------------
 #
-# Every subscription method takes (event_name, entity_name, entity_id, subscribers) while the tools
-# take entity_id first so the two defaults can sit at the end. All four are strings or a list of
-# them, so a transposition is accepted by the client, sent to the API, and rejected — or worse,
-# accepted against the wrong entity. The positional assertions below are the whole guard.
+# Every subscription method takes (event_name, entity_name, database_id, entity_id, subscribers)
+# while the tools take database_id and entity_id first so the two defaults can sit at the end. All
+# five are strings or a list of them, so a transposition is accepted by the client, sent to the API,
+# and rejected — or worse, accepted against the wrong entity. The positional assertions below are
+# the whole guard.
 
 
 def test_create_subscription_defaults_to_asset_version_change_on_asset(gated):
     server, client = gated
     client.api.create_subscription.return_value = {"message": "success"}
-    server.create_subscription("asset-1", ["user-a", "user-b"])
+    server.create_subscription("db-1", "asset-1", ["user-a", "user-b"])
     assert client.api.create_subscription.call_args.args == (
         "Asset Version Change",
         "Asset",
+        "db-1",
         "asset-1",
         ["user-a", "user-b"],
     )
@@ -527,11 +521,14 @@ def test_create_subscription_defaults_to_asset_version_change_on_asset(gated):
 def test_create_subscription_forwards_an_explicit_event_and_entity(gated):
     server, client = gated
     client.api.create_subscription.return_value = {"message": "success"}
-    server.create_subscription("db-1", ["user-a"], event_name="Some Event", entity_name="Database")
+    server.create_subscription(
+        "db-1", "asset-1", ["user-a"], event_name="Some Event", entity_name="Other"
+    )
     assert client.api.create_subscription.call_args.args == (
         "Some Event",
-        "Database",
+        "Other",
         "db-1",
+        "asset-1",
         ["user-a"],
     )
 
@@ -541,10 +538,11 @@ def test_update_subscription_sends_the_list_as_given(gated):
     assembled from a stale read silently unsubscribes whoever joined in between."""
     server, client = gated
     client.api.update_subscription.return_value = {"message": "success"}
-    server.update_subscription("asset-1", ["only-user"])
+    server.update_subscription("db-1", "asset-1", ["only-user"])
     assert client.api.update_subscription.call_args.args == (
         "Asset Version Change",
         "Asset",
+        "db-1",
         "asset-1",
         ["only-user"],
     )
@@ -586,11 +584,11 @@ def test_update_metadata_schema_passes_the_id_beside_the_body_not_inside_it(gate
 # --- Comment / subscription / metadata-schema deletes -----------------------
 
 
-def test_delete_comment_forwards_all_three_key_parts(gated):
+def test_delete_comment_forwards_the_database_asset_and_comment(gated):
     server, client = gated
     client.api.delete_comment.return_value = {"message": "Comment deleted"}
-    server.delete_comment("a1", "v1", "c1")
-    assert client.api.delete_comment.call_args.args == ("a1", "v1", "c1")
+    server.delete_comment("db1", "a1", "c1")
+    assert client.api.delete_comment.call_args.args == ("db1", "a1", "c1")
 
 
 def test_delete_subscription_removes_the_record_not_the_listed_users(gated):
@@ -598,10 +596,11 @@ def test_delete_subscription_removes_the_record_not_the_listed_users(gated):
     tool reaches the /subscriptions DELETE — the whole-record route — and not /unsubscribe."""
     server, client = gated
     client.api.delete_subscription.return_value = {"message": "success"}
-    server.delete_subscription("asset-1", ["user-a"])
+    server.delete_subscription("db-1", "asset-1", ["user-a"])
     assert client.api.delete_subscription.call_args.args == (
         "Asset Version Change",
         "Asset",
+        "db-1",
         "asset-1",
         ["user-a"],
     )
@@ -614,10 +613,11 @@ def test_unsubscribe_is_a_different_route_and_takes_one_subscriber(gated):
     entry from the topic, which is why this passes a single value rather than a list."""
     server, client = gated
     client.api.unsubscribe.return_value = {"message": "success"}
-    server.unsubscribe("asset-1", "user-a")
+    server.unsubscribe("db-1", "asset-1", "user-a")
     assert client.api.unsubscribe.call_args.args == (
         "Asset Version Change",
         "Asset",
+        "db-1",
         "asset-1",
         "user-a",
     )

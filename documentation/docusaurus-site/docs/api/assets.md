@@ -530,7 +530,7 @@ An archived asset stays readable until it is unarchived or permanently deleted. 
 | `GET /database/{databaseId}/assets/{assetId}/metadata` and `.../metadata/file`                  | Asset and file metadata.                                                                                                          |
 | `GET /database/{databaseId}/assets/{assetId}/asset-links`                                       | The asset's relationships.                                                                                                        |
 | `GET /asset-links/{assetLinkId}/metadata`                                                       | The metadata of a link whose linked asset is archived.                                                                            |
-| `GET /comments/assets/{assetId}` and `.../assetVersionId/{assetVersionId}`                      | The asset's comments.                                                                                                             |
+| `GET /comments/database/{databaseId}/assets/{assetId}` (with `assetVersionId` for one version)  | The asset's comments.                                                                                                             |
 
 `showArchived` accepts `true`, `false`, `1`, `0`, `yes`, and `no`; any other value is rejected with `400`. Without it, each route answers for an archived asset as it does for an asset that does not exist.
 

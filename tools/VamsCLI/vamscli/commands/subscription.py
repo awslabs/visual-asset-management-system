@@ -52,8 +52,8 @@ def format_subscription_list_output(result: Dict[str, Any]) -> str:
 def subscription():
     """Subscription management commands.
 
-    A subscription is keyed on an event, an entity type, and the entity's ID, and carries the list
-    of subscribed VAMS users. Notifications are delivered by e-mail, resolved from each
+    A subscription is keyed on an event, an entity type, the entity's database and its ID (two
+    databases may hold assets with the same asset ID), and carries the list of subscribed VAMS users. Notifications are delivered by e-mail, resolved from each
     subscriber's user profile.
     """
     pass
@@ -103,6 +103,8 @@ def list(ctx: click.Context, page_size: Optional[int], max_items: Optional[int],
 
 
 @subscription.command()
+@click.option('-d', '--database-id', required=True,
+              help="[REQUIRED] Database ID of the entity's asset")
 @click.option('-i', '--entity-id', required=True,
               help='[REQUIRED] ID of the entity to subscribe to (the assetId for an Asset)')
 @click.option('-s', '--subscriber', multiple=True, required=True,
@@ -114,7 +116,7 @@ def list(ctx: click.Context, page_size: Optional[int], max_items: Optional[int],
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def create(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], event_name: str,
+def create(ctx: click.Context, database_id: str, entity_id: str, subscriber: Tuple[str, ...], event_name: str,
            entity_name: str, json_output: bool):
     """Subscribe users to an entity's events.
 
@@ -125,9 +127,9 @@ def create(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], even
     ID itself.
 
     Examples:
-        vamscli subscription create -i my-asset -s alice@example.com
-        vamscli subscription create -i my-asset -s alice@example.com -s bob@example.com
-        vamscli subscription create -i my-asset -s alice@example.com --json-output
+        vamscli subscription create -d my-db -i my-asset -s alice@example.com
+        vamscli subscription create -d my-db -i my-asset -s alice@example.com -s bob@example.com
+        vamscli subscription create -d my-db -i my-asset -s alice@example.com --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -138,7 +140,7 @@ def create(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], even
 
     try:
         result = api_client.create_subscription(
-            event_name, entity_name, entity_id, builtin_list(subscriber))
+            event_name, entity_name, database_id, entity_id, builtin_list(subscriber))
         output_result(
             _message(result),
             json_output,
@@ -164,6 +166,8 @@ def create(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], even
 
 
 @subscription.command()
+@click.option('-d', '--database-id', required=True,
+              help="[REQUIRED] Database ID of the entity's asset")
 @click.option('-i', '--entity-id', required=True,
               help='[REQUIRED] ID of the subscribed entity (the assetId for an Asset)')
 @click.option('-s', '--subscriber', multiple=True, required=True,
@@ -175,7 +179,7 @@ def create(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], even
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def update(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], event_name: str,
+def update(ctx: click.Context, database_id: str, entity_id: str, subscriber: Tuple[str, ...], event_name: str,
            entity_name: str, json_output: bool):
     """Replace a subscription's subscriber list.
 
@@ -183,8 +187,8 @@ def update(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], even
     one user and leave the rest alone, use 'vamscli subscription unsubscribe'.
 
     Examples:
-        vamscli subscription update -i my-asset -s alice@example.com -s carol@example.com
-        vamscli subscription update -i my-asset -s alice@example.com --json-output
+        vamscli subscription update -d my-db -i my-asset -s alice@example.com -s carol@example.com
+        vamscli subscription update -d my-db -i my-asset -s alice@example.com --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -195,7 +199,7 @@ def update(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], even
 
     try:
         result = api_client.update_subscription(
-            event_name, entity_name, entity_id, builtin_list(subscriber))
+            event_name, entity_name, database_id, entity_id, builtin_list(subscriber))
         output_result(
             _message(result),
             json_output,
@@ -217,6 +221,8 @@ def update(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], even
 
 
 @subscription.command()
+@click.option('-d', '--database-id', required=True,
+              help="[REQUIRED] Database ID of the entity's asset")
 @click.option('-i', '--entity-id', required=True,
               help='[REQUIRED] ID of the subscribed entity (the assetId for an Asset)')
 @click.option('-s', '--subscriber', multiple=True, required=True,
@@ -230,7 +236,7 @@ def update(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], even
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def delete(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], event_name: str,
+def delete(ctx: click.Context, database_id: str, entity_id: str, subscriber: Tuple[str, ...], event_name: str,
            entity_name: str, confirm: bool, json_output: bool):
     """Delete a whole subscription.
 
@@ -241,8 +247,8 @@ def delete(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], even
     The --confirm flag is required.
 
     Examples:
-        vamscli subscription delete -i my-asset -s alice@example.com --confirm
-        vamscli subscription delete -i my-asset -s alice@example.com --confirm --json-output
+        vamscli subscription delete -d my-db -i my-asset -s alice@example.com --confirm
+        vamscli subscription delete -d my-db -i my-asset -s alice@example.com --confirm --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -270,7 +276,7 @@ def delete(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], even
         output_status(f"Deleting the subscription on '{entity_id}'...", json_output)
 
         result = api_client.delete_subscription(
-            event_name, entity_name, entity_id, builtin_list(subscriber))
+            event_name, entity_name, database_id, entity_id, builtin_list(subscriber))
         output_result(
             _message(result),
             json_output,
@@ -289,6 +295,8 @@ def delete(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], even
 
 
 @subscription.command()
+@click.option('-d', '--database-id', required=True,
+              help="[REQUIRED] Database ID of the entity's asset")
 @click.option('-i', '--entity-id', required=True,
               help='[REQUIRED] ID of the subscribed entity (the assetId for an Asset)')
 @click.option('-s', '--subscriber', required=True,
@@ -301,7 +309,7 @@ def delete(ctx: click.Context, entity_id: str, subscriber: Tuple[str, ...], even
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def unsubscribe(ctx: click.Context, entity_id: str, subscriber: str, event_name: str,
+def unsubscribe(ctx: click.Context, database_id: str, entity_id: str, subscriber: str, event_name: str,
                 entity_name: str, confirm: bool, json_output: bool):
     """Remove one subscriber from a subscription.
 
@@ -309,8 +317,8 @@ def unsubscribe(ctx: click.Context, entity_id: str, subscriber: str, event_name:
     this takes one --subscriber. The --confirm flag is required.
 
     Examples:
-        vamscli subscription unsubscribe -i my-asset -s bob@example.com --confirm
-        vamscli subscription unsubscribe -i my-asset -s bob@example.com --confirm --json-output
+        vamscli subscription unsubscribe -d my-db -i my-asset -s bob@example.com --confirm
+        vamscli subscription unsubscribe -d my-db -i my-asset -s bob@example.com --confirm --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -337,7 +345,7 @@ def unsubscribe(ctx: click.Context, entity_id: str, subscriber: str, event_name:
 
         output_status(f"Removing '{subscriber}' from the subscription on '{entity_id}'...", json_output)
 
-        result = api_client.unsubscribe(event_name, entity_name, entity_id, subscriber)
+        result = api_client.unsubscribe(event_name, entity_name, database_id, entity_id, subscriber)
         output_result(
             _message(result),
             json_output,
@@ -356,20 +364,21 @@ def unsubscribe(ctx: click.Context, entity_id: str, subscriber: str, event_name:
 
 
 @subscription.command()
+@click.option('-d', '--database-id', required=True, help='[REQUIRED] Database ID of the asset')
 @click.option('-a', '--asset-id', required=True, help='[REQUIRED] Asset ID to check')
 @click.option('-u', '--user-id', required=True, help='[REQUIRED] VAMS user ID to look for')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def check(ctx: click.Context, asset_id: str, user_id: str, json_output: bool):
+def check(ctx: click.Context, database_id: str, asset_id: str, user_id: str, json_output: bool):
     """Check whether a user is subscribed to an asset's version changes.
 
     The endpoint answers for the asset version-change event only, so neither the event nor the
     entity type is an option here.
 
     Examples:
-        vamscli subscription check -a my-asset -u alice@example.com
-        vamscli subscription check -a my-asset -u alice@example.com --json-output
+        vamscli subscription check -d my-db -a my-asset -u alice@example.com
+        vamscli subscription check -d my-db -a my-asset -u alice@example.com --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -379,7 +388,7 @@ def check(ctx: click.Context, asset_id: str, user_id: str, json_output: bool):
     output_status(f"Checking the subscription of '{user_id}' on '{asset_id}'...", json_output)
 
     try:
-        result = api_client.check_subscription(asset_id, user_id)
+        result = api_client.check_subscription(database_id, asset_id, user_id)
         output_result(
             _message(result),
             json_output,

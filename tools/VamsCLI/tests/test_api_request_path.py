@@ -16,7 +16,7 @@ from unittest.mock import Mock
 import pytest
 
 from vamscli import constants
-from vamscli.utils.api_client import APIClient, build_comment_path, route_path
+from vamscli.utils.api_client import APIClient, route_path
 from vamscli.utils.exceptions import APIError, GlobalInfrastructureError, InvalidRequestPathError
 
 # Every route constant constants.py exposes (the re-exported add-on paths included), with each
@@ -229,12 +229,15 @@ class TestPathValueStaysInItsOwnSegment:
         getattr(client, method)(*args)
         assert sent == [(verb, "https://api.example.com" + path)]
 
-    def test_a_comment_key_and_a_login_profile_value_stay_in_their_segment(self, monkeypatch):
-        assert build_comment_path("a-1", "v/1", "c#1").endswith("/v%2F1:c%231")
+    def test_a_comment_id_and_a_login_profile_value_stay_in_their_segment(self, monkeypatch):
         client = _client()
         sent = _record_requests(monkeypatch, client)
+        client.delete_comment("db-1", "a-1#", "c/1")
         client.call_login_profile("jane.doe@example.com")
-        assert sent == [("GET", "https://api.example.com/auth/loginProfile/jane.doe@example.com")]
+        assert sent == [
+            ("DELETE", "https://api.example.com/comments/database/db-1/assets/a-1%23/c%2F1"),
+            ("GET", "https://api.example.com/auth/loginProfile/jane.doe@example.com"),
+        ]
 
     @pytest.mark.parametrize("value", ["jane.doe@example.com", "a b", "x-1:c-1", "a+b", "a;b"])
     def test_every_other_character_is_left_as_it_was(self, value):

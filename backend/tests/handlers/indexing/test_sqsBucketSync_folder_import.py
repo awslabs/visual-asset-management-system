@@ -266,6 +266,8 @@ class TestARefusedAutoCreateIsNotAnError:
         m.logger = MagicMock()
         m.create_new_asset = _restore_module_attrs["create_new_asset"]
         m.get_or_create_database_for_bucket = MagicMock(return_value="testdb1")
+        # The target database holds no asset with the id, live or archived
+        m.dynamodb.Table.return_value.get_item.return_value = {}
         m.resolve_owner = MagicMock(return_value=NOT_FOUND)
         m.create_asset = MagicMock(side_effect=m.AssetLocationInUseError(
             "The specified bucketExistingKey is already in use by another asset", owner="db2:o1 at a1/sub/"))
@@ -299,6 +301,8 @@ class TestARefusedAutoCreateIsNotAnError:
         m.logger = MagicMock()
         m.create_new_asset = _restore_module_attrs["create_new_asset"]
         m.get_or_create_database_for_bucket = MagicMock(return_value="testdb1")
+        # The target database holds no asset with the id, live or archived
+        m.dynamodb.Table.return_value.get_item.return_value = {}
         m.resolve_owner = MagicMock(return_value=NOT_FOUND)
         m.create_asset = MagicMock(side_effect=m.AssetLocationInUseError("in use", owner="db2:o1 at a1/sub/"))
         records = [_sqs(f"msg-{i}", _record(f"a1/f{i}.glb")) for i in range(25)]

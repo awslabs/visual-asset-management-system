@@ -96,6 +96,8 @@ export const RESOURCE_PARAM_KEYS = {
         metadataSchemaStorage: "dynamoTables/legacy/metadataSchemaStorage",
         tagStorage: "dynamoTables/legacy/tagStorage",
         tagTypeStorage: "dynamoTables/legacy/tagTypeStorage",
+        commentStorageV1: "dynamoTables/legacy/commentStorageV1",
+        subscriptionsStorageV1: "dynamoTables/legacy/subscriptionsStorageV1",
     },
     // Lambda function names consumed by data-migration tooling and external bridge stacks
     lambdaFunctions: {

@@ -135,6 +135,8 @@ if [ "$MIGRATION_STATUS" -eq 0 ]; then
         echo "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
         echo "  4. Read the asset location index report (asset_location_index_report.json) and check the summary"
         echo "     says 'Completion marker written'; if not, run --steps assetLocationIndex --execute again"
+        echo "  5. Read the comment and subscription keys summary: for each id listed as 'ambiguous', name its database in"
+        echo "     comment_subscription_resolution_file and run --steps commentSubscriptionKeys --execute again"
     else
         echo "This was a dry run: no rows were deleted and no executions were launched."
         echo "Review the summaries above, then set \"dry_run\": false in the config and re-run with --execute to apply them."

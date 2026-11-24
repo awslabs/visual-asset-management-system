@@ -405,9 +405,15 @@ describe.each(MIGRATIONS)("$dir migration README IAM policy", (migration) => {
     /** The mapped actions the script needs that `readmeText` does not name. */
     function undocumentedActions(readmeText: string): string[] {
         const migrationScript = readMigrationFile(migration, migration.script);
-        return CALL_TO_ACTION.filter(
-            ([call, action]) => call.test(migrationScript) && !readmeText.includes(action)
-        ).map(([, action]) => action);
+        // Two calls can need one action (put_item and transact_write_items both need PutItem), so each
+        // action is reported once.
+        return Array.from(
+            new Set(
+                CALL_TO_ACTION.filter(
+                    ([call, action]) => call.test(migrationScript) && !readmeText.includes(action)
+                ).map(([, action]) => action)
+            )
+        );
     }
 
     it("documents an IAM action for every mutating or paid call the migration makes", () => {
@@ -420,8 +426,12 @@ describe.each(MIGRATIONS)("$dir migration README IAM policy", (migration) => {
         // `dynamodb_client.query` / `.scan` forms that a `.query(` literal never matched.
         const readme = readMigrationFile(migration, migration.readme);
         const migrationScript = readMigrationFile(migration, migration.script);
-        const needed = CALL_TO_ACTION.filter(([call]) => call.test(migrationScript)).map(
-            ([, action]) => action
+        const needed = Array.from(
+            new Set(
+                CALL_TO_ACTION.filter(([call]) => call.test(migrationScript)).map(
+                    ([, action]) => action
+                )
+            )
         );
         expect(needed.length).toBeGreaterThan(0);
         for (const action of needed) {

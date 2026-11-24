@@ -10,24 +10,28 @@ import { fetchSubscriptionRules, deleteSubscription } from "../../services/APISe
 import { Link } from "@cloudscape-design/components";
 import CreateSubscription from "./CreateSubscription";
 import { useState } from "react";
+import Synonyms from "../../synonyms";
 
 const ruleBody = {
     eventName: "Subscription Change",
     entityName: "",
     entityId: "",
+    databaseId: "",
     subscribers: [],
 };
 export const SubscriptionListDefinition = new ListDefinition({
     pluralName: "Subscriptions",
     pluralNameTitleCase: "Subscriptions",
     singularNameTitleCase: "Subscription",
-    visibleColumns: ["eventName", "entityName", "entityValue", "subscribers"],
+    visibleColumns: ["eventName", "entityName", "entityValue", "databaseId", "subscribers"],
     filterColumns: [{ name: "name", placeholder: "Name" }],
-    elementId: "entityId",
+    // Unique per row: two databases may hold assets with the same asset id
+    elementId: "subscriptionKey",
     deleteFunction: async (item: any): Promise<[boolean, string, string]> => {
         console.log(item);
         ruleBody.entityName = item.entityName;
         ruleBody.entityId = item.entityId;
+        ruleBody.databaseId = item.databaseId;
         ruleBody.subscribers = item.subscribers;
         ruleBody.eventName = item.eventName;
         try {
@@ -58,6 +62,14 @@ export const SubscriptionListDefinition = new ListDefinition({
             sortingField: "entityValue",
         }),
 
+        new ColumnDefinition({
+            id: "databaseId",
+            header: Synonyms.Database,
+            cellWrapper: (props: any) => {
+                return <>{props.children}</>;
+            },
+            sortingField: "databaseId",
+        }),
         new ColumnDefinition({
             id: "entityName",
             header: "Entity Type",

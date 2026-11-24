@@ -66,20 +66,21 @@ class TestSubscriptionRequestPathsAndMethods:
 
     def test_create_subscription_posts_the_collection_route(self):
         client, calls = _recording_client({'message': 'success'})
-        client.create_subscription('Asset Version Change', 'Asset', 'my-asset', ['alice@x.com'])
+        client.create_subscription('Asset Version Change', 'Asset', 'my-db', 'my-asset', ['alice@x.com'])
 
         assert calls[0]['method'] == 'POST'
         assert calls[0]['endpoint'] == '/subscriptions'
         assert calls[0]['kwargs']['json'] == {
             'eventName': 'Asset Version Change',
             'entityName': 'Asset',
+            'databaseId': 'my-db',
             'entityId': 'my-asset',
             'subscribers': ['alice@x.com'],
         }
 
     def test_update_subscription_puts_the_collection_route(self):
         client, calls = _recording_client({'message': 'success'})
-        client.update_subscription('Asset Version Change', 'Asset', 'my-asset',
+        client.update_subscription('Asset Version Change', 'Asset', 'my-db', 'my-asset',
                                    ['alice@x.com', 'bob@x.com'])
 
         assert calls[0]['method'] == 'PUT'
@@ -88,22 +89,23 @@ class TestSubscriptionRequestPathsAndMethods:
 
     def test_delete_subscription_deletes_the_collection_route_with_a_body(self):
         client, calls = _recording_client({'message': 'success'})
-        client.delete_subscription('Asset Version Change', 'Asset', 'my-asset', ['alice@x.com'])
+        client.delete_subscription('Asset Version Change', 'Asset', 'my-db', 'my-asset', ['alice@x.com'])
 
         assert calls[0]['method'] == 'DELETE'
         assert calls[0]['endpoint'] == '/subscriptions'
-        # All four keys are required on a DELETE too: the endpoint validates the subscribers list
+        # All five keys are required on a DELETE too: the endpoint validates the subscribers list
         # and then removes the whole record. Dropping it is a 400, not a default.
         assert calls[0]['kwargs']['json'] == {
             'eventName': 'Asset Version Change',
             'entityName': 'Asset',
+            'databaseId': 'my-db',
             'entityId': 'my-asset',
             'subscribers': ['alice@x.com'],
         }
 
     def test_unsubscribe_deletes_the_unsubscribe_route(self):
         client, calls = _recording_client({'message': 'success'})
-        client.unsubscribe('Asset Version Change', 'Asset', 'my-asset', 'bob@x.com')
+        client.unsubscribe('Asset Version Change', 'Asset', 'my-db', 'my-asset', 'bob@x.com')
 
         # A different route from delete_subscription, and the one that leaves the record in place.
         assert calls[0]['method'] == 'DELETE'
@@ -113,19 +115,20 @@ class TestSubscriptionRequestPathsAndMethods:
 
     def test_check_subscription_posts_the_check_route(self):
         client, calls = _recording_client({'message': 'success'})
-        client.check_subscription('my-asset', 'alice@x.com')
+        client.check_subscription('my-db', 'my-asset', 'alice@x.com')
 
         assert calls[0]['method'] == 'POST'
         assert calls[0]['endpoint'] == '/check-subscription'
-        # This endpoint takes only these two fields; it fixes the event and entity itself.
-        assert calls[0]['kwargs']['json'] == {'assetId': 'my-asset', 'userId': 'alice@x.com'}
+        # This endpoint takes only the asset's ids and the user; it fixes the event and entity itself.
+        assert calls[0]['kwargs']['json'] == {
+            'databaseId': 'my-db', 'assetId': 'my-asset', 'userId': 'alice@x.com'}
 
     def test_the_two_deletes_are_not_the_same_request(self):
         """A regression guard: collapsing them would silently delete a whole subscription."""
         client_a, calls_a = _recording_client({'message': 'success'})
-        client_a.delete_subscription('Asset Version Change', 'Asset', 'a', ['u@x.com'])
+        client_a.delete_subscription('Asset Version Change', 'Asset', 'my-db', 'a', ['u@x.com'])
         client_b, calls_b = _recording_client({'message': 'success'})
-        client_b.unsubscribe('Asset Version Change', 'Asset', 'a', 'u@x.com')
+        client_b.unsubscribe('Asset Version Change', 'Asset', 'my-db', 'a', 'u@x.com')
 
         assert calls_a[0]['endpoint'] != calls_b[0]['endpoint']
 
@@ -166,19 +169,19 @@ class TestSubscriptionErrorMapping:
         client = _client_with_transport(_ErrorResponse(400, {
             'message': 'Subscription already exists for some of the specified subscribers.'}))
         with pytest.raises(SubscriptionAlreadyExistsError):
-            client.create_subscription('Asset Version Change', 'Asset', 'a', ['u@x.com'])
+            client.create_subscription('Asset Version Change', 'Asset', 'my-db', 'a', ['u@x.com'])
 
     def test_a_missing_subscription_on_update_is_not_found(self):
         client = _client_with_transport(_ErrorResponse(400, {
             'message': 'Subscription does not exists for eventName.'}))
         with pytest.raises(SubscriptionNotFoundError):
-            client.update_subscription('Asset Version Change', 'Asset', 'a', ['u@x.com'])
+            client.update_subscription('Asset Version Change', 'Asset', 'my-db', 'a', ['u@x.com'])
 
     def test_a_missing_subscription_on_unsubscribe_is_not_found(self):
         client = _client_with_transport(_ErrorResponse(400, {
             'message': 'Subscription does not exists for eventName.'}))
         with pytest.raises(SubscriptionNotFoundError):
-            client.unsubscribe('Asset Version Change', 'Asset', 'a', 'u@x.com')
+            client.unsubscribe('Asset Version Change', 'Asset', 'my-db', 'a', 'u@x.com')
 
     def test_any_other_400_is_invalid_data_rather_than_not_found(self):
         # The discriminating branch has to fall the other way too, or every 400 would read as a
@@ -186,12 +189,12 @@ class TestSubscriptionErrorMapping:
         client = _client_with_transport(_ErrorResponse(400, {
             'message': 'Subscriber u@x.com does not have a valid email to use.'}))
         with pytest.raises(InvalidSubscriptionDataError):
-            client.create_subscription('Asset Version Change', 'Asset', 'a', ['u@x.com'])
+            client.create_subscription('Asset Version Change', 'Asset', 'my-db', 'a', ['u@x.com'])
 
     def test_an_unresolvable_asset_is_an_asset_not_found(self):
         client = _client_with_transport(_ErrorResponse(404, {'message': 'Asset not found'}))
         with pytest.raises(AssetNotFoundError):
-            client.create_subscription('Asset Version Change', 'Asset', 'nope', ['u@x.com'])
+            client.create_subscription('Asset Version Change', 'Asset', 'my-db', 'nope', ['u@x.com'])
 
 
 class TestSubscriptionList:
@@ -247,20 +250,20 @@ class TestSubscriptionCreate:
         with generic_command_mocks('subscription') as mocks:
             mocks['api_client'].create_subscription.return_value = {'message': 'success'}
             result = cli_runner.invoke(cli, [
-                'subscription', 'create', '-i', 'my-asset',
+                'subscription', 'create', '-d', 'my-db', '-i', 'my-asset',
                 '-s', 'alice@example.com', '-s', 'bob@example.com'])
 
             assert result.exit_code == 0
             # The event and entity default to the only pair the API accepts.
             mocks['api_client'].create_subscription.assert_called_once_with(
-                'Asset Version Change', 'Asset', 'my-asset',
+                'Asset Version Change', 'Asset', 'my-db', 'my-asset',
                 ['alice@example.com', 'bob@example.com'])
 
     def test_create_honours_an_explicit_event_and_entity(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('subscription') as mocks:
             mocks['api_client'].create_subscription.return_value = {'message': 'success'}
             result = cli_runner.invoke(cli, [
-                'subscription', 'create', '-i', 'my-asset', '-s', 'alice@example.com',
+                'subscription', 'create', '-d', 'my-db', '-i', 'my-asset', '-s', 'alice@example.com',
                 '--event-name', 'Asset Version Change', '--entity-name', 'Asset'])
 
             assert result.exit_code == 0
@@ -268,7 +271,7 @@ class TestSubscriptionCreate:
 
     def test_create_requires_a_subscriber(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('subscription') as mocks:
-            result = cli_runner.invoke(cli, ['subscription', 'create', '-i', 'my-asset'])
+            result = cli_runner.invoke(cli, ['subscription', 'create', '-d', 'my-db', '-i', 'my-asset'])
 
             assert result.exit_code != 0
             mocks['api_client'].create_subscription.assert_not_called()
@@ -278,14 +281,14 @@ class TestSubscriptionCreate:
             mocks['api_client'].create_subscription.side_effect = SubscriptionAlreadyExistsError(
                 "Subscription already exists for some of the specified subscribers.")
             result = cli_runner.invoke(cli, [
-                'subscription', 'create', '-i', 'my-asset', '-s', 'alice@example.com'])
+                'subscription', 'create', '-d', 'my-db', '-i', 'my-asset', '-s', 'alice@example.com'])
             assert result.exit_code != 0
 
     def test_create_asset_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('subscription') as mocks:
             mocks['api_client'].create_subscription.side_effect = AssetNotFoundError("Asset not found")
             result = cli_runner.invoke(cli, [
-                'subscription', 'create', '-i', 'nope', '-s', 'alice@example.com'])
+                'subscription', 'create', '-d', 'my-db', '-i', 'nope', '-s', 'alice@example.com'])
             assert result.exit_code != 0
 
 
@@ -294,18 +297,18 @@ class TestSubscriptionUpdate:
         with generic_command_mocks('subscription') as mocks:
             mocks['api_client'].update_subscription.return_value = {'message': 'success'}
             result = cli_runner.invoke(cli, [
-                'subscription', 'update', '-i', 'my-asset', '-s', 'carol@example.com'])
+                'subscription', 'update', '-d', 'my-db', '-i', 'my-asset', '-s', 'carol@example.com'])
 
             assert result.exit_code == 0
             mocks['api_client'].update_subscription.assert_called_once_with(
-                'Asset Version Change', 'Asset', 'my-asset', ['carol@example.com'])
+                'Asset Version Change', 'Asset', 'my-db', 'my-asset', ['carol@example.com'])
 
     def test_update_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('subscription') as mocks:
             mocks['api_client'].update_subscription.side_effect = SubscriptionNotFoundError(
                 "Subscription does not exists for eventName.")
             result = cli_runner.invoke(cli, [
-                'subscription', 'update', '-i', 'my-asset', '-s', 'carol@example.com'])
+                'subscription', 'update', '-d', 'my-db', '-i', 'my-asset', '-s', 'carol@example.com'])
             assert result.exit_code != 0
 
 
@@ -313,7 +316,7 @@ class TestSubscriptionDelete:
     def test_delete_requires_confirm(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('subscription') as mocks:
             result = cli_runner.invoke(cli, [
-                'subscription', 'delete', '-i', 'my-asset', '-s', 'alice@example.com'])
+                'subscription', 'delete', '-d', 'my-db', '-i', 'my-asset', '-s', 'alice@example.com'])
 
             assert result.exit_code != 0
             mocks['api_client'].delete_subscription.assert_not_called()
@@ -321,7 +324,7 @@ class TestSubscriptionDelete:
     def test_delete_requires_confirm_in_json_mode(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('subscription') as mocks:
             result = cli_runner.invoke(cli, [
-                'subscription', 'delete', '-i', 'my-asset', '-s', 'alice@example.com',
+                'subscription', 'delete', '-d', 'my-db', '-i', 'my-asset', '-s', 'alice@example.com',
                 '--json-output'])
 
             assert result.exit_code != 0
@@ -332,18 +335,18 @@ class TestSubscriptionDelete:
         with generic_command_mocks('subscription') as mocks:
             mocks['api_client'].delete_subscription.return_value = {'message': 'success'}
             result = cli_runner.invoke(cli, [
-                'subscription', 'delete', '-i', 'my-asset', '-s', 'alice@example.com', '--confirm'])
+                'subscription', 'delete', '-d', 'my-db', '-i', 'my-asset', '-s', 'alice@example.com', '--confirm'])
 
             assert result.exit_code == 0
             mocks['api_client'].delete_subscription.assert_called_once_with(
-                'Asset Version Change', 'Asset', 'my-asset', ['alice@example.com'])
+                'Asset Version Change', 'Asset', 'my-db', 'my-asset', ['alice@example.com'])
 
     def test_delete_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('subscription') as mocks:
             mocks['api_client'].delete_subscription.side_effect = SubscriptionNotFoundError(
                 "Subscription not found for the specified event and entity")
             result = cli_runner.invoke(cli, [
-                'subscription', 'delete', '-i', 'my-asset', '-s', 'alice@example.com', '--confirm'])
+                'subscription', 'delete', '-d', 'my-db', '-i', 'my-asset', '-s', 'alice@example.com', '--confirm'])
             assert result.exit_code != 0
 
 
@@ -351,7 +354,7 @@ class TestSubscriptionUnsubscribe:
     def test_unsubscribe_requires_confirm(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('subscription') as mocks:
             result = cli_runner.invoke(cli, [
-                'subscription', 'unsubscribe', '-i', 'my-asset', '-s', 'bob@example.com'])
+                'subscription', 'unsubscribe', '-d', 'my-db', '-i', 'my-asset', '-s', 'bob@example.com'])
 
             assert result.exit_code != 0
             mocks['api_client'].unsubscribe.assert_not_called()
@@ -360,19 +363,19 @@ class TestSubscriptionUnsubscribe:
         with generic_command_mocks('subscription') as mocks:
             mocks['api_client'].unsubscribe.return_value = {'message': 'success'}
             result = cli_runner.invoke(cli, [
-                'subscription', 'unsubscribe', '-i', 'my-asset', '-s', 'bob@example.com',
+                'subscription', 'unsubscribe', '-d', 'my-db', '-i', 'my-asset', '-s', 'bob@example.com',
                 '--confirm'])
 
             assert result.exit_code == 0
             # A single value, not a list: the endpoint removes one subscriber per call.
             mocks['api_client'].unsubscribe.assert_called_once_with(
-                'Asset Version Change', 'Asset', 'my-asset', 'bob@example.com')
+                'Asset Version Change', 'Asset', 'my-db', 'my-asset', 'bob@example.com')
 
     def test_unsubscribe_does_not_call_delete_subscription(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('subscription') as mocks:
             mocks['api_client'].unsubscribe.return_value = {'message': 'success'}
             cli_runner.invoke(cli, [
-                'subscription', 'unsubscribe', '-i', 'my-asset', '-s', 'bob@example.com',
+                'subscription', 'unsubscribe', '-d', 'my-db', '-i', 'my-asset', '-s', 'bob@example.com',
                 '--confirm'])
 
             mocks['api_client'].delete_subscription.assert_not_called()
@@ -382,7 +385,7 @@ class TestSubscriptionUnsubscribe:
             mocks['api_client'].unsubscribe.side_effect = SubscriptionNotFoundError(
                 "Subscription does not exists for eventName.")
             result = cli_runner.invoke(cli, [
-                'subscription', 'unsubscribe', '-i', 'my-asset', '-s', 'bob@example.com',
+                'subscription', 'unsubscribe', '-d', 'my-db', '-i', 'my-asset', '-s', 'bob@example.com',
                 '--confirm'])
             assert result.exit_code != 0
 
@@ -392,11 +395,11 @@ class TestSubscriptionCheck:
         with generic_command_mocks('subscription') as mocks:
             mocks['api_client'].check_subscription.return_value = {'message': 'success'}
             result = cli_runner.invoke(cli, [
-                'subscription', 'check', '-a', 'my-asset', '-u', 'alice@example.com'])
+                'subscription', 'check', '-d', 'my-db', '-a', 'my-asset', '-u', 'alice@example.com'])
 
             assert result.exit_code == 0
             mocks['api_client'].check_subscription.assert_called_once_with(
-                'my-asset', 'alice@example.com')
+                'my-db', 'my-asset', 'alice@example.com')
 
     def test_check_reports_an_absent_subscription(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('subscription') as mocks:
@@ -404,7 +407,7 @@ class TestSubscriptionCheck:
             mocks['api_client'].check_subscription.return_value = {
                 'message': "Subscription doesn't exists."}
             result = cli_runner.invoke(cli, [
-                'subscription', 'check', '-a', 'my-asset', '-u', 'alice@example.com',
+                'subscription', 'check', '-d', 'my-db', '-a', 'my-asset', '-u', 'alice@example.com',
                 '--json-output'])
 
             assert result.exit_code == 0
@@ -415,5 +418,21 @@ class TestSubscriptionCheck:
             mocks['api_client'].check_subscription.side_effect = InvalidSubscriptionDataError(
                 "userId and assetId are required fields.")
             result = cli_runner.invoke(cli, [
-                'subscription', 'check', '-a', 'my-asset', '-u', 'bad user'])
+                'subscription', 'check', '-d', 'my-db', '-a', 'my-asset', '-u', 'bad user'])
             assert result.exit_code != 0
+
+
+@pytest.mark.parametrize('args', [
+    ['subscription', 'create', '-i', 'my-asset', '-s', 'alice@example.com'],
+    ['subscription', 'update', '-i', 'my-asset', '-s', 'alice@example.com'],
+    ['subscription', 'delete', '-i', 'my-asset', '-s', 'alice@example.com', '--confirm'],
+    ['subscription', 'unsubscribe', '-i', 'my-asset', '-s', 'alice@example.com', '--confirm'],
+    ['subscription', 'check', '-a', 'my-asset', '-u', 'alice@example.com'],
+], ids=['create', 'update', 'delete', 'unsubscribe', 'check'])
+def test_every_asset_subscription_command_requires_the_database_id(cli_runner, generic_command_mocks, args):
+    """An asset is identified by its database and asset id, so no request goes out without both."""
+    with generic_command_mocks('subscription') as mocks:
+        result = cli_runner.invoke(cli, args)
+        assert result.exit_code == 2
+        assert '--database-id' in result.output
+        assert not mocks['api_client'].method_calls

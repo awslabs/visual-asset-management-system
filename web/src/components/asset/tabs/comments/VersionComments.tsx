@@ -57,8 +57,10 @@ type ShowMessageFunction = (props: {
 }) => void;
 
 interface CommentType {
+    databaseId: string;
     assetId: string;
-    "assetVersionId:commentId": string;
+    commentId: string;
+    assetVersionId: string;
     commentBody: string;
     commentOwnerID: string;
     commentOwnerUsername: string;
@@ -83,7 +85,7 @@ export default function VersionComments(props: VersionCommentsProps) {
     const [expanded, setExpanded] = useState(defaultExpanded);
     const [visible, setVisible] = useState(false);
     const [editVisible, setEditVisible] = useState(false);
-    const [commentToDelete, setCommentToDelete] = useState<string>("");
+    const [commentToDelete, setCommentToDelete] = useState<CommentType | null>(null);
     const [commentToEdit, setCommentToEdit] = useState<CommentType | null>(null);
     const [editedContent, setEditedContent] = useState<string>("");
     const editor = useRef(null);
@@ -153,15 +155,11 @@ export default function VersionComments(props: VersionCommentsProps) {
     const handleDeleteComment = async () => {
         if (!commentToDelete) return;
 
-        console.log("Deleting Comment-- " + commentToDelete);
-        const [assetId, assetVersionId, CommentId] = commentToDelete.split(":");
-
-        const assetVersionIdAndCommentId = assetVersionId + ":" + CommentId;
-
+        const { databaseId, assetId, commentId } = commentToDelete;
         showLoading(true);
 
         try {
-            const result = await deleteComment({ assetId, assetVersionIdAndCommentId });
+            const result = await deleteComment({ databaseId, assetId, commentId });
             // deleteComment resolves with 403 for a permission denial, [false, message] for any
             // other rejected request and false for an empty reply, so a failure never reaches the
             // catch below and has to be read off the result.
@@ -207,13 +205,14 @@ export default function VersionComments(props: VersionCommentsProps) {
     const handleEditComment = async () => {
         if (!commentToEdit) return;
 
-        const assetId = commentToEdit.assetId;
+        const { databaseId, assetId, commentId } = commentToEdit;
         showLoading(true);
 
         try {
             const response = await updateComment({
+                databaseId,
                 assetId,
-                assetVersionIdAndCommentId: commentToEdit["assetVersionId:commentId"],
+                commentId,
                 body: {
                     commentBody: editedContent,
                 },
@@ -275,10 +274,7 @@ export default function VersionComments(props: VersionCommentsProps) {
                         <div className="noCommentsDiv">{`No ${Synonyms.comments} yet`}</div>
                     ) : (
                         comments.map((comment) => (
-                            <div
-                                key={comment["assetVersionId:commentId"]}
-                                className="commentContainer"
-                            >
+                            <div key={comment.commentId} className="commentContainer">
                                 <div className="commentHeader">
                                     <div className="commentOwner">
                                         <strong>{comment.commentOwnerUsername}</strong>
@@ -315,9 +311,7 @@ export default function VersionComments(props: VersionCommentsProps) {
                                             <Button
                                                 variant="link"
                                                 onClick={() => {
-                                                    setCommentToDelete(
-                                                        `${comment.assetId}:${comment["assetVersionId:commentId"]}`
-                                                    );
+                                                    setCommentToDelete(comment);
                                                     setVisible(true);
                                                 }}
                                             >
