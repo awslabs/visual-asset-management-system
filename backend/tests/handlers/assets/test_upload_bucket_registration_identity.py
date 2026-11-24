@@ -24,6 +24,9 @@ os.environ.setdefault("SEND_EMAIL_FUNCTION_NAME", "test-send-email-function")
 os.environ.setdefault("PRESIGNED_URL_TIMEOUT_SECONDS", "3600")
 
 from backend.backend.handlers.assets import uploadFile as uf  # noqa: E402
+
+# The source-bucket decision under test is the real one (tests/externalUploadSource.py).
+USE_REAL_EXTERNAL_UPLOAD_SOURCE = True
 from backend.backend.handlers.assets import sqsUploadFileLarge as sq  # noqa: E402
 
 ASSET_BUCKET = {'bucketId': 'reg-asset', 'bucketName': 'asset-bucket', 'baseAssetsPrefix': '',

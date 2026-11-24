@@ -234,22 +234,26 @@ def get_database_details(databaseId):
         logger.exception(f"Error getting database details: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving database configuration")
 
-def external_upload_source(workflow_execution_id, asset_bucket):
+def external_upload_source(workflow_execution_id, asset_bucket, named_source_bucket=None):
     """The registration ({bucketId, bucketName, ...}) an external completion reads its tempKey files
     from. A workflow execution's write-back reads from the VAMS default asset bucket, where the
     pipelines staged the outputs (the run bucket the launch resolved the same way); any other
     completion reads from the asset's own bucket. Resolved from the registration table, so a caller
-    never names the bucket the files are copied from."""
+    never names the bucket the files are copied from: `named_source_bucket` (the request's
+    `sourceBucket`) is only logged when it differs from the resolved one."""
     if not workflow_execution_id:
-        return asset_bucket
-    try:
-        run_bucket = resolve_default_bucket(buckets_table)
-    except DefaultBucketNotFoundError as e:
-        logger.exception(f"The workflow run bucket could not be resolved: {e}")
-        raise VAMSGeneralErrorResponse("The workflow run bucket could not be resolved.")
-    if run_bucket.get('bucketId') == asset_bucket.get('bucketId'):
-        return asset_bucket
-    return run_bucket
+        source = asset_bucket
+    else:
+        try:
+            run_bucket = resolve_default_bucket(buckets_table)
+        except DefaultBucketNotFoundError as e:
+            logger.exception(f"The workflow run bucket could not be resolved: {e}")
+            raise VAMSGeneralErrorResponse("The workflow run bucket could not be resolved.")
+        source = asset_bucket if run_bucket.get('bucketId') == asset_bucket.get('bucketId') else run_bucket
+    if named_source_bucket and named_source_bucket != source.get('bucketName'):
+        logger.warning(f"An external completion named source bucket {named_source_bucket}; reading from "
+                       f"{source.get('bucketName')}, the bucket it resolves to")
+    return source
 
 
 def get_default_bucket_details(bucketId):
@@ -1672,11 +1676,8 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
-    source_registration = external_upload_source(workflow_execution_id, bucketDetails)
+    source_registration = external_upload_source(workflow_execution_id, bucketDetails, request_model.sourceBucket)
     source_bucket = source_registration['bucketName']
-    if request_model.sourceBucket and request_model.sourceBucket != source_bucket:
-        logger.warning(f"External completion for asset {assetId} named source bucket {request_model.sourceBucket}; "
-                       f"reading from {source_bucket}, the bucket this completion resolves to")
 
     # Get database details to check file upload restrictions
     database = get_database_details(databaseId)
