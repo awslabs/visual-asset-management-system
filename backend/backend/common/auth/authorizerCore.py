@@ -836,7 +836,9 @@ def get_jwks_uri_for_external_idp(issuer_url: str) -> str:
     Get JWKS URI for external IDP with discovery fallback.
 
     The resolved URI is cached per issuer for CACHE_TTL so OpenID Connect discovery
-    is not performed on the hot path of every authenticated request.
+    is not performed on the hot path of every authenticated request. The fallback used
+    when discovery fails is cached only for JWKS_MIN_REFETCH_INTERVAL_SECONDS, so a
+    transient discovery failure does not pin the fallback for the hour.
 
     Args:
         issuer_url: The issuer URL for the external IDP
@@ -861,12 +863,14 @@ def get_jwks_uri_for_external_idp(issuer_url: str) -> str:
         }
         return discovered_uri
 
-    # Fall back to standard .well-known/jwks.json
+    # Fall back to standard .well-known/jwks.json. A failed discovery may be transient, and an IdP
+    # that publishes its keys elsewhere fails every key fetch through the fallback, so the fallback
+    # is kept only for the refetch floor before discovery runs again.
     fallback_uri = EXTERNAL_JWKS_URL_TEMPLATE.format(issuer_url=issuer_url)
     logger.info(f"OpenID Connect discovery failed, falling back to: {fallback_uri}")
     jwks_uri_cache[issuer_url] = {
         "jwks_uri": fallback_uri,
-        "expiry": current_time + CACHE_TTL,
+        "expiry": current_time + JWKS_MIN_REFETCH_INTERVAL_SECONDS,
     }
     return fallback_uri
 

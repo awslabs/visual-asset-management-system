@@ -80,6 +80,10 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Previews of same-named files in subfolders** — A workflow that writes a file's preview replaces only that file's previews; the preview of a file with the same name in a subfolder (`lod1/model.glb` next to `model.glb`) is no longer archived. (issue #1716)
 -   **File operations keep to the file's own previews** — Deleting, archiving, unarchiving, copying or moving a file acts on that file's previews only; the preview of a file with the same name in a subfolder (`lod1/model.glb` next to `model.glb`) is no longer deleted, archived, restored, copied or moved with it. (issue #1723)
 -   **Asset history and sync records after a refused start-up lookup** — A function that could not resolve the asset history or outbound sync tracking table when it started resolves it again at its next write, instead of skipping every asset history and sync record until Lambda replaces it. (PR #1832)
+-   **External OAuth discovery retried after a minute** — One failed OpenID Connect discovery request no longer keeps external OAuth sign-in refused for up to an hour when the identity provider publishes its signing keys somewhere other than `{issuer}/.well-known/jwks.json`. (issue #1687)
+-   **Permanent asset deletion removes every upload and comment record** — Permanent deletion no longer leaves upload and comment records behind for an asset with many of them, and no longer deletes the upload records of an asset with the same ID in another database. (issue #1687)
+-   **permissionsSetup reports a failed step** — `apply_template.py` prints `Status: Incomplete` and exits 1 when a step fails or a `vamscli` call does not finish within 60 seconds, instead of printing `Status: Complete` and exiting 0. (issue #1687)
+-   **Isaac Sim connector keeps a handed-over sign-in** — A Cognito sign-in handed over from the CLI profile is renewed once with the CLI's refresh token when its access token expires, instead of reporting "Not authenticated". (issue #1687)
 
 **Other changes:**
 
