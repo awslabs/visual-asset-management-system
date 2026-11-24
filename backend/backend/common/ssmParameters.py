@@ -8,8 +8,10 @@ Which lookup to use:
 * A resource name VAMS creates at deploy time (a table, bucket, log group or function name under the
   deployment's resource-name prefix) is resolved with ``common.resourceNames.get_resource_name()``.
   It loads most of them for the container from the resource-name chunk parameters, and reads a
-  late-bound key the chunks do not carry (``lambdaFunctions/largeObjectCopyEngine``, for one) with
-  one GetParameter.
+  late-bound key the chunks do not carry (a tooling-only name such as
+  ``lambdaFunctions/crOsReindexer``) with one GetParameter. The deploy-time OpenSearch, web URL and
+  map key values are resolved through ``common.deployTimeValues``, which reads their earlier
+  parameters through this module only while the chunks do not carry them yet.
 * A parameter read by its full name goes through this module: a value VAMS does not create (an
   AWS-published or add-on-owned parameter), a value that can change after the deployment, or a
   deploy-time name that must be read again before the resolver's five-minute miss record expires

@@ -213,19 +213,23 @@ describe("ResourceNamesBuilder publishes the vector table name", () => {
     });
 
     test.each(ALL_TEMPLATES)(
-        "%s: the registry-published parameter count equals the registry minus lambdaFunctions",
+        "%s: the registry-published parameter count equals the registry minus the late-published categories",
         (name) => {
-            // lambdaFunctions/* is published by the search stack, only when its feature is on, so it is
+            // lambdaFunctions/* and the deploy-time openSearch/*, web/* and location/* values are
+            // published by the stacks that create them, each only when its feature is on, so they are
             // excluded from both sides of the comparison.
+            const latePublished = ["lambdaFunctions", "openSearch", "web", "location"];
             const s = synthTemplate(name);
             const published = resourceNameParams(s).filter(
                 (r) =>
-                    !SynthResult.flatten(r.properties.Name).includes(
-                        "/resourceNames/lambdaFunctions/"
+                    !latePublished.some((category) =>
+                        SynthResult.flatten(r.properties.Name).includes(
+                            `/resourceNames/${category}/`
+                        )
                     )
             );
             const registered = Object.entries(RESOURCE_PARAM_KEYS)
-                .filter(([category]) => category !== "lambdaFunctions")
+                .filter(([category]) => !latePublished.includes(category))
                 .reduce((n, [, keys]) => n + Object.keys(keys).length, 0);
             // The audit log queries table is built, and published, only when audit log search is
             // enabled; the EU Sovereign template turns it off.

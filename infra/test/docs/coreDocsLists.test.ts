@@ -289,11 +289,16 @@ describe("core documentation lists match the code they describe", () => {
         const logGroups = Object.keys(RESOURCE_PARAM_KEYS.cloudwatchLogGroups).length;
         const lambdas = Object.keys(RESOURCE_PARAM_KEYS.lambdaFunctions).length;
         const integration = Object.keys(RESOURCE_PARAM_KEYS.integration).length;
-        // ResourceNamesBuilder publishes every key but three: SearchBuilder publishes the reindexer
-        // function name, and the secondary API stack the workflow role ARN and the import function
-        // name, so the total details.md quotes is three higher than the materialized set.
-        const allParams = tables + legacy + buckets + logGroups + lambdas + integration;
-        const registryParams = allParams - lambdas - 1;
+        const deployTime =
+            Object.keys(RESOURCE_PARAM_KEYS.openSearch).length +
+            Object.keys(RESOURCE_PARAM_KEYS.web).length +
+            Object.keys(RESOURCE_PARAM_KEYS.location).length;
+        // ResourceNamesBuilder publishes every key but the lambdaFunctions names, the workflow role
+        // ARN and the deploy-time values: the search, secondary API, static web and Location Service
+        // stacks publish those, so the total details.md quotes is higher than the materialized set.
+        const allParams =
+            tables + legacy + buckets + logGroups + lambdas + integration + deployTime;
+        const registryParams = allParams - lambdas - deployTime - 1;
         /** The storage interface's tables that are not an add-on's: an add-on table is named after its add-on key. */
         const coreInterfaceTables = (): string[] => {
             const addonTables = new Set(
@@ -339,6 +344,7 @@ describe("core documentation lists match the code they describe", () => {
             expect(text).toContain(`materializes ${registryParams} of them`);
             expect(text).toContain(`${integration} integration values`);
             expect(text).toContain(`${lambdas} Lambda function names`);
+            expect(text).toContain(`${deployTime} deploy-time values`);
         });
 
         test("quotas.md table-count row", () => {

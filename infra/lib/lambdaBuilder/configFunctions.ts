@@ -61,7 +61,12 @@ export function buildConfigService(
         environment: {
             LOCATION_SERVICE_API_KEY_ARN_SSM_PARAM: config.locationServiceApiKeyArnSSMParam,
             LOCATION_SERVICE_URL_FORMAT: urlFormat,
-            WEB_DEPLOYED_URL_SSM_PARAM: config.webUrlDeploymentSSMParam,
+            // Set only when a web distribution is deployed: the static web stack, built for CloudFront
+            // or an ALB (core-stack.ts), is what publishes the web URL. Without one the handler finds
+            // the variable unset and answers an empty web URL with no Parameter Store lookup.
+            ...(Config.webDistributionEnabled(config)
+                ? { WEB_DEPLOYED_URL_SSM_PARAM: config.webUrlDeploymentSSMParam }
+                : {}),
         },
     });
 

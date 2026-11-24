@@ -32,6 +32,7 @@ import * as ssm from "aws-cdk-lib/aws-ssm";
 import { Service } from "../../helper/service-helper";
 import * as cr from "aws-cdk-lib/custom-resources";
 import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
+import { publishLateCoreResourceName } from "../resourceNames/lateCoreResourceNames";
 
 import { NAG_REASON_LAMBDA_BASIC_EXECUTION } from "../../helper/security";
 
@@ -128,6 +129,9 @@ export class SearchBuilderNestedStack extends NestedStack {
         // outer scope so the reindex trigger created after both branches can declare a dependency on
         // it; the constructs themselves are block-scoped to their branch.
         let schemaDeployResource: cdk.CustomResource | undefined = undefined;
+        // The endpoint the schema-deploy custom resource writes to aos/endPoint, held for the
+        // openSearch/* resource names published after both branches.
+        let openSearchEndpoint: string | undefined = undefined;
 
         // The dead-letter queues of the two indexer source queues. Held in the outer scope so the
         // CDK Nag suppression at the end of this method can be scoped to them rather than to the
@@ -155,6 +159,7 @@ export class SearchBuilderNestedStack extends NestedStack {
                 subnets: subnets,
             });
             schemaDeployResource = aoss.schemaDeployResource;
+            openSearchEndpoint = aoss.aossEndpointUrl;
 
             const osEndpointOutput = new cdk.CfnOutput(
                 scope,
@@ -357,6 +362,7 @@ export class SearchBuilderNestedStack extends NestedStack {
                 numberOfShards: config.app.openSearch.useProvisioned.numberOfShards,
             });
             schemaDeployResource = aos.schemaDeployResource;
+            openSearchEndpoint = aos.domainEndpoint;
 
             const osEndpointOutput = new cdk.CfnOutput(
                 scope,
@@ -577,6 +583,26 @@ export class SearchBuilderNestedStack extends NestedStack {
             // it fails against an index that does not exist yet and rolls the stack back.
             if (schemaDeployResource) {
                 reindexTrigger.node.addDependency(schemaDeployResource);
+            }
+        }
+
+        // The endpoint and index names the schema-deploy custom resource writes to aos/*, published
+        // again as core resource names so the resource-name chunk parameters carry them and a cold
+        // start of search or an indexer reads them in the call it already makes. Each waits for the
+        // custom resource, which creates the indexes: two resources with no declared dependency are
+        // ordered arbitrarily (Rule 9), and a reader of the per-key parameter must not get a new
+        // index name before its index exists. aos/* stays published for the reindexer and the
+        // data-migration tooling.
+        if (schemaDeployResource && openSearchEndpoint) {
+            const published: [string, string][] = [
+                [RESOURCE_PARAM_KEYS.openSearch.endpoint, openSearchEndpoint],
+                [RESOURCE_PARAM_KEYS.openSearch.assetIndexName, config.openSearchAssetIndexName],
+                [RESOURCE_PARAM_KEYS.openSearch.fileIndexName, config.openSearchFileIndexName],
+            ];
+            for (const [key, value] of published) {
+                publishLateCoreResourceName(scope, config, key, value, {
+                    dependsOn: [schemaDeployResource],
+                });
             }
         }
 

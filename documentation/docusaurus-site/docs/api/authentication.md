@@ -192,7 +192,7 @@ None.
 }
 ```
 
-`featuresEnabled` is a comma-separated string of the enabled feature flags. `locationServiceApiUrl` and `webDeployedUrl` are empty strings when Amazon Location Service or the web deployment URL is not configured.
+`featuresEnabled` is a comma-separated string of the enabled feature flags. `locationServiceApiUrl` is an empty string when Amazon Location Service is not deployed, and `webDeployedUrl` is an empty string when the deployment has no web distribution (neither Amazon CloudFront nor an Application Load Balancer).
 
 **Error Responses:**
 
