@@ -141,6 +141,41 @@ class TestConfinementRoot:
     def test_a_bucket_root_file(self):
         assert rf.confinement_root("model.obj", "") == ("", "model.obj")
 
+    @pytest.mark.parametrize("key, subdir, expected", [
+        # The object itself sits at its file name in its companion folder.
+        ("scans/model.obj", "", ("scans/model.obj/", "model.obj")),
+        # A file of the companion folder keeps its path there.
+        ("scans/model.obj/parts/a.obj", "parts", ("scans/model.obj/", "parts/a.obj")),
+        ("scans/model.obj/model.obj", "model.obj", ("scans/model.obj/", "model.obj")),
+    ])
+    def test_a_single_file_asset_is_confined_to_its_companion_folder(self, key, subdir, expected):
+        assert rf.confinement_root(key, subdir, "scans/model.obj") == expected
+
+    @pytest.mark.parametrize("key, root, expected", [
+        ("/scans/model.obj", "/scans/model.obj", ("/scans/model.obj/", "model.obj")),
+        ("/scans/model.obj", "scans/model.obj", ("/scans/model.obj/", "model.obj")),
+        ("/scans/model.obj/parts/a.obj", "/scans/model.obj", ("/scans/model.obj/", "parts/a.obj")),
+    ])
+    def test_a_leading_slash_on_the_key_or_root_is_confined_the_same_way(self, key, root, expected):
+        assert rf.confinement_root(key, "", root) == expected
+
+    def test_a_folder_asset_root_leaves_the_rule_as_it_was(self):
+        assert rf.confinement_root("scans/model.obj", "", "scans/") == ("scans/", "model.obj")
+
+    def test_a_single_file_root_of_another_object_is_not_used(self):
+        assert rf.confinement_root("scans/other.obj", "", "scans/model.obj") == ("scans/", "other.obj")
+
+
+@pytest.mark.unit
+class TestLocalPathFor:
+    def test_a_path_through_a_file_is_not_placed(self, tmp_path):
+        # The object of a single-file asset is staged at its file name, so model.obj/x.png (a file of
+        # its companion folder) would need a folder where that file is.
+        (tmp_path / "model.obj").write_text("o")
+        assert rf.local_path_for(str(tmp_path), "model.obj/x.png") is None
+        assert rf.local_path_for(str(tmp_path), "textures/x.png") == \
+            os.path.join(os.path.realpath(str(tmp_path)), "textures", "x.png")
+
 
 @pytest.mark.unit
 class TestCollectors:

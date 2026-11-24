@@ -209,7 +209,8 @@ def lambda_handler(event, context):
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
-        "externalSfnTaskToken": external_sfn_task_token
+        "externalSfnTaskToken": external_sfn_task_token,
+        "assetRootS3Key": event.get('assetRootS3Key', ''),
     }
 
     try:

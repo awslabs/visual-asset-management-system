@@ -39,6 +39,8 @@ class StageDefinitionBase(JsonEncodable):
 class StageInput(StageDefinitionBase):
     objectKey: str
     fileExtension: str = ""
+    # The input's asset root from the workflow manifest (assetRootS3Key); "" when none was recorded.
+    assetRootS3Key: str = ""
 
 
 @dataclass

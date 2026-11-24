@@ -68,6 +68,7 @@ Add the following to your `config.json` under `app.pipelines`:
 -   **Internet access** -- The container requires internet access for AWS Marketplace metering API communication. The ECS cluster deploys in private subnets with a NAT Gateway.
 -   **VPC with private subnets** -- When using an external VPC, provide private subnet IDs in the VPC configuration for the ECS cluster.
 -   **Container image** -- The `ecrContainerImageURI` must point to a valid container image.
+-   **Asset location** -- The pipeline processes a file of an asset whose location is a folder, or a file in the companion folder `{key}/` of an asset created on a single existing Amazon S3 object. It does not process the file of an asset created on a single existing object (a `bucketExistingKey` without a trailing `/`): the run fails before the container starts, with a message that says so.
 
 :::warning[Verify where your container writes its output before running a same-format conversion]
 VAMS supplies the container two configuration blocks: `state`, which describes the **input** file and
