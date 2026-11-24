@@ -157,6 +157,8 @@ def lambda_handler(event, context):
     claim_fingerprint = event.get("claimFingerprint", "")
     manual_run = event.get("manualRun") is True
     miris_root_file = event.get("mirisRootFile", "") or ""
+    nested_locations = event.get("nestedLocations")
+    nested_locations = nested_locations if isinstance(nested_locations, list) else []
     claim = (aux_s3, database_id, asset_id, claim_fingerprint, mirisClaim.owner_id(external_task_token))
 
     if input_s3_uri.endswith("/"):
@@ -196,6 +198,8 @@ def lambda_handler(event, context):
         # mirisRootFile when it is set.
         "manualRun": manual_run,
         "mirisRootFile": miris_root_file,
+        # Other assets stored inside the asset root; the container leaves their files out.
+        "nestedLocations": nested_locations,
         # Every end route reads this off the state, so it is always present ('' for none).
         "ambiguousRootReportS3Uri": ambiguous_root_report_uri(event.get("outputS3AssetResultsPath", "")),
         "preflightWarningsReportS3Uri": results_report_uri(

@@ -25,6 +25,8 @@ import hashlib
 import json
 import os
 
+from assetNesting import held_by_nested
+
 # Matches the IAM grants on the auxiliary bucket (MIRIS_CLAIM_PREFIX in mirisUploadFunctions.ts).
 CLAIM_PREFIX = "locks/miris-upload"
 CLAIM_PENDING = "pending"
@@ -44,8 +46,9 @@ def asset_root_prefix(root_key):
     return root if root.endswith("/") else root + "/"
 
 
-def list_trigger_files(s3_client, bucket, root_prefix, extensions):
-    """(asset-relative key, ETag) of every file under the asset root with a listed extension."""
+def list_trigger_files(s3_client, bucket, root_prefix, extensions, nested_locations=()):
+    """(asset-relative key, ETag) of every file under the asset root with a listed extension, except
+    the files of the assets stored in `nested_locations` inside it."""
     files = []
     paginator = s3_client.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=bucket, Prefix=root_prefix):
@@ -54,6 +57,8 @@ def list_trigger_files(s3_client, bucket, root_prefix, extensions):
             if key.endswith("/"):
                 continue
             if os.path.splitext(key)[1].lower() not in extensions:
+                continue
+            if held_by_nested(nested_locations, key):
                 continue
             files.append((key[len(root_prefix):], obj.get("ETag", "")))
     return files

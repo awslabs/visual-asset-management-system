@@ -245,6 +245,26 @@ describe("Miris add-on in static mode with the upload pipeline", () => {
         }
     );
 
+    test("the upload's execute function reads one asset record and queries only the location index", () => {
+        const onAssetTable = functionStatements(synth, UPLOAD_EXECUTE_HANDLER).filter((s) =>
+            /AssetStorageTable/.test(JSON.stringify(s.Resource))
+        );
+        const byAction = (action: string) =>
+            onAssetTable
+                .filter((s) => actionsOf(s).includes(action))
+                .flatMap((s) => [s.Resource].flat().map((r: unknown) => JSON.stringify(r)));
+        expect([...new Set(onAssetTable.flatMap(actionsOf))].sort()).toEqual([
+            "dynamodb:GetItem",
+            "dynamodb:Query",
+        ]);
+        expect(byAction("dynamodb:GetItem").length).toBeGreaterThan(0);
+        expect(byAction("dynamodb:GetItem").filter((r) => r.includes("/index/"))).toEqual([]);
+        expect(byAction("dynamodb:Query").length).toBeGreaterThan(0);
+        for (const resource of byAction("dynamodb:Query")) {
+            expect(resource).toContain("/index/AssetLocationGSI");
+        }
+    });
+
     test("alarms watch Miris auth failures and the upload's end-rule queue; static mode has no cleanup queue", () => {
         expectAuthFailureAlarm(synth);
         expect(

@@ -14,7 +14,10 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../config/config";
-import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
+import {
+    ASSET_LOCATION_INDEX,
+    storageResources,
+} from "../../../../storage/storageBuilder-nestedStack";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
@@ -236,7 +239,23 @@ export function buildVamsExecuteMirisUploadFunction(
     );
     // Reads the per-pipeline manifest envelope and the input configuration from the asset bucket.
     grantReadPermissionsToAllAssetBuckets(fun);
-    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    // The asset record, and the locations of other assets nested in its location, whose files the
+    // upload leaves out.
+    const assetTableArn = storageResources.dynamo.assetStorageTable.tableArn;
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:GetItem"],
+            resources: [assetTableArn],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:Query"],
+            resources: [`${assetTableArn}/index/${ASSET_LOCATION_INDEX}`],
+        })
+    );
     if (config.app.compliance.quarantineBlocksDownload) {
         storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
     }

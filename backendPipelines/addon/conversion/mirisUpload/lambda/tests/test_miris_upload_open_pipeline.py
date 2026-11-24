@@ -229,3 +229,21 @@ def test_the_run_reports_are_under_the_results_path(open_pipeline, results, expe
     assert sfn_input["ambiguousRootReportS3Uri"] == expected
     assert sfn_input["preflightWarningsReportS3Uri"] == expected.replace(
         "ambiguous_root.json", "preflight_warnings.txt")
+
+
+@pytest.mark.parametrize("overrides, expected", [
+    ({"nestedLocations": ["vams/data/a1/parts/"]}, ["vams/data/a1/parts/"]),
+    ({}, []),
+    ({"nestedLocations": "vams/data/a1/parts/"}, []),
+], ids=["list", "absent", "not-a-list"])
+def test_the_nested_locations_are_on_the_state_machine_input(open_pipeline, overrides, expected):
+    import datetime
+
+    with patch.object(open_pipeline, "sfn") as sfn, patch.object(open_pipeline, "s3_client"):
+        sfn.start_execution.return_value = {
+            "executionArn": "arn:aws:states:us-east-1:123456789012:execution:x:y",
+            "startDate": datetime.datetime(2026, 8, 14),
+        }
+        open_pipeline.lambda_handler(_execute_event(**overrides), None)
+
+    assert json.loads(sfn.start_execution.call_args.kwargs["input"])["nestedLocations"] == expected

@@ -93,13 +93,15 @@ def _report_skipped(task_token, reason):
         logger.warning(f"send_task_success failed (will fall through): {e}")
 
 
-def asset_fingerprint(asset_bucket, asset_root_key):
-    """Content fingerprint of the asset's trigger-extension files; '' when there is none to take."""
+def asset_fingerprint(asset_bucket, asset_root_key, nested_locations=()):
+    """Content fingerprint of the asset's trigger-extension files, leaving out the files of the assets
+    stored in `nested_locations` inside it; '' when there is none to take."""
     root_prefix = asset_root_prefix(asset_root_key)
     if not asset_bucket or not root_prefix:
         return ""
     files = list_trigger_files(
-        s3_client, asset_bucket, root_prefix, parse_extensions(ALLOWED_INPUT_FILEEXTENSIONS))
+        s3_client, asset_bucket, root_prefix, parse_extensions(ALLOWED_INPUT_FILEEXTENSIONS),
+        nested_locations)
     logger.info(f"Fingerprinting {len(files)} trigger file(s) under s3://{asset_bucket}/{root_prefix}")
     return content_fingerprint(files)
 
@@ -116,7 +118,9 @@ def lambda_handler(event, context):
         logger.info("Manual run; uploading without a claim")
         return {"gate": "proceed", "claimFingerprint": ""}
 
-    fingerprint = asset_fingerprint(body.get("assetBucket", ""), body.get("assetRootS3Key", ""))
+    nested = body.get("nestedLocations")
+    fingerprint = asset_fingerprint(
+        body.get("assetBucket", ""), body.get("assetRootS3Key", ""), nested if isinstance(nested, list) else [])
     bucket, key = claim_location(
         body.get("inputOutputS3AssetAuxiliaryFilesPath", ""), database_id, asset_id, fingerprint)
 

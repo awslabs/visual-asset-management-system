@@ -133,6 +133,7 @@ def test_vams_execute_never_logs_the_token(monkeypatch, recorder, route):
                     inputOutputS3AssetAuxiliaryFilesPath=AUX, manifestUsed=True)
     table = MagicMock()
     table.get_item.return_value = {"Item": {"assetName": "Pump"}}
+    table.query.return_value = {"Items": []}
     resolve = (MagicMock(side_effect=Exception("manifest unreadable")) if route == "manifest_failed"
                else MagicMock(return_value=resolved))
     with patch.object(mod, "logger", recorder), \

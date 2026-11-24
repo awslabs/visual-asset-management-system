@@ -11,6 +11,7 @@ import boto3
 from botocore.config import Config
 from customLogging.logger import safeLogger
 
+import assetNesting
 import manifestHelper
 import mirisClaim
 
@@ -173,7 +174,7 @@ def abort_external_workflow(error, task_token):
         logger.error(f"Failed to send task failure callback: {e}")
 
 
-def invoke_gate(resolved, asset_location, manual, miris_asset_name, task_token):
+def invoke_gate(resolved, asset_location, manual, miris_asset_name, task_token, nested_locations):
     """Claim the asset's current content. Returns (proceed, claim fingerprint)."""
     if not MIRIS_UPLOAD_GATE_FUNCTION_NAME:
         return True, ""
@@ -184,6 +185,8 @@ def invoke_gate(resolved, asset_location, manual, miris_asset_name, task_token):
             "assetId": resolved["assetId"],
             "assetBucket": asset_bucket,
             "assetRootS3Key": asset_root,
+            # Other assets stored inside the asset root; their files are left out of the fingerprint.
+            "nestedLocations": nested_locations,
             "manual": manual,
             "mirisAssetName": miris_asset_name,
             "inputOutputS3AssetAuxiliaryFilesPath":
@@ -204,7 +207,7 @@ def invoke_gate(resolved, asset_location, manual, miris_asset_name, task_token):
 
 def execute_pipeline(resolved, asset_location, claim_fingerprint, miris_asset_name,
                      external_task_token, executing_userName, executing_requestContext,
-                     manual=False, root_file=""):
+                     manual=False, root_file="", nested_locations=()):
     """Invoke openPipeline with the full pipeline payload."""
     asset_bucket, asset_root = asset_location
     message_payload = {
@@ -232,6 +235,8 @@ def execute_pipeline(resolved, asset_location, claim_fingerprint, miris_asset_na
         # A manual run's root is the selected file; an automatic run's is root_file when it is set.
         "manualRun": manual,
         "mirisRootFile": root_file,
+        # Other assets stored inside the asset root; the container leaves their files out.
+        "nestedLocations": list(nested_locations),
     }
 
     logger.info("Invoking openPipeline")
@@ -290,11 +295,16 @@ def lambda_handler(event, context):
         asset_name = read_distributable_asset(
             resolved["databaseId"], resolved["assetId"]).get("assetName", "") or ""
         asset_location = resolve_asset_root(resolved)
+        # Files of another asset stored inside this one's location are that asset's, so the upload
+        # leaves them out; the lookup fails the run before anything is claimed.
+        nested = assetNesting.nested_locations(
+            _asset_table(), asset_location[0], asset_location[1], resolved["databaseId"], resolved["assetId"])
+        assetNesting.check_size(nested)
         manual = is_manual_run(data, resolved)
         root_file = "" if manual else resolve_root_file(resolved)
 
         proceed, claim_fingerprint = invoke_gate(
-            resolved, asset_location, manual, asset_name, external_task_token)
+            resolved, asset_location, manual, asset_name, external_task_token, nested)
         if not proceed:
             logger.info("Gate returned skip; this execution is a no-op")
             return {"statusCode": 200, "body": "Skipped (gate)"}
@@ -312,6 +322,7 @@ def lambda_handler(event, context):
             data.get("executingRequestContext", ""),
             manual,
             root_file,
+            nested,
         )
         return {"statusCode": 200, "body": "Success"}
     except Exception as e:

@@ -53,6 +53,8 @@ def _resolved(**overrides):
 def _asset_table_mock(asset_name="Pump Housing", distributable=True):
     table = MagicMock()
     table.get_item.return_value = {"Item": {"assetName": asset_name, "isDistributable": distributable}}
+    # The location index lists no asset nested in this one.
+    table.query.return_value = {"Items": []}
     return table
 
 

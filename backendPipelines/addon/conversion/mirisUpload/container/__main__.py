@@ -38,6 +38,7 @@ from botocore.exceptions import ClientError
 
 import dependency_manifest
 import memory_budget
+from asset_nesting import held_by_nested
 import preflight
 from miris_uploader import MirisClient, MirisError
 from stream_metadata import (
@@ -193,13 +194,16 @@ def asset_root_location(stage) -> tuple[str, str]:
     return bucket, prefix
 
 
-def list_asset_files(s3, bucket: str, root_prefix: str):
+def list_asset_files(s3, bucket: str, root_prefix: str, nested_locations=()):
     """The run's one listing of the asset: ([(key, asset-relative path, size)] of every file under
-    the asset root, {key: ETag}). Every download is pinned to the ETag listed here."""
+    the asset root except the files of the assets stored in `nested_locations` inside it, {key:
+    ETag}). Every download is pinned to the ETag listed here."""
     paginator = s3.get_paginator("list_objects_v2")
     sizes, etags = {}, {}
     for page in paginator.paginate(Bucket=bucket, Prefix=root_prefix):
         for obj in page.get("Contents", []):
+            if held_by_nested(nested_locations, obj["Key"]):
+                continue
             sizes[obj["Key"]] = int(obj.get("Size", 0))
             etags[obj["Key"]] = obj.get("ETag", "")
     files = [(key, rel, sizes[key]) for key, rel in local_download_plan(sizes, root_prefix)]
@@ -540,7 +544,10 @@ def main():
     requested = requested_root(trigger_rel if manual else override)
     extensions = [
         e for e in (stage.get("rootExtensions") or _USD_MEDIA_TYPES) if e in _USD_MEDIA_TYPES]
-    files, listed_etags = list_asset_files(s3, asset_bucket, asset_root)
+    # Files of another asset stored inside this one's location are that asset's.
+    nested = stage.get("nestedLocations")
+    nested = [n for n in nested if isinstance(n, str)] if isinstance(nested, list) else []
+    files, listed_etags = list_asset_files(s3, asset_bucket, asset_root, nested)
     candidates = root_candidates([rel for _, rel, _ in files], extensions)
     if not candidates or (manual and requested not in candidates):
         _log("root_usd_not_found", asset_root=asset_root, trigger_key=trigger_key,

@@ -24,7 +24,7 @@ RUN chmod a+r /build/requirements.txt && \
 
 # Normalize read bits after each COPY: COPY preserves the build host's umask, so a hardened checkout
 # (umask 077/027) leaves these root-owned 600/640 and unreadable to the non-root USER below.
-COPY __init__.py __main__.py dependency_manifest.py entrypoint.sh memory_budget.py miris_uploader.py preflight.py stream_metadata.py time_budget.py upload_config.py usd_packager.py ./
+COPY __init__.py __main__.py asset_nesting.py dependency_manifest.py entrypoint.sh memory_budget.py miris_uploader.py preflight.py stream_metadata.py time_budget.py upload_config.py usd_packager.py ./
 RUN chmod -R a+rX /opt/miris-upload && chmod a+x entrypoint.sh
 COPY utils/ utils/
 RUN chmod -R a+rX /opt/miris-upload/utils
