@@ -1152,6 +1152,38 @@ class TestAssetDeleteCommand:
             assert '✗ Deletion Error' in result.output
             assert 'Deletion confirmation required' in result.output
 
+    REFUSED = ("Invalid delete operation: VAMS General Error: Error permanently deleting asset: the asset's "
+               "storage could not be fully deleted. The asset and its remaining files were kept.")
+
+    @patch('click.confirm')
+    def test_delete_refused_by_the_api_names_the_cause(self, mock_confirm, cli_runner, assets_command_mocks):
+        """A 400 the API answers for a delete it refused (InvalidAssetDataError) is a delete error, not an
+        unexpected error, and the output says the asset was kept."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].delete_asset_permanent.side_effect = InvalidAssetDataError(self.REFUSED)
+            mock_confirm.return_value = True
+
+            result = cli_runner.invoke(cli, ['assets', 'delete', 'test-asset', '-d', 'test-database', '--confirm'])
+
+            assert result.exit_code == 1
+            assert '✗ Delete Refused' in result.output
+            assert "the asset's storage could not be fully deleted" in result.output
+            assert 'The asset was not deleted' in result.output
+            assert 'Unexpected error' not in result.output
+
+    def test_delete_refused_by_the_api_json_output_carries_the_error_type(self, cli_runner, assets_command_mocks):
+        """With --json-output the refusal is one JSON object with error_type, the shape the MCP server and the
+        connectors read."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].delete_asset_permanent.side_effect = InvalidAssetDataError(self.REFUSED)
+
+            result = cli_runner.invoke(cli, ['assets', 'delete', 'test-asset', '-d', 'test-database', '--confirm',
+                                             '--json-output'])
+
+            assert result.exit_code == 1
+            payload = json.loads(result.output)
+            assert payload == {"error": self.REFUSED, "error_type": "InvalidAssetDataError"}
+
 
 class TestAssetDownloadCommand:
     """Test asset download command."""
