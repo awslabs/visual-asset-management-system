@@ -12,7 +12,8 @@ The v2.7 release introduces:
      Amazon S3 object (a single-file asset). Before v2.7 a folder key written without the '/' still
      listed its files. The ``assetLocationFolderKeys`` step finds asset rows whose key has no trailing
      '/', no object at the key and objects under ``{key}/``, reports them, and on a real run appends the
-     '/'. It runs first, before the backfills that walk every asset's location; it saves its scan
+     '/'. It runs first of the location steps (after ``commentSubscriptionKeys``), before the backfills
+     that walk every asset's location; it saves its scan
      position after every page (``--resume``) and writes one report line per finding.
   1. A consolidated SYSTEM GenAI metadata pipeline (``system-genai-metadata``) that replaces the
      GenAI 3D Metadata Labeling and CAD/Mesh Metadata Extraction built-ins. The v2.7 deploy removes
@@ -2536,7 +2537,7 @@ class CommentSubscriptionCopy:
         self.run_id = run_id or uuid.uuid4().hex
         self.current_run_id = self.run_id
         self._candidates: Dict[str, List[str]] = {}
-        self._databases: Optional[List[str]] = None
+        self._deletes: Optional[Dict[str, Dict[str, str]]] = None
         self._deleted: Dict[str, Dict[str, str]] = {}
         self._versions: Dict[Tuple[str, str], Optional[Tuple[set, str]]] = {}
         self._endpoints: Dict[Tuple[str, str], set] = {}
@@ -2562,42 +2563,41 @@ class CommentSubscriptionCopy:
             self._candidates[asset_id] = sorted(databases)
         return self._candidates[asset_id]
 
-    def _all_databases(self) -> List[str]:
-        """Every database id, live or deleted ('<id>#deleted'), from one paged scan of the database table."""
-        if self._databases is None:
-            databases = set()
-            for row in _paginate(self.ddb.scan, TableName=self.cfg['database_storage_table_name'],
-                                 ProjectionExpression='#d', ExpressionAttributeNames={'#d': 'databaseId'}):
-                database_id = _attr_s(row, 'databaseId')
-                if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
-                    database_id = database_id[:-len(ARCHIVED_DATABASE_SUFFIX)]
-                if database_id:
-                    databases.add(database_id)
-            self._databases = sorted(databases)
-        return self._databases
+    def _permanent_deletes(self) -> Dict[str, Dict[str, str]]:
+        """{assetId: {databaseId: time of its latest permanent delete}} from one paged Scan of the asset history
+        table, filtered on the permanentDelete records and projected to their key and time, read once per run.
+
+        The cost follows the size of the history table (one read per 1 MB page), not the number of databases
+        times the number of asset ids, and it is paid only when some v2.6 row's id has a live candidate."""
+        if self._deletes is None:
+            deletes: Dict[str, Dict[str, str]] = {}
+            for row in _paginate(self.ddb.scan, TableName=self.cfg['asset_history_storage_table_name'],
+                                 FilterExpression='#c = :d', ProjectionExpression='#p, #db, #a, #r',
+                                 ExpressionAttributeNames={'#c': 'changeSource', '#p': ASSET_HISTORY_PARTITION_KEY,
+                                                           '#db': 'databaseId', '#a': 'assetId', '#r': 'recordDate'},
+                                 ExpressionAttributeValues=_wire({':d': ASSET_HISTORY_PERMANENT_DELETE})):
+                key_database, _, key_asset = _attr_s(row, ASSET_HISTORY_PARTITION_KEY).partition(':')
+                database_id = _attr_s(row, 'databaseId') or key_database
+                asset_id = _attr_s(row, 'assetId') or key_asset
+                if not database_id or not asset_id:
+                    continue
+                when = _attr_s(row, 'recordDate')
+                latest = deletes.setdefault(asset_id, {})
+                latest[database_id] = max(when, latest.get(database_id, ''))
+            self._deletes = deletes
+        return self._deletes
 
     def deleted_databases(self, asset_id: str) -> Dict[str, str]:
         """{databaseId: time of its latest permanent delete} for the databases that no longer hold an asset with
-        this id but whose asset history records a permanent delete of it: one keyed query per database.
+        this id but whose asset history records a permanent delete of it (_permanent_deletes).
 
         Such a database's asset may own some of the id's v2.6 rows (a permanent delete on v2.7 leaves them), and
         its versions and topic are gone with it, so its evidence cannot be read. It is counted as a candidate."""
         if asset_id not in self._deleted:
             live = set(self.candidate_databases(asset_id))
-            deleted: Dict[str, str] = {}
-            for database_id in self._all_databases():
-                if database_id in live:
-                    continue
-                rows = _paginate(self.ddb.query, TableName=self.cfg['asset_history_storage_table_name'],
-                                 KeyConditionExpression='#p = :v', FilterExpression='#c = :d',
-                                 ProjectionExpression='#r', ExpressionAttributeNames={
-                                     '#p': ASSET_HISTORY_PARTITION_KEY, '#c': 'changeSource', '#r': 'recordDate'},
-                                 ExpressionAttributeValues=_wire({':v': f"{database_id}:{asset_id}",
-                                                                  ':d': ASSET_HISTORY_PERMANENT_DELETE}))
-                dates = [_attr_s(row, 'recordDate') for row in rows]
-                if dates:
-                    deleted[database_id] = max(dates)
-            self._deleted[asset_id] = deleted
+            self._deleted[asset_id] = {database_id: when for database_id, when
+                                       in self._permanent_deletes().get(asset_id, {}).items()
+                                       if database_id not in live}
         return self._deleted[asset_id]
 
     def _asset_row(self, database_id: str, asset_id: str) -> Optional[Dict]:
@@ -3055,8 +3055,6 @@ def run_comment_subscription_keys_step(config: dict, args, base_param_prefix, pr
                 'asset_versions_storage_table_name', ResourceParamKeys.ASSET_VERSIONS_STORAGE_TABLE),
             'user_storage_table_name': resolve('user_storage_table_name', ResourceParamKeys.USER_STORAGE_TABLE),
             # The databases whose asset with an id was permanently deleted are candidates too (deleted_databases)
-            'database_storage_table_name': resolve(
-                'database_storage_table_name', ResourceParamKeys.DATABASE_STORAGE_TABLE),
             'asset_history_storage_table_name': resolve(
                 'asset_history_storage_table_name', ResourceParamKeys.ASSET_HISTORY_STORAGE_TABLE),
         }

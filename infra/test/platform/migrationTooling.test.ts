@@ -937,21 +937,31 @@ describe("the v2.6 to v2.7 commentSubscriptionKeys step and what users did befor
         expect(resolve).toContain("if not made or not _iso_before(when, made)");
     });
 
-    it("finds those databases with one keyed history query per database per id, cached", () => {
+    it("finds those databases with one filtered scan of the history table per run, cached", () => {
+        // The cost follows the history table, not databases x asset ids (D1919-4)
+        const deletes = method("_permanent_deletes");
+        expect(deletes).toContain("if self._deletes is None:");
+        expect(deletes).toContain(
+            "_paginate(self.ddb.scan, TableName=self.cfg['asset_history_storage_table_name']"
+        );
+        expect(deletes).toContain("FilterExpression='#c = :d'");
+        expect(deletes).toContain("ASSET_HISTORY_PERMANENT_DELETE");
+        expect(deletes).toContain("ProjectionExpression='#p, #db, #a, #r'");
+        expect(deletes).not.toMatch(/\.query\b/);
         const deleted = method("deleted_databases");
         expect(deleted).toContain("if asset_id not in self._deleted:");
-        expect(deleted).toContain("self.cfg['asset_history_storage_table_name']");
-        expect(deleted).toContain("KeyConditionExpression='#p = :v'");
-        expect(deleted).toContain("ASSET_HISTORY_PERMANENT_DELETE");
-        expect(deleted).not.toMatch(/\.scan\b/);
-        expect(method("_all_databases")).toContain("if self._databases is None:");
+        expect(deleted).toContain("self._permanent_deletes().get(asset_id, {})");
+        expect(deleted).not.toMatch(/\.(query|scan)\b|for database_id in self\._all_databases/);
+        expect(script).not.toContain("database_storage_table_name");
         const step = pyFunction("run_comment_subscription_keys_step");
-        expect(step).toContain("ResourceParamKeys.DATABASE_STORAGE_TABLE");
         expect(step).toContain("ResourceParamKeys.ASSET_HISTORY_STORAGE_TABLE");
-        expect(config).toContain('"database_storage_table_name": null');
+        expect(step).not.toContain("ResourceParamKeys.DATABASE_STORAGE_TABLE");
         expect(config).toContain('"asset_history_storage_table_name": null');
-        expect(readme).toContain("`Scan` on the database table");
-        expect(readme).toContain("on\nthe asset history table");
+        expect(config).not.toContain("database_storage_table_name");
+        expect(readme).toContain(
+            "`Scan` on the asset history table (its `permanentDelete` records)"
+        );
+        expect(readme).not.toContain("`Scan` on the database table");
     });
 
     it("copies a single candidate's subscriber only when it is on that asset's topic", () => {
@@ -988,6 +998,54 @@ describe("the v2.6 to v2.7 commentSubscriptionKeys step and what users did befor
             expect(page).toContain("`notOnTopic`");
         }
         expect(readme).toContain("`deletedCandidates`");
+    });
+
+    it("says the deleted-asset handling needs the permanentDelete history record", () => {
+        for (const page of [readme, v27]) {
+            expect(page).toMatch(
+                /writes? that record last\s+and\s+best-effort|writes last and best-effort/
+            );
+        }
+    });
+
+    it("names the v2.6 causes of notOnTopic and the v2.1 noAsset edge the mapping cannot place", () => {
+        for (const page of [readme, v27]) {
+            expect(page).toMatch(/never\s+confirmed/);
+            expect(page).toContain("unsubscribe link");
+        }
+        expect(readme).toMatch(
+            /upgraded from v2\.1, a `noAsset` comment line with `deletedCandidates`/
+        );
+    });
+
+    it("says the location steps run after commentSubscriptionKeys wherever the order is stated", () => {
+        const revisions = fs.readFileSync(path.join(DOCS_ROOT, "additional/revisions.md"), "utf8");
+        const changelog = fs.readFileSync(path.join(__dirname, "..", "../../CHANGELOG.md"), "utf8");
+        for (const [name, text] of [
+            ["script", script],
+            ["readme", readme],
+            ["config", config],
+            ["guide", v27],
+            ["revisions", revisions],
+        ] as const) {
+            expect({
+                name,
+                stale: /assetLocationFolderKeys`? runs first(?! of the location steps)|assetLocationFolderKeys \(runs first\)|It runs first, before/.test(
+                    text
+                ),
+            }).toEqual({ name, stale: false });
+        }
+        expect(config).not.toMatch(/The (six|seven|eight|nine) table names/);
+        // The release record carries the window instruction too (D1919-6)
+        const note = changelog.slice(
+            changelog.indexOf("**Migration note:** comments and subscriptions move")
+        );
+        expect(note.slice(0, 1200)).toContain(
+            "do not permanently delete assets and do not subscribe"
+        );
+        expect(revisions).toMatch(
+            /not shown\. Until it has run, do not permanently delete assets and do not subscribe/
+        );
     });
 });
 
