@@ -647,8 +647,9 @@ class TestBotocoreParity:
     def test_the_retryable_sets_mirror_the_pinned_standard_checker(self, s3env):
         from botocore.retries import standard
         shipped = s3env.shipped
-        assert shipped._RETRYABLE_TRANSIENT_ERROR_CODES == set(standard.TransientRetryableChecker._TRANSIENT_ERROR_CODES)
-        assert shipped._RETRYABLE_TRANSIENT_STATUS_CODES == set(standard.TransientRetryableChecker._TRANSIENT_STATUS_CODES)
+        transient = standard.TransientRetryableChecker
+        assert shipped._RETRYABLE_TRANSIENT_ERROR_CODES == set(transient._TRANSIENT_ERROR_CODES)
+        assert shipped._RETRYABLE_TRANSIENT_STATUS_CODES == set(transient._TRANSIENT_STATUS_CODES)
         assert shipped._RETRYABLE_THROTTLING_ERROR_CODES == set(
             standard.ThrottledRetryableChecker._THROTTLED_ERROR_CODES)
 
