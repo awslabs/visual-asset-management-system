@@ -8,7 +8,9 @@ import pytest
 
 from vamscli.commands.sync import _safe_local_path
 from vamscli.main import cli
-from vamscli.utils.exceptions import APIError, AssetNotFoundError, SyncPullError
+from vamscli.utils.exceptions import APIError, AssetNotFoundError, InvalidAssetDataError, SyncPullError
+
+from tests.test_api_403_classification import _client, _response
 
 
 @pytest.fixture
@@ -475,6 +477,66 @@ class TestSyncPushFailureAggregation:
             assert len(failed) == 1
             assert failed[0]['relativeKey'] == '/gone.txt'
             assert 'archive failed' in failed[0]['error']
+
+    def test_push_permanent_delete_continues_past_a_refused_file(self, cli_runner, sync_command_mocks,
+                                                                 tmp_path, monkeypatch):
+        """A file whose delete the API refuses (400) is reported and the next file is still deleted.
+
+        The 400 goes through the real APIClient.delete_file, with only the HTTP session stubbed, so the
+        command handles whatever exception the client raises for it.
+        """
+        refused = {'message': "VAMS General Error: Error deleting file: the file's storage could not be "
+                              "fully deleted. The file and its previews were kept."}
+        client = _client()
+        sent = []
+
+        def request(method, url, **kwargs):
+            sent.append(kwargs['json']['filePath'])
+            if kwargs['json']['filePath'] == '/locked.txt':
+                return _response(refused, status=400)
+            return _response({'success': True, 'affectedFiles': ['/gone.txt']}, status=200)
+
+        monkeypatch.setattr(client.session, 'request', request)
+        monkeypatch.setattr(client, '_try_refresh_token', lambda token_before=None: True)
+
+        with sync_command_mocks('sync') as mocks:
+            setup_api_defaults(mocks['api_client'],
+                               [make_remote_item('/locked.txt'), make_remote_item('/gone.txt')])
+            mocks['api_client'].delete_file.side_effect = client.delete_file
+            result = cli_runner.invoke(cli, [
+                'sync', 'file', 'push', str(tmp_path), '-d', 'db1', '-a', 'asset1',
+                '--allow-delete', '--permanent-delete', '--confirm', '--json-output'
+            ])
+
+        assert sent == ['/locked.txt', '/gone.txt']
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data['overall_success'] is False
+        deletes = data['execution']['deletes']
+        assert deletes['succeeded'] == ['/gone.txt']
+        assert deletes['failed'] == [{
+            'relativeKey': '/locked.txt',
+            'error': f"Invalid delete operation: {refused['message']}",
+        }]
+
+    def test_push_permanent_delete_lists_a_refused_file(self, cli_runner, sync_command_mocks, tmp_path):
+        with sync_command_mocks('sync') as mocks:
+            setup_api_defaults(mocks['api_client'],
+                               [make_remote_item('/locked.txt'), make_remote_item('/gone.txt')])
+            mocks['api_client'].delete_file.side_effect = [
+                InvalidAssetDataError('Invalid delete operation: the file was kept'),
+                {'success': True, 'affectedFiles': ['/gone.txt']},
+            ]
+            result = cli_runner.invoke(cli, [
+                'sync', 'file', 'push', str(tmp_path), '-d', 'db1', '-a', 'asset1',
+                '--allow-delete', '--permanent-delete', '--confirm'
+            ])
+
+        assert result.exit_code == 1
+        assert mocks['api_client'].delete_file.call_count == 2
+        assert 'Sync push completed with some failures' in result.output
+        assert 'Deleted remote files: 1' in result.output
+        assert '✗ /locked.txt: Invalid delete operation: the file was kept' in result.output
 
 
 class TestSyncPullProducerPaths:
