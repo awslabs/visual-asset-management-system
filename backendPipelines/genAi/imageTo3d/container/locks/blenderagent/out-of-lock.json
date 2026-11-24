@@ -1,0 +1,17 @@
+{
+    "packages": [
+        {
+            "name": "moge",
+            "version": "2.0.0",
+            "source": "the MoGe clone at MOGE_COMMIT, installed with --no-deps in the Dockerfile (its own declared dependencies are not installed: the model code imports only what the lock holds)",
+            "commit": "07444410f1e33f402353b99d6ccd26bd31e469e8"
+        },
+        {
+            "name": "utils3d",
+            "version": "1.3",
+            "source": "the utils3d clone at UTILS3D_COMMIT, built in the Dockerfile; the build checks the SHA-256 of the checked-out tree below",
+            "commit": "3fab839f0be9931dac7c8488eb0e1600c236e183",
+            "treeSha256": "73f050a12b7ba005c2815d7e37784536b564d1eb57468a9e54e7303ed626f250"
+        }
+    ]
+}

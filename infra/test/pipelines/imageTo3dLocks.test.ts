@@ -38,7 +38,11 @@ interface ConvertedImage {
     upstreamFiles: string[];
     /** Upstream lines the Dockerfile deletes or the lock replaces, with the pyproject override that replaces them. */
     upstreamLinesNotLocked: RegExp[];
+    /** The PyTorch index torch and its siblings come from (default: the CUDA 12.8 index). */
+    torchIndex?: { name: string; url: string };
 }
+
+const CU128 = { name: "pytorch-cu128", url: "https://download.pytorch.org/whl/cu128" };
 
 const CONVERTED: ConvertedImage[] = [
     {
@@ -72,6 +76,24 @@ const CONVERTED: ConvertedImage[] = [
         upstreamFiles: ["requirements.txt"],
         upstreamLinesNotLocked: [/^(torch|torchvision|pymeshlab|gradio|fastapi|uvicorn)$/],
     },
+    {
+        // CUDA 12.4 torch from its own explicit index (PyPI stays the default for the NVIDIA runtime wheels), the prebuilt
+        // flash-attn wheel in the lock, and five packages built from pinned clones (utils3d hash-checked). Upstream's
+        // setup.sh names no versions and the Dockerfile's own list is what the lock mirrors, so no upstream file is recorded.
+        model: "trellis2",
+        dockerfile: "Dockerfile.trellis2",
+        upstreamFiles: [],
+        upstreamLinesNotLocked: [],
+        torchIndex: { name: "pytorch-cu124", url: "https://download.pytorch.org/whl/cu124" },
+    },
+    {
+        // The Blender agent has no upstream requirements file: its set is the shared pipeline dependencies, LiteLLM and
+        // its dependencies, the CUDA 12.8 torch and what MoGe-2 imports. MoGe and utils3d are built from pinned clones.
+        model: "blenderagent",
+        dockerfile: "Dockerfile.blenderagent",
+        upstreamFiles: [],
+        upstreamLinesNotLocked: [],
+    },
 ];
 
 /** Logical Dockerfile instructions: backslash continuations joined, comments dropped. */
@@ -101,7 +123,14 @@ function exportPins(text: string): { name: string; version: string; hashes: numb
     const pins: { name: string; version: string; hashes: number }[] = [];
     for (const line of text.split(/\r?\n/)) {
         const pin = /^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)/.exec(line);
+        // A prebuilt wheel (`name @ https://.../<dist>-<version>[+label]-<tags>.whl`) is read as its public version, the
+        // way the audit and check_installed_set.py read it.
+        const wheel =
+            /^([A-Za-z0-9][A-Za-z0-9._-]*)\s+@\s+https:\/\/[^\s;]*\/[A-Za-z0-9_.]+-([0-9][A-Za-z0-9_.!]*)(?:\+[A-Za-z0-9_.]+)?-[^\s;/]+\.whl\b/.exec(
+                line
+            );
         if (pin) pins.push({ name: normalize(pin[1]), version: pin[2], hashes: 0 });
+        else if (wheel) pins.push({ name: normalize(wheel[1]), version: wheel[2], hashes: 0 });
         else if (/^\s+--hash=sha256:[0-9a-f]{64}/.test(line) && pins.length) {
             pins[pins.length - 1].hashes += 1;
         }
@@ -137,16 +166,19 @@ function tomlArray(text: string, key: string, after = 0): string[] {
 
 describe.each(CONVERTED)(
     "the $model image lock",
-    ({ model, dockerfile, upstreamFiles, upstreamLinesNotLocked }) => {
+    ({ model, dockerfile, upstreamFiles, upstreamLinesNotLocked, torchIndex = CU128 }) => {
         const dir = path.join(CONTAINER_DIR, "locks", model);
         const read = (name: string) => fs.readFileSync(path.join(dir, name), "utf-8");
         const dockerText = fs.readFileSync(path.join(CONTAINER_DIR, dockerfile), "utf-8");
         const steps = instructions(dockerText);
         const pyproject = read("pyproject.toml");
         const frozen = frozenPins(read("frozen-set.txt"));
-        const outOfLock: { name: string; version: string; commit: string }[] = JSON.parse(
-            read("out-of-lock.json")
-        ).packages;
+        const outOfLock: {
+            name: string;
+            version: string;
+            commit: string;
+            treeSha256?: string;
+        }[] = JSON.parse(read("out-of-lock.json")).packages;
 
         it("installs every Python package from a hashed lock, except the recorded source builds", () => {
             const installs = steps.filter((s) => /\bpip3?\s+install\b/.test(s));
@@ -172,7 +204,7 @@ describe.each(CONVERTED)(
             for (const build of builds) {
                 expect(build).toMatch(/--no-deps/);
                 expect(build).toMatch(/--no-build-isolation/);
-                expect(build).toMatch(/\s\/(opt|tmp)\/[a-z0-9_]+(\/[a-z0-9_]+)*$/);
+                expect(build).toMatch(/\s\/(opt|tmp)\/[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/);
             }
             expect(builds.length).toBe(outOfLock.length);
             // The upgrade of pip, setuptools and wheel that resolved on build day is gone.
@@ -207,19 +239,19 @@ describe.each(CONVERTED)(
         });
 
         it("takes torch and its siblings from the explicit PyTorch index, and nothing else from it", () => {
-            expect(pyproject).toMatch(
-                /\[\[tool\.uv\.index\]\]\nname = "pytorch-cu128"\nurl = "https:\/\/download\.pytorch\.org\/whl\/cu128"\nexplicit = true/
+            expect(pyproject).toContain(
+                `[[tool.uv.index]]\nname = "${torchIndex.name}"\nurl = "${torchIndex.url}"\nexplicit = true`
             );
             const sources = /\[tool\.uv\.sources\]\n([\s\S]*)$/.exec(pyproject)![1];
             for (const line of sources.split(/\r?\n/).filter((l) => l.trim() !== "")) {
                 expect(line).toMatch(
-                    /^(torch|torchvision|xformers) = \{ index = "pytorch-cu128" \}$/
+                    new RegExp(
+                        `^(torch|torchvision|xformers) = \\{ index = "${torchIndex.name}" \\}$`
+                    )
                 );
             }
             const install = steps.find((s) => /-r \/opt\/locks\/\w+\/requirements\.lock/.test(s))!;
-            expect(install).toMatch(
-                /--extra-index-url https:\/\/download\.pytorch\.org\/whl\/cu128/
-            );
+            expect(install).toContain(`--extra-index-url ${torchIndex.url}`);
         });
 
         it("copies the lock files, the recorded upstream files and the checks into the image", () => {
@@ -233,13 +265,18 @@ describe.each(CONVERTED)(
                 expect(copies).toContain(`locks/${model}/${file}`);
                 expect(fs.existsSync(path.join(dir, file))).toBe(true);
             }
-            expect(copies).toContain(`locks/${model}/upstream /opt/locks/${model}/upstream`);
+            if (upstreamFiles.length > 0) {
+                expect(copies).toContain(`locks/${model}/upstream /opt/locks/${model}/upstream`);
+            }
             expect(copies).toContain(
-                "locks/tools/check_installed_set.py locks/tools/check_upstream_requirements.py /opt/locks/tools/"
+                upstreamFiles.length > 0
+                    ? "locks/tools/check_installed_set.py locks/tools/check_upstream_requirements.py /opt/locks/tools/"
+                    : "locks/tools/check_installed_set.py /opt/locks/tools/"
             );
         });
 
         it("compares each recorded upstream file with the clone right after the clone", () => {
+            if (upstreamFiles.length === 0) return;
             const clone = steps.findIndex(
                 (s) =>
                     /git clone .*\/opt\/\w+ /.test(s) ||
@@ -325,6 +362,14 @@ describe.each(CONVERTED)(
                 expect(entry.version).toMatch(/^\d/);
                 expect(entry.commit).toMatch(/^[0-9a-f]{40}$/);
                 expect(dockerText).toContain(`=${entry.commit}`);
+                // A package built from a clone whose files are hash-checked records the digest the build compares with.
+                if (entry.treeSha256 !== undefined) {
+                    expect(entry.treeSha256).toMatch(/^[0-9a-f]{64}$/);
+                    expect(dockerText).toContain(`=${entry.treeSha256}`);
+                    expect(dockerText).toMatch(
+                        /git ls-files -z \| LC_ALL=C sort -z \| xargs -0 sha256sum \| sha256sum/
+                    );
+                }
             }
         });
 
