@@ -58,6 +58,7 @@ All notable changes to this project will be documented in this file. See [standa
 ### Chores
 
 -   **Backend tests** The Physna add-on tests' `handlers.auth` stub carries `AUTH_METHOD_JWT` and `AUTH_METHOD_API_KEY`, so a backend test run that collects the Physna tests before another test imports `customLogging.auditLogging` (for example `tests/handlers` alone) no longer fails at collection. ([#1451](https://github.com/awslabs/visual-asset-management-system/issues/1451))
+-   **Backend tests** The audit log search service tests take their timestamps when each test runs instead of when the module is imported, so a backend test run that reaches them more than about 1,000 seconds after collection no longer fails. ([#1752](https://github.com/awslabs/visual-asset-management-system/issues/1752))
 
 ### Known Outstanding Issues
 

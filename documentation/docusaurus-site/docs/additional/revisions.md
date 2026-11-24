@@ -82,6 +82,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **EDH stopped desktop termination guidance** — The EDH setup guide says to keep EDH's `DCV_LINUX_TERMINATE_STOPPED_SESSION` and `DCV_WINDOWS_TERMINATE_STOPPED_SESSION` at `0`, so that EDH does not terminate stopped workstations and their disks. (issue #1731)
 -   **Docs match the code** — The permission model lists the Download as Zip, audit log search, execution detail and EDH Workstations routes; the pipeline, CLI command group and viewer counts are corrected; the configuration reference gives the order in which CDK context, `config.json` and environment variables apply; and the notices add CuMesh, FlexGEMM, opencv-python-headless, xformers and the conda-forge base images. The docs site's configuration builder requires a VPC for Image to 3D, and nine permission templates drop criteria that match no route without changing what they grant. (PR #1776)
 -   **Backend test subsets** — A test run that collects the Physna add-on tests before another test imports the audit logging module, such as `tests/handlers` alone, no longer fails at collection. (issue #1451)
+-   **Audit log search tests on long runs** — The audit log search service tests take their timestamps when each test runs, so a backend test run that reaches them more than about 1,000 seconds after collection no longer fails. (issue #1752)
 
 **Known issues:**
 
