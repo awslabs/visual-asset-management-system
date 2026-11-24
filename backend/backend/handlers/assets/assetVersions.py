@@ -32,7 +32,7 @@ from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResp
 from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_object
 from common.assetProvenance import ASSET_VERSION_STAMPED_FIELDS, stamp_asset_version_provenance
 from common.assetLocations import (
-    NestedLocations, aux_scope, contains, normalize_base_prefix, object_key_for, relative_path_in,
+    NestedLocations, contains, normalize_base_prefix, object_key_for, relative_path_in, viewer_data_scope,
 )
 from common.fileAttribution import nested_locations_of_asset
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
@@ -1977,14 +1977,11 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
             if not new_version_id:
                 return None, relative_key
 
-            # Delete the file's own aux files since they are most likely wrong with the version revert. The
-            # object of a single-file location keeps its data in {db}/{key}/preview/; the rest of
-            # {db}/{key}/, and a companion folder named preview inside it, holds its companion entries' data.
-            aux_prefix, aux_keep = aux_scope(databaseId, prefix, full_key)
-            if aux_keep is None:
-                delete_assetAuxiliary_files(aux_prefix)
-            else:
-                delete_assetAuxiliary_files(aux_prefix, keep=aux_keep)
+            # Delete the file's own viewer data, which no longer matches the reverted version. It is in
+            # {db}/{key}/preview/; the rest of {db}/{key}/, and a folder named preview inside it, holds the
+            # data of other files in a folder named like this file (companion entries, or a nested asset's).
+            aux_prefix, aux_keep = viewer_data_scope(databaseId, full_key)
+            delete_assetAuxiliary_files(aux_prefix, keep=aux_keep)
 
             return {
                 'relativeKey': relative_key,

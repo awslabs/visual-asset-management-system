@@ -72,7 +72,7 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 76 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 78 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
@@ -99,9 +99,15 @@ CoreVAMSStack (root)
   +-- LocationService (conditional: useLocationService.enabled) -> StaticWeb (when the static
   |                                                                  web stack is built)
   +-- CustomFeatureEnabledConfig (writes enabled features to DynamoDB)
+  +-- ResourceNameChunk<i> (root-stack SSM parameters, built last) -> storage, ApiBuilder2, SearchBuilder,
+                                                                       StaticWeb, LocationService (each when a
+                                                                       chunk value is read from it), AddonBuilder,
+                                                                       CustomBuilder (when they publish names)
 ```
 
 `RestApi` materializes the routes every API stack registered into `RouteRegistry`, which is why it depends on all of them rather than the reverse.
+
+The resource-name chunk parameters (`resourceNameChunks.ts`) carry every core name again: the registry's, then the late core names stacks built after ResourceNamesBuilder publish with `publishLateCoreResourceName()` (`lateCoreResourceNames.ts`): the copy engine's function name (ApiBuilder2 records its existing parameter), the OpenSearch endpoint and index names (SearchBuilder, after the schema-deploy custom resource), the web URL (StaticWeb) and the map API key ARN (LocationService), each only when its feature is deployed. Then come the add-on and custom names. Every chunk waits for each stack a value is read from, so on the commercial default they are created or re-laid out at the end of the deploy; nothing depends on a chunk. Mirrors `infra/CLAUDE.md` "Resource-name chunk parameters".
 
 ### **Fork Extension Points (core + add-on + custom)**
 
@@ -185,7 +191,7 @@ interface storageResources {
         syncTrackingOutboundStorageTable;
         assetFileMetadataVersionsStorageTable;
         authEntitiesStorageTable;
-        commentStorageTable;
+        commentStorageTable; // V2: PK databaseId:assetId, SK commentId, LSI AssetVersionIdLSI (SK assetVersionId); the V1 table's name is published for migration tooling only
         constraintsStorageTable;
         databaseStorageTable;
         metadataSchemaStorageTableV2;
@@ -195,7 +201,7 @@ interface storageResources {
         pipelineStorageTable; // V1; name published for migration tooling only
         rolesStorageTable;
         s3AssetBucketsStorageTable;
-        subscriptionsStorageTable;
+        subscriptionsStorageTable; // V2: PK eventName, SK entityName:databaseId:entityId; the V1 table's name is published for migration tooling only
         tagStorageTable;
         tagTypeStorageTable;
         tagStorageTableLegacy; // legacy tag table; name published for migration tooling only

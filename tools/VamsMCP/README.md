@@ -451,8 +451,9 @@ ignores, so neither tool offers one. `get_comment` reports a comment that does
 not exist as an error, because the endpoint answers 200 with an empty object
 rather than a 404.
 
-`check_subscription` answers one asset without paging and returns `subscribed`
-alongside the endpoint's raw `message`. Both real answers are HTTP 200 and the
+`check_subscription` answers one asset (`database_id`, `asset_id`) for one user
+without paging and returns `subscribed` alongside the endpoint's raw `message`.
+Both real answers are HTTP 200 and the
 verdict is carried only in that string, so a successful call is not on its own an
 answer; `unrecognizedResponse` marks a message that is neither known value, which
 means unknown rather than not subscribed.
@@ -736,12 +737,13 @@ Comments, subscriptions, and metadata schemas: `add_comment`, `update_comment`,
 `create_subscription`, `update_subscription`, `create_metadata_schema`,
 `update_metadata_schema`.
 
-`add_comment` returns the `commentId` it wrote, because the endpoint's
-acknowledgement does not contain it. The id is the caller's to choose and the
-write is unconditional, so passing an existing one REPLACES that comment with no
-error; leave `comment_id` unset and a `uuid4` is generated. `update_comment` and
-`delete_comment` are creator-only — anyone else gets a 403 whatever their VAMS
-role.
+Every comment and subscription tool takes `database_id` first: the same asset id
+can exist in more than one database, so the database and asset ids together
+address an asset's comments and subscriptions. `add_comment` takes the asset version the
+comment is about and returns the `commentId` the API generates; `get_comment`,
+`update_comment` and `delete_comment` address one comment by `database_id`,
+`asset_id` and `comment_id`. `update_comment` and `delete_comment` are
+creator-only — anyone else gets a 403 whatever their VAMS role.
 
 `update_subscription` REPLACES the subscriber list rather than adding to it: every
 user absent from the list is unsubscribed from the notification topic. Read the
@@ -768,11 +770,10 @@ the host's conversation log and telemetry. Keep both create tools out of
 `create_user_api_key` (self-service) always binds the key to the authenticated
 user and requires an expiry within 365 days. `update_*_api_key` with
 `is_active=False` is the reversible revoke: the key stops authenticating until it
-is re-enabled, and nothing is destroyed. The API Gateway authorizer caches its
-decision for about 30 seconds in both directions: a key that authenticated within
-that window keeps working until it expires, a key refused within it stays refused
-for the same time after re-enabling, and a disabled key not in use is refused on
-its next call.
+is re-enabled, and nothing is destroyed. VAMS briefly caches API key authorization
+in both directions (the API Gateway authorizer cache for 30 seconds and the
+authorizer's API key record cache for 15 seconds): a disabled key can keep working
+for up to about 45 seconds, and a re-enabled key can stay refused for as long.
 
 Zip downloads: `create_zip_download`, `get_zip_download_url`.
 
@@ -927,7 +928,8 @@ result reads `action: "ended"` with the final `status`. `delete_zip_download` pe
 removes a finished job and its archive, and any URL already issued stops working.
 
 API keys: `delete_api_key`, `delete_user_api_key`. Both are permanent and lock
-out every client still presenting the key at once; `update_api_key` /
+out every client still presenting the key within about 45 seconds (VAMS briefly
+caches API key authorization); `update_api_key` /
 `update_user_api_key` with `is_active=False` revokes the same access reversibly
 and is the better first move.
 

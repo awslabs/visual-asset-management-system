@@ -40,6 +40,7 @@ import { CUSTOM_RESOURCE_PARAM_KEYS } from "../../common/customResourceParamKeys
 
 const REPO_ROOT = path.join(__dirname, "..", "../..");
 const BACKEND_MIRROR_PY = path.join(REPO_ROOT, "backend/backend/common/resourceNames.py");
+const DEPLOY_TIME_MIRROR_PY = path.join(REPO_ROOT, "backend/backend/common/deployTimeValues.py");
 const ADDON_MIRROR_PY = path.join(REPO_ROOT, "backend/backend/common/addonResourceNames.py");
 const CUSTOM_MIRROR_PY = path.join(REPO_ROOT, "backend/backend/custom/customResourceNames.py");
 const SELF = path.join(__dirname, path.basename(__filename).replace(/\.js$/, ".ts"));
@@ -92,9 +93,12 @@ function canonicalKeys(): string[] {
  *   * the whole `integration` category -- the orchestration bus ARN, event source prefix and
  *     workflow state-machine role ARN that an externally owned pipeline bridge stack resolves at
  *     its own deploy time; no handler reads them; and
- *   * the five deprecated-table keys under `dynamoTables/legacy/` whose only consumer is a
+ *   * the seven deprecated-table keys under `dynamoTables/legacy/` whose only consumer is a
  *     migration script. Each is named through the registry object rather than as a string, so a
  *     rename fails compilation instead of drifting into a stale allow-list entry.
+ *
+ * The deploy-time categories (`openSearch`, `web`, `location`) are not in resourceNames.py either:
+ * their handler mirror is deployTimeValues.py, compared below (deployTimeKeys()).
  *
  * `legacy/tagStorage` and `legacy/tagTypeStorage` are deliberately absent from this list, so the
  * mirror is required to carry them. No handler resolves either one -- the per-database tag
@@ -112,12 +116,23 @@ function toolingOnlyKeys(): string[] {
         legacy.assetLinksStorage,
         legacy.metadataStorage,
         legacy.metadataSchemaStorage,
+        legacy.commentStorageV1,
+        legacy.subscriptionsStorageV1,
     ];
 }
 
-/** Keys the mirror must carry: everything canonical that is not tooling-only. */
+/** The deploy-time categories, mirrored by deployTimeValues.py rather than resourceNames.py. */
+function deployTimeKeys(): string[] {
+    return [
+        ...Object.values(RESOURCE_PARAM_KEYS.openSearch),
+        ...Object.values(RESOURCE_PARAM_KEYS.web),
+        ...Object.values(RESOURCE_PARAM_KEYS.location),
+    ];
+}
+
+/** Keys the mirror must carry: everything canonical that is neither tooling-only nor deploy-time. */
 function expectedBackendKeys(): string[] {
-    const omitted = new Set(toolingOnlyKeys());
+    const omitted = new Set([...toolingOnlyKeys(), ...deployTimeKeys()]);
     return canonicalKeys().filter((key) => !omitted.has(key));
 }
 
@@ -180,6 +195,11 @@ describe("backend mirror matches the canonical registry", () => {
             // Bounds what may be omitted: no live table, bucket, or log group can be hidden here.
             expect(key).toMatch(/^(lambdaFunctions\/|integration\/|dynamoTables\/legacy\/)/);
         }
+        for (const key of deployTimeKeys()) {
+            expect(canonical.has(key)).toBe(true);
+            expect(mirror.has(key)).toBe(false);
+            expect(key).toMatch(/^(openSearch\/|web\/|location\/)/);
+        }
     });
 
     it("mirrors both legacy tag keys, which no handler resolves", () => {
@@ -207,6 +227,39 @@ describe("backend mirror matches the canonical registry", () => {
         );
         expect(orphaned.unknownInMirror).toEqual(["dynamoTables/syntheticOrphanTable"]);
         expect(orphaned.missingFromMirror).toEqual([]);
+    });
+});
+
+describe("deployTimeValues.py mirrors the deploy-time categories", () => {
+    const deployTimeSource = fs.readFileSync(DEPLOY_TIME_MIRROR_PY, "utf8");
+    const deployTimeMirrorKeys = parseBackendMirrorKeys(deployTimeSource);
+
+    it("declares exactly the openSearch, web and location keys, with no environment override", () => {
+        // Control: the categories are populated, so the comparison is not two empty sets.
+        expect(deployTimeKeys().length).toBeGreaterThanOrEqual(5);
+        expect(deployTimeSource).toContain("class DeployTimeKeys");
+        const { missingFromMirror, unknownInMirror } = diffKeys(
+            deployTimeMirrorKeys,
+            deployTimeKeys()
+        );
+        // Add the ResourceParamKey to backend/backend/common/deployTimeValues.py.
+        expect(missingFromMirror).toEqual([]);
+        // Remove it from deployTimeValues.py, or declare it in infra/common/resourceParamKeys.ts.
+        expect(unknownInMirror).toEqual([]);
+        // A *_SSM_PARAM variable holds a parameter name, never the value, so none is an override.
+        const declarations = Array.from(
+            deployTimeSource.matchAll(/ResourceParamKey\(\s*"([^"]+)"\s*,\s*\(([^)]*)\)\s*\)/g)
+        );
+        expect(declarations.map((m) => m[1]).sort()).toEqual([...deployTimeKeys()].sort());
+        for (const m of declarations)
+            expect({ key: m[1], overrides: m[2].trim() }).toEqual({
+                key: m[1],
+                overrides: "",
+            });
+    });
+
+    it("the deploy-time keys are not in resourceNames.py", () => {
+        expect(deployTimeKeys().filter((key) => mirrorKeys.includes(key))).toEqual([]);
     });
 });
 

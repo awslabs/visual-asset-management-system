@@ -193,10 +193,10 @@ REJECTED_REASON_AMBIGUOUS = "ambiguousLocation"
 # restoring the archived asset would make the location shared again (the API unarchive refuses it too), so
 # nothing is restored or attributed and the record goes to the rejected-record queue.
 REJECTED_REASON_ARCHIVED_OWNER_LOCATION_IN_USE = "archivedOwnerLocationInUse"
-# A file no stored location holds, written under a first-level folder named by the id of an existing asset (live or
-# archived, in any database or bucket) that is stored elsewhere: auto-creating an asset for the folder would give two
-# assets one id, which every handler that finds an asset by its id alone refuses, so nothing is created or attributed
-# and the record goes to the rejected-record queue (D12).
+# A file no stored location holds, written under a first-level folder named by the id of an asset (live or archived)
+# of the database the folder's asset would be created in, stored elsewhere: an asset is addressed by its database and
+# asset ids, so a second asset with that id in that database cannot be created, and the record goes to the
+# rejected-record queue. An asset with the id in another database does not stop the create.
 REJECTED_REASON_ASSET_ID_IN_USE = "assetIdInUse"
 
 # A first-level auto-create whose folder already holds other objects is deferred once by this many
@@ -219,8 +219,8 @@ class RecordRedrive(Exception):
 
 
 class AssetIdInUseError(Exception):
-    """An auto-create named an asset id the asset table already holds: `holders` are its rows, live or
-    archived, in any database."""
+    """An auto-create named an asset id its target database already holds: `holders` are its rows there,
+    live or archived."""
 
     def __init__(self, asset_id: str, holders: List[Dict]):
         super().__init__(f"Asset id {asset_id} is already in use")
@@ -314,6 +314,59 @@ def asset_id_entries(rows: List[Dict]) -> List[LocationEntry]:
                           bucket_id=str(row.get('bucketId') or ''),
                           location=normalize_location((row.get('assetLocation') or {}).get('Key')))
             for row in rows]
+
+
+def database_asset_id_rows(database_id: str, asset_id: str) -> List[Dict]:
+    """The asset rows of `asset_id` in `database_id`, live and archived (`{databaseId}#deleted`), read by key
+    with a consistent read. A read that fails raises RecordRedrive, so no asset is created on an id that could
+    not be checked."""
+    table = dynamodb.Table(asset_table_name)
+    rows: List[Dict] = []
+    try:
+        for partition in (database_id, f"{database_id}{ARCHIVED_DATABASE_SUFFIX}"):
+            item = table.get_item(Key={'databaseId': partition, 'assetId': asset_id},
+                                  ConsistentRead=True).get('Item')
+            if item:
+                rows.append(item)
+    except Exception as e:
+        logger.exception(f"Could not read asset id {asset_id} in database {database_id}: {e}")
+        raise RecordRedrive(f"Could not check whether asset id {asset_id} is in use in database {database_id}")
+    return rows
+
+
+def lookup_asset_for_key(bucket_id: str, asset_id: str, base_prefix: str,
+                         object_key: str) -> Tuple[Optional[Dict], List[Dict]]:
+    """The live asset of this registration named by the key's first folder whose stored location holds the key.
+
+    The same asset id can be held by assets of several databases in one registration. The first live row of
+    `(bucketId, assetId)` answers when its stored location holds the key; otherwise every live row of the id in
+    this registration is read and the one whose stored location holds the key is used, the deepest when
+    several do. Returns `(row, [])`, `(None, [])` when no row holds the key, or `(None, rows)` when two or more
+    rows hold it at one location. A read that fails raises RecordRedrive.
+    """
+    first = lookup_asset(bucket_id, asset_id)
+    if not first:
+        return None, []
+    if contains(asset_location_of(first, base_prefix, asset_id), object_key):
+        return first, []
+    holding = []
+    for row in asset_id_rows(asset_id):
+        if (str(row.get('bucketId') or '') != bucket_id
+                or str(row.get('databaseId') or '').endswith(ARCHIVED_DATABASE_SUFFIX)):
+            continue
+        location = asset_location_of(row, base_prefix, asset_id)
+        if contains(location, object_key):
+            holding.append((location, row))
+    if not holding:
+        logger.info(f"No live asset {asset_id} of bucket {bucket_id} holds {object_key} at its stored location; "
+                    "resolving by location")
+        return None, []
+    deepest = max(len(location) for location, _ in holding)
+    at_deepest = [row for location, row in holding if len(location) == deepest]
+    if len(at_deepest) > 1:
+        logger.info(f"{len(at_deepest)} live assets {asset_id} of bucket {bucket_id} hold {object_key} at one location")
+        return None, at_deepest
+    return at_deepest[0], []
 
 
 def auto_create_refusal(asset_table, bucket_name: str, location: str) -> Optional[str]:
@@ -1203,13 +1256,12 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         str: Asset ID if created successfully, None otherwise
 
     Raises:
-        AssetIdInUseError: the asset table already holds `asset_id`, live or archived, in any database or
-            bucket. createAsset checks the id only in the target database, so a second asset with the id
-            would be created in another one (D12).
+        AssetIdInUseError: `database_id` already holds `asset_id`, live or archived. An asset with the id in
+            another database does not stop the create.
         AssetLocationInUseError: another asset's location holds the folder.
         RecordRedrive: the id could not be checked.
     """
-    holders = asset_id_rows(asset_id)
+    holders = database_asset_id_rows(database_id, asset_id)
     if holders:
         raise AssetIdInUseError(asset_id, holders)
     try:
@@ -2352,16 +2404,16 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
         resolved_by = RESOLVED_BY_FAST_PATH
         owner_asset_id = asset_id
         owner_bucket_id = bucket_id
-        asset_data = lookup_asset(bucket_id, asset_id) if first_folder_valid else None
+        asset_data, first_folder_tie = (lookup_asset_for_key(bucket_id, asset_id, base_prefix, object_key)
+                                        if first_folder_valid else (None, []))
+        if first_folder_tie:
+            return reject_record(record, bucket_name, object_key, REJECTED_REASON_AMBIGUOUS,
+                                 asset_id_entries(first_folder_tie))
         fast_path_row = None
         if asset_data:
             fast_path_location = asset_location_of(asset_data, base_prefix, asset_id)
-            if not contains(fast_path_location, object_key):
-                logger.info(f"Asset {asset_id} does not hold {object_key} at its stored location; "
-                            "resolving by location")
-                asset_data = None
-            elif held_by_another_location(asset_table, bucket_name, asset_data, fast_path_location, object_key,
-                                          use_cache=use_index_cache):
+            if held_by_another_location(asset_table, bucket_name, asset_data, fast_path_location, object_key,
+                                        use_cache=use_index_cache):
                 logger.info(f"Another stored location inside {fast_path_location} holds {object_key}; "
                             "resolving by location")
                 fast_path_row, asset_data = asset_data, None
@@ -2413,15 +2465,13 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
                     logger.info(f"Archived asset {asset_id} does not hold {object_key} at its stored location")
                     archived_asset = None
 
-            # 2.d No asset holds the key. Its first folder becomes a new asset's id only when no asset row, live
-            # or archived, in any database or bucket, has that id: two assets with one id break every handler
-            # that finds an asset by its id alone (D12), so the key is refused instead. An asset of this
-            # registration that does hold the key but that the lookups above did not return (an index that
-            # has not caught up with a new row, or an archived row the location index does not list) is used:
-            # a live one is looked up again on the next receive, an archived one is restored.
+            # 2.d No asset holds the key. An asset of this registration that does hold it but that the lookups
+            # above did not return (an index that has not caught up with a new row, or an archived row the
+            # location index does not list) is used: a live one is looked up again on the next receive, an
+            # archived one is restored. Otherwise the first folder becomes a new asset's id below, which
+            # create_new_asset refuses when the target database already holds that id.
             if not asset_data and not archived_asset and first_folder_valid:
-                holders = asset_id_rows(asset_id)
-                holding = [row for row in holders if str(row.get('bucketId') or '') == bucket_id
+                holding = [row for row in asset_id_rows(asset_id) if str(row.get('bucketId') or '') == bucket_id
                            and contains(asset_location_of(row, base_prefix, asset_id), object_key)]
                 if any(not str(row.get('databaseId') or '').endswith(ARCHIVED_DATABASE_SUFFIX) for row in holding):
                     logger.info(f"Asset {asset_id} holds {object_key} but was not found by its lookups; looking again")
@@ -2430,11 +2480,6 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
                 if holding:
                     archived_asset = holding[0]
                     resolved_by, owner_asset_id, owner_bucket_id = RESOLVED_BY_FAST_PATH, asset_id, bucket_id
-                elif holders:
-                    logger.info(f"Asset id {asset_id} of {object_key}'s first folder is in use by an asset stored "
-                                "elsewhere; not auto-creating")
-                    return reject_record(record, bucket_name, object_key, REJECTED_REASON_ASSET_ID_IN_USE,
-                                         asset_id_entries(holders))
 
             if asset_data:
                 logger.info(f"Asset {owner_asset_id} found in bucket {owner_bucket_id} ({resolved_by})")
@@ -2532,8 +2577,10 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
                 try:
                     created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
                 except AssetIdInUseError as e:
-                    # The id came into use after the check above, or this path skipped it (an archived owner
-                    # deleted since its lookup): never a second asset with it.
+                    # The bucket's database already has an asset with this id stored elsewhere: never a second
+                    # asset with it in that database.
+                    logger.info(f"Asset id {asset_id} of {object_key}'s first folder is in use in database "
+                                f"{database_id_to_use} by an asset stored elsewhere; not auto-creating")
                     return reject_record(record, bucket_name, object_key, REJECTED_REASON_ASSET_ID_IN_USE,
                                          asset_id_entries(e.holders))
                 except AssetLocationInUseError as e:
@@ -3159,14 +3206,14 @@ def lambda_handler_deleted(event, context):
                     first_folder_valid = validate_asset_id(asset_id)
                     resolved_by = RESOLVED_BY_FAST_PATH
                     owner_asset_id, owner_bucket_id = asset_id, bucket_id
-                    asset_data = lookup_asset(bucket_id, asset_id) if first_folder_valid else None
+                    asset_data, _first_folder_tie = (lookup_asset_for_key(bucket_id, asset_id, base_prefix,
+                                                                          object_key)
+                                                     if first_folder_valid else (None, []))
                     fast_path_row = None
                     if asset_data:
                         fast_path_location = asset_location_of(asset_data, base_prefix, asset_id)
-                        if not contains(fast_path_location, object_key):
-                            asset_data = None
-                        elif held_by_another_location(dynamodb.Table(asset_table_name), bucket_name, asset_data,
-                                                      fast_path_location, object_key):
+                        if held_by_another_location(dynamodb.Table(asset_table_name), bucket_name, asset_data,
+                                                    fast_path_location, object_key):
                             # The deepest stored location that contains the key owns it (D10)
                             fast_path_row, asset_data = asset_data, None
                     if not asset_data:

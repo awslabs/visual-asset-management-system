@@ -155,8 +155,8 @@ GLOBAL_ERRORS = [
 METHOD_CALLS = [
     pytest.param(lambda c: c.list_pipelines(), id="list_pipelines"),
     pytest.param(lambda c: c.create_asset({"databaseId": "d-1", "assetName": "a"}), id="create_asset"),
-    pytest.param(lambda c: c.add_comment("a-1", "v-1", "c-1", "text"), id="add_comment"),
-    pytest.param(lambda c: c.create_subscription("Asset Version Change", "Asset", "a-1",
+    pytest.param(lambda c: c.add_comment("d-1", "a-1", "v-1", "text"), id="add_comment"),
+    pytest.param(lambda c: c.create_subscription("Asset Version Change", "Asset", "d-1", "a-1",
                                                  ["user@example.com"]), id="create_subscription"),
 ]
 

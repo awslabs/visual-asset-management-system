@@ -15,7 +15,6 @@ import logging
 import sys
 import threading
 import time
-import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 
@@ -2187,18 +2186,20 @@ def get_execution_logs(
 @mcp.tool(title="List asset comments", annotations=READ)
 @tool_result
 def list_asset_comments(
+    database_id: str,
     asset_id: str,
     max_items: Optional[int] = None,
     page_size: Optional[int] = None,
     include_archived: bool = False,
 ) -> Dict[str, Any]:
-    """Use to read the comments on an asset (every version). Rows: `assetVersionId:commentId`,
+    """Use to read the comments on an asset (every version). Rows: commentId, assetVersionId,
     commentBody, commentOwnerUsername, dateCreated. include_archived also finds an archived asset.
     This route CANNOT be paged: `truncated` means the result reached max_items (else page_size, else
     10000) and the count is a floor. Deleted comments are never returned (showDeleted is ignored)."""
     return _bounded_message_list(
         CLIENT.api.list_asset_comments(
-            asset_id, max_items=max_items, page_size=page_size, show_archived=include_archived
+            database_id, asset_id, max_items=max_items, page_size=page_size,
+            show_archived=include_archived,
         ),
         max_items,
         page_size,
@@ -2209,6 +2210,7 @@ def list_asset_comments(
 @mcp.tool(title="List version comments", annotations=READ)
 @tool_result
 def list_asset_version_comments(
+    database_id: str,
     asset_id: str,
     asset_version_id: str,
     max_items: Optional[int] = None,
@@ -2220,7 +2222,7 @@ def list_asset_version_comments(
     also finds an archived asset."""
     return _bounded_message_list(
         CLIENT.api.list_asset_version_comments(
-            asset_id, asset_version_id, max_items=max_items, page_size=page_size,
+            database_id, asset_id, asset_version_id, max_items=max_items, page_size=page_size,
             show_archived=include_archived,
         ),
         max_items,
@@ -2231,10 +2233,10 @@ def list_asset_version_comments(
 
 @mcp.tool(title="Get comment", annotations=READ)
 @tool_result
-def get_comment(asset_id: str, asset_version_id: str, comment_id: str) -> Dict[str, Any]:
-    """Use to read one comment. The route answers 200 with an empty object for a missing comment, which
-    comes back as a CommentNotFoundError in `error`. Neither id may contain a colon."""
-    return CLIENT.unwrap_message(CLIENT.api.get_comment(asset_id, asset_version_id, comment_id))
+def get_comment(database_id: str, asset_id: str, comment_id: str) -> Dict[str, Any]:
+    """Use to read one comment by its commentId. The route answers 200 with an empty object for a missing
+    comment, which comes back as a CommentNotFoundError in `error`."""
+    return CLIENT.unwrap_message(CLIENT.api.get_comment(database_id, asset_id, comment_id))
 
 
 @mcp.tool(title="List subscriptions", annotations=READ)
@@ -2243,7 +2245,7 @@ def list_subscriptions(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Use to see e-mail event subscriptions (eventName, entityName, entityId, subscribers).
+    """Use to see e-mail event subscriptions (eventName, entityName, databaseId, entityId, subscribers).
     BOUNDED: `truncated`: pass `NextToken` as `starting_token`.
     For one asset and user use check_subscription()."""
     return CLIENT.paginate(
@@ -2258,10 +2260,10 @@ def list_subscriptions(
 
 @mcp.tool(title="Check subscription", annotations=READ)
 @tool_result
-def check_subscription(asset_id: str, user_id: str) -> Dict[str, Any]:
+def check_subscription(database_id: str, asset_id: str, user_id: str) -> Dict[str, Any]:
     """Use to tell whether one user is subscribed to an asset's version changes: `subscribed`. The route
     answers 200 in BOTH cases; `unrecognizedResponse` set means the verdict is unknown."""
-    response = CLIENT.api.check_subscription(asset_id, user_id)
+    response = CLIENT.api.check_subscription(database_id, asset_id, user_id)
     message = response.get("message") if isinstance(response, dict) else response
     result: Dict[str, Any] = {"subscribed": message == SUBSCRIBED_MESSAGE, "message": message}
     if message not in (SUBSCRIBED_MESSAGE, NOT_SUBSCRIBED_MESSAGE):
@@ -3258,34 +3260,28 @@ if CONFIG.enable_writes:
     @mcp.tool(title="Add comment", annotations=WRITE)
     @tool_result
     def add_comment(
+        database_id: str,
         asset_id: str,
         asset_version_id: str,
         comment_body: str,
-        comment_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Use to comment on one asset version; returns `commentId`. The write is UNCONDITIONAL: passing an
-        existing `comment_id` REPLACES that comment with no error, so leave it unset (a uuid4 is
-        generated). comment_body: up to 16384 characters."""
-        resolved_id = comment_id or str(uuid.uuid4())
-        response = CLIENT.api.add_comment(asset_id, asset_version_id, resolved_id, comment_body)
-        result: Dict[str, Any] = {"commentId": resolved_id}
-        if isinstance(response, dict):
-            result.update(response)
-        else:
-            result["response"] = response
-        return result
+        """Use to comment on one asset version; returns the `commentId` the API generates.
+        comment_body: up to 16384 characters."""
+        response = CLIENT.api.add_comment(database_id, asset_id, asset_version_id, comment_body)
+        return response if isinstance(response, dict) else {"response": response}
 
     @mcp.tool(title="Edit comment", annotations=WRITE)
     @tool_result
     def update_comment(
-        asset_id: str, asset_version_id: str, comment_id: str, comment_body: str
+        database_id: str, asset_id: str, comment_id: str, comment_body: str
     ) -> Dict[str, Any]:
         """Use to edit a comment's text. Only its CREATOR may (403 otherwise)."""
-        return CLIENT.api.update_comment(asset_id, asset_version_id, comment_id, comment_body)
+        return CLIENT.api.update_comment(database_id, asset_id, comment_id, comment_body)
 
     @mcp.tool(title="Subscribe users", annotations=WRITE)
     @tool_result
     def create_subscription(
+        database_id: str,
         entity_id: str,
         subscribers: List[str],
         event_name: str = SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
@@ -3294,11 +3290,12 @@ if CONFIG.enable_writes:
         """Use to subscribe users (VAMS user IDs) to an entity's e-mail events (default: an asset's version
         changes). A user already subscribed is an ERROR, not a no-op, and rejects the whole call; check
         first, or use update_subscription()."""
-        return CLIENT.api.create_subscription(event_name, entity_name, entity_id, subscribers)
+        return CLIENT.api.create_subscription(event_name, entity_name, database_id, entity_id, subscribers)
 
     @mcp.tool(title="Replace subscribers", annotations=WRITE)
     @tool_result
     def update_subscription(
+        database_id: str,
         entity_id: str,
         subscribers: List[str],
         event_name: str = SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
@@ -3306,7 +3303,7 @@ if CONFIG.enable_writes:
     ) -> Dict[str, Any]:
         """Use to REPLACE a subscription's subscriber list; this is not an addition: every user not in
         `subscribers` is unsubscribed. To add one, read list_subscriptions() and send the full list."""
-        return CLIENT.api.update_subscription(event_name, entity_name, entity_id, subscribers)
+        return CLIENT.api.update_subscription(event_name, entity_name, database_id, entity_id, subscribers)
 
     @mcp.tool(title="Create metadata schema", annotations=WRITE)
     @tool_result
@@ -3363,8 +3360,8 @@ if CONFIG.enable_writes:
         is_active: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Use to change an API key's description, expiry or enabled state (admin scope). `is_active=False`
-        is the REVERSIBLE revoke; prefer it to delete_api_key(). Changes can take ~30 seconds (authorizer
-        cache)."""
+        is the REVERSIBLE revoke; prefer it to delete_api_key(). Changes can take up to ~45 seconds
+        (authorizer caches)."""
         payload: Dict[str, Any] = {}
         if description is not None:
             payload["description"] = description
@@ -3839,13 +3836,14 @@ if CONFIG.enable_destructive:
 
     @mcp.tool(title="Delete comment", annotations=DESTRUCTIVE)
     @tool_result
-    def delete_comment(asset_id: str, asset_version_id: str, comment_id: str) -> Dict[str, Any]:
+    def delete_comment(database_id: str, asset_id: str, comment_id: str) -> Dict[str, Any]:
         """Use to delete a comment (unrecoverable through these tools). Only its CREATOR may."""
-        return CLIENT.api.delete_comment(asset_id, asset_version_id, comment_id)
+        return CLIENT.api.delete_comment(database_id, asset_id, comment_id)
 
     @mcp.tool(title="Delete subscription", annotations=DESTRUCTIVE)
     @tool_result
     def delete_subscription(
+        database_id: str,
         entity_id: str,
         subscribers: List[str],
         event_name: str = SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
@@ -3853,18 +3851,19 @@ if CONFIG.enable_destructive:
     ) -> Dict[str, Any]:
         """Use to delete a WHOLE subscription, every subscriber and the asset's notification topic;
         `subscribers` is required but the endpoint IGNORES it. To remove one user use unsubscribe()."""
-        return CLIENT.api.delete_subscription(event_name, entity_name, entity_id, subscribers)
+        return CLIENT.api.delete_subscription(event_name, entity_name, database_id, entity_id, subscribers)
 
     @mcp.tool(title="Unsubscribe user", annotations=DESTRUCTIVE)
     @tool_result
     def unsubscribe(
+        database_id: str,
         entity_id: str,
         subscriber: str,
         event_name: str = SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
         entity_name: str = SUBSCRIPTION_ENTITY_ASSET,
     ) -> Dict[str, Any]:
         """Use to remove ONE subscriber and keep the subscription (delete_subscription() removes it all)."""
-        return CLIENT.api.unsubscribe(event_name, entity_name, entity_id, subscriber)
+        return CLIENT.api.unsubscribe(event_name, entity_name, database_id, entity_id, subscriber)
 
     @mcp.tool(title="Delete metadata schema", annotations=DESTRUCTIVE)
     @tool_result

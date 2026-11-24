@@ -105,15 +105,11 @@ sys.modules['common.dynamodb'] = MagicMock()
 def _mock_get_asset_object_from_id(database_id=None, asset_id=None, include_archived=False):
     """Stand-in for common.dynamodb.get_asset_object_from_id.
 
-    Mirrors the real two-argument signature ``(database_id, asset_id)``. The stub
-    previously took a single argument while every caller passes two
-    (``get_asset_object_from_id(None, assetId)``), so any test reaching one of those
-    call sites raised TypeError rather than exercising the handler - which is why the
-    suite could not see whether a caller handles a None return. The real function
-    returns None when the assetId resolves to nothing, so a test covering that path
-    patches this to return None.
+    Mirrors the real signature ``(database_id, asset_id, include_archived)``: an asset is read by
+    its database and asset id together. The real function returns None when the database holds
+    no such asset, so a test covering that path patches this to return None.
     """
-    return {"assetId": asset_id}
+    return {"databaseId": database_id, "assetId": asset_id, "object__type": "asset"}
 
 
 sys.modules['common.dynamodb'].get_asset_object_from_id = _mock_get_asset_object_from_id
@@ -253,6 +249,16 @@ _els_module = _s3mk_importlib_util.module_from_spec(_els_spec)
 _els_spec.loader.exec_module(_els_module)
 sys.modules['common.eventLogSummary'] = _els_module
 sys.modules['common'].eventLogSummary = _els_module
+# commentSubscriptionKeys is pure (key names and key builders for the comment and subscription
+# tables), so load the REAL module by path: a MagicMock would build keys no test could compare.
+_csk_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.commentSubscriptionKeys',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'commentSubscriptionKeys.py')
+)
+_csk_module = _s3mk_importlib_util.module_from_spec(_csk_spec)
+_csk_spec.loader.exec_module(_csk_module)
+sys.modules['common.commentSubscriptionKeys'] = _csk_module
+sys.modules['common'].commentSubscriptionKeys = _csk_module
 # assetProvenance builds the asset-row change-provenance attributes (stdlib + the s3MetadataKeys
 # constants). The upload and large-file completion handlers import it at module level.
 _apv_spec = _s3mk_importlib_util.spec_from_file_location(
@@ -603,6 +609,19 @@ sys.modules['common.ssmParameters'] = _ssmp_module
 _ssmp_spec.loader.exec_module(_ssmp_module)
 sys.modules['common'].ssmParameters = _ssmp_module
 
+# deployTimeValues resolves the OpenSearch, web URL and map key values from the resource names, and
+# reads the parameters that held them before through ssmParameters when the names do not carry them
+# yet. It builds no client, so the REAL module loads with no AWS access; loaded after both modules it
+# imports.
+_dtv_spec = _importlib_util.spec_from_file_location(
+    'common.deployTimeValues',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'deployTimeValues.py')
+)
+_dtv_module = _importlib_util.module_from_spec(_dtv_spec)
+sys.modules['common.deployTimeValues'] = _dtv_module
+_dtv_spec.loader.exec_module(_dtv_module)
+sys.modules['common'].deployTimeValues = _dtv_module
+
 # uploadStatus (an upload's asynchronously ingested files) likewise takes its table as an argument, so
 # the REAL module is loaded and bound the same way.
 _us_spec = _importlib_util.spec_from_file_location(
@@ -841,16 +860,29 @@ def comments_table(ddb_resource):
         boto3.resource.Table: Mocked comments table
     """
     comment_table_name = "commentStorageTable"
+    # The CommentStorageTableV2 shape (infra storageBuilder): one partition per (databaseId, assetId)
+    # and the asset version index
     comments_table = ddb_resource.create_table(
         TableName=comment_table_name,
         BillingMode="PAY_PER_REQUEST",
         KeySchema=[
-            {"AttributeName": "assetId", "KeyType": "HASH"},
-            {"AttributeName": "assetVersionId:commentId", "KeyType": "RANGE"},
+            {"AttributeName": "databaseId:assetId", "KeyType": "HASH"},
+            {"AttributeName": "commentId", "KeyType": "RANGE"},
         ],
         AttributeDefinitions=[
-            {"AttributeName": "assetId", "AttributeType": "S"},
-            {"AttributeName": "assetVersionId:commentId", "AttributeType": "S"},
+            {"AttributeName": "databaseId:assetId", "AttributeType": "S"},
+            {"AttributeName": "commentId", "AttributeType": "S"},
+            {"AttributeName": "assetVersionId", "AttributeType": "S"},
+        ],
+        LocalSecondaryIndexes=[
+            {
+                "IndexName": "AssetVersionIdLSI",
+                "KeySchema": [
+                    {"AttributeName": "databaseId:assetId", "KeyType": "HASH"},
+                    {"AttributeName": "assetVersionId", "KeyType": "RANGE"},
+                ],
+                "Projection": {"ProjectionType": "ALL"},
+            }
         ],
     )
 
@@ -957,15 +989,17 @@ def mock_cognito_auth():
 
 class TestComment:
     """
-    Class to easily create comments for testing purposes
+    Class to easily create comments for testing purposes, in the stored (V2) shape
     """
 
     __test__ = False
 
     def __init__(
         self,
+        database_id="test-db",
         asset_id="test-id",
-        asset_version_id_and_comment_id="test-version-id:test-comment-id",
+        comment_id="test-comment-id",
+        asset_version_id="test-version-id",
         comment_body="test comment body",
         comment_owner_id="test_email@amazon.com",
         comment_owner_username="test_email@amazon.com",
@@ -973,33 +1007,43 @@ class TestComment:
     ) -> None:
         """
         Creates a test_comment object based on the specified parameters
-        
+
         Args:
+            database_id: Database of the asset the test comment is attached to
             asset_id: Asset ID for the test comment to be attached to
-            asset_version_id_and_comment_id: Version ID for the comment to be attached to and
-                unique comment identifier
+            comment_id: The comment's own id
+            asset_version_id: Version ID the comment is about
             comment_body: Body of the comment
             comment_owner_id: Cognito sub for the creator of the comment
             comment_owner_username: Cognito username for the creator of the comment
             date_created: Date the comment was created
         """
+        self.database_id = database_id
         self.asset_id = asset_id
-        self.asset_version_id_and_comment_id = asset_version_id_and_comment_id
+        self.comment_id = comment_id
+        self.asset_version_id = asset_version_id
         self.comment_body = comment_body
         self.comment_owner_id = comment_owner_id
         self.comment_owner_username = comment_owner_username
         self.date_created = date_created
 
-    def get_comment(self):
+    def get_comment(self, deleted=False):
         """
-        Return a dict that can be converted to JSON based on the comment information stored in the class
-        
+        Return the stored row of the test comment
+
+        Args:
+            deleted: The row as soft-deleted (in the asset's "#deleted" partition)
+
         Returns:
             dict: Dictionary representation of the test comment
         """
+        partition = f"{self.database_id}:{self.asset_id}" + ("#deleted" if deleted else "")
         return {
+            "databaseId:assetId": partition,
+            "commentId": self.comment_id,
+            "databaseId": self.database_id,
             "assetId": self.asset_id,
-            "assetVersionId:commentId": self.asset_version_id_and_comment_id,
+            "assetVersionId": self.asset_version_id,
             "commentBody": self.comment_body,
             "commentOwnerID": self.comment_owner_id,
             "commentOwnerUsername": self.comment_owner_username,

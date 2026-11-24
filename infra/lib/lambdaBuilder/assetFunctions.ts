@@ -34,6 +34,7 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Service from "../../lib/helper/service-helper";
 import { IAMArn } from "../../lib/helper/service-helper";
 import { RESOURCE_PARAM_KEYS } from "../../common/resourceParamKeys";
+import { recordLateCoreResourceName } from "../nestedStacks/resourceNames/lateCoreResourceNames";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import {
@@ -1032,7 +1033,9 @@ export function largeObjectCopyEngineFunctionNameParameterName(config: Config.Co
  * a CloudFormation dependency cycle. The name is published under the deployment's resource-name
  * prefix (lambdaFunctions/largeObjectCopyEngine), which every VAMS function may already read
  * (globalLambdaEnvironmentsAndPermissions), so the output step's role gains no statement; the
- * invoke is a resource-based permission on the engine naming the output step's role.
+ * invoke is a resource-based permission on the engine naming the output step's role. The name is
+ * also recorded for the resource-name chunk parameters, so the output step's cold start reads it
+ * with the other resource names instead of with a GetParameter of its own.
  */
 export function grantLargeObjectCopyViaEngine(
     scope: Construct,
@@ -1041,12 +1044,17 @@ export function grantLargeObjectCopyViaEngine(
     config: Config.Config
 ) {
     const parameterName = largeObjectCopyEngineFunctionNameParameterName(config);
-    new ssm.StringParameter(scope, "LargeObjectCopyEngineFunctionNameParameter", {
+    const parameter = new ssm.StringParameter(scope, "LargeObjectCopyEngineFunctionNameParameter", {
         parameterName,
         stringValue: engine.functionName,
         description:
             "Name of the VAMS large object copy engine function (read by the workflow output step).",
     });
+    recordLateCoreResourceName(
+        parameter,
+        RESOURCE_PARAM_KEYS.lambdaFunctions.largeObjectCopyEngine,
+        engine.functionName
+    );
     fun.addEnvironment("LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER", parameterName);
     permitEngineInvoke(engine, fun, "LargeObjectCopyInvokeByOutputStep");
 }

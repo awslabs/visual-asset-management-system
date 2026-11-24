@@ -14,6 +14,13 @@
  * backend/common/resourceNames.py; lambdaFunctions.largeObjectCopyEngine is also resolved by the
  * workflow output step through backend/common/resourceNames.py (the key is
  * ENGINE_FUNCTION_RESOURCE_KEY in backend/common/largeObjectCopy.py).
+ *
+ * The openSearch, web and location categories are deploy-time values that stacks built after the
+ * resource-name stack publish (publishLateCoreResourceName(), lateCoreResourceNames.ts), each only
+ * when its feature is deployed. Their backend mirror is backend/backend/common/deployTimeValues.py,
+ * not resourceNames.py. The parameters that held these values before (aos/*, web/deployedUrl and
+ * location/apiKeyArn beside the prefix) stay published for the reindexer, the data-migration
+ * tooling and add-ons.
  */
 export const RESOURCE_PARAM_KEYS = {
     dynamoTables: {
@@ -89,6 +96,8 @@ export const RESOURCE_PARAM_KEYS = {
         metadataSchemaStorage: "dynamoTables/legacy/metadataSchemaStorage",
         tagStorage: "dynamoTables/legacy/tagStorage",
         tagTypeStorage: "dynamoTables/legacy/tagTypeStorage",
+        commentStorageV1: "dynamoTables/legacy/commentStorageV1",
+        subscriptionsStorageV1: "dynamoTables/legacy/subscriptionsStorageV1",
     },
     // Lambda function names consumed by data-migration tooling and external bridge stacks
     lambdaFunctions: {
@@ -120,5 +129,17 @@ export const RESOURCE_PARAM_KEYS = {
         auditAuthChanges: "cloudwatchLogGroups/auditAuthChanges",
         auditActions: "cloudwatchLogGroups/auditActions",
         auditErrors: "cloudwatchLogGroups/auditErrors",
+    },
+    // Deploy-time values of the search, web and map stacks (see the header comment)
+    openSearch: {
+        endpoint: "openSearch/endpoint",
+        assetIndexName: "openSearch/assetIndexName",
+        fileIndexName: "openSearch/fileIndexName",
+    },
+    web: {
+        deployedUrl: "web/deployedUrl",
+    },
+    location: {
+        apiKeyArn: "location/apiKeyArn",
     },
 } as const;

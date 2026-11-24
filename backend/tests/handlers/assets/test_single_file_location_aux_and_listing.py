@@ -39,15 +39,15 @@ OBJECT_PREVIEW_COMPANION_DATA = "db1/p1/model.glb/preview/x.glb/preview/PotreeVi
 
 @pytest.mark.unit
 class TestAuxiliaryDataOfTheObject:
-    @pytest.mark.parametrize("location,key,expected", [
-        (FILE_LOCATION, OWN_KEY, "db1/p1/model.glb/preview/"),
-        (FILE_LOCATION, "/" + OWN_KEY, "db1/p1/model.glb/preview/"),
-        (FILE_LOCATION, COMPANION, "db1/p1/model.glb/sub/x.obj/"),
-        (FILE_LOCATION, SHADOWED, "db1/p1/model.glb/model.glb/"),
-        (FOLDER_LOCATION, "proj/a/x.txt", "db1/proj/a/x.txt/"),
+    @pytest.mark.parametrize("key,expected", [
+        (OWN_KEY, "db1/p1/model.glb/preview/"),
+        ("/" + OWN_KEY, "db1/p1/model.glb/preview/"),
+        (COMPANION, "db1/p1/model.glb/sub/x.obj/preview/"),
+        (SHADOWED, "db1/p1/model.glb/model.glb/preview/"),
+        ("proj/a/x.txt", "db1/proj/a/x.txt/preview/"),
     ])
-    def test_each_file_has_its_own_auxiliary_prefix(self, af, location, key, expected):
-        assert af.aux_file_base("db1", location, key) == expected
+    def test_each_file_has_its_own_viewer_data_folder(self, af, key, expected):
+        assert af.viewer_data_prefix("db1", key) == expected
 
     def test_deleting_the_object_deletes_its_preview_data_only(self, af, monkeypatch):
         calls = []
@@ -55,10 +55,10 @@ class TestAuxiliaryDataOfTheObject:
                             lambda prefix, keep=None: calls.append((prefix, keep)))
         af.delete_file("db1", "a1", "/sub/x.obj", False, True, CLAIMS)
         af.delete_file("db1", "a1", "/model.glb", False, True, CLAIMS)
-        # A companion entry's own data goes with it; the object's stops at preview/ and leaves the data of
-        # companion entries in {key}/preview/
-        assert [prefix for prefix, _ in calls] == ["db1/p1/model.glb/sub/x.obj/", "db1/p1/model.glb/preview/"]
-        assert calls[0][1] is None
+        # Each file's own viewer data goes with it; the object's leaves the data of companion entries in
+        # {key}/preview/
+        assert [prefix for prefix, _ in calls] == ["db1/p1/model.glb/sub/x.obj/preview/", "db1/p1/model.glb/preview/"]
+        assert calls[0][1]("db1/p1/model.glb/sub/x.obj/preview/r.bin")
         assert calls[1][1]("db1/p1/model.glb/preview/r.bin") and not calls[1][1](OBJECT_PREVIEW_COMPANION_DATA)
 
     def test_reverting_the_object_deletes_its_preview_data_only(self, af, monkeypatch):
@@ -95,19 +95,16 @@ class TestAuxiliaryDataOfTheObject:
 
     @pytest.mark.parametrize("source,dest,expected", [
         # The object copied out: its preview data lands in the destination file's preview folder
-        ((FILE_LOCATION, OWN_KEY), (FOLDER_LOCATION, "proj/a/model.glb"),
-         ("db1/p1/model.glb/preview/", "db2/proj/a/model.glb/preview/")),
+        (OWN_KEY, "proj/a/model.glb", ("db1/p1/model.glb/preview/", "db2/proj/a/model.glb/preview/")),
         # A file copied onto the object's path: into the object's preview folder, not over its companions
-        ((FOLDER_LOCATION, "proj/a/x.txt"), (FILE_LOCATION, OWN_KEY),
-         ("db1/proj/a/x.txt/preview/", "db2/p1/model.glb/preview/")),
-        # A companion entry keeps its whole base
-        ((FILE_LOCATION, COMPANION), (FILE_LOCATION, "p1/model.glb/sub/y.obj"),
-         ("db1/p1/model.glb/sub/x.obj/", "db2/p1/model.glb/sub/y.obj/")),
-        ((FOLDER_LOCATION, "proj/a/x.txt"), (FOLDER_LOCATION, "proj/a/y.txt"),
-         ("db1/proj/a/x.txt/", "db2/proj/a/y.txt/")),
+        ("proj/a/x.txt", OWN_KEY, ("db1/proj/a/x.txt/preview/", "db2/p1/model.glb/preview/")),
+        # A companion entry, and a file of a folder asset, move their own viewer data only
+        (COMPANION, "p1/model.glb/sub/y.obj",
+         ("db1/p1/model.glb/sub/x.obj/preview/", "db2/p1/model.glb/sub/y.obj/preview/")),
+        ("proj/a/x.txt", "proj/a/y.txt", ("db1/proj/a/x.txt/preview/", "db2/proj/a/y.txt/preview/")),
     ])
-    def test_a_copy_or_move_keeps_the_object_data_in_its_preview_folder(self, af, source, dest, expected):
-        assert af.aux_file_bases("db1", source[0], source[1], "db2", dest[0], dest[1]) == expected
+    def test_a_copy_or_move_carries_the_files_own_viewer_data_folder(self, af, source, dest, expected):
+        assert (af.viewer_data_scope("db1", source)[0], af.viewer_data_prefix("db2", dest)) == expected
 
 
 @pytest.mark.unit

@@ -129,7 +129,7 @@ paths:
                                         description: "Amazon Location Service map style descriptor URL with embedded API key; empty when Location Services is not enabled"
                                     webDeployedUrl:
                                         type: string
-                                        description: "Deployed web application URL; empty when not configured"
+                                        description: "Deployed web application URL; empty when the deployment has no web distribution (neither CloudFront nor an Application Load Balancer)"
                                 required:
                                     - featuresEnabled
                                     - locationServiceApiUrl
@@ -1374,16 +1374,27 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
-    /comments/assets/{assetId}:
+    /comments/database/{databaseId}/assets/{assetId}:
         get:
-            summary: "List all comments for an asset."
+            summary: "List the comments of an asset, newest first."
+            description: "Returns the asset's comments under `message`, each with commentId, assetVersionId, databaseId, assetId, commentBody, commentOwnerID, commentOwnerUsername, dateCreated and, once edited, dateEdited. Deleted comments are not returned."
             responses:
                 "200":
                     description: OK
                 "400":
-                    description: No asset ID in API call.
+                    description: Invalid database, asset, comment or asset version ID, or an invalid body.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized.
+                    description: Action not allowed or not authorized. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
                     content:
                         application/json:
                             schema:
@@ -1395,17 +1406,24 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
-              - name: "assetId"
+              - name: "databaseId"
                 in: "path"
-                description: "Unique identifier for asset."
+                description: "Database ID of the asset."
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "showDeleted"
-                in: "query"
-                description: "Show deleted comments flag."
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Asset ID."
+                required: true
                 schema:
-                    type: boolean
+                    $ref: '#/components/schemas/asset_id_regex'
+              - name: "assetVersionId"
+                in: "query"
+                description: "Only the comments on this asset version."
+                schema:
+                    type: string
+                    maxLength: 256
               - name: maxItems
                 in: query
                 description: "Max number of comments that can be returned. Default is 10000; a larger value is reduced to 30000"
@@ -1426,128 +1444,36 @@ paths:
               - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
-    /comments/assets/{assetId}/assetVersionId/{assetVersionId}:
-        get:
-            summary: "List all comments for the given version of an asset."
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: No asset ID in API call.
-                "403":
-                    description: Not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-            parameters:
-              - name: "assetId"
-                in: "path"
-                description: "Generated path parameter for assetId."
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionId"
-                in: "path"
-                description: "Asset version."
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "showDeleted"
-                in: "query"
-                description: "Show deleted comments flag."
-                schema:
-                    type: boolean
-              - $ref: "#/components/parameters/showArchivedAssetParam"
-            security:
-              - DefaultCognitoAuthorizer: []
-    /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionIdAndCommentId}:
-        get:
-            summary: "Get specified comment."
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: No asset ID in API call.
-                "403":
-                    description: Not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-            parameters:
-              - name: "assetId"
-                in: "path"
-                description: "Generated path parameter for assetId."
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionIdAndCommentId"
-                in: "path"
-                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path. Validation will be performed on asset version ID and comment ID."
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - $ref: "#/components/parameters/showArchivedAssetParam"
-            security:
-              - DefaultCognitoAuthorizer: []
-        delete:
-            summary: "Delete specified comment."
-            responses:
-                "200":
-                    description: OK
-                "400":
-                    description: No asset ID in API call.
-                "403":
-                    description: Action not allowed or not authorized.
-                "500":
-                    description: Error processing request.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-            parameters:
-              - name: "assetId"
-                in: "path"
-                description: "Generated path parameter for assetId."
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionIdAndCommentId" 
-                in: "path"
-                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path."
-                required: true
-                schema:
-                    $ref: '#/components/schemas/id_regex'
-            security:
-              - DefaultCognitoAuthorizer: []
         post:
-            summary: "Add comment to specified version of asset."
+            summary: "Add a comment to an asset version."
+            description: "The API generates the comment ID and returns it as `commentId`, beside `message`."
             requestBody:
                 required: true
                 content:
                     application/json:
                         schema:
-                            $ref: "#/components/schemas/comment"
+                            $ref: "#/components/schemas/createComment"
             responses:
                 "200":
                     description: OK
                 "400":
-                    description: No asset ID in API call.
+                    description: Invalid database, asset, comment or asset version ID, or an invalid body.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Action not allowed or not authorized. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -1555,22 +1481,75 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Database ID of the asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
               - name: "assetId"
                 in: "path"
-                description: "Generated path parameter for assetId."
+                description: "Asset ID."
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionIdAndCommentId" 
+                    $ref: '#/components/schemas/asset_id_regex'
+            security:
+              - DefaultCognitoAuthorizer: []
+    /comments/database/{databaseId}/assets/{assetId}/{commentId}:
+        get:
+            summary: "Get one comment."
+            description: "Answers 200 with an empty object under `message` when the asset has no comment with this ID."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid database, asset, comment or asset version ID, or an invalid body.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
                 in: "path"
-                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path."
+                description: "Database ID of the asset."
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Asset ID."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/asset_id_regex'
+              - name: "commentId"
+                in: "path"
+                description: "Comment ID, as returned when the comment was created."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
         put:
-            summary: "Edit specified comment."
+            summary: "Edit a comment's text. Only the comment's creator may edit it."
             requestBody:
                 required: true
                 content:
@@ -1581,9 +1560,23 @@ paths:
                 "200":
                     description: Succeeded.
                 "400":
-                    description: No asset ID in API call.
+                    description: Invalid database, asset, comment or asset version ID, or an invalid body.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Action not allowed or not authorized. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -1591,18 +1584,74 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
             parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Database ID of the asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
               - name: "assetId"
                 in: "path"
-                description: "Generated path parameter for assetId."
+                description: "Asset ID."
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionIdAndCommentId" 
+                    $ref: '#/components/schemas/asset_id_regex'
+              - name: "commentId"
                 in: "path"
-                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path."
+                description: "Comment ID, as returned when the comment was created."
                 required: true
                 schema:
-                    $ref: '#/components/schemas/id_regex'
+                    $ref: "#/components/schemas/id_regex"
+            security:
+              - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Delete a comment. Only the comment's creator may delete it."
+            responses:
+                "200":
+                    description: OK
+                "400":
+                    description: Invalid database, asset, comment or asset version ID, or an invalid body.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Action not allowed or not authorized. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Asset not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Database ID of the asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Asset ID."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/asset_id_regex'
+              - name: "commentId"
+                in: "path"
+                description: "Comment ID, as returned when the comment was created."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
             security:
               - DefaultCognitoAuthorizer: []
     /database:
@@ -3703,7 +3752,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or confirmation required. A missing file also answers 400.
+                    description: Invalid parameters or confirmation required. A missing file also answers 400, as does a delete Amazon S3 does not complete; the files it deleted lose their records and the remaining files are kept.
                     content:
                         application/json:
                             schema:
@@ -4395,7 +4444,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/assetOperationResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters, or Amazon S3 did not delete every object version of the asset. The asset keeps its records and remaining files, so the delete can be retried; the files that were deleted lose their records.
                     content:
                         application/json:
                             schema:
@@ -7527,6 +7576,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
               - DefaultCognitoAuthorizer: []
         delete:
             summary: "Delete specified subscription."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/subscription"
             responses:
                 "200":
                     description: OK
@@ -7980,7 +8035,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /unsubscribe:
         delete:
             summary: "Unsubscribe."
-            description: "eventName (object regex), entityName (object regex), entityId (asset ID regex), and the list of subscribers (email array regex) are required fields"
+            description: "eventName (object regex), entityName (object regex), databaseId (ID regex), entityId (asset ID regex), and the list of subscribers (email array regex) are required fields"
             responses:
                 "200":
                     description: OK
@@ -13518,10 +13573,13 @@ components:
             properties:
                 userId:
                     $ref: "#/components/schemas/email_pattern_regex"
+                databaseId:
+                    $ref: "#/components/schemas/id_regex"
                 assetId:
                     $ref: '#/components/schemas/asset_id_regex'
             required:
                 - userId
+                - databaseId
                 - assetId
         comment:
             type: object
@@ -13530,6 +13588,19 @@ components:
                     type: string
                     maxLength: 16384
             required:
+                - commentBody
+        createComment:
+            type: object
+            properties:
+                assetVersionId:
+                    type: string
+                    maxLength: 256
+                    description: "The asset version the comment is about."
+                commentBody:
+                    type: string
+                    maxLength: 16384
+            required:
+                - assetVersionId
                 - commentBody
         # Constraint API Request/Response Schemas
         constraintCriteria:
@@ -18121,6 +18192,9 @@ components:
                     $ref: "#/components/schemas/entityId"
                 entityName:
                     $ref: "#/components/schemas/entityName"
+                databaseId:
+                    $ref: "#/components/schemas/id_regex"
+                    description: "Database ID of the entity's asset. With entityId it identifies the asset."
                 eventName:
                     $ref: "#/components/schemas/eventName"
                 subscribers:
@@ -18128,6 +18202,7 @@ components:
             required:
                 - entityId
                 - entityName
+                - databaseId
                 - eventName
                 - subscribers
         # Tag API Request/Response Schemas
