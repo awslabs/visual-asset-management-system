@@ -21,7 +21,10 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
-from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
+from handlers.assets.assetFiles import (
+    delete_s3_prefix_all_versions, aux_bucket_asset_file_base, S3PrefixDeleteIncomplete,
+    delete_files_metadata, delete_file_version_records, delete_auxiliary_files_of_keys,
+)
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, log_action
 from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE, get_asset_record, asset_authorization_object, ARCHIVED_ASSET_DATABASE_SUFFIX
@@ -1763,6 +1766,71 @@ def _delete_asset_links_for_permanent_deletion(databaseId: str, assetId: str, de
             logger.warning(f"Error deleting asset link {asset_link_id} for asset {assetId}: {e}")
             continue
 
+
+# The answer to a permanent delete Amazon S3 does not complete. Generic: it names no key or bucket.
+ASSET_DELETE_INCOMPLETE_MESSAGE = (
+    "Error permanently deleting asset: the asset's storage could not be fully deleted. Check that VAMS "
+    "can delete objects in the asset's storage bucket (its permissions and any object lock), then try "
+    "again. The asset and its remaining files were kept.")
+
+
+def _delete_asset_objects_for_permanent_deletion(asset, bucket_name, database_id, asset_id, deleted_items):
+    """Delete every object version and delete marker in the asset's file and preview locations.
+
+    Runs before any record of the asset is removed. The keys of another asset nested in the location,
+    and every key of a location another live asset also holds, are that asset's: they are neither
+    deleted nor reported. When S3 keeps a version or delete marker, the files whose every version is
+    gone lose their file records (metadata, attributes and version snapshot rows, as a file delete
+    removes) and their auxiliary data, the asset keeps everything else, and the delete raises so it can
+    be retried. Each key has its own asset-relative path, so a kept file keeps its records. The records
+    are removed in batches, not one file at a time.
+    """
+    location = None
+    removed_keys, kept_keys = [], []
+    files_complete, complete = True, True
+
+    if "assetLocation" in asset and "Key" in asset["assetLocation"]:
+        location = asset["assetLocation"]["Key"]
+        if location:
+            logger.info(f"Deleting S3 asset objects and all versions with prefix {location} from bucket {bucket_name}")
+            # The files of an asset nested in the location are that asset's and stay
+            nested = nested_locations_for(asset, bucket_name)
+            try:
+                removed_keys = delete_s3_prefix_all_versions(bucket_name, location, location=location,
+                                                             nested=nested)
+            except S3PrefixDeleteIncomplete as incomplete:
+                removed_keys, kept_keys = incomplete.deleted_keys, incomplete.failed_keys
+                files_complete = complete = False
+            deleted_items["s3_objects"].extend(removed_keys)
+
+            # Also delete any auxiliary files
+            if files_complete:
+                delete_assetAuxiliary_files(database_id, asset["assetLocation"], nested=nested)
+
+    if complete and "previewLocation" in asset and "Key" in asset["previewLocation"]:
+        prefix = asset["previewLocation"]["Key"]
+        if prefix:
+            logger.info(f"Deleting S3 preview objects and all versions with prefix {prefix} from bucket {bucket_name}")
+            try:
+                deleted_items["s3_objects"].extend(delete_s3_prefix_all_versions(bucket_name, prefix, location=prefix))
+            except S3PrefixDeleteIncomplete:
+                complete = False
+
+    if complete:
+        return
+
+    removed_files = [key for key in removed_keys if not key.endswith('/') and relative_path_in(location, key)]
+    removed_paths = [relative_path_in(location, key) for key in removed_files]
+    delete_files_metadata(database_id, asset_id, removed_paths)
+    delete_file_version_records(database_id, asset_id, removed_paths)
+    if not files_complete:
+        delete_auxiliary_files_of_keys(database_id, removed_files)
+
+    logger.error(f"Permanent delete of asset {asset_id} stopped with the asset kept: {len(removed_keys)} S3 "
+                 f"key(s) deleted, {len(kept_keys)} kept, {len(removed_paths)} file record(s) removed")
+    raise VAMSGeneralErrorResponse(ASSET_DELETE_INCOMPLETE_MESSAGE)
+
+
 def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles):
     """Permanently delete an asset from all systems
     
@@ -1811,6 +1879,12 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             "dynamodb_tables": []
         }
 
+        original_db_id = databaseId.replace("#deleted", "")
+
+        # 1. Delete all S3 objects (assets files and preview) before any record, so a delete S3
+        #    refuses keeps the asset for a retry
+        _delete_asset_objects_for_permanent_deletion(asset, bucket_name, original_db_id, assetId, deleted_items)
+
         # Delete SNS topic if it exists
         if 'snsTopic' in asset and asset['snsTopic']:
             try:
@@ -1839,34 +1913,6 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         # Subscribers are notified when the asset is archived. A permanent delete sends no
         # email: its topic and subscription record are already gone at this point.
 
-        original_db_id = databaseId.replace("#deleted", "")
-
-        # 1. Delete all S3 objects (assets files and preview)
-        if "assetLocation" in asset and "Key" in asset["assetLocation"]:
-            prefix = asset["assetLocation"]["Key"]
-            if prefix:
-                # Get bucket from assetLocation or use default
-                logger.info(f"Deleting S3 asset objects and all versions with prefix {prefix} from bucket {bucket_name}")
-                
-                # Delete all objects and all versions this location holds; the files of an asset nested
-                # in the location are that asset's and stay
-                nested = nested_locations_for(asset, bucket_name)
-                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix, location=prefix, nested=nested)
-                deleted_items["s3_objects"].extend(deleted_keys)
-                
-                # Also delete any auxiliary files
-                delete_assetAuxiliary_files(original_db_id, asset["assetLocation"], nested=nested)
-
-        if "previewLocation" in asset and "Key" in asset["previewLocation"]:
-            prefix = asset["previewLocation"]["Key"]
-            if prefix:
-                # Get bucket from assetLocation or use default
-                logger.info(f"Deleting S3 preview objects and all versions with prefix {prefix} from bucket {bucket_name}")
-                
-                # Delete all objects and all versions this location holds
-                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix, location=prefix)
-                deleted_items["s3_objects"].extend(deleted_keys)
-        
         # 2. Delete from asset table (both active and archived locations)
         # First try the original database ID
         asset_table.delete_item(Key={'databaseId': original_db_id, 'assetId': assetId})
@@ -2052,6 +2098,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             operation="delete",
             timestamp=now
         )
+    except VAMSGeneralErrorResponse:
+        raise
     except Exception as e:
         logger.exception(f"Error permanently deleting asset: {e}")
         raise VAMSGeneralErrorResponse(f"Error permanently deleting asset.")

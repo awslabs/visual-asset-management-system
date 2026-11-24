@@ -1717,7 +1717,9 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """Permanently delete a file or files under a prefix."""
         try:
             endpoint = route_path(API_DELETE_FILE, databaseId=database_id, assetId=asset_id)
-            response = self.delete(endpoint, include_auth=True, json=delete_data)
+            # raise_http_errors: the status code reaches the mapping below instead of becoming a
+            # generic APIError in _make_request.
+            response = self.delete(endpoint, include_auth=True, json=delete_data, raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -1954,8 +1956,10 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             }
             if reason:
                 data['reason'] = reason
-                
-            response = self.delete(endpoint, include_auth=True, json=data)
+
+            # raise_http_errors: the status code reaches the mapping below instead of becoming a
+            # generic APIError in _make_request.
+            response = self.delete(endpoint, include_auth=True, json=data, raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:

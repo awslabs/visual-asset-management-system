@@ -208,3 +208,19 @@ def test_a_draco_point_cloud_drops_its_nan_points_with_their_colours(tmp_path):
     np.testing.assert_array_equal(np.sort(built_points, axis=0), np.sort(valid, axis=0))
     (_, built_colours), _ = fake_pv.PolyData.return_value.point_data.__setitem__.call_args
     assert len(built_colours) == len(valid) and (built_colours == 200).all()
+
+
+@pytest.mark.unit
+@requires_real("DracoPy", "pyvista")
+def test_a_real_draco_file_without_faces_loads_as_a_point_cloud(tmp_path):
+    import DracoPy
+
+    from preview_pipeline.format_handlers import mesh_handler
+
+    points = np.random.default_rng(11).uniform(-10, 10, size=(200, 3)).astype(np.float32)
+    drc = tmp_path / "cloud.drc"
+    drc.write_bytes(DracoPy.encode(points))
+    cloud = mesh_handler._load_draco(str(drc))
+    assert cloud.n_points == len(points)
+    assert cloud.n_faces == 0
+    assert np.isfinite(np.asarray(cloud.points)).all()
