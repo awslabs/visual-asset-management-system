@@ -6,8 +6,9 @@
 /**
  * Resource-name chunk parameters. Core-owned.
  *
- * Every registered resource name (the core registry, plus the add-on and custom names recorded by
- * publishLaneResourceName()) is published a second time as JSON in numbered String parameters
+ * Every registered resource name (the core registry and the core names later stacks record through
+ * lateCoreResourceNames.ts, plus the add-on and custom names recorded by publishLaneResourceName())
+ * is published a second time as JSON in numbered String parameters
  * `<resourceNamesSSMParamPrefix>Chunks/<i>`, i = 0..n-1:
  *
  *     {"v":1,"n":<n>,"i":<i>,"l":"<layout id>","m":{"<key>":"<name>",...}}
@@ -26,9 +27,12 @@
  *   resource before the old stack deletes its copy, and the create fails with ParameterAlreadyExists.
  *   In one stack the construct id is the index, so a layout change only updates a chunk in place,
  *   adds the highest one or removes it.
- * - Names are packed per source (the core registry, then each lane stack in the order it first
+ * - Names are packed per source (the core names, then each lane stack in the order it first
  *   published), so toggling an add-on adds or removes that source's chunks and leaves the others'
- *   contents as they were.
+ *   contents as they were. The core source is the registry followed by the late core names (the
+ *   OpenSearch endpoint and index names, the web URL, the map API key ARN, the copy engine's
+ *   function name), which fill the last core chunk's spare room instead of adding a chunk per
+ *   publishing stack.
  * - Values are deploy-time tokens, so chunks are sized by the longest each value can be: a literal's
  *   own length, else the bound of its exact key (TOKEN_MAX_LENGTH_BY_KEY, for ARN-valued keys), else
  *   the limit of the key's category (TOKEN_MAX_LENGTH_BY_CATEGORY), else UNKNOWN_TOKEN_MAX_LENGTH.
@@ -61,6 +65,7 @@ export const TOKEN_MAX_LENGTH_BY_CATEGORY: Readonly<Record<string, number>> = {
     dynamoTables: 255, // DynamoDB CreateTable TableName: 3-255 characters
     s3Buckets: 63, // S3 bucket name: 3-63 characters
     cloudwatchLogGroups: 512, // CloudWatch Logs CreateLogGroup logGroupName: 1-512 characters
+    lambdaFunctions: 64, // Lambda CreateFunction FunctionName: 1-64 characters
 };
 
 /**
@@ -99,6 +104,18 @@ export function arnMaxLength(service: string, resourcePrefix: string, nameMax: n
 export const EVENT_BUS_ARN_MAX_LENGTH = arnMaxLength("events", "event-bus/", 256);
 
 /**
+ * An HTTPS URL of a host and no path, `https://<host>`, with the host at the 253-character limit of a
+ * DNS name: 261 characters. The OpenSearch endpoint and the deployed web URL take this form.
+ */
+export const HTTPS_HOST_URL_MAX_LENGTH = "https://".length + 253;
+
+/**
+ * An Amazon Location Service API key ARN, `arn:<partition>:geo:<region>:<account>:api-key/<name>`,
+ * with the name at its CreateKey limit of 100 characters: 172 characters.
+ */
+export const LOCATION_API_KEY_ARN_MAX_LENGTH = arnMaxLength("geo", "api-key/", 100);
+
+/**
  * Longest a deploy-time value can be, by its exact key: the registered keys whose values are ARNs,
  * which UNKNOWN_TOKEN_MAX_LENGTH would size at 2,048. Kept here rather than on the storage
  * registrations, so the register() calls stay as they are. A key added to the registry with an ARN
@@ -106,6 +123,9 @@ export const EVENT_BUS_ARN_MAX_LENGTH = arnMaxLength("events", "event-bus/", 256
  */
 export const TOKEN_MAX_LENGTH_BY_KEY: Readonly<Record<string, number>> = {
     [RESOURCE_PARAM_KEYS.integration.orchestrationBusArn]: EVENT_BUS_ARN_MAX_LENGTH,
+    [RESOURCE_PARAM_KEYS.openSearch.endpoint]: HTTPS_HOST_URL_MAX_LENGTH,
+    [RESOURCE_PARAM_KEYS.web.deployedUrl]: HTTPS_HOST_URL_MAX_LENGTH,
+    [RESOURCE_PARAM_KEYS.location.apiKeyArn]: LOCATION_API_KEY_ARN_MAX_LENGTH,
 };
 
 /** Characters an SSM parameter name allows, which JSON carries without escaping. */
@@ -122,7 +142,11 @@ export interface ResourceNameChunkEntry {
 }
 
 export interface ResourceNameChunkGroup {
-    /** The stack holding the per-key parameters of the group's names; packing never mixes sources. */
+    /**
+     * The stack that identifies the group: for a lane, the stack holding its names' per-key
+     * parameters; for the core group, ResourceNamesBuilder (the late core names' per-key parameters
+     * sit in the stacks that publish them). Packing never mixes groups.
+     */
     source: Stack;
     entries: ResourceNameChunkEntry[];
 }
@@ -264,9 +288,10 @@ export function renderResourceNameChunk(
 }
 
 /**
- * Group every registered name by the stack that holds its per-key parameter (core names first, in
- * registration order, then each lane stack in the order it first published), plan the chunks and
- * create one standard-tier String parameter per chunk in `scope`, the root core stack.
+ * Group every registered name (the core names first: the registry in registration order, then the
+ * late core names in publication order; then each lane stack's names, in the order it first
+ * published), plan the chunks and create one standard-tier String parameter per chunk in `scope`,
+ * the root core stack.
  *
  * Call once, after every stack that publishes resource names has been built.
  */
@@ -287,7 +312,12 @@ export function buildResourceNameChunks(props: {
     const groups: ResourceNameChunkGroup[] = [
         {
             source: props.coreSource,
-            entries: props.registry.list().map((d) => ({ key: d.paramKey, value: d.value })),
+            entries: [
+                ...props.registry.list().map((d) => ({ key: d.paramKey, value: d.value })),
+                ...props.registry
+                    .lateCoreEntries()
+                    .map((e) => ({ key: e.paramKey, value: e.value })),
+            ],
         },
     ];
     for (const lane of props.registry.laneEntries()) {

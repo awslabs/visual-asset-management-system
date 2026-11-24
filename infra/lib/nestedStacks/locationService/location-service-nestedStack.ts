@@ -11,6 +11,8 @@ import { Construct } from "constructs";
 import * as Service from "../../helper/service-helper";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
+import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
+import { publishLateCoreResourceName } from "../resourceNames/lateCoreResourceNames";
 
 interface LocationServiceConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -84,6 +86,17 @@ export class LocationServiceNestedStack extends NestedStack {
 
         // Add dependency to ensure API key is created before SSM parameter
         apiKeySSMParameter.node.addDependency(apiKey);
+
+        // The same ARN as a core resource name, carried by the resource-name chunk parameters, so the
+        // secure-config call reads it with no Parameter Store call of its own. The ARN names the key;
+        // its value is still read with geo:DescribeKey, which only the secure-config function holds.
+        publishLateCoreResourceName(
+            this,
+            props.config,
+            RESOURCE_PARAM_KEYS.location.apiKeyArn,
+            apiKey.attrKeyArn,
+            { dependsOn: [apiKey] }
+        );
 
         this.apiKey = apiKey;
 

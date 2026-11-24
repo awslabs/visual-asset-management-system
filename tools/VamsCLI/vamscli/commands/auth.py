@@ -221,7 +221,10 @@ def login(ctx: click.Context, username: str, password: str, password_stdin: bool
             )
             output_warning(warning_msg, json_output)
             
-            if not skip_version_check and not json_output and not click.confirm("Continue with authentication?"):
+            # A stdin credential flag means a secret is piped; the prompt would consume it as input.
+            stdin_credentials = password_stdin or new_password_stdin or token_override_stdin
+            if not skip_version_check and not json_output and not stdin_credentials \
+                    and not click.confirm("Continue with authentication?"):
                 output_info("Authentication cancelled.", json_output)
                 return
             elif skip_version_check:
