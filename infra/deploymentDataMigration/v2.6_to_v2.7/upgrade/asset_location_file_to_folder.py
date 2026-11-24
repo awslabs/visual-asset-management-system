@@ -38,11 +38,22 @@ in place and reported. A moved object's copies carry the source version id (``va
 the key the file move route writes), so a resumed move continues where it stopped and stops at a version it
 did not write.
 
+Derived data follows the paths, only for the converted assets and the paths that changed. The vector items
+of a moved path (``VectorEmbeddingsStorageTable``) move with it, with their embeddings, so nothing is
+analysed or embedded again; after a move into the companion folder their S3 version ids are rewritten as the
+version records are. A vector item already at the new key (a newer run wrote it) wins, and the old one is
+deleted. The file search index is brought up to date the way the reindexer does it, by writing and at once
+deleting a ``REINDEX_METADATA_RECORD`` file metadata record at each new path, at each file that joins the
+asset and at ``/``: the table's stream re-indexes exactly those files (and the asset), and the add-ons that
+follow the stream re-sync them. A search document at an old path is not removed by that (the indexer reaches
+no file there); the report names each such document id. A dry run counts what it would move and touch.
+
 The location rules below mirror ``backend/backend/common/assetLocations.py`` (``contains``,
 ``relative_path_in``, ``object_key_for``, ``locations_share_key``); the step runs on an operator machine and
 does not import backend code.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -107,9 +118,21 @@ _HISTORY_VERSION_ID_PREFIXES = ('unarchive:',)
 _NOT_FOUND_CODES = ('404', 'NoSuchKey', 'NotFound')
 _COPIED_HEADERS = ('ContentType', 'CacheControl', 'ContentDisposition', 'ContentEncoding', 'ContentLanguage')
 
+# The vector table's keys and the file-path part of its sort key (backend common/vectorsearch/vectorStore.py and
+# common/indexing/documentIds.py), and the reindexer's touch record (common/dynamoDbMetadataKeys.py).
+VECTOR_PARTITION_KEY = 'databaseId:assetId'
+VECTOR_SORT_KEY = 'fileVersionKey'
+VECTOR_FILE_PATH_KEY_BUDGET = 926
+VECTOR_SORT_KEY_MAX_BYTES = 1024
+_VECTOR_KEY_PATH_ENCODING = (('%', '%25'), ('#', '%23'))
+_VECTOR_SHORTENED_MARKER = '%#'
+_SHA256_HEX_LENGTH = 64
+REINDEX_METADATA_RECORD_KEY = 'REINDEX_METADATA_RECORD'
+
 COUNTERS = ('scanned', 'candidates', 'skipped-complete', 'would-convert', 'converted', 'resumed', 'paths-moved',
             'records-moved', 'records-gone', 'records-left', 'versions-rewritten', 'objects-copied',
-            'auxiliary-moved') + tuple(f"mode:{m}" for m in CONVERSION_MODES) + LAYOUT_REFUSALS + FAILURE_OUTCOMES
+            'auxiliary-moved', 'vectors-moved', 'vectors-dropped', 'vectors-left', 'search-reindexed',
+            'search-stale') + tuple(f"mode:{m}" for m in CONVERSION_MODES) + LAYOUT_REFUSALS + FAILURE_OUTCOMES
 
 
 #######################
@@ -263,6 +286,36 @@ def path_map(file_key: str, target: str, keys: Iterator[str]) -> Dict[str, str]:
         if new != old:
             moves[old] = new
     return moves
+
+
+def vector_key_path(file_path: str) -> str:
+    """The file-path part of a vector item's sort key: the path with ``%`` and ``#`` percent-encoded, or, past
+    the byte budget, a truncated prefix, ``%#`` and the SHA-256 of the plain path."""
+    encoded = file_path
+    for plain, escaped in _VECTOR_KEY_PATH_ENCODING:
+        encoded = encoded.replace(plain, escaped)
+    if len(encoded.encode('utf-8')) <= VECTOR_FILE_PATH_KEY_BUDGET:
+        return encoded
+    digest = hashlib.sha256(file_path.encode('utf-8')).hexdigest()
+    budget = VECTOR_FILE_PATH_KEY_BUDGET - _SHA256_HEX_LENGTH - len(_VECTOR_SHORTENED_MARKER)
+    prefix = encoded.encode('utf-8')[:budget].decode('utf-8', errors='ignore')
+    return f"{prefix}{_VECTOR_SHORTENED_MARKER}{digest}"
+
+
+def search_paths(file_key: str, target: str, moves: Dict[str, str], keys: Set[str], mode: str) -> List[str]:
+    """The asset paths whose search documents a conversion re-indexes: ``/`` (the asset), every new path of a
+    moved companion entry, and every file of the new location outside the companion folder (the object, and
+    for include-siblings the files that join); preview files are indexed with their base file."""
+    paths = {'/'} | set(moves.values())
+    if mode == MODE_MOVE:
+        paths.add('/' + _file_name(file_key))
+    for key in keys:
+        if key.endswith('/') or not key.startswith(target) or key.startswith(file_key + '/'):
+            continue
+        path = '/' + key[len(target):]
+        if PREVIEW_FILE_PATTERN not in path:
+            paths.add(path)
+    return sorted(paths)
 
 
 def path_collisions(target: str, moves: Dict[str, str], keys_with_versions: Set[str]) -> List[str]:
@@ -797,9 +850,80 @@ class RecordMover:
             return
         self._outcome(label, old, new, outcome)
 
+    def _vector_items(self, table: str, key_path: str) -> List[Dict]:
+        return list(_paginate(self.client.query, TableName=table,
+                              KeyConditionExpression='#pk = :pk AND begins_with(#sk, :prefix)',
+                              ExpressionAttributeNames={'#pk': VECTOR_PARTITION_KEY, '#sk': VECTOR_SORT_KEY},
+                              ExpressionAttributeValues={':pk': {'S': self.asset}, ':prefix': {'S': f"{key_path}#"}}))
+
+    def move_vectors(self, old: str, new: str, version_map: Optional[Dict[str, str]] = None) -> None:
+        """Move the vector items of ``old`` to ``new`` (sort key and ``filePath``), mapping their S3 version ids
+        through ``version_map``. An item already at the new key wins; the old item is then deleted."""
+        table = self.cfg.get('vector_embeddings_storage_table_name')
+        if not table:
+            return
+        old_key_path, new_key_path = vector_key_path(old), vector_key_path(new)
+        for item in self._vector_items(table, old_key_path):
+            sort_key = _s(item, VECTOR_SORT_KEY)
+            version, separator, segment = sort_key[len(old_key_path) + 1:].partition('#')
+            new_version = (version_map or {}).get(version, version)
+            new_sort_key = f"{new_key_path}#{new_version}" + (f"#{segment}" if separator else '')
+            if new_sort_key == sort_key:
+                continue
+            label = 'vectors'
+            shown_old, shown_new = f"{old}@{version}", f"{new}@{new_version}"
+            if len(new_sort_key.encode('utf-8')) > VECTOR_SORT_KEY_MAX_BYTES:
+                self.counts['vectors-left'] += 1
+                self.report(dict(self.base, part='vectors', table=label, **{'from': shown_old, 'to': shown_new},
+                                 action='left', detail='the sort key at the new path would exceed 1024 bytes'))
+                continue
+            new_item = dict(item)
+            new_item[VECTOR_SORT_KEY] = {'S': new_sort_key}
+            if _s(item, 'filePath') == old:
+                new_item['filePath'] = {'S': new}
+            if 'versionId' in item:
+                new_item['versionId'] = {'S': new_version}
+            try:
+                outcome = move_record(self.client, table, item, (VECTOR_PARTITION_KEY, VECTOR_SORT_KEY), new_item,
+                                      self.dry_run)
+                if outcome == 'clash' and not self.dry_run:
+                    self.client.delete_item(TableName=table, Key={
+                        VECTOR_PARTITION_KEY: item[VECTOR_PARTITION_KEY], VECTOR_SORT_KEY: item[VECTOR_SORT_KEY]})
+            except ClientError as e:
+                self._outcome(label, shown_old, shown_new, 'failed', str(e))
+                continue
+            if outcome in ('moved', 'would move'):
+                self.counts['vectors-moved'] += 1
+            elif outcome == 'clash':
+                self.counts['vectors-dropped'] += 1
+            self.report(dict(self.base, part='vectors', table=label, **{'from': shown_old, 'to': shown_new},
+                             action=outcome if outcome != 'clash' else 'dropped: a vector is at the new key'))
+
+    def touch_for_search(self, paths: List[str]) -> None:
+        """Write and delete a reindex touch record at each path, so the file metadata table's stream
+        re-indexes those files (``/`` re-indexes the asset). A dry run counts the paths."""
+        table = self.cfg.get('asset_file_metadata_storage_table_name')
+        if not table:
+            return
+        for path in paths:
+            key = {'metadataKey': {'S': REINDEX_METADATA_RECORD_KEY},
+                   'databaseId:assetId:filePath': {'S': f"{self.asset}:{path}"}}
+            if not self.dry_run:
+                try:
+                    self.client.put_item(TableName=table, Item=dict(key, metadataValue={
+                        'S': datetime.now(timezone.utc).isoformat()}, metadataValueType={'S': 'string'}))
+                    self.client.delete_item(TableName=table, Key=key)
+                except ClientError as e:
+                    self._outcome('search', path, path, 'failed', str(e))
+                    continue
+            self.counts['search-reindexed'] += 1
+        self.report(dict(self.base, part='search', action='would re-index' if self.dry_run else 're-indexed',
+                         paths=len(paths)))
+
     def move_paths(self, moves: Dict[str, str], guard: Callable[[str], bool]) -> None:
-        """Move every record at an old path of ``moves`` to its new path. ``guard(old)`` is True when the old
-        path now names a stored key of the new location; such a path's records are left and reported."""
+        """Move every record and vector item at an old path of ``moves`` to its new path, and report the search
+        document at each old path. ``guard(old)`` is True when the old path now names a stored key of the new
+        location; such a path's records are left and reported."""
         forms = {}
         for old, new in moves.items():
             if guard(old):
@@ -807,6 +931,10 @@ class RecordMover:
                 continue
             forms[old] = new
             forms[old.lstrip('/')] = new.lstrip('/')
+            self.counts['search-stale'] += 1
+            self.report(dict(self.base, part='search', **{'from': old, 'to': new},
+                             action='the search document at the old path is not removed',
+                             documentId=f"{self.asset.replace(':', '#', 1)}#{old}"))
         for label, table_key, item_key in (('file metadata', 'asset_file_metadata_storage_table_name', 'metadataKey'),
                                            ('file attributes', 'file_attribute_storage_table_name', 'attributeKey')):
             table = self.cfg.get(table_key)
@@ -856,12 +984,16 @@ class RecordMover:
                         changes['filePath'] = new
                     self._move('file version history', table, item, ('databaseId:assetId:filePath', 'versionId'),
                                changes, old, new)
+        for old, new in forms.items():
+            self.move_vectors(old, new)
 
     def rewrite_versions(self, path: str, version_map: Dict[str, str]) -> None:
         """Replace the S3 version ids of ``path`` (old to new) in its version records and history."""
         if not version_map:
             return
         forms = (path, path.lstrip('/'))
+        for form in forms:
+            self.move_vectors(form, form, version_map)
 
         def mapped(version_id: str) -> Optional[str]:
             for prefix in ('',) + _HISTORY_VERSION_ID_PREFIXES:
@@ -1126,6 +1258,11 @@ def _execute(dynamodb_client, s3_client, cfg: Dict, context: Context, candidate:
         counts['pending'] += 1
         report(dict(base, action='left pending', detail='a record could not be moved; resolve it and run again'))
         return
+    mover.touch_for_search(search_paths(file_key, target, {} if mode == MODE_MOVE else moves, keys, mode))
+    if counts['errors'] + counts['record-clash'] != errors_before:
+        counts['pending'] += 1
+        report(dict(base, action='left pending', detail='the search index could not be updated; run again'))
+        return
     row = dynamodb_client.get_item(TableName=asset_table, ConsistentRead=True, Key={
         'databaseId': {'S': candidate.database_id}, 'assetId': {'S': candidate.asset_id}}).get('Item') or {}
     write_history(dynamodb_client, cfg.get('asset_history_storage_table_name'), row, started, target)
@@ -1204,10 +1341,14 @@ def run_file_to_folder(dynamodb_client, s3_client, cfg: Dict, dry_run: bool, *, 
                 write(dict(finding, action='would convert' if plan.outcome != 'resume' else 'would resume'))
                 logger.info(f"  [DRY RUN] {candidate.database_id} / {candidate.asset_id}: '{candidate.location}' -> "
                             f"'{plan.target}' ({plan.outcome})")
-                if plan.outcome in (MODE_IN_PLACE, MODE_APPEND_SLASH, MODE_INCLUDE_SIBLINGS) and plan.moves:
-                    counts['paths-moved'] += len(plan.moves)
-                    RecordMover(dynamodb_client, cfg, candidate.database_id, candidate.asset_id, True, counts,
-                                write, base).move_paths(plan.moves, lambda old: False)
+                if plan.outcome in CONVERSION_MODES:
+                    mover = RecordMover(dynamodb_client, cfg, candidate.database_id, candidate.asset_id, True, counts,
+                                        write, base)
+                    if plan.moves:
+                        counts['paths-moved'] += len(plan.moves)
+                        mover.move_paths(plan.moves, lambda old: False)
+                    mover.touch_for_search(search_paths(candidate.location, plan.target, plan.moves or {},
+                                                        plan.keys or set(), plan.outcome))
             else:
                 write(dict(finding, action='converting' if plan.outcome != 'resume' else 'resuming'))
                 try:
@@ -1253,8 +1394,15 @@ def summary_lines(counts: Dict[str, int], dry_run: bool) -> List[str]:
     if failed:
         lines.append("  Needs a re-run: " + ', '.join(f"{name} {count}" for name, count in failed.items()))
     if counts.get('paths-moved'):
-        lines.append(f"  {counts['paths-moved']} companion path(s) changed: run vectorBackfill with "
-                     "clear_vectors set to true and the reindex utility with --clear-indexes, so search and "
-                     "vectors carry no entry at an old path.")
+        lines.append(f"  {counts['paths-moved']} companion path(s) changed. Their records "
+                     f"and {counts.get('vectors-moved', 0)} vector item(s) "
+                     f"{'would move' if dry_run else 'moved'} with them (no file is analysed or embedded again), "
+                     f"and {counts.get('search-reindexed', 0)} path(s) "
+                     f"{'would be' if dry_run else 'were'} re-indexed for search.")
+    if counts.get('search-stale'):
+        lines.append(f"  {counts['search-stale']} search document(s) at an old path may remain (part 'search' "
+                     "in the report lists their ids); a search result there opens no file. To remove them, run "
+                     "the reindex utility with --clear-indexes once; it rewrites every search document from "
+                     "the tables and makes no Amazon Bedrock call.")
     lines.append(f"  Report: {counts.get('report', '')}")
     return lines
