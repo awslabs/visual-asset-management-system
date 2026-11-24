@@ -25,6 +25,8 @@ import hashlib
 import json
 import os
 
+from botocore.exceptions import ClientError
+
 from assetNesting import held_by_nested
 
 # Matches the IAM grants on the auxiliary bucket (MIRIS_CLAIM_PREFIX in mirisUploadFunctions.ts).
@@ -132,15 +134,21 @@ def claim_body(database_id, asset_id, fingerprint, miris_asset_name, owner, clai
 
 def read_claim(s3_client, bucket, key):
     """(claim, ETag, claimed-at epoch seconds) of the claim at `key`; (None, None, None) when there
-    is no readable claim there.
+    is no claim there or its body is not a claim. Any other read error is raised, so a missing
+    permission or a failed read is not taken for a claim another execution holds.
 
     The claimed-at time is the claim's own `claimedAt`, else the object's last write (a claim
     written before claims recorded a time), else None.
     """
     try:
         response = s3_client.get_object(Bucket=bucket, Key=key)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+            return None, None, None
+        raise
+    try:
         claim = json.loads(response["Body"].read())
-    except Exception:
+    except ValueError:
         return None, None, None
     if not isinstance(claim, dict):
         return None, None, None
@@ -170,7 +178,11 @@ def complete_claim(s3_client, logger, aux_uri, database_id, asset_id, fingerprin
     bucket, key = claim_location(aux_uri, database_id, asset_id, fingerprint)
     if not bucket:
         return False
-    claim, etag, _ = read_claim(s3_client, bucket, key)
+    try:
+        claim, etag, _ = read_claim(s3_client, bucket, key)
+    except Exception as e:
+        logger.warning(f"Could not read claim s3://{bucket}/{key} to complete it: {e}")
+        return False
     if claim is None or not owner or claim.get("owner") != owner:
         logger.info(f"No claim of this execution to complete at s3://{bucket}/{key}")
         return False

@@ -159,3 +159,17 @@ def test_a_claim_without_a_recorded_time_ages_from_its_last_write(pipeline):
     assert asset.claim()[1]["gate"] == "skip"
     asset.s3.now = written + STALE_AFTER + 1
     assert asset.claim()[1]["gate"] == "proceed"
+
+
+def test_a_claim_that_cannot_be_read_fails_the_run_instead_of_skipping_it(pipeline):
+    from botocore.exceptions import ClientError
+
+    asset = Asset(pipeline)
+    asset.claim()
+
+    def refuse(Bucket, Key):
+        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "GetObject")
+
+    asset.s3.get_object = refuse
+    with pytest.raises(ClientError):
+        asset.claim()

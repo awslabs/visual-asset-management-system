@@ -180,7 +180,8 @@ def test_a_run_with_no_claim_to_record_proceeds_without_one(gate, files, overrid
 
 
 def _claimed(s3, existing_claim):
-    """Make the conditional put fail, with `existing_claim` (dict, or an exception) already stored."""
+    """Make the conditional put fail, with `existing_claim` (a dict, raw bytes, or the exception the
+    read raises) already stored."""
     s3.exceptions.ClientError = ClientError
     s3.get_paginator.return_value.paginate.return_value = [
         {"Contents": [{"Key": "a1/scene.usda", "ETag": '"e1"'}]}]
@@ -189,7 +190,8 @@ def _claimed(s3, existing_claim):
         s3.get_object.side_effect = existing_claim
     else:
         body = MagicMock()
-        body.read.return_value = json.dumps(existing_claim).encode("utf-8")
+        body.read.return_value = (existing_claim if isinstance(existing_claim, bytes)
+                                  else json.dumps(existing_claim).encode("utf-8"))
         s3.get_object.return_value = {"Body": body}
 
 
@@ -206,7 +208,7 @@ def test_a_retried_put_that_meets_its_own_claim_proceeds(gate):
 
 @pytest.mark.parametrize("existing_claim", [
     {"assetId": "a1"},
-    ValueError("not JSON"),
+    b"not JSON",
     ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject"),
 ], ids=["no-owner-field", "unreadable", "released-before-read-back"])
 def test_an_unverifiable_claim_is_treated_as_another_executions(gate, existing_claim):

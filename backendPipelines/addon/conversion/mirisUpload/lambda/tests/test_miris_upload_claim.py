@@ -118,3 +118,36 @@ def test_owner_id_is_a_digest_and_empty_without_a_token():
     assert mirisClaim.owner_id("") == ""
     assert len(mirisClaim.owner_id("tok-a")) == 64
     assert "tok-a" not in mirisClaim.owner_id("tok-a")
+
+
+def _refusing_reads(code):
+    """A FakeS3 whose get_object fails with `code` for every key."""
+    from botocore.exceptions import ClientError
+
+    s3 = FakeS3()
+
+    def refuse(Bucket, Key):
+        raise ClientError({"Error": {"Code": code, "Message": code}}, "GetObject")
+
+    s3.get_object = refuse
+    return s3
+
+
+def test_a_missing_claim_reads_as_no_claim():
+    assert mirisClaim.read_claim(FakeS3(), "aux", "locks/miris-upload/db1/a1/f.claim") == (None, None, None)
+
+
+@pytest.mark.parametrize("code", ["AccessDenied", "SlowDown", "InternalError"])
+def test_any_other_read_error_is_raised_not_taken_for_no_claim(code):
+    from botocore.exceptions import ClientError
+
+    with pytest.raises(ClientError):
+        mirisClaim.read_claim(_refusing_reads(code), "aux", "locks/miris-upload/db1/a1/f.claim")
+
+
+def test_completing_a_claim_that_cannot_be_read_is_logged_not_raised():
+    completed = mirisClaim.complete_claim(
+        _refusing_reads("AccessDenied"), _Logger(), "s3://aux/pipelines/miris-upload/e/", "db1", "a1",
+        "f" * 64, "owner-1")
+
+    assert completed is False
