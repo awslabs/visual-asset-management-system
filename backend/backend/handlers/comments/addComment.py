@@ -2,6 +2,7 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 import copy
+import uuid
 import boto3
 from botocore.config import Config
 import json
@@ -11,7 +12,8 @@ from common.validators import validate
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
-from common.dynamodb import get_asset_object_from_id
+from common.dynamodb import get_asset_object_from_id, asset_authorization_object
+from common.commentSubscriptionKeys import COMMENT_PARTITION_KEY, COMMENT_SORT_KEY, comment_partition
 from common.constants import STANDARD_JSON_RESPONSE
 from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
@@ -24,7 +26,6 @@ logger = safeLogger(service="AddComment")
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
-s3c = boto3.client("s3", config=retry_config)
 
 main_rest_response = copy.deepcopy(STANDARD_JSON_RESPONSE)
 
@@ -37,31 +38,34 @@ except Exception as e:
     main_rest_response["body"] = json.dumps({"message": "Failed resolving comment table name"})
 
 
-def add_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, event: dict) -> dict:
+def add_comment(databaseId: str, assetId: str, assetVersionId: str, commentBody: str, userId: str) -> dict:
     """
-    Creates the JSON for a comment based on the parameters and adds the comment to the database
-    :param assetId: string containing the assetId that the comment will be attached to
-    :param assetVersionIdAndCommentId: string with the asset version id the comment will be attached to and the unique comment id
-    :param event: Lambda event dictionary
-    :returns: dictionary with status code and success info
+    Creates a comment on one asset version under a new server-generated comment id
+    :param databaseId: database of the asset the comment is attached to
+    :param assetId: id of the asset the comment is attached to
+    :param assetVersionId: the asset version the comment is about
+    :param commentBody: the comment text
+    :param userId: the caller, recorded as the comment's owner
+    :returns: dictionary with status code, message and the new comment's id
     """
     response = {"statusCode": 200, "message": "Succeeded"}
-    logger.info("Setting Table")
-    logger.info(comment_database)
     table = dynamodb.Table(comment_database)
-    logger.info("Setting Time Stamp")
     dtNow = utc_now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    logger.info("current time in ISO8601:" + dtNow)
+    comment_id = str(uuid.uuid4())
     item = {
+        COMMENT_PARTITION_KEY: comment_partition(databaseId, assetId),
+        COMMENT_SORT_KEY: comment_id,
+        "databaseId": databaseId,
         "assetId": assetId,
-        "assetVersionId:commentId": assetVersionIdAndCommentId,
-        "commentBody": event["body"]["commentBody"],
+        "assetVersionId": assetVersionId,
+        "commentBody": commentBody,
         "commentOwnerID": userId,
         "commentOwnerUsername": userId,
         "dateCreated": dtNow,
     }
     try:
-        table.put_item(Item=item)
+        # A comment id is never reused: the write refuses a key the table already holds
+        table.put_item(Item=item, ConditionExpression="attribute_not_exists(commentId)")
     except Exception as e:
         logger.exception(e)
         response["statusCode"] = 500
@@ -69,23 +73,17 @@ def add_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, even
         return response
 
     logger.info(
-        f"Comment added: assetId={assetId}, commentId={assetVersionIdAndCommentId}, "
-        f"commentBody={len(item['commentBody'])} char(s)"
+        f"Comment added: assetId={assetId}, commentId={comment_id}, "
+        f"commentBody={len(commentBody)} char(s)"
     )
-
+    response["commentId"] = comment_id
     return response
-
-
-def _comment_ids(asset_version_and_comment_id):
-    """The asset version id and comment id of an "<assetVersionId>:<commentId>" path value."""
-    version_id, _, comment_id = str(asset_version_and_comment_id or "").partition(":")
-    return {"assetVersionId": version_id or None, "commentId": comment_id or None}
 
 
 @audited_handler
 def lambda_handler(event: dict, context: dict) -> dict:
     """
-    Lambda handler for API calls that try to add a comment
+    Lambda handler for API calls that add a comment
     :param event: Lamdba event dictionary
     :param context: Lambda context disctionary
     :returns: Http response object (statusCode, headers, body)
@@ -111,126 +109,103 @@ def lambda_handler(event: dict, context: dict) -> dict:
         response['body'] = json.dumps({"message": "Invalid JSON in request body"})
         return response
 
+    if not isinstance(event['body'], dict):
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": "Request body must be a JSON object"})
+        return response
+
     pathParameters = event.get("pathParameters", {})
-    logger.info(pathParameters)
 
     try:
-        # error if no assetId in api call
-        if "assetId" not in pathParameters:
-            message = "No assetId in API Call"
-            response["statusCode"] = 400
-            response["body"] = json.dumps({"message": message})
-            return response
-
-        split_arr = pathParameters["assetVersionId:commentId"].split(":")
-        logger.info("Validating parameters")
-        (valid, message) = validate(
-            {
-                "assetId": {"value": pathParameters["assetId"], "validator": "ASSET_ID"},
-                "commentId": {"value": split_arr[1], "validator": "ID"},
-            }
-        )
-
         global claims_and_roles
         claims_and_roles = request_to_claims(event)
 
         httpMethod = event['requestContext']['http']['method']
-        method_allowed_on_api = False
-        userId = None
 
-        asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
+        # Tier 1: may the caller call this route at all
+        if len(claims_and_roles["tokens"]) == 0 or not CasbinEnforcer(claims_and_roles).enforceAPI(event):
+            response["statusCode"] = 403
+            response["body"] = json.dumps({"message": "Action not allowed"})
+            return response
+
+        required_field_names = ['databaseId', 'assetId']
+        missing_field_names = [name for name in required_field_names if not pathParameters.get(name)]
+        if missing_field_names:
+            message = 'Missing path parameter(s) (%s) in API call' % (', '.join(missing_field_names))
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
+            return response
+
+        (valid, message) = validate(
+            {
+                "databaseId": {"value": pathParameters["databaseId"], "validator": "ID"},
+                "assetId": {"value": pathParameters["assetId"], "validator": "ASSET_ID"},
+            }
+        )
+        if not valid:
+            logger.warning(message)
+            response["body"] = json.dumps({"message": message})
+            response["statusCode"] = 400
+            return response
+
+        databaseId = pathParameters["databaseId"]
+        assetId = pathParameters["assetId"]
+
+        # Tier 2 on the asset of the named database, decided before its existence is revealed
+        asset_object = get_asset_object_from_id(databaseId, assetId)
+        authorization_object = asset_authorization_object(asset_object, databaseId, assetId)
+        userId = claims_and_roles["tokens"][0]
+        if not CasbinEnforcer(claims_and_roles).enforce(authorization_object, httpMethod):
+            response["statusCode"] = 403
+            response["body"] = json.dumps({"message": "Action not allowed"})
+            return response
         if asset_object is None:
             response["statusCode"] = 404
             response["body"] = json.dumps({"message": "Asset not found"})
             return response
 
-        asset_object.update({"object__type": "asset"})
-
-        # Add Casbin Enforcer to check if the current user has permissions to POST the Comment
-        if len(claims_and_roles["tokens"]) > 0:
-            userId = claims_and_roles["tokens"][0]
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(asset_object, httpMethod) and casbin_enforcer.enforceAPI(event):
-                method_allowed_on_api = True
-
-        if method_allowed_on_api:
-            logger.info("Trying to add comment")
-            # Check for missing fields - TODO:  keep these synchronized
-            #
-            required_field_names = ['assetId', 'assetVersionId:commentId']
-            missing_field_names = list(set(required_field_names).difference(pathParameters))
-            if missing_field_names:
-                message = 'Missing path parameter(s) (%s) in API call' % (', '.join(missing_field_names))
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                logger.error(response)
-                return response
-
-            if not valid:
-                logger.warning(message)
-                response["body"] = json.dumps({"message": message})
-                response["statusCode"] = 400
-                return response
-
-            # Check for missing fields - TODO: need to keep these synchronized
-            #
-            required_field_names = ['commentBody']
-            missing_field_names = list(set(required_field_names).difference(event['body']))
-            if missing_field_names:
-                message = 'Missing body parameter(s) (%s) in API call' % (', '.join(missing_field_names))
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                logger.error(response)
-                return response
-
-            logger.info("Validating body")
-            (valid, message) = validate(
-                {
-                    "commentBody": {"value": event["body"]["commentBody"], "validator": "STRING_16384"},
-                }
-            )
-            if not valid:
-                logger.error(message)
-                response['body'] = json.dumps({"message": message})
-                response['statusCode'] = 400
-                return response
-
-            # call the add_comment function if everything is valid
-            returned = add_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], userId, event)
-            if returned["statusCode"] == 200:
-                log_action(event, "commentCreate", database_id=asset_object.get("databaseId"),
-                           asset_id=pathParameters["assetId"],
-                           **_comment_ids(pathParameters["assetVersionId:commentId"]),
-                           changes={"commentBody": event["body"]["commentBody"]})
-            response["statusCode"] = returned["statusCode"]
-            response["body"] = json.dumps({"message": returned["message"]})
-            logger.info(response)
+        required_field_names = ['commentBody', 'assetVersionId']
+        missing_field_names = [name for name in required_field_names if name not in event['body']]
+        if missing_field_names:
+            message = 'Missing body parameter(s) (%s) in API call' % (', '.join(missing_field_names))
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
             return response
-        else:
-            response["statusCode"] = 403
-            response["body"] = json.dumps({"message": "Action not allowed"})
+
+        (valid, message) = validate(
+            {
+                "commentBody": {"value": event["body"]["commentBody"], "validator": "STRING_16384"},
+                "assetVersionId": {"value": event["body"]["assetVersionId"], "validator": "STRING_256"},
+            }
+        )
+        if valid and not str(event["body"]["assetVersionId"]).strip():
+            (valid, message) = (False, "assetVersionId must not be empty")
+        if not valid:
+            logger.error(message)
+            response['body'] = json.dumps({"message": message})
+            response['statusCode'] = 400
             return response
+
+        assetVersionId = str(event["body"]["assetVersionId"])
+        returned = add_comment(databaseId, assetId, assetVersionId, event["body"]["commentBody"], userId)
+        body = {"message": returned["message"]}
+        if returned["statusCode"] == 200:
+            body["commentId"] = returned["commentId"]
+            log_action(event, "commentCreate", database_id=databaseId, asset_id=assetId,
+                       assetVersionId=assetVersionId, commentId=returned["commentId"],
+                       changes={"commentBody": event["body"]["commentBody"]})
+        response["statusCode"] = returned["statusCode"]
+        response["body"] = json.dumps(body)
+        return response
     except VAMSGeneralErrorResponse as v:
-        # Raised by the asset lookup when the assetId cannot be resolved to a single live
-        # asset (e.g. the same assetId exists in more than one database). The message names
-        # no caller-supplied value, so it is returned as the client-facing reason.
+        # Raised by the asset lookup when an id is empty or the read fails. The message names no
+        # caller-supplied value, so it is returned as the client-facing reason.
         logger.exception(v)
         response["statusCode"] = 400
         response["body"] = json.dumps({"message": str(v)})
         return response
     except Exception as e:
-        logger.exception(f"caught exception")
-        # Only botocore ClientError carries a `.response`; guard the access so a
-        # non-ClientError (e.g. a KeyError/IndexError from malformed path params)
-        # does not raise AttributeError here and collapse into an opaque 502.
-        error_code = getattr(e, "response", {}).get("Error", {}).get("Code")
-        if error_code == "ConditionalCheckFailedException":
-            response["statusCode"] = 400
-            response["body"] = json.dumps(
-                {"message": "Comment already exists."}
-            )
-        else:
-            response["statusCode"] = 500
-            response["body"] = json.dumps({"message": "Internal Server Error"})
-            logger.exception(e)
+        logger.exception("caught exception")
+        response["statusCode"] = 500
+        response["body"] = json.dumps({"message": "Internal Server Error"})
         return response

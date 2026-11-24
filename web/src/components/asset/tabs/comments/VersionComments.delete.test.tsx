@@ -33,8 +33,10 @@ const { deleteComment } = jest.requireMock("../../../../services/APIService");
 const BLOCKED = "Request blocked by the deployment's AWS WAF web ACL (request ID r-1)";
 
 const comment = {
+    databaseId: "db1",
     assetId: "asset1",
-    "assetVersionId:commentId": "v1:c1",
+    commentId: "c1",
+    assetVersionId: "v1",
     commentBody: "<p>hello</p>",
     commentOwnerID: "owner",
     commentOwnerUsername: "user1",
@@ -88,8 +90,9 @@ describe("comment delete outcome", () => {
         await confirmDelete();
         await waitFor(() => expect(showMessage).toHaveBeenCalled());
         expect(deleteComment).toHaveBeenCalledWith({
+            databaseId: "db1",
             assetId: "asset1",
-            assetVersionIdAndCommentId: "v1:c1",
+            commentId: "c1",
         });
         expect(lastMessage(showMessage)).toMatchObject({
             type: "success",

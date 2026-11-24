@@ -28,6 +28,7 @@ from handlers.assets.assetFiles import (
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, log_action
 from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE, get_asset_record, asset_authorization_object, ARCHIVED_ASSET_DATABASE_SUFFIX
+from common.commentSubscriptionKeys import COMMENT_PARTITION_KEY, COMMENT_SORT_KEY, comment_partition, subscription_key
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
@@ -1567,6 +1568,10 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         logger.exception(f"Error archiving asset: {e}")
         raise VAMSGeneralErrorResponse(f"Error archiving asset.")
 
+UNARCHIVE_ID_IN_USE_MESSAGE = ("The database already holds a live asset with this ID. Archive or permanently "
+                               "delete that asset before unarchiving this one.")
+
+
 def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
     """Unarchive an asset (restore from soft delete)
     
@@ -1610,6 +1615,14 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
     if 'Item' not in db_response:
         logger.info(f"Database {original_db_id} for asset {assetId} has been deleted; not unarchiving")
         raise VAMSGeneralErrorResponse("The asset's database has been deleted. Re-create the database before unarchiving this asset.")
+
+    # Only while the database holds no live asset with the same id: restoring the archived row over
+    # it would replace that asset's record
+    live_row = asset_table.get_item(Key={'databaseId': original_db_id, 'assetId': assetId},
+                                    ConsistentRead=True).get('Item')
+    if live_row and live_row.get('databaseId') == original_db_id:
+        logger.info(f"Database {original_db_id} holds a live asset {assetId}; not unarchiving")
+        raise VAMSGeneralErrorResponse(UNARCHIVE_ID_IN_USE_MESSAGE)
 
     # Get bucket details for asset
     bucketDetails = get_asset_bucket_details(asset)
@@ -1663,8 +1676,15 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         # Move back to original database ID
         asset['databaseId'] = original_db_id
         
-        # Save to original location (the whole row: it keeps or gains the location index attributes)
-        asset_table.put_item(Item=fill_location_attributes(asset, bucket_name))
+        # Save to original location (the whole row: it keeps or gains the location index attributes),
+        # conditional on no live row having appeared since the check above
+        try:
+            asset_table.put_item(Item=fill_location_attributes(asset, bucket_name),
+                                 ConditionExpression='attribute_not_exists(assetId)')
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+                raise VAMSGeneralErrorResponse(UNARCHIVE_ID_IN_USE_MESSAGE)
+            raise
 
         # Delete from archived location
         asset_table.delete_item(Key={'databaseId': archived_db_id, 'assetId': assetId})
@@ -1699,6 +1719,8 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
             operation="unarchive",
             timestamp=now
         )
+    except VAMSGeneralErrorResponse:
+        raise
     except Exception as e:
         logger.exception(f"Error unarchiving asset: {e}")
         raise VAMSGeneralErrorResponse("Error unarchiving asset")
@@ -1877,12 +1899,11 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         # Delete subscription record if it exists
         if subscription_table:
             try:
-                # Delete the subscription record where eventName is 'Asset Version Change' and entityName_entityId is 'Asset#{assetId}'
+                # The asset's own subscription row, keyed by its original database and asset id, so
+                # an asset with the same id in another database keeps its subscription
                 subscription_table.delete_item(
-                    Key={
-                        'eventName': 'Asset Version Change',
-                        'entityName_entityId': f'Asset#{assetId}'
-                    }
+                    Key=subscription_key('Asset Version Change', 'Asset',
+                                         databaseId.replace("#deleted", ""), assetId)
                 )
                 logger.info(f"Successfully deleted subscription record for asset {assetId}")
             except Exception as e:
@@ -1930,20 +1951,24 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             except Exception as e:
                 logger.warning(f"Error deleting asset uploads: {e}")
         
-        # 6. Delete from comments table if available
+        # 6. Delete from comments table if available: the asset's live and soft-deleted comments, keyed
+        # by its original database and asset id, every page (as for the uploads above)
         if comment_table:
             try:
-                # Query to find all comments for this asset, every page (as for the uploads above)
-                for item in query_all_items(
-                    comment_table,
-                    KeyConditionExpression=Key('assetId').eq(assetId)
-                ):
-                    if 'assetVersionId:commentId' in item:
-                        comment_table.delete_item(Key={
-                            'assetId': assetId,
-                            'assetVersionId:commentId': item['assetVersionId:commentId']
-                        })
-                        deleted_items["dynamodb_tables"].append(f"{comment_table_name} (assetId={assetId}, assetVersionId:commentId={item['assetVersionId:commentId']})")
+                for deleted in (False, True):
+                    partition = comment_partition(original_db_id, assetId, deleted=deleted)
+                    for item in query_all_items(
+                        comment_table,
+                        KeyConditionExpression=Key(COMMENT_PARTITION_KEY).eq(partition)
+                    ):
+                        if COMMENT_SORT_KEY in item:
+                            comment_table.delete_item(Key={
+                                COMMENT_PARTITION_KEY: partition,
+                                COMMENT_SORT_KEY: item[COMMENT_SORT_KEY]
+                            })
+                            deleted_items["dynamodb_tables"].append(
+                                f"{comment_table_name} ({COMMENT_PARTITION_KEY}={partition}, "
+                                f"commentId={item[COMMENT_SORT_KEY]})")
             except Exception as e:
                 logger.warning(f"Error deleting asset comments: {e}")
         

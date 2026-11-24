@@ -44,6 +44,7 @@ const ruleBody = {
     eventName: "Asset Version Change",
     entityName: "",
     entityId: "",
+    databaseId: "",
     subscribers: [""],
 };
 
@@ -237,6 +238,8 @@ export default function CreateSubscription({
                     ? selectedItems[0].databaseName
                     : selectedItems[0].assetId
                 : "";
+        // The selected asset's database: an asset is identified by its database and asset id
+        ruleBody.databaseId = selectedItems.length > 0 ? selectedItems[0].databaseName : "";
 
         ruleBody.subscribers = formState.subscribers
             ? (typeof formState.subscribers === "string" ? formState.subscribers.split(",") : [])
@@ -329,6 +332,7 @@ export default function CreateSubscription({
                                         });
                                 } else {
                                     ruleBody.entityId = formState.entityId;
+                                    ruleBody.databaseId = formState.databaseId;
                                     // selectedEntityType?.value === "Database"
                                     //     ? formState.databaseId
                                     //     : formState.entityId;

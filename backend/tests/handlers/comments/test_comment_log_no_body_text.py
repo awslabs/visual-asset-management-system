@@ -40,8 +40,10 @@ edit_svc = _import_edit_comment()
 
 PHRASE = "zq1552-comment-phrase-91ab"
 STORED_PHRASE = "zq1552-stored-phrase-92bc"
+DATABASE_ID = "db-01"
 ASSET_ID = "asset-01"
-COMMENT_ID = "ver-01:cmt-0001"
+VERSION_ID = "ver-01"
+COMMENT_ID = "cmt-0001"
 
 
 def _logged_text(logger):
@@ -50,7 +52,8 @@ def _logged_text(logger):
 
 
 def _stored_comment(owner="alice"):
-    return {"assetId": ASSET_ID, "assetVersionId:commentId": COMMENT_ID, "commentBody": STORED_PHRASE,
+    return {"databaseId:assetId": f"{DATABASE_ID}:{ASSET_ID}", "commentId": COMMENT_ID,
+            "databaseId": DATABASE_ID, "assetId": ASSET_ID, "assetVersionId": VERSION_ID, "commentBody": STORED_PHRASE,
             "commentOwnerID": owner, "commentOwnerUsername": owner, "dateCreated": "2026-11-16T00:00:00.000000Z"}
 
 
@@ -58,11 +61,11 @@ def _stored_comment(owner="alice"):
 def test_add_comment_logs_ids_and_length_only(monkeypatch):
     monkeypatch.setattr(add_svc, "logger", MagicMock())
     monkeypatch.setattr(add_svc, "dynamodb", MagicMock())
-    result = add_svc.add_comment(ASSET_ID, COMMENT_ID, "alice", {"body": {"commentBody": PHRASE}})
-    assert result == {"statusCode": 200, "message": "Succeeded"}
+    result = add_svc.add_comment(DATABASE_ID, ASSET_ID, VERSION_ID, PHRASE, "alice")
+    assert result["statusCode"] == 200 and result["message"] == "Succeeded"
     text = _logged_text(add_svc.logger)
     assert PHRASE not in text
-    assert ASSET_ID in text and COMMENT_ID in text and f"{len(PHRASE)} char(s)" in text
+    assert ASSET_ID in text and result["commentId"] in text and f"{len(PHRASE)} char(s)" in text
     # the comment is still stored with its text
     stored = add_svc.dynamodb.Table.return_value.put_item.call_args.kwargs["Item"]
     assert stored["commentBody"] == PHRASE
@@ -74,7 +77,7 @@ def test_edit_comment_logs_neither_stored_nor_new_text(monkeypatch, owner, statu
     monkeypatch.setattr(edit_svc, "logger", MagicMock())
     monkeypatch.setattr(edit_svc, "dynamodb", MagicMock())
     monkeypatch.setattr(edit_svc, "get_single_comment", lambda *args, **kwargs: _stored_comment(owner))
-    result = edit_svc.edit_comment(ASSET_ID, COMMENT_ID, "alice", {"body": {"commentBody": PHRASE}})
+    result = edit_svc.edit_comment(DATABASE_ID, ASSET_ID, COMMENT_ID, "alice", PHRASE)
     assert result["statusCode"] == status
     text = _logged_text(edit_svc.logger)
     assert PHRASE not in text and STORED_PHRASE not in text
@@ -90,7 +93,7 @@ def test_delete_comment_logs_no_comment_text(monkeypatch, owner, status):
     monkeypatch.setattr(comment_svc, "dynamodb", MagicMock())
     monkeypatch.setattr(comment_svc, "dynamodb_client", MagicMock())
     monkeypatch.setattr(comment_svc, "get_single_comment", lambda *args, **kwargs: _stored_comment(owner))
-    result = comment_svc.delete_comment(ASSET_ID, COMMENT_ID, "alice", {})
+    result = comment_svc.delete_comment(DATABASE_ID, ASSET_ID, COMMENT_ID, "alice")
     assert result["statusCode"] == status
     text = _logged_text(comment_svc.logger)
     assert STORED_PHRASE not in text

@@ -10,9 +10,10 @@ asset API accepts, dotted, spaced, longer than 63 characters or ending in ``#`` 
 reaches the asset lookup and the subscription operation; an ID that rule refuses (``#``
 anywhere but the last character among them) is answered 400 before any lookup.
 
-A subscription row is keyed ``<entityName>#<entityId>``. ``entityName`` cannot contain ``#``
-(``OBJECT_NAME``), so ``GET /subscriptions`` splits the key at its first ``#`` and returns the
-rest whole as the entityId, whatever ``#`` it contains.
+A subscription row is keyed ``<entityName>:<databaseId>:<entityId>`` and carries the three as
+attributes. ``entityName`` (``OBJECT_NAME``) and ``databaseId`` (``ID``) cannot contain ``:``, so a row
+without the attributes is split at its first two ``:`` and the rest is returned whole as the entityId,
+whatever ``#`` or ``:`` it contains.
 """
 
 import json
@@ -23,6 +24,7 @@ from backend.backend.handlers.subscription import subscriptionService
 from backend.backend.handlers.subscription import unsubscribeService
 
 DOWNSTREAM_RESPONSE = {"statusCode": 200, "body": json.dumps({"message": "success"})}
+DATABASE_ID = "test-database-id"
 
 ACCEPTED_IDS = [
     pytest.param("building-model", id="plain"),
@@ -75,9 +77,9 @@ class RecordingLookup:
     def __init__(self):
         self.calls = []
 
-    def __call__(self, database_id, asset_id):
+    def __call__(self, database_id, asset_id, include_archived=False):
         self.calls.append((database_id, asset_id))
-        return {"assetId": asset_id, "databaseId": "test-database-id", "assetName": "Test Asset"}
+        return {"assetId": asset_id, "databaseId": database_id, "assetName": "Test Asset"}
 
 
 class RecordingCall:
@@ -106,6 +108,7 @@ def _call(monkeypatch, module, method, path, operation, entity_id):
             "eventName": "Asset Version Change",
             "entityName": "Asset",
             "entityId": entity_id,
+            "databaseId": DATABASE_ID,
             "subscribers": ["test-user@example.com"],
         },
     }
@@ -123,7 +126,7 @@ class TestSubscriptionEntityIdFollowsTheAssetIdRule:
             monkeypatch, module, method, path, operation, entity_id)
 
         assert response["statusCode"] == 200, response["body"]
-        assert lookup.calls == [(None, entity_id)]
+        assert lookup.calls == [(DATABASE_ID, entity_id)]
         assert [body["entityId"] for body in downstream.bodies] == [entity_id]
 
     @pytest.mark.parametrize("entity_id", REFUSED_IDS)
@@ -155,22 +158,27 @@ class StubScan:
         return {"Items": self.items}
 
 
-def _row(entity_id):
-    # The key create_subscription writes: f'{entityName}#{entityId}'
-    return {
+def _row(entity_id, with_attributes=True):
+    # The row create_subscription writes: the sort key and, beside it, the three parts
+    row = {
         "eventName": {"S": "Asset Version Change"},
-        "entityName_entityId": {"S": f"Asset#{entity_id}"},
+        "entityName:databaseId:entityId": {"S": f"Asset:{DATABASE_ID}:{entity_id}"},
         "subscribers": {"L": [{"S": "test-user@example.com"}]},
     }
+    if with_attributes:
+        row.update({"entityName": {"S": "Asset"}, "databaseId": {"S": DATABASE_ID},
+                    "entityId": {"S": entity_id}})
+    return row
 
 
-def _list(monkeypatch, entity_ids):
+def _list(monkeypatch, entity_ids, with_attributes=True):
     monkeypatch.setattr(
         subscriptionService, "request_to_claims", lambda event: {"tokens": ["test-user@example.com"]})
     monkeypatch.setattr(subscriptionService, "CasbinEnforcer", AllowingEnforcer())
-    monkeypatch.setattr(subscriptionService, "get_asset_object_from_id", RecordingLookup())
+    monkeypatch.setattr(subscriptionService, "_read_live_assets", lambda keys: {
+        key: {"databaseId": key[0], "assetId": key[1], "assetName": "Test Asset"} for key in keys})
     monkeypatch.setattr(
-        subscriptionService, "dynamodb_client", StubScan([_row(i) for i in entity_ids]))
+        subscriptionService, "dynamodb_client", StubScan([_row(i, with_attributes) for i in entity_ids]))
     event = {
         "requestContext": {"http": {"method": "GET", "path": "/subscriptions"}},
         "queryStringParameters": {"maxItems": "10", "pageSize": "10", "startingToken": ""},
@@ -187,15 +195,18 @@ class TestSubscriptionListingParsesEveryAssetId:
         pytest.param("abc#", id="trailing-hash"),
         pytest.param("a#", id="shortest-trailing-hash"),
         # Not writable through the API (the asset ID rule refuses it), but the parser
-        # still returns everything after the first '#' whole
+        # still returns everything after the second ':' whole
         pytest.param("ab#c", id="hash-mid-string"),
+        pytest.param("ab:c", id="colon-mid-string"),
     ])
-    def test_a_row_lists_with_its_entity_id_whole(self, monkeypatch, entity_id):
-        response = _list(monkeypatch, [entity_id])
+    @pytest.mark.parametrize("with_attributes", [True, False], ids=["attributes", "sort-key-only"])
+    def test_a_row_lists_with_its_entity_id_whole(self, monkeypatch, entity_id, with_attributes):
+        response = _list(monkeypatch, [entity_id], with_attributes)
 
         assert response["statusCode"] == 200, response["body"]
         items = json.loads(response["body"])["message"]["Items"]
-        assert [(i["entityName"], i["entityId"]) for i in items] == [("Asset", entity_id)]
+        assert [(i["entityName"], i["databaseId"], i["entityId"]) for i in items] == [
+            ("Asset", DATABASE_ID, entity_id)]
 
     def test_one_trailing_hash_row_does_not_break_the_listing_of_the_others(self, monkeypatch):
         response = _list(monkeypatch, ["building-model", "abc#", "smk.dotted.u2"])

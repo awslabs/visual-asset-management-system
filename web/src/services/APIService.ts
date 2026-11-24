@@ -766,6 +766,13 @@ export const deleteAssetLink = async ({ assetLinkId }: any) => {
  * Returns array of all subscription constraints from the auth/constraints api
  * @returns {Promise<boolean|{rules}|any>}
  */
+/**
+ * The key that identifies one subscription row in the list: two databases may hold assets with the
+ * same asset id, so the entity id alone does not.
+ */
+export const subscriptionRowKey = (item: any) =>
+    `${item?.eventName}:${item?.entityName}:${item?.databaseId}:${item?.entityId}`;
+
 export const fetchSubscriptionRules = async () => {
     try {
         let response = await apiClient.get("subscriptions", {});
@@ -781,7 +788,10 @@ export const fetchSubscriptionRules = async () => {
                     response = await apiClient.get("subscriptions", init);
                     items = items.concat(response.message.Items);
                 }
-                return items;
+                return items.map((item) => ({
+                    ...item,
+                    subscriptionKey: subscriptionRowKey(item),
+                }));
             } else {
                 return response.message;
             }
@@ -1088,15 +1098,23 @@ export const resetCognitoUserPassword = async ({ userId, confirmReset }: any) =>
 };
 
 /**
- * Returns array of all the comments that are attached to a given assetId
+ * The comment routes of one asset, addressed by its database and asset id. A comment's own id is the
+ * last segment; its target (the asset version) is a query filter or a body field, never a segment.
+ */
+const commentsPath = (databaseId: string, assetId: string, commentId?: string) =>
+    `comments/database/${encodeURIComponent(databaseId)}/assets/${encodeURIComponent(assetId)}` +
+    (commentId ? `/${encodeURIComponent(commentId)}` : "");
+
+/**
+ * Returns array of all the comments that are attached to the asset (databaseId, assetId)
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchAllComments = async ({ assetId, showArchived = false }: any) => {
+export const fetchAllComments = async ({ databaseId, assetId, showArchived = false }: any) => {
     try {
         // An archived asset's comments are only found when asked for
         const archivedParams: Record<string, string> = showArchived ? { showArchived: "true" } : {};
         let response = await apiClient.get(
-            `comments/assets/${assetId}`,
+            commentsPath(databaseId, assetId),
             showArchived ? { queryStringParameters: archivedParams } : {}
         );
         let items: any[] = [];
@@ -1108,7 +1126,7 @@ export const fetchAllComments = async ({ assetId, showArchived = false }: any) =
                 items = items.concat(response.message.Items);
                 while (response.message.NextToken) {
                     init["queryStringParameters"]["startingToken"] = response.message.NextToken;
-                    response = await apiClient.get(`comments/assets/${assetId}`, init);
+                    response = await apiClient.get(commentsPath(databaseId, assetId), init);
                     items = items.concat(response.message.Items);
                 }
                 return items;
@@ -1128,12 +1146,9 @@ export const fetchAllComments = async ({ assetId, showArchived = false }: any) =
  * Deletes the given comment from the database
  * @returns {Promise<boolean|{message}|any>}
  */
-export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }: any) => {
+export const deleteComment = async ({ databaseId, assetId, commentId }: any) => {
     try {
-        const response = await apiClient.del(
-            `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
-            {}
-        );
+        const response = await apiClient.del(commentsPath(databaseId, assetId, commentId), {});
         if (response.message) {
             console.log(response.message);
             return [true, response.message];
@@ -3272,12 +3287,13 @@ export const unsubscribeFromAsset = async (body: any) => {
     }
 };
 
-export const createComment = async ({ assetId, assetVersionIdAndCommentId, body }: any) => {
+/**
+ * Adds a comment to the asset (databaseId, assetId). The body carries commentBody and the asset version
+ * the comment is about (assetVersionId); the API generates the comment id and returns it.
+ */
+export const createComment = async ({ databaseId, assetId, body }: any) => {
     try {
-        const response = await apiClient.post(
-            `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
-            { body }
-        );
+        const response = await apiClient.post(commentsPath(databaseId, assetId), { body });
         if (response.message) {
             if (
                 response.message.indexOf("error") !== -1 ||
@@ -3295,12 +3311,11 @@ export const createComment = async ({ assetId, assetVersionIdAndCommentId, body 
     }
 };
 
-export const updateComment = async ({ assetId, assetVersionIdAndCommentId, body }: any) => {
+export const updateComment = async ({ databaseId, assetId, commentId, body }: any) => {
     try {
-        const response = await apiClient.put(
-            `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
-            { body }
-        );
+        const response = await apiClient.put(commentsPath(databaseId, assetId, commentId), {
+            body,
+        });
         if (response.message) {
             if (
                 response.message.indexOf("error") !== -1 ||

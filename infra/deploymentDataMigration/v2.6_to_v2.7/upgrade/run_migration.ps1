@@ -20,7 +20,7 @@ param(
     [switch]$ClearVectors,
     [switch]$Async,
     [switch]$GenerateMetadataForExistingFiles,
-    [ValidateSet("all", "assetLocationFolderKeys", "assetLocationFileToFolder", "orphanedTriggers", "vectorBackfill", "metadataBackfill", "systemPipelineRetirement", "assetLocationIndex")]
+    [ValidateSet("all", "assetLocationFolderKeys", "assetLocationFileToFolder", "orphanedTriggers", "vectorBackfill", "metadataBackfill", "systemPipelineRetirement", "commentSubscriptionKeys", "assetLocationIndex")]
     [string]$Steps,
     [int]$Limit,
     [string]$Profile,
@@ -128,7 +128,9 @@ try {
             Write-Host "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
             Write-Host "  4. Read the asset location index report (asset_location_index_report.json) and check the summary"
             Write-Host "     says 'Completion marker written'; if not, run -Steps assetLocationIndex -Execute again"
-            Write-Host "  5. Read the assetLocationFileToFolder report: decide a move or include-siblings for each refused asset"
+            Write-Host "  5. Read the comment and subscription keys summary: for each id listed as 'ambiguous', name its database in"
+            Write-Host "     comment_subscription_resolution_file and run -Steps commentSubscriptionKeys -Execute again"
+            Write-Host "  6. Read the assetLocationFileToFolder report: decide a move or include-siblings for each refused asset"
             Write-Host "     in a resolutions file (asset_location_file_to_folder_resolutions), then run"
             Write-Host "     -Steps assetLocationFileToFolder -Execute again"
         } else {

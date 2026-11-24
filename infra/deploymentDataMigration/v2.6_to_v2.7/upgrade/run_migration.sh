@@ -136,7 +136,9 @@ if [ "$MIGRATION_STATUS" -eq 0 ]; then
         echo "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
         echo "  4. Read the asset location index report (asset_location_index_report.json) and check the summary"
         echo "     says 'Completion marker written'; if not, run --steps assetLocationIndex --execute again"
-        echo "  5. Read the assetLocationFileToFolder report: decide a move or include-siblings for each refused asset"
+        echo "  5. Read the comment and subscription keys summary: for each id listed as 'ambiguous', name its database in"
+        echo "     comment_subscription_resolution_file and run --steps commentSubscriptionKeys --execute again"
+        echo "  6. Read the assetLocationFileToFolder report: decide a move or include-siblings for each refused asset"
         echo "     in a resolutions file (asset_location_file_to_folder_resolutions), then run"
         echo "     --steps assetLocationFileToFolder --execute again"
     else
