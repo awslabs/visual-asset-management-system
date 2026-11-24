@@ -28,7 +28,8 @@ def stored_attribute_names(model):
 
 def pipeline_execution_record_keys():
     """Every attribute build_pipeline_execution_record can write. from_pipeline_execution_id is
-    the sparse chain-GSI sort key, written only for a chained pipeline."""
+    the sparse chain-GSI sort key, written only for a chained pipeline; the run bucket's registration
+    and prefix are written only when the launch names them."""
     common = dict(
         pipeline_execution_id="P1", workflow_execution_id="E1", pipeline_database_id="db1",
         pipeline_id="pipe1", end_state_pipeline=False, s3_asset_bucket="bucket",
@@ -40,7 +41,8 @@ def pipeline_execution_record_keys():
     unchained = er.build_pipeline_execution_record(**common)
     chained = er.build_pipeline_execution_record(
         **common, from_pipeline_execution_id="P0",
-        orchestration_bus_event_prefix="vams.pipeline.P1")
+        orchestration_bus_event_prefix="vams.pipeline.P1",
+        s3_asset_bucket_id="reg-1", s3_asset_bucket_base_prefix="vams/")
     return set(unchained) | set(chained), chained
 
 
