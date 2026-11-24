@@ -103,6 +103,8 @@ export const WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX = "WorkflowExecutionLocksByHo
  * whose code reads it holds dynamodb:Query on it (infra/test/storage/assetLocationIndexReaderGrants.test.ts).
  */
 export const ASSET_LOCATION_INDEX = "AssetLocationGSI";
+// Asset rows by bucket registration (bucketId, assetId).
+export const ASSET_BUCKET_ID_INDEX = "BucketIdGSI";
 
 /**
  * Index of LargeObjectCopyJobsStorageTable on workflowExecutionId: the copy jobs of one workflow
@@ -1268,20 +1270,6 @@ export function storageResourcesBuilder(
         },
     });
 
-    // Create a custom resource to populate the S3AssetBucketsStorageTable with bucket information
-    // Pass the newly created bucket as a dependency if we created one
-    const newlyCreatedBucket = assetBucket
-        ? assetBucket instanceof s3.Bucket
-            ? assetBucket
-            : undefined
-        : undefined;
-    const populateS3AssetBucketsTable = createPopulateS3AssetBucketsTableCustomResource(
-        scope,
-        "PopulateS3AssetBucketsTable",
-        s3AssetBucketsStorageTable,
-        newlyCreatedBucket
-    );
-
     const commentStorageTable = new dynamodb.Table(scope, "CommentStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -1320,7 +1308,7 @@ export function storageResourcesBuilder(
     });
 
     assetStorageTable.addGlobalSecondaryIndex({
-        indexName: "BucketIdGSI",
+        indexName: ASSET_BUCKET_ID_INDEX,
         partitionKey: {
             name: "bucketId",
             type: dynamodb.AttributeType.STRING,
@@ -1330,6 +1318,22 @@ export function storageResourcesBuilder(
             type: dynamodb.AttributeType.STRING,
         },
     });
+
+    // Create a custom resource to populate the S3AssetBucketsStorageTable with bucket information.
+    // Pass the newly created bucket as a dependency if we created one, and the asset table, whose
+    // bucketId index tells which of two rows for one registration assets reference.
+    const newlyCreatedBucket = assetBucket
+        ? assetBucket instanceof s3.Bucket
+            ? assetBucket
+            : undefined
+        : undefined;
+    createPopulateS3AssetBucketsTableCustomResource(
+        scope,
+        "PopulateS3AssetBucketsTable",
+        s3AssetBucketsStorageTable,
+        newlyCreatedBucket,
+        { table: assetStorageTable, bucketIdIndexName: ASSET_BUCKET_ID_INDEX }
+    );
 
     assetStorageTable.addGlobalSecondaryIndex({
         indexName: "assetIdGSI",

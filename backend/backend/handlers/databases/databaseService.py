@@ -14,6 +14,7 @@ from common.constants import STANDARD_JSON_RESPONSE
 from common.apiRoutes import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
 from common.validators import validate
 from common.dynamodb import validate_pagination_info, to_update_expr
+from common.bucketRegistrations import is_retired
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
@@ -668,6 +669,11 @@ def get_buckets(query_params, claims_and_roles=None):
         items = []
         for item in response.get('Items', []):
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+            # A retired registration left the configuration: no bucket sync and no grants serve it, so
+            # it is not offered for a database. Its row stays for the assets that name its bucketId.
+            # A page can therefore hold fewer rows than its size; NextToken still continues the scan.
+            if is_retired(deserialized_document):
+                continue
 
             # Convert to model
             bucket_model = BucketModel(
