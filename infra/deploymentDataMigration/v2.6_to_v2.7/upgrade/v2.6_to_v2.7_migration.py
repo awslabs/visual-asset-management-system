@@ -97,6 +97,7 @@ Requirements:
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -2356,8 +2357,11 @@ COMMENT_SUBSCRIPTION_PAGE_SIZE = 500
 # A database id never contains '#' (the ID rule), so the partition never meets a comment's, and VAMS reads
 # the comment table only by an asset's partition, so no API, web, CLI or MCP read returns one. A record
 # outlives what users do with the copy afterwards (edit, delete, unsubscribe, delete the subscription or
-# the asset), so a later run never copies that row or subscriber again.
+# the asset), so a later run never copies that row or subscriber again. Its sort key is a SHA-256 hash of
+# the v2.6 row key and, for a subscriber, the subscriber's user id, which is all a later run compares, so
+# no record holds a user id in clear.
 COPY_RECORD_PARTITION_PREFIX = '#commentSubscriptionKeys:'
+COPY_RECORD_SORT_PREFIX = 'sha256:'
 TRANSACT_MAX_ITEMS = 100
 COMMENT_SUBSCRIPTION_ATTEMPTS = 5
 # Classes of the JSON Lines report: one per v2.6 comment row, one per subscriber of a v2.6 subscription row.
@@ -2398,18 +2402,33 @@ def parse_v1_subscription_key(sort_key: str) -> Optional[Tuple[str, str]]:
     return entity_name, entity_id
 
 
-def copy_record_key(asset_id: str, source: str) -> Dict[str, str]:
-    """Key of the copy record of one v2.6 comment row or subscriber, in the V2 comment table."""
-    return {COMMENT_V2_PARTITION_KEY: f"{COPY_RECORD_PARTITION_PREFIX}{asset_id}", COMMENT_V2_SORT_KEY: source}
+def copy_record_source_hash(source_table: str, v1_partition: str, v1_sort_key: str,
+                            subscriber: Optional[str] = None) -> str:
+    """SHA-256 (hex) of what a later run compares: the V1 row's table and key and, for a subscriber, its id.
+
+    The input is the JSON array [table, partition, sort key(, subscriber)] with no spaces, so no two
+    sources share an input."""
+    parts = [source_table, v1_partition, v1_sort_key] + ([subscriber] if subscriber is not None else [])
+    canonical = json.dumps(parts, separators=(',', ':'), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
 
-def comment_copy_source(deleted: bool, v1_sort_key: str) -> str:
-    """The copy record's sort key for a V1 comment row (its asset id is in the partition)."""
+def copy_record_key(asset_id: str, sort_key: str) -> Dict[str, str]:
+    """Key of a copy record of one v2.6 comment row or subscriber, in the V2 comment table."""
+    return {COMMENT_V2_PARTITION_KEY: f"{COPY_RECORD_PARTITION_PREFIX}{asset_id}", COMMENT_V2_SORT_KEY: sort_key}
+
+
+def copy_record_sort_key(source_hash: str) -> str:
+    return f"{COPY_RECORD_SORT_PREFIX}{source_hash}"
+
+
+# Pre-release builds of this step keyed copy records by the V1 sort key and, for a subscriber, its user id in
+# clear. A run reads such a record when no hashed one exists, honours it, and rewrites it in the hashed form.
+def legacy_comment_copy_source(deleted: bool, v1_sort_key: str) -> str:
     return f"comment|{'deleted' if deleted else 'live'}|{v1_sort_key}"
 
 
-def subscription_copy_source(event_name: str, subscriber: str) -> str:
-    """The copy record's sort key for one subscriber of a V1 subscription row (entity 'Asset', id in the partition)."""
+def legacy_subscription_copy_source(event_name: str, subscriber: str) -> str:
     return f"subscription|{event_name}|{subscriber}"
 
 
@@ -2435,6 +2454,9 @@ class CommentSubscriptionCopy:
         self._versions: Dict[Tuple[str, str], Optional[Tuple[set, str]]] = {}
         self._endpoints: Dict[Tuple[str, str], set] = {}
         self._emails: Dict[str, str] = {}
+        # Pre-release copy records found, and rewritten in the hashed form (a dry run rewrites none)
+        self.legacy_records_found = 0
+        self.legacy_records_rewritten = 0
 
     # ----- the assets an id belongs to -----
 
@@ -2543,15 +2565,44 @@ class CommentSubscriptionCopy:
 
     # ----- copy records -----
 
-    def _copy_record(self, asset_id: str, source: str) -> Optional[Dict]:
+    def _get_copy_record(self, asset_id: str, sort_key: str) -> Optional[Dict]:
         item = self.ddb.get_item(TableName=self.cfg['comment_storage_table_name'],
-                                 Key=_wire(copy_record_key(asset_id, source)), ConsistentRead=True).get('Item')
+                                 Key=_wire(copy_record_key(asset_id, sort_key)), ConsistentRead=True).get('Item')
         return _plain(item) if item else None
 
-    def _copy_record_put(self, asset_id: str, source: str, source_table: str, database_id: str, result: str) -> Dict:
-        item = dict(copy_record_key(asset_id, source), step=COMMENT_SUBSCRIPTION_STEP, sourceTable=source_table,
-                    assetId=asset_id, placedInDatabaseId=database_id, result=result, runId=self.current_run_id,
-                    copiedAt=datetime.now(timezone.utc).isoformat())
+    def _copy_record(self, asset_id: str, source_hash: str, legacy_source: str) -> Optional[Dict]:
+        """The copy record of a V1 comment row or subscriber, or None when no run copied it.
+
+        A record in the pre-release form (legacy_source as its sort key) counts as well; a real run rewrites
+        it in the hashed form and deletes it, in one transaction."""
+        copied = self._get_copy_record(asset_id, copy_record_sort_key(source_hash))
+        if copied:
+            return copied
+        legacy = self._get_copy_record(asset_id, legacy_source)
+        if not legacy:
+            return None
+        self.legacy_records_found += 1
+        if not self.dry_run:
+            table = self.cfg['comment_storage_table_name']
+            attributes = {k: v for k, v in legacy.items() if k not in (COMMENT_V2_PARTITION_KEY, COMMENT_V2_SORT_KEY)}
+            rewritten = dict(copy_record_key(asset_id, copy_record_sort_key(source_hash)), **attributes)
+            # A failed condition means another run rewrote it meanwhile; the record is honoured either way
+            if self._transact([
+                {'Put': {'TableName': table, 'Item': _wire(rewritten),
+                         'ConditionExpression': 'attribute_not_exists(#k)',
+                         'ExpressionAttributeNames': {'#k': COMMENT_V2_SORT_KEY}}},
+                {'Delete': {'TableName': table, 'Key': _wire(copy_record_key(asset_id, legacy_source)),
+                            'ConditionExpression': 'attribute_exists(#k)',
+                            'ExpressionAttributeNames': {'#k': COMMENT_V2_SORT_KEY}}},
+            ]):
+                self.legacy_records_rewritten += 1
+        return legacy
+
+    def _copy_record_put(self, asset_id: str, source_hash: str, source_table: str, database_id: str,
+                         result: str) -> Dict:
+        item = dict(copy_record_key(asset_id, copy_record_sort_key(source_hash)), step=COMMENT_SUBSCRIPTION_STEP,
+                    sourceTable=source_table, assetId=asset_id, placedInDatabaseId=database_id, result=result,
+                    runId=self.current_run_id, copiedAt=datetime.now(timezone.utc).isoformat())
         return {'Put': {'TableName': self.cfg['comment_storage_table_name'], 'Item': _wire(item),
                         'ConditionExpression': 'attribute_not_exists(#k)',
                         'ExpressionAttributeNames': {'#k': COMMENT_V2_SORT_KEY}}}
@@ -2602,7 +2653,8 @@ class CommentSubscriptionCopy:
             return [dict(record, result='unreadable')]
         asset_id, deleted, version_id, comment_id = parsed
         record.update(assetId=asset_id, deleted=deleted, commentId=comment_id)
-        source = comment_copy_source(deleted, sort_key)
+        source_hash = copy_record_source_hash('comment', partition, sort_key)
+        legacy_source = legacy_comment_copy_source(deleted, sort_key)
         comment = _plain(item)
         created = str(comment.get('dateCreated') or '')
 
@@ -2622,7 +2674,7 @@ class CommentSubscriptionCopy:
 
         for _ in range(COMMENT_SUBSCRIPTION_ATTEMPTS):
             # Copied before: left as users left it (edited, deleted), even when its asset is gone since
-            copied = self._copy_record(asset_id, source)
+            copied = self._copy_record(asset_id, source_hash, legacy_source)
             if copied:
                 return [self._reported(record, copied)]
             database_id, result, candidates = self.resolve(asset_id, evidence, 'resolvedByVersions')
@@ -2639,7 +2691,7 @@ class CommentSubscriptionCopy:
                     return [dict(record, result='duplicateCommentId')]
                 # The comment is there (live or deleted): only the copy record is missing
                 result = 'alreadyPresent'
-                actions = [self._copy_record_put(asset_id, source, 'comment', database_id, result)]
+                actions = [self._copy_record_put(asset_id, source_hash, 'comment', database_id, result)]
             else:
                 v2_partition = f"{database_id}:{asset_id}{COMMENT_DELETED_SUFFIX if deleted else ''}"
                 target = {k: v for k, v in comment.items() if k not in (COMMENT_V1_PARTITION_KEY, COMMENT_V1_SORT_KEY)}
@@ -2648,13 +2700,13 @@ class CommentSubscriptionCopy:
                 actions = [{'Put': {'TableName': self.cfg['comment_storage_table_name'], 'Item': _wire(target),
                                     'ConditionExpression': 'attribute_not_exists(#k)',
                                     'ExpressionAttributeNames': {'#k': COMMENT_V2_SORT_KEY}}},
-                           self._copy_record_put(asset_id, source, 'comment', database_id, result)]
+                           self._copy_record_put(asset_id, source_hash, 'comment', database_id, result)]
             if self.dry_run or self._transact(actions):
                 return [dict(record, result=result)]
         return [dict(record, result='unreadable', detail='the V2 rows kept changing; run the step again')]
 
-    def _write_subscribers(self, event_name: str, entity_name: str, asset_id: str, database_id: str,
-                           lines: Dict[str, Dict], subscribers: List[str]) -> bool:
+    def _write_subscribers(self, event_name: str, v1_sort_key: str, entity_name: str, asset_id: str,
+                           database_id: str, lines: Dict[str, Dict], subscribers: List[str]) -> bool:
         """Adds the subscribers to the V2 row of the asset in this database, with a copy record each, in one
         transaction conditional on the subscriber list it read. A subscriber the row already lists gets its
         copy record only ('alreadyPresent'). False when the row or a copy record changed meanwhile."""
@@ -2688,8 +2740,9 @@ class CommentSubscriptionCopy:
                               ExpressionAttributeValues=_wire({':new': new}))
             actions.append({'Update': update})
         for subscriber in subscribers:
-            actions.append(self._copy_record_put(asset_id, subscription_copy_source(event_name, subscriber),
-                                                 'subscription', database_id, lines[subscriber]['result']))
+            source_hash = copy_record_source_hash('subscription', event_name, v1_sort_key, subscriber)
+            actions.append(self._copy_record_put(asset_id, source_hash, 'subscription', database_id,
+                                                 lines[subscriber]['result']))
         return self._transact(actions)
 
     def copy_subscription(self, item: Dict) -> List[Dict]:
@@ -2713,7 +2766,9 @@ class CommentSubscriptionCopy:
             for subscriber in subscribers:
                 line = dict(record, subscriber=subscriber)
                 # Copied before: an unsubscribe or a deleted subscription since then stays as the user left it
-                copied = self._copy_record(asset_id, subscription_copy_source(event_name, subscriber))
+                copied = self._copy_record(asset_id,
+                                           copy_record_source_hash('subscription', event_name, sort_key, subscriber),
+                                           legacy_subscription_copy_source(event_name, subscriber))
                 if copied:
                     lines[subscriber] = self._reported(line, copied)
                     continue
@@ -2726,7 +2781,8 @@ class CommentSubscriptionCopy:
             for database_id, placed in pending.items():
                 for start in range(0, len(placed), TRANSACT_MAX_ITEMS - 1):
                     chunk = placed[start:start + TRANSACT_MAX_ITEMS - 1]
-                    if not self._write_subscribers(event_name, entity_name, asset_id, database_id, lines, chunk):
+                    if not self._write_subscribers(event_name, sort_key, entity_name, asset_id, database_id, lines,
+                                                   chunk):
                         written = False
                         break
                 if not written:
@@ -2918,6 +2974,10 @@ def run_comment_subscription_keys_step(config: dict, args, base_param_prefix, pr
     logger.info(f"COMMENT AND SUBSCRIPTION KEYS SUMMARY{' (DRY RUN: counts of what a real run would write)' if dry_run else ''}")
     for name, counts in totals.items():
         logger.info(f"  {name}: " + ", ".join(f"{k} {v}" for k, v in counts.items()))
+    if copier.legacy_records_found:
+        logger.info(f"  {copier.legacy_records_found} copy record(s) of a pre-release build found and honoured, "
+                    f"{copier.legacy_records_rewritten} rewritten in the hashed form"
+                    f"{' (a real run rewrites them)' if dry_run else ''}.")
     left = sum(counts['ambiguous'] + counts['duplicateCommentId'] for counts in totals.values())
     if left:
         logger.info(f"  {left} comment row(s) or subscriber(s) were left in the V1 tables (ambiguous or "
