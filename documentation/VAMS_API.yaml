@@ -189,7 +189,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/createAssetResponse"
                 "400":
-                    description: Invalid parameters or validation error, including a bucketExistingKey inside a folder VAMS reserves for system use ("The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location.") and an assetId equal to the name of such a folder ("The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID.").
+                    description: Invalid parameters or validation error, including a bucketExistingKey inside a folder VAMS reserves for system use (a message that contains "The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location.") and an assetId equal to the name of such a folder (a message that contains "The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID.").
                     content:
                         application/json:
                             schema:
@@ -13473,7 +13473,7 @@ components:
                 bucketExistingKey:
                     type: string
                     maxLength: 1024
-                    description: "Existing key in the database default Amazon S3 bucket for the new asset. A key ending in `/` is a folder; any other key is one object, the asset's file, with its companion folder `{key}/` and its previews. A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces` or `vams.preparedDownloads`) as any path segment is refused with 400."
+                    description: "Existing key in the database default Amazon S3 bucket for the new asset. A key ending in `/` is a folder; any other key is one object, the asset's file, with its companion folder `{key}/` and its previews. A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces` or `vams.preparedDownloads`) as any path segment under the bucket's base prefix is refused with 400."
             required:
                 - databaseId
                 - assetName
