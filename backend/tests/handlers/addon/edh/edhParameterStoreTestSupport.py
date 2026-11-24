@@ -18,7 +18,9 @@ record, back-off window), gives it a client holding no parameter and drives its 
 """
 
 import sys
+import time
 import types
+from unittest.mock import MagicMock
 
 from backend.tests.ssmParametersStub import FakeClock, ParameterStoreStub, install_clock
 
@@ -125,3 +127,23 @@ def serve_parameters(monkeypatch, client=None, **stub):
 def lookup_clock():
     """The FakeClock driving the lookups in this test (the conftest's, unless a test installed another)."""
     return shared_lookup()._monotonic.__self__
+
+
+def resolver_names(module):
+    """The ``common.resourceNames`` copy that ``module``'s ``resolve_deploy_time_value`` looks keys up in."""
+    resolver = vars(module)["resolve_deploy_time_value"]
+    return ModuleNamespace(resolver.__globals__["get_resource_name"].__globals__)
+
+
+def publish_resource_names(monkeypatch, module, names, *, missing=(), client=None):
+    """Make ``module``'s deploy-time lookups find ``names`` (key -> value) among the resource names the container
+    loaded, as a cold start leaves them after the chunk read, with ``missing`` keys recorded as not published; the
+    resolver's own reads go to ``client`` (a MagicMock recording every call by default). Returns that client."""
+    resolver = resolver_names(module)
+    client = client if client is not None else MagicMock()
+    now = time.time()
+    for name, value in (("_cache", dict(names)), ("_cache_fetched_at", now), ("_cache_complete", False),
+                        ("_missing_keys", {key: now for key in missing}), ("_failed_sweeps", 0),
+                        ("_sweep_retry_after", 0.0), ("_window_logged_for", None), ("_ssm_client", client)):
+        monkeypatch.setattr(resolver, name, value)
+    return client
