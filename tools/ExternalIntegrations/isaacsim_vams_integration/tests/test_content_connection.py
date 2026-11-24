@@ -86,6 +86,7 @@ class FakeRegistry:
     def __init__(self, servers=()):
         self.servers = list(servers)
         self.started = []
+        self.removed = []
 
     def get_discovery_servers(self):
         return list(self.servers)
@@ -93,6 +94,10 @@ class FakeRegistry:
     def start_discovery(self, url):
         self.started.append(url)
         return None
+
+    def remove_discovery_server(self, url):
+        self.removed.append(url)
+        self.servers = [s for s in self.servers if s.discovery_url != url]
 
 
 class _NoLoop:
@@ -163,8 +168,8 @@ def test_start_launches_the_adapter_with_the_cli_python_and_registers_with_the_c
     url = conn.start()
     assert url == "http://127.0.0.1:40123/discovery"
     args, kwargs = launches[0]
-    assert args[0] == cli_env[1] and args[1] == cc.SERVER_SCRIPT and args[2:] == ["--profile", "edh"]
-    assert kwargs["stdout"] == subprocess.PIPE
+    assert args[0] == cli_env[1] and args[1] == cc.SERVER_SCRIPT and args[2:] == ["--profile", "edh", "--watch-stdin"]
+    assert kwargs["stdout"] == subprocess.PIPE and kwargs["stdin"] == subprocess.PIPE
     assert api.added == [(url, "VAMS")]
     assert len(client.callbacks) == 1 and client.direct == []
 
@@ -242,15 +247,23 @@ def test_start_begins_discovery_so_vams_urls_resolve_before_the_entry_is_expande
     assert registry.started == [url]
 
 
-def test_start_removes_vams_entries_left_by_an_earlier_session(cli_env):
+def test_start_removes_vams_entries_left_by_an_earlier_session_from_the_registry(cli_env):
     stale = [types.SimpleNamespace(name="VAMS", discovery_url="http://127.0.0.1:1111/discovery", service_id=3),
              types.SimpleNamespace(name="VAMS", discovery_url="https://vams.example.com/discovery", service_id=4),
              types.SimpleNamespace(name="Other", discovery_url="http://127.0.0.1:2222/discovery", service_id=5),
              types.SimpleNamespace(name="VAMS", discovery_url="", service_id=6)]
-    api = FakeApi()
-    conn, _, _ = make(cli_env, api=api, registry=FakeRegistry(stale))
+    registry, api = FakeRegistry(stale), FakeApi()
+    conn, _, _ = make(cli_env, api=api, registry=registry)
     conn.start()
-    assert api.removed == [3]
+    assert registry.removed == ["http://127.0.0.1:1111/discovery"] and api.removed == []
+
+
+def test_stop_also_removes_the_entry_from_the_registry(cli_env):
+    registry, api = FakeRegistry(), FakeApi()
+    conn, _, _ = make(cli_env, api=api, registry=registry)
+    url = conn.start()
+    conn.stop()
+    assert api.removed == [7] and registry.removed == [url]
 
 
 ORIGIN = "http://127.0.0.1:40123/discovery"

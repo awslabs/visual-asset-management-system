@@ -132,3 +132,26 @@ def test_databases_are_read_across_pages_sorted_and_cached_per_caller():
     assert api.calls == 2
     list(tree.databases(api, "who2"))
     assert api.calls == 4
+
+
+def test_the_adapter_exits_when_its_parent_closes_the_pipe():
+    import io
+    import threading
+
+    gone = threading.Event()
+    thread = server.exit_when_parent_goes(io.BytesIO(b"anything"), gone.set)
+    thread.join(5)
+    assert gone.is_set()
+
+
+def test_the_adapter_keeps_running_while_the_pipe_is_open():
+    import os
+    import threading
+
+    read_end, write_end = os.pipe()
+    gone = threading.Event()
+    with os.fdopen(read_end, "rb") as stream:
+        server.exit_when_parent_goes(stream, gone.set)
+        assert not gone.wait(0.3)
+        os.close(write_end)
+        assert gone.wait(5)

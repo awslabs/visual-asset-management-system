@@ -426,6 +426,22 @@ def _register_events(server, tree):
     return "nvidia.omniverse.notifications.consumer.v1beta.EventConsumerService"
 
 
+def exit_when_parent_goes(stream, on_gone):
+    """Calls on_gone once `stream` (the adapter's stdin, a pipe the extension holds) reaches end of file, which
+    happens when the extension's process ends for any reason, so the adapter never outlives Isaac Sim. Runs in a
+    daemon thread. Works the same on Linux, macOS and Windows."""
+    def watch():
+        try:
+            while stream.read(4096):
+                pass
+        except (OSError, ValueError):
+            pass
+        on_gone()
+    thread = threading.Thread(target=watch, name="vams-parent-watch", daemon=True)
+    thread.start()
+    return thread
+
+
 def discovery_document(grpc_port, services, event_port=None, event_services=()):
     document = {"schema-version": 2, "services": [{
         "name": "vams-storage", "capability_source": "grpc",
@@ -443,6 +459,8 @@ def main(argv=None):
     parser.add_argument("--api-url", default=None, help="VAMS API base URL; default: the profile's")
     parser.add_argument("--http-port", type=int, default=0)
     parser.add_argument("--grpc-port", type=int, default=0)
+    parser.add_argument("--watch-stdin", action="store_true",
+                        help="exit when stdin closes (the extension passes a pipe it holds)")
     parser.add_argument("--log", default=None, help="append one JSON line per call (no tokens); default: the "
                         "VAMS_STORAGE_ADAPTER_LOG environment variable")
     args = parser.parse_args(argv)
@@ -501,6 +519,8 @@ def main(argv=None):
             pass
 
     http = ThreadingHTTPServer(("127.0.0.1", args.http_port), Discovery)
+    if args.watch_stdin:
+        exit_when_parent_goes(sys.stdin.buffer, lambda: threading.Thread(target=http.shutdown, daemon=True).start())
     sys.stdout.write(json.dumps({"discovery": f"http://127.0.0.1:{http.server_address[1]}/discovery",
                                  "grpc": f"http://127.0.0.1:{grpc_port}", "root": ROOT}) + "\n")
     sys.stdout.flush()

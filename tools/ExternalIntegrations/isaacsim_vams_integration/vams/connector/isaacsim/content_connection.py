@@ -241,9 +241,11 @@ class VamsContentConnection:
             if not python:
                 raise ContentConnectionError("the VAMS CLI's Python environment was not found")
             try:
+                # stdin is a pipe held only by this process: when Isaac Sim ends, however it ends, the pipe closes
+                # and the adapter exits (--watch-stdin), so no adapter outlives it.
                 self._process = self._popen(
-                    [python, SERVER_SCRIPT, "--profile", self.profile], stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE, text=True, close_fds=True)
+                    [python, SERVER_SCRIPT, "--profile", self.profile, "--watch-stdin"], stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, close_fds=True)
             except OSError as error:
                 raise ContentConnectionError(f"the VAMS storage adapter could not start ({type(error).__name__})")
             threading.Thread(target=self._drain_stderr, args=(self._process,), daemon=True).start()
@@ -324,19 +326,27 @@ class VamsContentConnection:
         self._schedule(kick())
 
     def _remove_stale_entries(self, api):
-        """Removes VAMS entries a previous session left behind (each pointed at a loopback port that is gone)."""
+        """Removes VAMS entries a previous session left behind in the user's omniverse.toml (each points at a
+        loopback port that is gone, and shows that session's addresses). They are removed from the connection
+        registry by URL: the Content window may not have built its own entries yet when this runs, and it follows
+        the registry's removal events."""
         try:
             registry = self._connection_registry()
             servers = list(registry.get_discovery_servers()) if registry else []
         except Exception:  # noqa: BLE001 - the registry is optional; stale entries only clutter the tree
             return
         for server in servers:
-            origin = origin_of(getattr(server, "discovery_url", "")) or (None, None, None)
-            if getattr(server, "name", None) == SERVICE_NAME and origin[1] == "127.0.0.1":
-                try:
+            url = getattr(server, "discovery_url", "") or ""
+            origin = origin_of(url) or (None, None, None)
+            if getattr(server, "name", None) != SERVICE_NAME or origin[1] != "127.0.0.1" or url == self._discovery_url:
+                continue
+            try:
+                if hasattr(registry, "remove_discovery_server"):
+                    registry.remove_discovery_server(url)
+                else:
                     api.remove_discovery_server(server.service_id)
-                except Exception:  # noqa: BLE001
-                    pass
+            except Exception:  # noqa: BLE001
+                pass
 
     def stop(self):
         """Unregister and stop the adapter. Safe to call more than once."""
@@ -346,6 +356,12 @@ class VamsContentConnection:
                     self._browser_api.remove_discovery_server(self._service_id)
                 except Exception:  # noqa: BLE001
                     pass
+                registry = self._connection_registry()
+                if registry is not None and hasattr(registry, "remove_discovery_server") and self._discovery_url:
+                    try:
+                        registry.remove_discovery_server(self._discovery_url)  # no-op when already removed
+                    except Exception:  # noqa: BLE001
+                        pass
             self._service_id = None
             for registration in (self._storage_registration, self._auth_registration):
                 if registration is not None and callable(getattr(registration, "stop", None)):
