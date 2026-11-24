@@ -14,6 +14,15 @@ The v2.7 release introduces:
      '/', no object at the key and objects under ``{key}/``, reports them, and on a real run appends the
      '/'. It runs first, before the backfills that walk every asset's location; it saves its scan
      position after every page (``--resume``) and writes one report line per finding.
+  0b. An asset is created on a folder only: from v2.7 ``POST /assets`` refuses a ``bucketExistingKey``
+     that names a file. The ``assetLocationFileToFolder`` step (module ``asset_location_file_to_folder.py``)
+     converts every asset whose location still names a file into a folder asset: in place on the file's
+     parent folder when that folder holds only the asset's own keys (no Amazon S3 write; the records,
+     vector items and search entries of the companion paths that change follow them), with the '/'
+     appended when nothing is stored at the key, and by the operator's per-asset choice from a resolutions
+     file (move the file into its companion folder, or let the other files in the folder join the asset).
+     Every other layout is refused and reported, and the row is left unchanged. It runs right after
+     ``assetLocationFolderKeys``.
   1. A consolidated SYSTEM GenAI metadata pipeline (``system-genai-metadata``) that replaces the
      GenAI 3D Metadata Labeling and CAD/Mesh Metadata Extraction built-ins. The v2.7 deploy removes
      the two retired nested stacks, and the schema importer archives their pipeline and workflow
@@ -106,6 +115,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 # Shared migration tooling (infra/deploymentDataMigration/tools)
 sys.path.insert(0, os.path.join(_HERE, "..", "..", "tools"))
 from ssm_resource_lookup import ResourceParamKeys, SsmResourceLookup  # noqa: E402
+
+# The assetLocationFileToFolder step lives in its own module beside this script.
+sys.path.insert(0, _HERE)
+import asset_location_file_to_folder as file_to_folder  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -906,6 +919,88 @@ def run_asset_location_folder_keys_step(config: dict, args, base_param_prefix, p
     logger.info("=" * 80)
 
     return 0 if counts['errors'] == 0 and counts['unreadable'] == 0 else 1
+
+
+#######################
+# STEP: assetLocationFileToFolder
+#######################
+
+FILE_TO_FOLDER_STEP = file_to_folder.STEP
+FILE_TO_FOLDER_SKIPPED_AFTER_FOLDER_KEYS = 'skipped: assetLocationFolderKeys failed in this run'
+BACKFILL_SKIPPED_AFTER_FILE_TO_FOLDER = ('skipped: assetLocationFileToFolder did not finish; re-run it until it '
+                                         'exits 0, then run this step')
+
+
+def run_asset_location_file_to_folder_step(config: dict, args, base_param_prefix, profile, region,
+                                           dry_run) -> int:
+    """Convert asset locations that name a file into folder locations. Returns 0 when nothing failed;
+    layout refusals, which only an operator decision resolves, are reported and do not fail the step."""
+    try:
+        resolve = make_resolver(config, base_param_prefix, profile, region)
+        cfg = {
+            'asset_storage_table_name': resolve(
+                'asset_storage_table_name', ResourceParamKeys.ASSET_STORAGE_TABLE),
+            's3_asset_buckets_storage_table_name': resolve(
+                's3_asset_buckets_storage_table_name', ResourceParamKeys.S3_ASSET_BUCKETS_STORAGE_TABLE),
+            'asset_history_storage_table_name': resolve(
+                'asset_history_storage_table_name', ResourceParamKeys.ASSET_HISTORY_STORAGE_TABLE),
+            'vector_embeddings_storage_table_name': resolve(
+                'vector_embeddings_storage_table_name', ResourceParamKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE),
+            # A move carries the moved file's own viewer and preview data, {databaseId}/{file key}/preview/.
+            'asset_auxiliary_bucket_name': resolve(
+                'asset_auxiliary_bucket_name', ResourceParamKeys.ASSET_AUXILIARY_BUCKET),
+            'output_dir': config.get('asset_location_output_dir') or os.getcwd(),
+        }
+        for cfg_key, param_name in COPY_TABLE_KEYS:
+            cfg[cfg_key] = resolve(cfg_key, getattr(ResourceParamKeys, param_name))
+    except Exception as e:
+        logger.error(f"Failed resolving resource names for the {FILE_TO_FOLDER_STEP} step: {e}")
+        return 1
+    try:
+        cfg[LEGACY_COPY_TABLE_KEY[0]] = resolve(LEGACY_COPY_TABLE_KEY[0],
+                                                getattr(ResourceParamKeys, LEGACY_COPY_TABLE_KEY[1]))
+    except Exception:
+        cfg[LEGACY_COPY_TABLE_KEY[0]] = None
+    resolutions_path = config.get('asset_location_file_to_folder_resolutions')
+    try:
+        resolutions = file_to_folder.load_resolutions(None if _is_unset(resolutions_path) else resolutions_path)
+    except (OSError, ValueError) as e:
+        logger.error(f"The {FILE_TO_FOLDER_STEP} resolutions file cannot be used: {e}")
+        return 1
+
+    limit = args.limit if args.limit is not None else config.get('limit')
+    pace = config.get('asset_location_pace_seconds')
+    pace = file_to_folder.PACE_SECONDS if pace is None else float(pace)
+    session = _session(profile, region)
+    dynamodb_client = session.client('dynamodb', config=_DYNAMODB_CLIENT_CONFIG)
+    s3_client = session.client('s3', config=_S3_CLIENT_CONFIG)
+
+    logger.info("=" * 80)
+    logger.info("VAMS v2.6 -> v2.7 ASSET LOCATION FILE TO FOLDER")
+    logger.info(f"Asset table:  {cfg['asset_storage_table_name']}")
+    logger.info(f"Output dir:   {cfg['output_dir']}")
+    logger.info(f"Resolutions:  {len(resolutions)} asset(s)"
+                f"{f' from {resolutions_path}' if resolutions else ''}")
+    logger.info(f"Dry Run: {dry_run}   Limit: {limit}   Resume: {args.resume}   Pace: {pace}s")
+    logger.info("=" * 80)
+
+    start = datetime.now(timezone.utc)
+    try:
+        counts = file_to_folder.run_file_to_folder(dynamodb_client, s3_client, cfg, dry_run, resume=args.resume,
+                                                   limit=limit, pace_seconds=pace, resolutions=resolutions)
+    except Exception as e:
+        logger.error(f"{FILE_TO_FOLDER_STEP} step failed: {e}. Run it again (with --resume to continue from the "
+                     "last saved position); a converted asset is never converted twice.")
+        return 1
+    duration = (datetime.now(timezone.utc) - start).total_seconds()
+
+    logger.info("=" * 80)
+    logger.info("ASSET LOCATION FILE TO FOLDER SUMMARY")
+    logger.info(f"  Duration: {duration:.1f}s   Dry Run: {dry_run}")
+    for line in file_to_folder.summary_lines(counts, dry_run):
+        logger.info(f"  {line}")
+    logger.info("=" * 80)
+    return file_to_folder.exit_status(counts, dry_run)
 
 
 #######################
@@ -2323,18 +2418,22 @@ def run_asset_location_index_step(config: dict, args, base_param_prefix, profile
 # CLI
 #######################
 
-STEP_CHOICES = ('assetLocationFolderKeys', 'orphanedTriggers', 'vectorBackfill', 'metadataBackfill',
+STEP_CHOICES = ('assetLocationFolderKeys', 'assetLocationFileToFolder', 'orphanedTriggers', 'vectorBackfill', 'metadataBackfill',
                 'systemPipelineRetirement', 'assetLocationIndex', 'all')
 
 
 def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vectors: bool,
                    backfills_metadata: bool = False, fixes_locations: bool = False,
-                   indexes_locations: bool = False) -> str:
+                   indexes_locations: bool = False, converts_locations: bool = False) -> str:
     """What a real run changes, deletes, bills or rewrites, phrased to follow "This run will"."""
     parts = []
     if fixes_locations:
         parts.append("append '/' to asset location keys that name a folder and move the records of a "
                      "single-file asset's copy named like its file (assetLocationFolderKeys)")
+    if converts_locations:
+        parts.append("convert asset locations that name a file into folders, moving their records, vector "
+                     "items and search entries, and, for the assets the resolutions file names, copying a file "
+                     "into its companion folder (assetLocationFileToFolder)")
     if deletes_triggers:
         parts.append('delete orphaned workflow-trigger rows (orphanedTriggers)')
     if clears_vectors:
@@ -2390,6 +2489,9 @@ Examples:
   # Append the trailing '/' to asset location keys that name a folder (run before the backfills)
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps assetLocationFolderKeys
 
+  # Convert assets whose location names a file into folder assets (after assetLocationFolderKeys)
+  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps assetLocationFileToFolder
+
   # Delete orphaned trigger rows only
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps orphanedTriggers
 
@@ -2434,6 +2536,12 @@ Notes:
     continues from it). Part (b) moves the records of a single-file asset's copy '{key}/{name}' to
     '/{name}/{name}' and marks the asset row done, so no later run moves them again. Run it before users
     edit metadata on single-file assets. It runs first under --steps all.
+  - assetLocationFileToFolder runs second and converts each asset whose location names a file: in place on
+    the parent folder when it holds only the asset's keys (no S3 write), '/' appended when nothing is at the
+    key, and a move or an include-siblings only for the assets named in
+    asset_location_file_to_folder_resolutions. Every other layout is reported in
+    assetLocationFileToFolder-<mode>-report-<time>.jsonl and left unchanged. A real run that leaves a row
+    pending, or fails, makes vectorBackfill and metadataBackfill wait under --steps all.
   - assetLocationIndex is required after the v2.7 deploy and runs after assetLocationFolderKeys (last under
     --steps all, and skipped in a real run when assetLocationFolderKeys failed): it writes locationBucket and
     locationKey on every asset row (one UpdateItem per row that lacks them, paced), verifies them with
@@ -2456,8 +2564,9 @@ Notes:
     parser.add_argument('--limit', type=int,
                         help='Cap on rows examined / files enqueued (testing)')
     parser.add_argument('--resume', action='store_true',
-                        help='assetLocationFolderKeys: continue the asset scan from the checkpoint a '
-                             'stopped run of the same mode (dry run or real) saved. Default: start over.')
+                        help='assetLocationFolderKeys and assetLocationFileToFolder: continue from the '
+                             'checkpoint a stopped run of the same mode (dry run or real) saved. Default: '
+                             'start over.')
     parser.add_argument('--clear-vectors', dest='clear_vectors', action='store_true',
                         help='vectorBackfill: delete every stored vector before re-embedding '
                              '(reindexer operation "both" instead of "enqueue"). Default: false.')
@@ -2491,6 +2600,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     config = load_config_from_file(args.config)
 
     run_location_keys = args.steps in ('assetLocationFolderKeys', 'all')
+    run_file_to_folder = args.steps in ('assetLocationFileToFolder', 'all')
     run_orphaned_triggers = args.steps in ('orphanedTriggers', 'all')
     run_vector_backfill = args.steps in ('vectorBackfill', 'all')
     run_metadata_backfill = args.steps in ('metadataBackfill', 'all')
@@ -2534,6 +2644,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     step_plan = []
     if run_location_keys:
         step_plan.append('assetLocationFolderKeys')
+    if run_file_to_folder:
+        step_plan.append('assetLocationFileToFolder')
     if run_orphaned_triggers:
         step_plan.append('orphanedTriggers')
     if run_vector_backfill:
@@ -2573,10 +2685,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         base_param_prefix=base_param_prefix,
         dry_run=dry_run,
         args_dry_run=args.dry_run,
-        gated=run_location_keys or run_orphaned_triggers or backfills_vectors or backfills_metadata or run_asset_location_index,
+        gated=run_location_keys or run_file_to_folder or run_orphaned_triggers or backfills_vectors or backfills_metadata or run_asset_location_index,
         gated_summary=_gated_summary(run_orphaned_triggers, backfills_vectors, clears_vectors,
                                      backfills_metadata, fixes_locations=run_location_keys,
-                                     indexes_locations=run_asset_location_index),
+                                     indexes_locations=run_asset_location_index,
+                                     converts_locations=run_file_to_folder),
         confirm_account=args.confirm_account,
         step_plan=step_plan,
     ):
@@ -2599,6 +2712,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             exit_code = rc
             location_keys_failed = True
 
+    # Second: the conversion reads the copy records assetLocationFolderKeys moved, and the backfills below
+    # write vectors and metadata at the paths it settles.
+    file_to_folder_failed = False
+    if run_file_to_folder and location_keys_failed and not dry_run:
+        logger.info("")
+        logger.error(f"{FILE_TO_FOLDER_STEP} skipped: assetLocationFolderKeys failed in this run, and the "
+                     "conversion needs its results. Fix its errors, run it again, then run "
+                     f"--steps {FILE_TO_FOLDER_STEP}.")
+        outcomes.append((FILE_TO_FOLDER_STEP, FILE_TO_FOLDER_SKIPPED_AFTER_FOLDER_KEYS))
+        exit_code = exit_code or 1
+        file_to_folder_failed = True
+    elif run_file_to_folder:
+        logger.info("")
+        logger.info("##### STEP: Asset location file to folder #####")
+        rc = run_asset_location_file_to_folder_step(config, args, base_param_prefix, profile, region, dry_run)
+        _record(FILE_TO_FOLDER_STEP, rc)
+        if rc != 0:
+            exit_code = rc
+            file_to_folder_failed = True
+    # A billed backfill waits for a conversion that did not finish, so no file is analysed at a path that
+    # is about to change.
+    backfills_wait = file_to_folder_failed and not dry_run
+
     if run_orphaned_triggers:
         logger.info("")
         logger.info("##### STEP: Orphaned workflow-trigger cleanup #####")
@@ -2607,7 +2743,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         if rc != 0:
             exit_code = rc
 
-    if run_vector_backfill:
+    if run_vector_backfill and backfills_wait:
+        logger.error(f"vectorBackfill skipped: {FILE_TO_FOLDER_STEP} did not finish in this run.")
+        outcomes.append(('vectorBackfill', BACKFILL_SKIPPED_AFTER_FILE_TO_FOLDER))
+        exit_code = exit_code or 1
+    elif run_vector_backfill:
         logger.info("")
         logger.info("##### STEP: Vector index backfill #####")
         result = run_vector_backfill_step(config, args, base_param_prefix, profile, region, dry_run,
@@ -2616,7 +2756,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         if result.rc != 0:
             exit_code = result.rc
 
-    if run_metadata_backfill:
+    if run_metadata_backfill and backfills_wait and metadata_plan.action == 'run':
+        logger.error(f"metadataBackfill skipped: {FILE_TO_FOLDER_STEP} did not finish in this run.")
+        outcomes.append(('metadataBackfill', BACKFILL_SKIPPED_AFTER_FILE_TO_FOLDER))
+        exit_code = exit_code or 1
+    elif run_metadata_backfill:
         logger.info("")
         logger.info("##### STEP: Metadata backfill for existing files (vector search off) #####")
         result = run_metadata_backfill_step(config, args, base_param_prefix, profile, region, dry_run,

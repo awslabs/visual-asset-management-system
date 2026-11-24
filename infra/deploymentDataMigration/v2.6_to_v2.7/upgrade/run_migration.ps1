@@ -1,5 +1,6 @@
-# PowerShell script to run the VAMS v2.6 to v2.7 migration (asset location folder keys, orphaned trigger
-# cleanup, vector index backfill, system-pipeline retirement report, asset location index backfill)
+# PowerShell script to run the VAMS v2.6 to v2.7 migration (asset location folder keys, asset location file
+# to folder, orphaned trigger cleanup, vector index backfill, system-pipeline retirement report, asset
+# location index backfill)
 # Usage: .\run_migration.ps1 [-ConfigFile <path>] [-Execute] [-Resume] [-ClearVectors] [-Async]
 #                            [-GenerateMetadataForExistingFiles]
 #                            [-Steps <step>] [-Limit <n>] [-Profile <name>] [-Region <name>]
@@ -19,7 +20,7 @@ param(
     [switch]$ClearVectors,
     [switch]$Async,
     [switch]$GenerateMetadataForExistingFiles,
-    [ValidateSet("all", "assetLocationFolderKeys", "orphanedTriggers", "vectorBackfill", "metadataBackfill", "systemPipelineRetirement", "assetLocationIndex")]
+    [ValidateSet("all", "assetLocationFolderKeys", "assetLocationFileToFolder", "orphanedTriggers", "vectorBackfill", "metadataBackfill", "systemPipelineRetirement", "assetLocationIndex")]
     [string]$Steps,
     [int]$Limit,
     [string]$Profile,
@@ -82,7 +83,7 @@ if ($RealRun) {
 } else {
     Write-Host "Mode: DRY RUN (no changes will be made; pass -Execute for a real run)" -ForegroundColor Yellow
 }
-if ($Resume)       { $ExtraArgs += "--resume";        Write-Host "Mode: RESUME (assetLocationFolderKeys continues from its saved checkpoint)" -ForegroundColor Yellow }
+if ($Resume)       { $ExtraArgs += "--resume";        Write-Host "Mode: RESUME (assetLocationFolderKeys and assetLocationFileToFolder continue from their saved checkpoints)" -ForegroundColor Yellow }
 if ($ClearVectors) { $ExtraArgs += "--clear-vectors"; Write-Host "Mode: CLEAR VECTORS (every stored vector is deleted before re-embedding)" -ForegroundColor Yellow }
 if ($Async)        { $ExtraArgs += "--async";         Write-Host "Mode: ASYNCHRONOUS (reindexer results in CloudWatch Logs)" -ForegroundColor Yellow }
 if ($GenerateMetadataForExistingFiles) { $ExtraArgs += "--generate-metadata-for-existing-files"; Write-Host "Mode: GENERATE METADATA FOR EXISTING FILES (metadataBackfill, vector search off)" -ForegroundColor Yellow }
@@ -127,6 +128,9 @@ try {
             Write-Host "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
             Write-Host "  4. Read the asset location index report (asset_location_index_report.json) and check the summary"
             Write-Host "     says 'Completion marker written'; if not, run -Steps assetLocationIndex -Execute again"
+            Write-Host "  5. Read the assetLocationFileToFolder report: decide a move or include-siblings for each refused asset"
+            Write-Host "     in a resolutions file (asset_location_file_to_folder_resolutions), then run"
+            Write-Host "     -Steps assetLocationFileToFolder -Execute again"
         } else {
             Write-Host "This was a dry run: no rows were deleted and no executions were launched." -ForegroundColor Yellow
             Write-Host "Review the summaries above, then set `"dry_run`": false in the config and re-run with -Execute to apply them."

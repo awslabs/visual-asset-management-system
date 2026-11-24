@@ -1,6 +1,7 @@
 #!/bin/bash
-# Script to run the VAMS v2.6 to v2.7 migration (asset location folder keys, orphaned trigger cleanup,
-# vector index backfill, system-pipeline retirement report, asset location index backfill)
+# Script to run the VAMS v2.6 to v2.7 migration (asset location folder keys, asset location file to folder,
+# orphaned trigger cleanup, vector index backfill, system-pipeline retirement report, asset location index
+# backfill)
 # Usage: ./run_migration.sh [config_file] [--execute] [--resume] [--clear-vectors] [--async]
 #                           [--generate-metadata-for-existing-files]
 #                           [--steps STEP] [--limit N] [--profile NAME] [--region NAME]
@@ -135,6 +136,9 @@ if [ "$MIGRATION_STATUS" -eq 0 ]; then
         echo "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
         echo "  4. Read the asset location index report (asset_location_index_report.json) and check the summary"
         echo "     says 'Completion marker written'; if not, run --steps assetLocationIndex --execute again"
+        echo "  5. Read the assetLocationFileToFolder report: decide a move or include-siblings for each refused asset"
+        echo "     in a resolutions file (asset_location_file_to_folder_resolutions), then run"
+        echo "     --steps assetLocationFileToFolder --execute again"
     else
         echo "This was a dry run: no rows were deleted and no executions were launched."
         echo "Review the summaries above, then set \"dry_run\": false in the config and re-run with --execute to apply them."
