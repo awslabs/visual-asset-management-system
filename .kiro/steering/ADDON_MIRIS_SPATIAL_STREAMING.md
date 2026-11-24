@@ -122,7 +122,7 @@ Mirrors `web/src/visualizerPlugin/viewers/MirisStreamViewerPlugin/CLAUDE.md`.
 
 ### Registration and install
 
-The entry is in `config/addonViewerConfig.json` + `viewers/addonManifest.ts` (`.usd`, `.usda`, `.usdc`, `.usdz`; `featuresEnabledRestriction` `MIRIS_ADDON` and `ALLOWUNSAFEEVAL`) and ships enabled. `web/customInstalls/miris/mirisInstall.js` (in `postinstall`) bundles the SDK only when the deployment configuration (`VAMS_CONFIG_PATH`, else `infra/config/config.json`) enables `app.addons.useMirisStreaming` (`customInstalls/miris/mirisAddonEnabled.js`, tested by `mirisInstallGate.test.ts`) and the entry is enabled (`customInstalls/utility/checkViewerEnabled.js`).
+The entry is in `config/addonViewerConfig.json` + `viewers/addonManifest.ts` (`.usd`, `.usda`, `.usdc`, `.usdz`; `featuresEnabledRestriction` `MIRIS_ADDON` and `ALLOWUNSAFEEVAL`) and ships enabled. `web/customInstalls/miris/mirisInstall.js` (in `postinstall`) bundles the SDK only when the deployment configuration (`VAMS_CONFIG_PATH`, resolved as CDK resolves `-c configFile`, else `infra/config/config.json`) enables `app.addons.useMirisStreaming` (`customInstalls/miris/mirisAddonEnabled.js`, tested by `mirisInstallGate.test.ts`) and the entry is enabled (`customInstalls/utility/checkViewerEnabled.js`).
 
 The SDK (`@miris-inc/components`, `@miris-inc/core`, `@miris-inc/three`) and its `three` are not web dependencies: the install bundles them with webpack into an ES module and copies it with the SDK's `.wasm` files to `public/viewers/miris/`, where `dependencies.ts` imports it at runtime. The exact pins live in `customInstalls/miris/package.json`; upgrade the `@miris-inc/*` packages together with `three`, which stays inside the SDK's peer range (`>=0.182.0 <0.186.0`).
 

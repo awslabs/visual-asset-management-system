@@ -128,7 +128,8 @@ const main = async () => {
         await previousCleanUp();
 
         // The SDK is bundled only for a deployment that enables the add-on
-        // (app.addons.useMirisStreaming in VAMS_CONFIG_PATH, else infra/config/config.json).
+        // (app.addons.useMirisStreaming in the file VAMS_CONFIG_PATH names, as -c configFile does,
+        // else infra/config/config.json).
         if (!mirisAddonEnabled()) {
             console.log("Miris: The deployment configuration does not enable the add-on");
             console.log("Miris: Skipping installation");

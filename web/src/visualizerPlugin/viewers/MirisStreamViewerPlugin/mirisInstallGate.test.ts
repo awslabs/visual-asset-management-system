@@ -15,7 +15,7 @@ import path from "path";
 import addonViewerConfig from "../../config/addonViewerConfig.json";
 
 // The install helper is CommonJS; jest.requireActual loads it without an import shim.
-const { mirisAddonEnabled, DEFAULT_CONFIG_PATH } = jest.requireActual(
+const { mirisAddonEnabled, resolveConfigPath, DEFAULT_CONFIG_PATH } = jest.requireActual(
     "../../../../customInstalls/miris/mirisAddonEnabled"
 );
 
@@ -60,6 +60,18 @@ describe("the Miris SDK install follows the deployment configuration", () => {
             if (previous === undefined) delete process.env.VAMS_CONFIG_PATH;
             else process.env.VAMS_CONFIG_PATH = previous;
         }
+    });
+
+    it("resolves VAMS_CONFIG_PATH as CDK resolves -c configFile", () => {
+        const configDir = path.dirname(DEFAULT_CONFIG_PATH);
+        expect(resolveConfigPath(undefined)).toBe(DEFAULT_CONFIG_PATH);
+        expect(resolveConfigPath("  ")).toBe(DEFAULT_CONFIG_PATH);
+        expect(resolveConfigPath("config.staging.json")).toBe(
+            path.join(configDir, "config.staging.json")
+        );
+        expect(resolveConfigPath("envs/prod.json")).toBe(path.join(configDir, "envs/prod.json"));
+        const absolute = path.join(os.tmpdir(), "elsewhere", "config.json");
+        expect(resolveConfigPath(absolute)).toBe(absolute);
     });
 
     it("the shipped configuration leaves the add-on off, so a default install bundles nothing", () => {

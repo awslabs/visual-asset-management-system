@@ -4,7 +4,7 @@ This directory builds the Miris web SDK for the Miris Spatial Streaming viewer (
 
 ## Enabling the viewer
 
-The viewer entry ships enabled. `mirisAddonEnabled.js` reads the deployment configuration (the file named by `VAMS_CONFIG_PATH`, else `infra/config/config.json`), and the SDK is bundled only when it enables `app.addons.useMirisStreaming`.
+The viewer entry ships enabled. `mirisAddonEnabled.js` reads the deployment configuration (`infra/config/config.json`, or the file `VAMS_CONFIG_PATH` names, resolved as CDK resolves `-c configFile`), and the SDK is bundled only when it enables `app.addons.useMirisStreaming`.
 
 1. Run `npm install` (or `npm ci`) in `web/` with that configuration in place. To rebuild only this bundle, run `node customInstalls/miris/mirisInstall.js` from `web/`.
 

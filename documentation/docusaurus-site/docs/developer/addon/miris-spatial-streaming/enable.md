@@ -26,7 +26,7 @@ Enable the add-on by setting `app.addons.useMirisStreaming.enabled` to `true`, w
 
 Enabling the add-on sets the `MIRIS_ADDON` feature switch; enabling `upload` also sets `MIRIS_UPLOAD`. The same setting decides whether the web application bundles the Miris web SDK, so a deployment without the add-on neither installs nor bundles it:
 
-1. Run `npm install` (or `npm ci`) in `web/` with the add-on configuration above in `infra/config/config.json`, or with `VAMS_CONFIG_PATH` naming the configuration file you deploy with. Its `postinstall` bundles the [web SDK](#web-sdk) only when that configuration enables `app.addons.useMirisStreaming`. To rebuild only the SDK bundle, run `node customInstalls/miris/mirisInstall.js` from `web/`.
+1. Run `npm install` (or `npm ci`) in `web/` with the add-on configuration above in the configuration file you deploy with. The install reads `infra/config/config.json`; when you deploy with `-c configFile=<name>`, set `VAMS_CONFIG_PATH` to the same value, which resolves as `configFile` does (a file name or relative path under `infra/config/`, or an absolute path). Its `postinstall` bundles the [web SDK](#web-sdk) only when that configuration enables `app.addons.useMirisStreaming`. To rebuild only the SDK bundle, run `node customInstalls/miris/mirisInstall.js` from `web/`.
 2. Build the web application (`npm run build` in `web/`) and deploy it with the same configuration.
 
 The viewer entry ships enabled, and the viewer is offered only when both `MIRIS_ADDON` and `ALLOWUNSAFEEVAL` are present.
@@ -44,7 +44,7 @@ The functions never follow a redirect from Miris, so a `mirisApiBaseUrl` that re
 
 ## Web SDK
 
-The viewer renders with the Miris web SDK (`@miris-inc/components`, `@miris-inc/three`, `@miris-inc/core`, and `three`), which is not a dependency of the web application. The custom install script `web/customInstalls/miris/mirisInstall.js`, run by the web application's `postinstall`, acts only when the deployment configuration enables the add-on (see [Configuration](#configuration)) and the `miris-stream-viewer` entry is enabled, as it ships: it bundles the SDK into `web/public/viewers/miris/`, and the viewer imports `/viewers/miris/miris-sdk.js` from the same origin. The SDK packages and `three` are pinned in `web/customInstalls/miris/package.json` and are upgraded together.
+The viewer renders with the Miris web SDK (`@miris-inc/components`, `@miris-inc/three`, `@miris-inc/core`, and `three`), which is not a dependency of the web application. The custom install script `web/customInstalls/miris/mirisInstall.js`, run by the web application's `postinstall`, acts only when the deployment configuration enables the add-on (see [Configuration](#configuration)): it bundles the SDK into `web/public/viewers/miris/`, and the viewer imports `/viewers/miris/miris-sdk.js` from the same origin. The SDK packages and `three` are pinned in `web/customInstalls/miris/package.json` and are upgraded together.
 
 The SDK renders only with WebGPU. Before it requests a viewer key, the viewer asks the browser for a WebGPU adapter, as the SDK does; a browser that grants none shows "Miris streaming needs WebGPU" and no key is requested. The viewer loads the SDK only after it has a viewer key. It waits 60 seconds for the SDK to load and 60 seconds for the first frame, counting the first-frame wait only while the browser tab is visible.
 
