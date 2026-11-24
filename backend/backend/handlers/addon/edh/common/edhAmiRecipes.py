@@ -68,9 +68,14 @@ PARENT_ARCHITECTURE_MISMATCH = "the parent image's architecture does not match t
 BUILD_TYPE_ARCHITECTURE_MISMATCH = "buildInstanceType does not match the recipe's architecture"
 PARENT_IMAGE_ARCHITECTURE_INVALID = "parentImage does not match the recipe's architecture"
 # A recipe save starts no parent image lookup once its architecture lookups have run this many seconds.
-# One lookup on edhImageBuilder.lookup_retry_config ends within about 11 s, so a save's lookups end within
-# about 16 s, inside the API's deadline.
+# One EC2 lookup on edhImageBuilder.lookup_retry_config ends within about 11 s, and the parent image parameter
+# read through common.ssmParameters within about 7 s, so a save's lookups end within about 16 s, inside the
+# API's deadline.
 ARCHITECTURE_LOOKUP_BUDGET_SECONDS = 5
+# How long a build started at deployment or by the registrar (the sweep, an image's state change) waits out a
+# Parameter Store that cannot be reached in time on its parent image's parameter, plus one bounded read. A build
+# an API request starts, a queued build it promotes included, waits for nothing.
+BACKGROUND_PARENT_IMAGE_READ_WAIT_SECONDS = 30
 # An AMI an instance uses is kept: its build row names the instances (sorted, at most
 # AMI_IN_USE_LIST_MAX), and a retired build whose AMI was kept is flagged until the sweep removes it.
 AMI_IN_USE_FIELD = "amiInUseBy"
@@ -219,9 +224,10 @@ def _lookup_budget_spent(recipe_id: str, started: float) -> bool:
     return True
 
 
-def require_architecture_match(model: AmiRecipeRequestModel, ec2, ssm) -> None:
+def require_architecture_match(model: AmiRecipeRequestModel, ec2) -> None:
     """Refuse (RecipeInvalid) a recipe whose build instance types, or whose ``ami-`` or ``ssm:`` parent
-    image, EC2 reports as running another architecture family than the recipe's. A lookup that fails, a
+    image, EC2 reports as running another architecture family than the recipe's. An ``ssm:`` parent is read
+    through common.ssmParameters, uncached. A lookup that fails, a
     parent of no known architecture and an ``edhStack:`` parent are logged and refuse nothing, and so is a
     parent lookup due after the lookups have run ARCHITECTURE_LOOKUP_BUDGET_SECONDS; the build start checks
     them again."""
@@ -241,7 +247,7 @@ def require_architecture_match(model: AmiRecipeRequestModel, ec2, ssm) -> None:
     ami_id = parent
     if parent.startswith(builder.PARENT_SSM_PREFIX):
         try:
-            ami_id = str(ssm.get_parameter(Name=parent[len(builder.PARENT_SSM_PREFIX):])["Parameter"]["Value"])
+            ami_id = str(builder.read_parent_parameter(parent[len(builder.PARENT_SSM_PREFIX):]))
         except Exception as err:
             logger.warning(f"{recipe_id}: parent image parameter not read; architecture not checked ({_error_name(err)})")
             return
@@ -261,14 +267,14 @@ def require_architecture_match(model: AmiRecipeRequestModel, ec2, ssm) -> None:
 
 
 def _require_architecture_match_at_save(model: AmiRecipeRequestModel) -> None:
-    """require_architecture_match on the context's short-timeout lookup clients; a context that cannot be
+    """require_architecture_match on the context's short-timeout EC2 lookup client; a context that cannot be
     built is logged and refuses nothing."""
     try:
         ctx = _ctx()
     except Exception as err:
         logger.warning(f"{model.recipeId}: architecture not checked; no build context ({_error_name(err)})")
         return
-    require_architecture_match(model, ctx.lookup_ec2, ctx.lookup_ssm)
+    require_architecture_match(model, ctx.lookup_ec2)
 
 
 def _asset_key(assets: Iterable[Dict[str, Any]]) -> List[Tuple[str, str]]:
@@ -411,16 +417,18 @@ def _require_buildable(ctx: builder.ImageBuilderContext, recipe: Dict[str, Any],
 
 
 def _launch(recipe: Dict[str, Any], version: int, requested_by: str, *, requested_at: Optional[str],
-            not_started: Callable[[Exception], Any]) -> Dict[str, Any]:
+            not_started: Callable[[Exception], Any], parent_read_wait_seconds: float = 0.0) -> Dict[str, Any]:
     """Start the pipeline of a build row the caller has claimed, then record the row as BUILDING. The
     build is of the recipe as it stands once the row is held; one gone or being deleted starts nothing.
-    ``not_started`` settles the claimed row when the pipeline does not start."""
+    ``not_started`` settles the claimed row when the pipeline does not start. The parent image's parameter
+    read waits up to ``parent_read_wait_seconds`` on a Parameter Store that cannot be reached in time."""
     try:
         recipe = _current_unless_deleted(recipe["recipeId"])
         ctx = _ctx()
         edh_client = _edh() if str(recipe["parentImage"]).startswith(builder.PARENT_EDH_STACK_PREFIX) else None
         try:
-            parent = builder.resolve_parent_image(recipe["parentImage"], ctx=ctx, edh_client=edh_client, kind=recipe["kind"])
+            parent = builder.resolve_parent_image(recipe["parentImage"], ctx=ctx, edh_client=edh_client,
+                                                  kind=recipe["kind"], transient_wait_seconds=parent_read_wait_seconds)
         except builder.ParentImageUnavailable as err:
             raise RecipeConflict(str(err))
         root_device_name = _require_buildable(ctx, recipe, parent)
@@ -444,10 +452,13 @@ def _launch(recipe: Dict[str, Any], version: int, requested_by: str, *, requeste
     return build
 
 
-def start_build(recipe: Dict[str, Any], requested_by: str, *, only_if_changed: bool) -> Tuple[Optional[Dict[str, Any]], str]:
+def start_build(recipe: Dict[str, Any], requested_by: str, *, only_if_changed: bool,
+                parent_read_wait_seconds: float = 0.0) -> Tuple[Optional[Dict[str, Any]], str]:
     """Start a build of the recipe, or queue it behind the build in progress. A manual request for
     content already queued or building is answered with that build. The version row is claimed before
-    any pipeline starts, so a request that finds its version taken re-reads the builds and decides again."""
+    any pipeline starts, so a request that finds its version taken re-reads the builds and decides again.
+    ``parent_read_wait_seconds`` is the parent image read's wait (``_launch``): 0 for an API request, and
+    BACKGROUND_PARENT_IMAGE_READ_WAIT_SECONDS for a build the deployment starts."""
     if not recipe.get("enabled", True):
         return None, OUTCOME_REFUSED_DISABLED
     recipe_id = recipe["recipeId"]
@@ -460,7 +471,7 @@ def start_build(recipe: Dict[str, Any], requested_by: str, *, only_if_changed: b
         active = any(b.get("status") in store.ACTIVE_BUILD_STATUSES for b in builds)
         if not active and any(b.get("status") == store.STATUS_QUEUED for b in builds):
             # A queued build that waits on nothing starts ahead of this request.
-            promoted = _promote_queued(recipe)
+            promoted = _promote_queued(recipe, parent_read_wait_seconds=parent_read_wait_seconds)
             if promoted:
                 return promoted, OUTCOME_STARTED
             continue
@@ -486,15 +497,17 @@ def start_build(recipe: Dict[str, Any], requested_by: str, *, only_if_changed: b
         claimed = store.claim_new_build({**row, "status": store.STATUS_BUILDING, "claimedAt": store.utc_now()})
         if claimed:
             return _launch(recipe, version, requested_by, requested_at=claimed["requestedAt"],
-                           not_started=lambda err: store.release_claim(recipe_id, version)), OUTCOME_STARTED
+                           not_started=lambda err: store.release_claim(recipe_id, version),
+                           parent_read_wait_seconds=parent_read_wait_seconds), OUTCOME_STARTED
     raise RecipeConflict("the recipe's builds changed while the request was placed; try again")
 
 
-def _promote_queued(recipe: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _promote_queued(recipe: Dict[str, Any], *, parent_read_wait_seconds: float = 0.0) -> Optional[Dict[str, Any]]:
     """Start the recipe's oldest queued build once nothing is active. The row is claimed from QUEUED
     before its pipeline starts, so of two promoters one starts it. A build that cannot start goes back
     to QUEUED with the reason on its row, so the next attempt starts it once the cause is fixed; the
-    started row replaces the queued one, reason included."""
+    started row replaces the queued one, reason included. ``parent_read_wait_seconds`` is the parent image
+    read's wait (``_launch``)."""
     recipe_id = recipe["recipeId"]
     builds = store.list_builds(recipe_id)
     if any(b.get("status") in store.ACTIVE_BUILD_STATUSES for b in builds):
@@ -515,7 +528,8 @@ def _promote_queued(recipe: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                                 error=f"{QUEUED_NOT_STARTED}: {reason}")
 
     return _launch(recipe, version, oldest.get("requestedBy", REQUESTED_BY_DEPLOY),
-                   requested_at=oldest.get("requestedAt"), not_started=not_started)
+                   requested_at=oldest.get("requestedAt"), not_started=not_started,
+                   parent_read_wait_seconds=parent_read_wait_seconds)
 
 
 def _stack_id_named(client: EdhClient, edh_kind: str, stack_name: str):
@@ -610,7 +624,7 @@ def _complete(recipe: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any]:
     if not described["amiId"]:
         store.update_build(recipe_id, version, status=store.STATUS_FAILED, completedAt=store.utc_now(),
                            error="the image reports no AMI for the deployment region")
-        _promote_queued(recipe)
+        _promote_queued(recipe, parent_read_wait_seconds=BACKGROUND_PARENT_IMAGE_READ_WAIT_SECONDS)
         return {"outcome": "failed", "version": version}
     build = store.claim_build(recipe_id, version, store.STATUS_BUILDING, status=store.STATUS_REGISTERING,
                               amiId=described["amiId"], snapshotIds=described["snapshotIds"], completedAt=store.utc_now())
@@ -622,11 +636,11 @@ def _complete(recipe: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as err:
         logger.exception(f"{recipe_id} v{version}: completion failed")
         _register_failed(recipe_id, version, f"completion failed ({type(err).__name__})", automatic=True)
-        _promote_queued(recipe)
+        _promote_queued(recipe, parent_read_wait_seconds=BACKGROUND_PARENT_IMAGE_READ_WAIT_SECONDS)
         return {"outcome": "register_failed", "version": version}
     if build["status"] == store.STATUS_AVAILABLE:
         build = _retire_and_prune(recipe, build)
-    _promote_queued(recipe)
+    _promote_queued(recipe, parent_read_wait_seconds=BACKGROUND_PARENT_IMAGE_READ_WAIT_SECONDS)
     return {"outcome": build["status"].lower(), "version": version}
 
 
@@ -644,7 +658,7 @@ def handle_image_state(image_build_version_arn: str, status: Optional[str], reas
     if status in IMAGE_TERMINAL_FAILURES:
         store.update_build(recipe["recipeId"], int(build["version"]), status=store.STATUS_FAILED,
                            error=reason or status, completedAt=store.utc_now())
-        _promote_queued(recipe)
+        _promote_queued(recipe, parent_read_wait_seconds=BACKGROUND_PARENT_IMAGE_READ_WAIT_SECONDS)
         return {"outcome": "failed", "version": int(build["version"])}
     return {"outcome": "in-progress", "status": status}
 
@@ -948,7 +962,7 @@ def sweep() -> Dict[str, Any]:
                 logger.exception(f"{label}: sweep step failed")
                 summary["warnings"].append(f"{label}: {type(err).__name__}")
         try:
-            if _promote_queued(recipe):
+            if _promote_queued(recipe, parent_read_wait_seconds=BACKGROUND_PARENT_IMAGE_READ_WAIT_SECONDS):
                 summary["promoted"] += 1
         except Exception as err:
             logger.exception(f"{recipe['recipeId']}: queued build not promoted")

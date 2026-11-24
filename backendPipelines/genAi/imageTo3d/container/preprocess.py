@@ -38,8 +38,9 @@ BACKGROUND_REMOVAL_BACKENDS = ("none", "rembg", "birefnet", "rmbg2", "sam")
 # class and processor and trade quality for speed and memory.
 #
 # Loaded through the transformers each model image already carries, which is not all of them: TripoSR's is
-# older than SamModel needs, and it cannot be raised in the shared layer without breaking that model's own
-# checkpoint -- see requirements.txt. Selecting sam there raises rather than falling back.
+# older than SamModel needs, and it cannot be raised in that image without breaking the model's own checkpoint
+# (TSR.from_pretrained fails on the renamed ViT modules of a newer transformers; locks/triposr holds the version).
+# Selecting sam there raises rather than falling back.
 SAM_MODEL_REPO = "facebook/sam-vit-huge"
 # The checkpoints SAM_MODEL_REPO may name. Each is pinned in hfguard/hf_pins.py, and a run naming any
 # other repository is refused before anything downloads: the setting is part of a run's configuration,
@@ -284,8 +285,8 @@ def _remove_background_sam(image_path: str, output_path: str, params: dict) -> N
     except ImportError as e:
         raise PreprocessError(
             "Background removal backend 'sam' is unavailable: torch and transformers are required. Each "
-            "model image carries its own transformers, and TripoSR's is older than SamModel needs -- see "
-            "the note in requirements.txt for why one cannot simply be added to the shared layer") from e
+            "model image carries its own transformers, and TripoSR's is older than SamModel needs: a newer "
+            "one breaks the TripoSR checkpoint, so that image keeps the version it has") from e
 
     with Image.open(image_path, formats=INPUT_IMAGE_FORMATS) as img:
         source = img.convert("RGB")

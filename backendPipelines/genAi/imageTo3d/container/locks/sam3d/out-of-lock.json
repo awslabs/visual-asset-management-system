@@ -1,0 +1,41 @@
+{
+    "packages": [
+        {
+            "name": "kaolin",
+            "version": "0.17.0",
+            "source": "NVIDIA's wheel for torch 2.5.1 and CUDA 12.1 (KAOLIN_WHEEL_URL in the Dockerfile), which PyPI does not carry; the build checks it against the SHA-256 below",
+            "wheelSha256": "eefd56fe9403fb2c193c0125e456d6f39b540a87dc0f9ef05e02950fb7975971"
+        },
+        {
+            "name": "pytorch3d",
+            "version": "0.7.8",
+            "source": "the pytorch3d clone at PYTORCH3D_COMMIT, the commit upstream's requirements.p3d.txt names, built in the Dockerfile",
+            "commit": "75ebeeaea0908c5527e7b1e305fbc7681382db47"
+        },
+        {
+            "name": "gsplat",
+            "version": "1.5.3",
+            "source": "the gsplat clone at GSPLAT_COMMIT, the commit upstream's requirements.inference.txt names, built in the Dockerfile",
+            "commit": "2323de5905d5e90e035f792fe65bad0fedd413e7"
+        },
+        {
+            "name": "moge",
+            "version": "1.0.0",
+            "source": "the MoGe clone at MOGE_COMMIT, the commit upstream's requirements.txt names, installed in the Dockerfile",
+            "commit": "a8c37341bc0325ca99b9d57981cc3bb2bd3e255b"
+        },
+        {
+            "name": "utils3d",
+            "version": "0.0.2",
+            "source": "the utils3d clone at UTILS3D_COMMIT, the commit MoGe's pyproject.toml names, installed in the Dockerfile; the build checks the SHA-256 of the checked-out tree below",
+            "commit": "3913c65d81e05e47b9f367250cf8c0f7462a0900",
+            "treeSha256": "204b7c79b4d369499fa5bad73d90a4bf7798c74c86a2efe1d1670eb23ab4279d"
+        },
+        {
+            "name": "sam3d_objects",
+            "version": "0.0.1",
+            "source": "SAM 3D's own package, the clone at SAM3D_COMMIT, installed editable in the Dockerfile",
+            "commit": "f91db411c50efee93d8db7aeb323885650f6f722"
+        }
+    ]
+}

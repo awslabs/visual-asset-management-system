@@ -11,10 +11,10 @@
  * seven images (the reverted attempt moved numpy, pillow and scipy under images that compile extensions
  * against them), which is why each image has its own.
  *
- * Images are listed here as they are converted; an image not listed keeps installing the shared
- * `requirements.txt`, whose exemption in `.github/python-lock-exemptions.json` stays until the last image is
- * converted. The audit (`python-dependency-audit`) checks `uv lock --check`, the exports and the advisories of
- * every lock; this file checks that the Dockerfile uses them and that the pieces agree.
+ * All seven images are converted, so the shared `requirements.txt` and `vams_utils/requirements.txt` are gone, with
+ * their exemptions in `.github/python-lock-exemptions.json`. The audit (`python-dependency-audit`) checks
+ * `uv lock --check`, the exports and the advisories of every lock; this file checks that the Dockerfile uses them and
+ * that the pieces agree. SAM 3D also locks its conda environment (`locks/sam3d/conda-explicit.txt`).
  */
 
 import * as fs from "fs";
@@ -93,6 +93,27 @@ const CONVERTED: ConvertedImage[] = [
         dockerfile: "Dockerfile.blenderagent",
         upstreamFiles: [],
         upstreamLinesNotLocked: [],
+    },
+    {
+        // SAM 3D: a conda environment (conda-explicit.txt) and the CUDA 12.1 torch stack from its own explicit index. The git
+        // requirements are built from pinned clones, kaolin is NVIDIA's wheel by its SHA-256 (PyPI does not carry it), the
+        // flash-attn wheel is locked by URL, pymeshfix is the GPL group's, and nvidia-pyindex is left out (out-of-lock.json,
+        // pyproject.toml).
+        model: "sam3d",
+        dockerfile: "Dockerfile.sam3d",
+        upstreamFiles: [
+            "requirements.txt",
+            "requirements.dev.txt",
+            "requirements.p3d.txt",
+            "requirements.inference.txt",
+        ],
+        upstreamLinesNotLocked: [
+            /^MoGe @ git\+https:\/\/github\.com\/microsoft\/MoGe\.git@[0-9a-f]{40}$/,
+            /^gsplat @ git\+https:\/\/github\.com\/nerfstudio-project\/gsplat\.git@[0-9a-f]{40}$/,
+            /^pytorch3d @ git\+https:\/\/github\.com\/facebookresearch\/pytorch3d\.git@[0-9a-f]{40}$/,
+            /^(kaolin|flash_attn|pymeshfix|nvidia-pyindex)==/,
+        ],
+        torchIndex: { name: "pytorch-cu121", url: "https://download.pytorch.org/whl/cu121" },
     },
 ];
 
@@ -176,8 +197,9 @@ describe.each(CONVERTED)(
         const outOfLock: {
             name: string;
             version: string;
-            commit: string;
+            commit?: string;
             treeSha256?: string;
+            wheelSha256?: string;
         }[] = JSON.parse(read("out-of-lock.json")).packages;
 
         it("installs every Python package from a hashed lock, except the recorded source builds", () => {
@@ -204,7 +226,10 @@ describe.each(CONVERTED)(
             for (const build of builds) {
                 expect(build).toMatch(/--no-deps/);
                 expect(build).toMatch(/--no-build-isolation/);
-                expect(build).toMatch(/\s\/(opt|tmp)\/[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/);
+                // A clone directory, or a downloaded wheel file checked by its SHA-256 (out-of-lock.json `wheelSha256`).
+                expect(build).toMatch(
+                    /\s\/(opt|tmp)\/[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*(\/[A-Za-z0-9_.+-]+\.whl)?$/
+                );
             }
             expect(builds.length).toBe(outOfLock.length);
             // The upgrade of pip, setuptools and wheel that resolved on build day is gone.
@@ -246,7 +271,7 @@ describe.each(CONVERTED)(
             for (const line of sources.split(/\r?\n/).filter((l) => l.trim() !== "")) {
                 expect(line).toMatch(
                     new RegExp(
-                        `^(torch|torchvision|xformers) = \\{ index = "${torchIndex.name}" \\}$`
+                        `^(torch|torchvision|torchaudio|xformers) = \\{ index = "${torchIndex.name}" \\}$`
                     )
                 );
             }
@@ -360,6 +385,14 @@ describe.each(CONVERTED)(
             for (const entry of outOfLock) {
                 expect(frozen.has(normalize(entry.name))).toBe(false);
                 expect(entry.version).toMatch(/^\d/);
+                // A prebuilt wheel no index the audit reads carries (kaolin) is checked by its SHA-256 instead of a commit.
+                if (entry.wheelSha256 !== undefined) {
+                    expect(entry.commit).toBeUndefined();
+                    expect(entry.wheelSha256).toMatch(/^[0-9a-f]{64}$/);
+                    expect(dockerText).toContain(`=${entry.wheelSha256}`);
+                    expect(dockerText).toMatch(/sha256sum -c -/);
+                    continue;
+                }
                 expect(entry.commit).toMatch(/^[0-9a-f]{40}$/);
                 expect(dockerText).toContain(`=${entry.commit}`);
                 // A package built from a clone whose files are hash-checked records the digest the build compares with.
@@ -434,25 +467,115 @@ describe("the Stable3DGen image's pillow and gradio", () => {
     });
 });
 
-describe("the images not yet converted", () => {
-    it("still install the shared requirements.txt, and its exemption stays", () => {
-        const exemptions = JSON.parse(
-            fs.readFileSync(
-                path.join(__dirname, "..", "..", "..", ".github", "python-lock-exemptions.json"),
+describe("the shared requirement files", () => {
+    const root = path.join(__dirname, "..", "..", "..");
+    const exemptions = (): string[] =>
+        JSON.parse(
+            fs.readFileSync(path.join(root, ".github", "python-lock-exemptions.json"), "utf-8")
+        ).exemptions.map((e: { path: string }) => e.path);
+
+    it("are gone with their exemptions, now that every image is converted", () => {
+        const dockerfiles = fs
+            .readdirSync(CONTAINER_DIR)
+            .filter((f) => f.startsWith("Dockerfile."))
+            .sort();
+        expect(dockerfiles).toEqual(CONVERTED.map((c) => c.dockerfile).sort());
+        expect(fs.existsSync(path.join(CONTAINER_DIR, "requirements.txt"))).toBe(false);
+        expect(fs.existsSync(path.join(CONTAINER_DIR, "vams_utils", "requirements.txt"))).toBe(
+            false
+        );
+        const gone = [
+            "backendPipelines/genAi/imageTo3d/container/requirements.txt",
+            "backendPipelines/genAi/imageTo3d/container/vams_utils/requirements.txt",
+        ];
+        expect(exemptions().filter((e) => gone.includes(e))).toEqual([]);
+        // [control] the exemption list is read: the upstream-owned Splat Toolbox file is still on it.
+        expect(exemptions()).toContain(
+            "backendPipelines/3dRecon/splatToolbox/container/requirements.txt"
+        );
+    });
+
+    it("are read by no Dockerfile and no pipeline test setting", () => {
+        for (const file of CONVERTED.map((c) => c.dockerfile)) {
+            const steps = instructions(fs.readFileSync(path.join(CONTAINER_DIR, file), "utf-8"));
+            expect([
+                file,
+                steps.filter((s) => /^(COPY|ADD) .*\brequirements\.txt\b/.test(s)),
+            ]).toEqual([file, []]);
+        }
+        const settings = fs.readFileSync(
+            path.join(root, "backendPipelines", "ci", "suite-settings.json"),
+            "utf-8"
+        );
+        expect(settings).not.toContain("imageTo3d/container/requirements.txt");
+    });
+});
+
+describe("the SAM 3D conda environment", () => {
+    const dir = path.join(CONTAINER_DIR, "locks", "sam3d");
+    const explicit = fs.readFileSync(path.join(dir, "conda-explicit.txt"), "utf-8");
+    const packages = explicit
+        .split(/\r?\n/)
+        .filter((l) => l !== "" && !l.startsWith("#") && l !== "@EXPLICIT");
+    const dockerText = fs.readFileSync(path.join(CONTAINER_DIR, "Dockerfile.sam3d"), "utf-8");
+    const steps = instructions(dockerText);
+
+    it("names every package of upstream's environment file, each with a SHA-256", () => {
+        expect(explicit.split(/\r?\n/)).toContain("@EXPLICIT");
+        for (const line of packages) {
+            expect([
+                line,
+                /^https:\/\/conda\.anaconda\.org\/conda-forge\/(linux-64|noarch)\/[A-Za-z0-9._+-]+\.(conda|tar\.bz2)#sha256:[0-9a-f]{64}$/.test(
+                    line
+                ),
+            ]).toEqual([line, true]);
+        }
+        // `name=version=build` of each file, compared with the recorded default.yml.
+        const fromFile = packages
+            .map((l) => /\/([^/]+)\.(conda|tar\.bz2)#/.exec(l)![1])
+            .map((f) => /^(.+)-([^-]+)-([^-]+)$/.exec(f)!)
+            .map((m) => `${m[1]}=${m[2]}=${m[3]}`)
+            .sort();
+        const recorded = fs
+            .readFileSync(
+                path.join(dir, "upstream", "environments", "default.yml.recorded"),
                 "utf-8"
             )
-        ).exemptions.map((e: { path: string }) => e.path);
-        expect(exemptions).toContain("backendPipelines/genAi/imageTo3d/container/requirements.txt");
-        const converted = new Set(CONVERTED.map((c) => c.dockerfile));
-        const others = fs
-            .readdirSync(CONTAINER_DIR)
-            .filter((f) => f.startsWith("Dockerfile.") && !converted.has(f));
-        expect(others.length).toBeGreaterThan(0);
-        for (const file of others) {
-            expect([file, fs.readFileSync(path.join(CONTAINER_DIR, file), "utf-8")]).toEqual([
-                file,
-                expect.stringMatching(/requirements\.txt/),
-            ]);
+            .split(/\r?\n/)
+            .filter((l) => /^ {2}- \S+=\S+=\S+$/.test(l))
+            .map((l) => l.trim().slice(2))
+            .sort();
+        expect(recorded.length).toBeGreaterThan(200);
+        expect(fromFile).toEqual(recorded);
+    });
+
+    it("pins every package with platform markers only, so the audit reads every line", () => {
+        // pip-audit evaluates each line's environment marker against its own interpreter (Python 3.13 in CI) and skips a
+        // line whose marker does not hold, without a finding. The image's interpreter is 3.11.0, so a Python-version
+        // marker would leave lines unaudited; the lock's requires-python range keeps uv from writing one.
+        for (const file of [
+            "requirements-build.lock",
+            "requirements.lock",
+            "requirements-gpl.lock",
+        ]) {
+            const text = fs.readFileSync(path.join(dir, file), "utf-8");
+            expect([file, /python_(full_)?version/.test(text)]).toEqual([file, false]);
         }
+    });
+
+    it("creates the environment from that file, after refusing a line without a checksum, and checks default.yml after the clone", () => {
+        const create = steps.findIndex((s) => /micromamba create/.test(s));
+        expect(create).toBeGreaterThanOrEqual(0);
+        expect(steps[create]).toContain('-f "$f"');
+        expect(steps[create]).toContain("f=/opt/locks/sam3d/conda-explicit.txt");
+        expect(steps[create]).toMatch(/#sha256:\[0-9a-f\]\{64\}\)\$' "\$f"/);
+        // The only environment created is the checksummed one; upstream's file is never resolved.
+        expect(steps.filter((s) => /micromamba (create|install|env)/.test(s))).toEqual([
+            steps[create],
+        ]);
+        expect(steps[create]).not.toContain("default.yml");
+        const clone = steps.findIndex((s) => /git clone "\$SAM3D_REPO_URL" \/opt\/sam3d/.test(s));
+        expect(clone).toBeGreaterThan(create);
+        expect(steps[clone]).toContain("environments/default.yml");
     });
 });

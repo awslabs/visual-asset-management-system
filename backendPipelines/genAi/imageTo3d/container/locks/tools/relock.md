@@ -60,3 +60,26 @@ Use the repository's pinned uv (`required-version` in each `pyproject.toml`) and
     `out-of-lock.json` carries `treeSha256`, and the Dockerfile's `UTILS3D_TREE_SHA256` holds the same value. When the
     commit moves, take the new value from the checked-out clone with
     `git ls-files -z | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum`, and change both places.
+
+## SAM 3D (`locks/sam3d`)
+
+SAM 3D's set has no shipped baseline. Development's image stopped building on 2026-11-24, when pip's resolver gave up
+on upstream's open requirements, so `frozen-set.txt` is uv's resolution of the image's inputs at the
+`exclude-newer` cutoff in `pyproject.toml`, not the freeze of a build. Steps 2 and 3 above therefore change: after a
+change, run `uv lock` with the constraints block emptied, write `frozen-set.txt` from the three exports (keep the
+header comment), run `python ../tools/sync_constraints.py .`, `uv lock` again and export. Because a re-resolved set is
+new, the PR that moves it needs a live SAM 3D run.
+
+-   **The conda environment** is `conda-explicit.txt`: the packages of upstream's `environments/default.yml` (recorded
+    as `upstream/environments/default.yml.recorded`), one URL per line with `#sha256:<hex>`. micromamba refuses a file
+    whose checksum differs; a bare 64-hex value is read as an MD5 and refused too, so keep the `sha256:` prefix. A line
+    with no checksum would install unchecked, so the Dockerfile fails on one. When the recorded file changes, create the
+    environment from it in the Dockerfile's base image (`micromamba create -n sam3d-objects -f default.yml`), and write
+    one line per package from the environment's `conda-meta/*.json` records (`url` and `sha256`), in the order
+    `micromamba env export -n sam3d-objects --explicit` lists them. The jest test compares the file with the recorded
+    `default.yml`, package for package.
+-   **kaolin** is NVIDIA's wheel, which PyPI does not carry, so pip-audit cannot read it and it is not in the lock: the
+    Dockerfile's `KAOLIN_WHEEL_URL` and `KAOLIN_WHEEL_SHA256` and the `wheelSha256` of its `out-of-lock.json` entry move
+    together, and its `Requires-Dist` lines are in `pyproject.toml`.
+-   **nvidia-pyindex** is left out through `override-dependencies`: its only effect is to add NVIDIA's index to pip's
+    configuration when it installs. The build's `pip check` allows the one line that reports it missing.

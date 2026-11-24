@@ -20,6 +20,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from backend.backend.handlers.addon.edh.common import edhSessionBootstrap as bootstrap
+from backend.tests.handlers.addon.edh.edhParameterStoreTestSupport import publish_resource_names, serve_parameters
 
 USER = "user@example.com"
 BOOTSTRAP_ID = "5d1c8a2e-0b1f-4a6c-9d3e-7f8a9b0c1d2e"
@@ -1040,12 +1041,12 @@ class TestBootstrapSession:
         assert _deleted_ids(client) == ["key-2"]
         sm.delete_secret.assert_called_once()
 
-    def test_an_unresolvable_base_url_mints_nothing(self):
+    def test_an_unresolvable_base_url_mints_nothing(self, monkeypatch):
         mint = MagicMock()
-        ssm = MagicMock()
-        ssm.get_parameter.side_effect = _client_error("ParameterNotFound")
-        with _Patched(_enabled(vams_base_url="ssm:/vams-test/web/deployedUrl", ssm_client=ssm,
-                               mint_session_key=mint)):
+        # The resource names do not carry the web URL and the parameter the pointer names is missing.
+        publish_resource_names(monkeypatch, bootstrap, {}, missing=["web/deployedUrl"])
+        serve_parameters(monkeypatch)
+        with _Patched(_enabled(vams_base_url="ssm:/vams-test/web/deployedUrl", mint_session_key=mint)):
             assert bootstrap.bootstrap_session(EVENT, _row(apiKeyId=""), mfa_enabled=True) == ("unavailable", {})
         mint.assert_not_called()
 
