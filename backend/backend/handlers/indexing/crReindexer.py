@@ -1179,6 +1179,14 @@ class ReindexUtility:
                                 results['skipped_no_asset'] += 1
                                 continue
                             entry = resolution.entry
+                            # The owner is found by bucket name; it must be in the registration being
+                            # walked (any row of its location), or a nested registration's files would
+                            # be reindexed under the walk of the outer one, as fileEnumeration checks.
+                            if entry.bucket_id and location_ids and entry.bucket_id not in location_ids:
+                                logger.warning(f"Skipping {s3_key}: held by asset {entry.asset_id} of "
+                                               f"registration {entry.bucket_id}, not of {bucket_id}")
+                                results['skipped_no_asset'] += 1
+                                continue
                             live_database_id = entry.database_id[:-len('#deleted')] \
                                 if entry.database_id.endswith('#deleted') else entry.database_id
                             files_batch.append({

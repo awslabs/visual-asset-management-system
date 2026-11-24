@@ -89,3 +89,36 @@ class TestReindexWalksActiveRegistrations:
         walked, members = crReindexer.registrations_to_walk([DUPLICATE, RETIRED, ACTIVE, {"bucketId": "x"}])
         assert [row["bucketId"] for row in walked] == ["b1"]
         assert members == {"b1": ["b1", "b1d"]}
+
+
+@pytest.mark.unit
+class TestIndexOwnerMustBeTheWalkedRegistration:
+    """Once the location index is ready, the owner of a key is found by bucket name. A walk of an active
+    root registration lists the keys of a retired registration nested under it on the same bucket, and
+    their owner (an asset of the retired registration) must not be reindexed under the root's walk."""
+
+    def test_a_nested_retired_registrations_files_are_skipped(self, crReindexer):
+        from tests.common.fileAttributionFakes import AttributionAssetTable, asset_row
+        from tests.handlers.indexing.test_crReindexer_fileEnumeration_parity import FakeS3
+
+        m = crReindexer
+        root = {"bucketId": "b1", "bucketName": "bucket-one", "baseAssetsPrefix": "/"}
+        nested_retired = {"bucketId": "b9", "bucketName": "bucket-one", "baseAssetsPrefix": "ext/", "retired": True}
+        rows = [asset_row("db1", "a1", "b1", "a1/", "bucket-one"),
+                asset_row("db9", "e1", "b9", "ext/e1/", "bucket-one")]
+        captured = []
+
+        def capture(files, timestamp):
+            captured.extend(files)
+            return {"success": len(files), "failed": 0, "errors": []}
+
+        utility = _utility(m)
+        with patch.object(m, "s3_client", FakeS3(["a1/m.glb", "ext/e1/n.glb"])), \
+                patch.object(m, "index_ready", return_value=True), \
+                patch.object(m.dynamodb_resource, "Table", return_value=AttributionAssetTable(rows)), \
+                patch.object(m.ReindexUtility, "_scan_s3_buckets_table", return_value=[root, nested_retired]), \
+                patch.object(utility, "_update_files_in_metadata_table", side_effect=capture):
+            results = utility.reindex_files(dry_run=False)
+
+        assert {(f["databaseId"], f["assetId"], f["relative_path"]) for f in captured} == {("db1", "a1", "/m.glb")}
+        assert results["skipped_no_asset"] == 1
