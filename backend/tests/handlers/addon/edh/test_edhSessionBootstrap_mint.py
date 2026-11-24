@@ -23,7 +23,7 @@ from backend.backend.common.constants import TEMPORARY_SESSION_KEY_NAME_PREFIX
 from backend.backend.common.validators import object_name_pattern
 from backend.backend.handlers.addon.edh.common import edhSessionBootstrap as bootstrap
 from backend.tests.handlers.addon.edh.edhParameterStoreTestSupport import (
-    publish_resource_names, resolver_names, serve_parameters,
+    patch_globals, publish_resource_names, resolver_names, serve_parameters,
 )
 from backend.tests.ssmParametersStub import always, client_error, throttled
 
@@ -553,8 +553,7 @@ class TestBaseUrl:
     def test_a_resource_name_lookup_that_is_refused_raises_and_reads_no_legacy_parameter(self, monkeypatch):
         names = publish_resource_names(monkeypatch, bootstrap, {})
         resolver = resolver_names(bootstrap)
-        monkeypatch.setattr(resolver, "_failed_sweeps", 1)
-        monkeypatch.setattr(resolver, "_sweep_retry_after", resolver._monotonic() + 100)
+        patch_globals(monkeypatch, resolver, _failed_sweeps=1, _sweep_retry_after=resolver._monotonic() + 100)
         parameters = serve_parameters(monkeypatch, values={self.LEGACY: "https://legacy.example.com"})
         with pytest.raises(bootstrap.SessionBootstrapError):
             self._resolve(monkeypatch)

@@ -13,7 +13,7 @@ import boto3
 
 from backend.backend.handlers.addon.edh.common import edhAmiRecipeStore as store
 from backend.backend.handlers.addon.edh.common import edhImageBuilder as ib_mod
-from backend.tests.handlers.addon.edh.edhParameterStoreTestSupport import shared_lookups
+from backend.tests.handlers.addon.edh.edhParameterStoreTestSupport import replace_lookup_client
 from backend.tests.handlers.addon.edh.edhTestSupport import FakeProjects
 
 TABLE = os.environ["EDH_AMI_RECIPE_STORAGE_TABLE_NAME"]
@@ -72,9 +72,7 @@ def _describe_instances_paginator(ec2):
 def install_parent_parameters(parameter_store):
     """Answer the lookups' reads from ``parameter_store`` for the rest of the test (the EDH conftest restores the
     lookups' clients after it)."""
-    for lookup in shared_lookups():
-        lookup._ssm_client = parameter_store
-    return parameter_store
+    return replace_lookup_client(parameter_store)
 
 
 def parent_parameters(ami="ami-0abc0abc0abc0abc0"):
