@@ -53,6 +53,7 @@ The location rules below mirror ``backend/backend/common/assetLocations.py`` (``
 does not import backend code.
 """
 
+import bisect
 import hashlib
 import json
 import logging
@@ -131,7 +132,8 @@ REINDEX_METADATA_RECORD_KEY = 'REINDEX_METADATA_RECORD'
 
 COUNTERS = ('scanned', 'candidates', 'skipped-complete', 'would-convert', 'converted', 'resumed', 'paths-moved',
             'records-moved', 'records-gone', 'records-left', 'versions-rewritten', 'objects-copied',
-            'auxiliary-moved', 'vectors-moved', 'vectors-dropped', 'vectors-left', 'search-reindexed',
+            'auxiliary-moved', 'move-versions', 'move-bytes', 'vectors-moved', 'vectors-dropped', 'vectors-left',
+            'search-reindexed',
             'search-stale') + tuple(f"mode:{m}" for m in CONVERSION_MODES) + LAYOUT_REFUSALS + FAILURE_OUTCOMES
 
 
@@ -349,8 +351,13 @@ def _plain_map(wire: Dict) -> Dict:
     return plain
 
 
+def _stored_location_of(row: Dict) -> str:
+    """``assetLocation.Key`` exactly as stored (a v2.6.x row can carry a leading ``/``)."""
+    return _s(_m(row, 'assetLocation'), 'Key')
+
+
 def _location_of(row: Dict) -> str:
-    return normalize_location(_s(_m(row, 'assetLocation'), 'Key'))
+    return normalize_location(_stored_location_of(row))
 
 
 def _live_database_id(database_id: str) -> str:
@@ -459,9 +466,14 @@ class Candidate(NamedTuple):
     database_id: str
     asset_id: str
     bucket_id: str
-    location: str
+    location: str                # normalized: no leading '/', the form S3 keys take
     copy_done: bool
     conversion: Dict[str, str]
+    stored_location: str = ''    # assetLocation.Key exactly as stored, which the row writes condition on
+
+    @property
+    def stored(self) -> str:
+        return self.stored_location or self.location
 
 
 class Plan(NamedTuple):
@@ -474,16 +486,49 @@ class Plan(NamedTuple):
     keys: Optional[Set[str]] = None
     resolution: str = ''
     archived: Tuple[str, ...] = ()
+    move_versions: int = 0
+    move_bytes: int = 0
 
     @property
     def converts(self) -> bool:
         return self.outcome in CONVERSION_MODES or self.outcome == 'resume'
 
 
+class BucketLocations:
+    """Every stored location of one bucket, sorted, so the locations that can share a key with a location are
+    found without walking them all. Two locations share a key only when one is a prefix of the other (every key
+    a location holds starts with the location), so ``related(text)`` returns the locations that start with
+    ``text`` (a range of the sorted list) and those that ``text`` starts with (one lookup per prefix of it)."""
+
+    def __init__(self, entries: Iterator[Tuple[str, str, str]] = ()):
+        self.holders: Dict[str, List[Tuple[str, str]]] = {}
+        for location, database_id, asset_id in entries:
+            self.add(location, database_id, asset_id)
+
+    def add(self, location: str, database_id: str, asset_id: str) -> None:
+        self.holders.setdefault(location, []).append((database_id, asset_id))
+        self._sorted = None
+
+    def related(self, text: str) -> Iterator[Tuple[str, Tuple[str, str]]]:
+        """``(location, (databaseId, assetId))`` for every holder of a location that starts with ``text`` or
+        that ``text`` starts with."""
+        if getattr(self, '_sorted', None) is None:
+            self._sorted = sorted(self.holders)
+        found = []
+        index = bisect.bisect_left(self._sorted, text)
+        while index < len(self._sorted) and self._sorted[index].startswith(text):
+            found.append(self._sorted[index])
+            index += 1
+        found.extend(text[:end] for end in range(1, len(text)) if text[:end] in self.holders)
+        for location in found:
+            for holder in self.holders[location]:
+                yield location, holder
+
+
 class Context(NamedTuple):
     """What the planner needs to know about the whole deployment."""
     registrations: Dict[str, Tuple[str, str]]        # bucketId -> (bucket name, base prefix)
-    locations: Dict[str, List[Tuple[str, str, str]]]  # bucket name -> [(location, databaseId, assetId)]
+    locations: Dict[str, BucketLocations]            # bucket name -> its stored locations
     candidate_keys: Dict[str, Set[str]]              # bucket name -> file keys of every candidate row
     resolutions: Dict[Tuple[str, str], Dict[str, str]]
 
@@ -516,24 +561,36 @@ def load_resolutions(path: Optional[str]) -> Dict[Tuple[str, str], Dict[str, str
     return resolutions
 
 
-def _others(context: Context, bucket: str, candidate: Candidate) -> Iterator[str]:
-    for location, database_id, asset_id in context.locations.get(bucket, []):
-        if (database_id, asset_id) != (candidate.database_id, candidate.asset_id):
+def _others(context: Context, bucket: str, candidate: Candidate, text: str) -> Iterator[str]:
+    """The other assets' locations that can share a key with ``text`` (``BucketLocations.related``)."""
+    locations = context.locations.get(bucket)
+    if locations is None:
+        return
+    for location, holder in locations.related(text):
+        if holder != (candidate.database_id, candidate.asset_id):
             yield location
+
+
+def _encloses(location: str, key: str) -> bool:
+    """Whether ``location`` is a stored location that ``key`` lies inside: a folder that ``key`` starts with,
+    or a single file whose companion folder ``key`` is in. The asset at ``key`` is nested in such a location
+    already, and stays nested in it after the conversion."""
+    return key.startswith(location) if location.endswith('/') else key.startswith(location + '/')
 
 
 def _conflicts(context: Context, bucket: str, candidate: Candidate, folder: str) -> Tuple[List[str], List[str],
                                                                                           List[str]]:
     """``(equal, ancestors, conflicting)`` other locations for ``folder`` becoming the location: equal to it,
-    an ancestor folder of it (allowed, the asset is nested in it), and any other location that holds one of
-    its keys and is not already nested in the file's own location."""
+    a location it lies inside (an ancestor folder, or a single file whose companion folder holds it; allowed,
+    the asset is nested in it), and any other location that holds one of its keys and is not already nested in
+    the file's own location."""
     equal, ancestors, conflicting = [], [], []
-    for location in _others(context, bucket, candidate):
+    for location in _others(context, bucket, candidate, folder):
         if location == folder:
             equal.append(location)
         elif not locations_share_key(folder, location):
             continue
-        elif location.endswith('/') and folder.startswith(location):
+        elif _encloses(location, folder):
             ancestors.append(location)
         elif len(location) > len(candidate.location) and locations_share_key(candidate.location, location):
             continue
@@ -699,6 +756,11 @@ def _plan_move(s3_client, context: Context, candidate: Candidate, bucket: str) -
                    (e.get('StorageClass') or 'STANDARD') not in READABLE_STORAGE_CLASSES})
     if cold:
         return blocked('a version is in a storage class that needs a restore first', cold)
+    refused = preflight_reads(s3_client, bucket, [e for e in sources if not e['Marker']])
+    if refused:
+        return Plan('unreadable', target=target, detail=(
+            f"a move must read every version of the file, and the read of {refused} was refused; grant "
+            "s3:GetObjectVersion on the bucket and kms:Decrypt on its key, then run the step again"))
     taken = sorted({e['Key'] for e in list_versions(s3_client, bucket, moved)
                     if e['Key'] == moved or _is_preview_of(moved, e['Key']) or e['Key'].startswith(moved + '/')})
     if taken:
@@ -709,17 +771,61 @@ def _plan_move(s3_client, context: Context, candidate: Candidate, bucket: str) -
     equal, _, _ = _conflicts(context, bucket, candidate, target)
     if equal:
         return blocked('another asset is stored at the companion folder', equal)
-    holders = [loc for loc in _others(context, bucket, candidate) if locations_share_key(moved, loc)]
+    # A location the file already lies inside (an ancestor folder asset, or a file asset whose companion folder
+    # holds it) also holds the target; the moved asset stays nested in it, as the file is now.
+    holders = [loc for loc in _others(context, bucket, candidate, moved)
+               if locations_share_key(moved, loc) and not _encloses(loc, key)]
     if holders:
         return blocked('another asset location holds the target key', holders)
     archived = tuple(source for source in own_files(s3_client, bucket, key)
                      if latest_is_marker(exact_versions(s3_client, bucket, source)))
-    return Plan(MODE_MOVE, target=target, moves={}, keys=set(), archived=archived)
+    copies = [e for e in sources if not e['Marker']]
+    size = sum(int(e.get('Size') or 0) for e in copies)
+    return Plan(MODE_MOVE, target=target, moves={}, keys=set(), archived=archived, move_versions=len(copies),
+                move_bytes=size, detail=f"copies {len(copies)} version(s), {size} bytes")
 
 
 #######################
 # Writes
 #######################
+
+def preflight_reads(s3_client, bucket: str, versions: List[Dict]) -> str:
+    """Read one byte of every version a move copies, so a refused read or decrypt shows before the row changes.
+    Returns '' when every read succeeded, else ``'{key} version {id} ({error code})'``."""
+    for entry in versions:
+        kwargs = {'Bucket': bucket, 'Key': entry['Key'], 'VersionId': entry['VersionId']}
+        try:
+            if int(entry.get('Size') or 0) > 0:
+                s3_client.get_object(Range='bytes=0-0', **kwargs)['Body'].read()
+            else:
+                s3_client.head_object(**kwargs)
+        except ClientError as e:
+            if _error_code(e) != 'InvalidRange':
+                return f"{entry['Key']} version {entry['VersionId']} ({_error_code(e) or e})"
+    return ''
+
+
+def revert_flip(dynamodb_client, asset_table: str, candidate: Candidate, bucket: str, target: str) -> str:
+    """Give a row whose move copied nothing back its file location, and remove its conversion record, in one
+    write conditional on the row still being pending on ``target``. Returns 'reverted' or 'changed'."""
+    try:
+        dynamodb_client.update_item(
+            TableName=asset_table,
+            Key={'databaseId': {'S': candidate.database_id}, 'assetId': {'S': candidate.asset_id}},
+            UpdateExpression='SET #al.#k = :from, #lb = :bucket, #lk = :key REMOVE #c',
+            ConditionExpression='#al.#k = :to AND #c.#s = :pending',
+            ExpressionAttributeNames={'#al': 'assetLocation', '#k': 'Key', '#lb': LOCATION_BUCKET_ATTRIBUTE,
+                                      '#lk': LOCATION_KEY_ATTRIBUTE, '#c': CONVERSION_ATTRIBUTE, '#s': 'state'},
+            ExpressionAttributeValues={':from': {'S': candidate.stored}, ':bucket': {'S': bucket},
+                                       ':key': {'S': candidate.location}, ':to': {'S': target},
+                                       ':pending': {'S': STATE_PENDING}},
+        )
+        return 'reverted'
+    except ClientError as e:
+        if _error_code(e) == 'ConditionalCheckFailedException':
+            return 'changed'
+        raise
+
 
 def flip_row(dynamodb_client, asset_table: str, candidate: Candidate, bucket: str, plan: Plan, started: str) -> str:
     """Set the folder location and mark the conversion pending, in one write conditional on the location
@@ -736,7 +842,7 @@ def flip_row(dynamodb_client, asset_table: str, candidate: Candidate, bucket: st
             ExpressionAttributeNames={'#al': 'assetLocation', '#k': 'Key', '#lb': LOCATION_BUCKET_ATTRIBUTE,
                                       '#lk': LOCATION_KEY_ATTRIBUTE, '#c': CONVERSION_ATTRIBUTE},
             ExpressionAttributeValues={':to': {'S': plan.target}, ':bucket': {'S': bucket},
-                                       ':conv': {'M': conversion}, ':from': {'S': candidate.location}},
+                                       ':conv': {'M': conversion}, ':from': {'S': candidate.stored}},
         )
         return 'flipped'
     except ClientError as e:
@@ -790,11 +896,64 @@ def write_history(dynamodb_client, history_table: Optional[str], row: Dict, star
             raise
 
 
-def move_record(dynamodb_client, table: str, item: Dict, key_names: Tuple[str, ...], new_item: Dict,
+def move_record(dynamodb_client, table: str, item: Dict, key_names: Tuple[str, ...], changes: Dict[str, str],
                 dry_run: bool) -> str:
-    """Move one record to its new key in one transaction: the put needs no record at the new key and the
-    delete needs the old one to still be there. Returns 'moved' ('would move'), 'clash' (a record is already
-    at the new key; nothing changes) or 'gone' (the old record was removed meanwhile)."""
+    """Move one record to its new key, as the assetLocationFolderKeys step moves a copy's records. The old record
+    is read again (consistent read) and the new record is built from that read with ``changes``; the put is
+    conditional on no record at the new key and the delete on the old record being unchanged since that read, in
+    one transaction. Returns 'moved' (or 'would move' on a dry run); 'clash' when a record is already at the new
+    key; 'gone' when the old record was removed; 'changed' when it differs from the listing that selected it or
+    was edited before the transaction. Nothing changes for the last three. A transaction cancelled for any
+    other reason raises."""
+    old_key = {name: item[name] for name in key_names}
+    current = dynamodb_client.get_item(TableName=table, Key=old_key, ConsistentRead=True).get('Item')
+    if current is None:
+        return 'gone'
+    if current != item:
+        return 'changed'
+    new_item = dict(current)
+    new_item.update({attr: {'S': value} for attr, value in changes.items()})
+    target_key = {name: new_item[name] for name in key_names}
+    if dry_run:
+        found = dynamodb_client.get_item(TableName=table, Key=target_key)
+        return 'clash' if 'Item' in found else 'would move'
+    names = {'#k': key_names[0]}
+    unchanged = ['attribute_exists(#k)']
+    values = {}
+    for index, attr in enumerate(sorted(a for a in current if a not in key_names)):
+        names[f"#a{index}"] = attr
+        values[f":a{index}"] = current[attr]
+        unchanged.append(f"#a{index} = :a{index}")
+    delete = {'TableName': table, 'Key': old_key, 'ConditionExpression': ' AND '.join(unchanged),
+              'ExpressionAttributeNames': names, 'ReturnValuesOnConditionCheckFailure': 'ALL_OLD'}
+    if values:
+        delete['ExpressionAttributeValues'] = values
+    try:
+        dynamodb_client.transact_write_items(TransactItems=[
+            {'Put': {'TableName': table, 'Item': new_item, 'ConditionExpression': 'attribute_not_exists(#k)',
+                     'ExpressionAttributeNames': {'#k': key_names[0]}}},
+            {'Delete': delete},
+        ])
+        return 'moved'
+    except ClientError as e:
+        if _error_code(e) != 'TransactionCanceledException':
+            raise
+        # One reason per action, in order: index 0 is the put, index 1 the delete.
+        reasons = e.response.get('CancellationReasons') or []
+        codes = [reason.get('Code') for reason in reasons]
+        if codes[:1] == ['ConditionalCheckFailed']:
+            return 'clash'
+        if len(codes) == 2 and codes[0] in (None, 'None') and codes[1] == 'ConditionalCheckFailed':
+            return 'changed' if reasons[1].get('Item') else 'gone'
+        raise
+
+
+def move_item(dynamodb_client, table: str, item: Dict, key_names: Tuple[str, ...], new_item: Dict,
+              dry_run: bool) -> str:
+    """Move one vector item to its new key in one transaction: the put needs no item at the new key and the
+    delete needs the old one to still be there. Returns 'moved' ('would move'), 'clash' (an item is already at
+    the new key; nothing changes) or 'gone' (the old item was removed meanwhile). A vector item is rewritten
+    only by the indexer from the file itself, so it needs no compare with the listing."""
     target_key = {name: new_item[name] for name in key_names}
     names = {'#k': key_names[0]}
     if dry_run:
@@ -828,11 +987,13 @@ class RecordMover:
         self.counts = counts
         self.report = report
         self.base = base
+        # Old to new S3 key of each file a move copies, for the keys vector items name (previewFileKey)
+        self.key_map: Dict[str, str] = {}
 
     def _outcome(self, label: str, old: str, new: str, outcome: str, detail: str = '') -> None:
         key = {'moved': 'records-moved', 'would move': 'records-moved', 'clash': 'record-clash',
                'gone': 'records-gone', 'left': 'records-left', 'rewritten': 'versions-rewritten',
-               'would rewrite': 'versions-rewritten', 'failed': 'errors'}[outcome]
+               'would rewrite': 'versions-rewritten', 'failed': 'errors', 'changed': 'changed'}[outcome]
         self.counts[key] += 1
         record = dict(self.base, part='records', table=label, **{'from': old, 'to': new}, action=outcome)
         if detail:
@@ -841,14 +1002,14 @@ class RecordMover:
 
     def _move(self, label: str, table: str, item: Dict, key_names: Tuple[str, ...], changes: Dict[str, str],
               old: str, new: str) -> None:
-        new_item = dict(item)
-        new_item.update({attr: {'S': value} for attr, value in changes.items()})
         try:
-            outcome = move_record(self.client, table, item, key_names, new_item, self.dry_run)
+            outcome = move_record(self.client, table, item, key_names, changes, self.dry_run)
         except ClientError as e:
             self._outcome(label, old, new, 'failed', str(e))
             return
-        self._outcome(label, old, new, outcome)
+        self._outcome(label, old, new, outcome,
+                      'the record was edited after it was listed; it stays at its old path, run the step again'
+                      if outcome == 'changed' else '')
 
     def _vector_items(self, table: str, key_path: str) -> List[Dict]:
         return list(_paginate(self.client.query, TableName=table,
@@ -868,10 +1029,14 @@ class RecordMover:
             version, separator, segment = sort_key[len(old_key_path) + 1:].partition('#')
             new_version = (version_map or {}).get(version, version)
             new_sort_key = f"{new_key_path}#{new_version}" + (f"#{segment}" if separator else '')
-            if new_sort_key == sort_key:
-                continue
+            preview = _s(item, 'previewFileKey')
+            new_preview = self.key_map.get(preview, preview)
             label = 'vectors'
             shown_old, shown_new = f"{old}@{version}", f"{new}@{new_version}"
+            if new_sort_key == sort_key:
+                if new_preview != preview:
+                    self._retarget_preview(table, item, preview, new_preview, shown_old)
+                continue
             if len(new_sort_key.encode('utf-8')) > VECTOR_SORT_KEY_MAX_BYTES:
                 self.counts['vectors-left'] += 1
                 self.report(dict(self.base, part='vectors', table=label, **{'from': shown_old, 'to': shown_new},
@@ -883,9 +1048,11 @@ class RecordMover:
                 new_item['filePath'] = {'S': new}
             if 'versionId' in item:
                 new_item['versionId'] = {'S': new_version}
+            if new_preview != preview:
+                new_item['previewFileKey'] = {'S': new_preview}
             try:
-                outcome = move_record(self.client, table, item, (VECTOR_PARTITION_KEY, VECTOR_SORT_KEY), new_item,
-                                      self.dry_run)
+                outcome = move_item(self.client, table, item, (VECTOR_PARTITION_KEY, VECTOR_SORT_KEY), new_item,
+                                    self.dry_run)
                 if outcome == 'clash' and not self.dry_run:
                     self.client.delete_item(TableName=table, Key={
                         VECTOR_PARTITION_KEY: item[VECTOR_PARTITION_KEY], VECTOR_SORT_KEY: item[VECTOR_SORT_KEY]})
@@ -898,6 +1065,23 @@ class RecordMover:
                 self.counts['vectors-dropped'] += 1
             self.report(dict(self.base, part='vectors', table=label, **{'from': shown_old, 'to': shown_new},
                              action=outcome if outcome != 'clash' else 'dropped: a vector is at the new key'))
+
+    def _retarget_preview(self, table: str, item: Dict, preview: str, new_preview: str, shown: str) -> None:
+        """Point a vector item that stays at its key at the moved preview, conditional on its preview being the
+        one read."""
+        if not self.dry_run:
+            try:
+                self.client.update_item(
+                    TableName=table,
+                    Key={VECTOR_PARTITION_KEY: item[VECTOR_PARTITION_KEY], VECTOR_SORT_KEY: item[VECTOR_SORT_KEY]},
+                    UpdateExpression='SET previewFileKey = :new', ConditionExpression='previewFileKey = :old',
+                    ExpressionAttributeValues={':new': {'S': new_preview}, ':old': {'S': preview}})
+            except ClientError as e:
+                if _error_code(e) != 'ConditionalCheckFailedException':
+                    self._outcome('vectors', shown, shown, 'failed', str(e))
+                    return
+        self.report(dict(self.base, part='vectors', table='vectors', **{'from': preview, 'to': new_preview},
+                         action='would point at the moved preview' if self.dry_run else 'pointed at the moved preview'))
 
     def touch_for_search(self, paths: List[str]) -> None:
         """Write and delete a reindex touch record at each path, so the file metadata table's stream
@@ -1175,7 +1359,7 @@ def read_context(dynamodb_client, cfg: Dict, resolutions: Dict) -> Tuple[Context
                           ProjectionExpression='bucketId, bucketName, baseAssetsPrefix'):
         if _s(item, 'bucketId') and _s(item, 'bucketName'):
             registrations[_s(item, 'bucketId')] = (_s(item, 'bucketName'), _s(item, 'baseAssetsPrefix'))
-    locations: Dict[str, List[Tuple[str, str, str]]] = {}
+    locations: Dict[str, BucketLocations] = {}
     candidate_keys: Dict[str, Set[str]] = {}
     candidates = []
     scanned = 0
@@ -1186,11 +1370,11 @@ def read_context(dynamodb_client, cfg: Dict, resolutions: Dict) -> Tuple[Context
         location = _location_of(row)
         bucket = registrations.get(_s(row, 'bucketId'), ('', ''))[0]
         if bucket and location:
-            locations.setdefault(bucket, []).append((location, _s(row, 'databaseId'), _s(row, 'assetId')))
+            locations.setdefault(bucket, BucketLocations()).add(location, _s(row, 'databaseId'), _s(row, 'assetId'))
         conversion = _plain_map(_m(row, CONVERSION_ATTRIBUTE))
         if (location and not location.endswith('/')) or conversion.get('state') == STATE_PENDING:
             candidates.append(Candidate(_s(row, 'databaseId'), _s(row, 'assetId'), _s(row, 'bucketId'), location,
-                                        bool(_s(row, COPY_DONE_ATTRIBUTE)), conversion))
+                                        bool(_s(row, COPY_DONE_ATTRIBUTE)), conversion, _stored_location_of(row)))
             if bucket and location and not location.endswith('/'):
                 candidate_keys.setdefault(bucket, set()).add(location)
     candidates.sort(key=lambda c: (c.database_id, c.asset_id))
@@ -1202,7 +1386,10 @@ def _execute(dynamodb_client, s3_client, cfg: Dict, context: Context, candidate:
     """Carry out a conversion plan (or resume a pending one) on a real run."""
     asset_table = cfg['asset_storage_table_name']
     bucket = context.registrations.get(candidate.bucket_id, ('', ''))[0]
-    errors_before = counts['errors'] + counts['record-clash']
+    def failures() -> int:
+        return counts['errors'] + counts['record-clash'] + counts['changed']
+
+    errors_before = failures()
     if plan.outcome == 'resume':
         file_key = candidate.conversion.get('from', '')
         mode = candidate.conversion.get('mode', '')
@@ -1229,11 +1416,18 @@ def _execute(dynamodb_client, s3_client, cfg: Dict, context: Context, candidate:
     if mode == MODE_MOVE:
         name = _file_name(file_key)
         archived = set(candidate.conversion.get('archived') or ()) if plan.outcome == 'resume' else set(plan.archived)
-        for source in own_files(s3_client, bucket, file_key):
-            destination = f"{target}{name}{source[len(file_key):]}"
+        sources = own_files(s3_client, bucket, file_key)
+        mover.key_map = {source: f"{target}{name}{source[len(file_key):]}" for source in sources}
+        for source in sources:
+            destination = mover.key_map[source]
             path = '/' + destination[len(target):]
-            outcome, mapping = move_object(s3_client, bucket, source, destination, database_id, candidate.asset_id,
-                                           path, source in archived)
+            try:
+                outcome, mapping = move_object(s3_client, bucket, source, destination, database_id,
+                                               candidate.asset_id, path, source in archived)
+            except ClientError as e:
+                _stop_move(dynamodb_client, s3_client, asset_table, candidate, bucket, file_key, target, mover.key_map,
+                           e, counts, report, base)
+                return
             report(dict(base, part='objects', **{'from': source, 'to': destination}, action=outcome,
                         versions=len(mapping)))
             if outcome == 'changed':
@@ -1254,12 +1448,12 @@ def _execute(dynamodb_client, s3_client, cfg: Dict, context: Context, candidate:
             return target + old.lstrip('/') in target_keys
 
         mover.move_paths(moves, guard)
-    if counts['errors'] + counts['record-clash'] != errors_before:
+    if failures() != errors_before:
         counts['pending'] += 1
         report(dict(base, action='left pending', detail='a record could not be moved; resolve it and run again'))
         return
     mover.touch_for_search(search_paths(file_key, target, {} if mode == MODE_MOVE else moves, keys, mode))
-    if counts['errors'] + counts['record-clash'] != errors_before:
+    if failures() != errors_before:
         counts['pending'] += 1
         report(dict(base, action='left pending', detail='the search index could not be updated; run again'))
         return
@@ -1274,6 +1468,30 @@ def _execute(dynamodb_client, s3_client, cfg: Dict, context: Context, candidate:
     counts['converted'] += 1
     counts[f"mode:{mode}"] += 1
     report(dict(base, action='converted', mode=mode, to=target))
+
+
+def _stop_move(dynamodb_client, s3_client, asset_table: str, candidate: Candidate, bucket: str, file_key: str,
+               target: str, key_map: Dict[str, str], error: ClientError, counts: Dict[str, int],
+               report: Callable[[Dict], None], base: Dict) -> None:
+    """A copy of a move was refused. When no copy of the step is at any target yet, the row gets its file
+    location back and the move is reported refused; otherwise the row stays pending on ``target`` and the
+    report says where the file is and how to finish."""
+    code = _error_code(error) or str(error)
+    counts['errors'] += 1
+    written = any(copied_versions(s3_client, bucket, destination,
+                                  {e['VersionId'] for e in exact_versions(s3_client, bucket, source)
+                                   if not e['Marker']})[0]
+                  for source, destination in key_map.items())
+    if not written and revert_flip(dynamodb_client, asset_table, candidate, bucket, target) == 'reverted':
+        report(dict(base, part='objects', action='failed', detail=(
+            f"the copy was refused ({code}) before any version was copied; the row is unchanged and the asset "
+            "stays single-file. Grant the move's S3 and AWS KMS permissions and run the step again")))
+        return
+    counts['pending'] += 1
+    report(dict(base, part='objects', action='left pending', detail=(
+        f"the move stopped ({code}) after copying part of the file: the asset's location is {target} while its "
+        f"file is still at {file_key}, so the asset lists its file only once a run completes the move. Fix the "
+        "cause and run the step again; it continues with the versions not yet copied")))
 
 
 def run_file_to_folder(dynamodb_client, s3_client, cfg: Dict, dry_run: bool, *, resume: bool = False,
@@ -1327,6 +1545,10 @@ def run_file_to_folder(dynamodb_client, s3_client, cfg: Dict, dry_run: bool, *, 
                 finding['resolution'] = plan.resolution
             if plan.moves:
                 finding['pathsMoved'] = len(plan.moves)
+            if plan.outcome == MODE_MOVE:
+                finding.update(moveVersions=plan.move_versions, moveBytes=plan.move_bytes)
+                counts['move-versions'] += plan.move_versions
+                counts['move-bytes'] += plan.move_bytes
             if not plan.converts:
                 counts[plan.outcome] += 1
                 write(dict(finding, action='report only'))
@@ -1386,6 +1608,9 @@ def summary_lines(counts: Dict[str, int], dry_run: bool) -> List[str]:
     done = counts.get('would-convert' if dry_run else 'converted', 0)
     lines = [f"assetLocationFileToFolder: {counts.get('candidates', 0)} row(s) without a folder location; "
              f"{done} {'would be converted' if dry_run else 'converted'} ({modes})."]
+    if counts.get('move-versions'):
+        lines.append(f"  Moves {'would copy' if dry_run else 'planned to copy'} {counts['move-versions']} version(s), "
+                     f"{counts.get('move-bytes', 0)} bytes in all (per asset in the report: moveVersions, moveBytes).")
     refused = {name: counts.get(name, 0) for name in LAYOUT_REFUSALS if counts.get(name)}
     if refused:
         lines.append("  Refused (row unchanged; see the report and the resolutions option): " +

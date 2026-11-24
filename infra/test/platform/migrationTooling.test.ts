@@ -1038,7 +1038,7 @@ describe("reindex_utility.py --tag-synced reaches its readiness check with the b
 });
 
 describe("the v2.6 to v2.7 assetLocationFileToFolder step", () => {
-    // The step converts asset locations that name a file into folders (#1888). It runs on an operator
+    // The step converts asset locations that name a file into folders. It runs on an operator
     // machine without the backend, so its copies of the backend's names are pinned to the backend here.
     const release = MIGRATIONS.find((m) => m.dir === "v2.6_to_v2.7");
     if (!release) throw new Error("the v2.6_to_v2.7 migration is not listed");
@@ -1133,9 +1133,19 @@ describe("the v2.6 to v2.7 assetLocationFileToFolder step", () => {
         for (const call of module.match(/\.delete_object\([^)]*\)/g) ?? []) {
             expect(call).not.toContain("VersionId");
         }
-        const move = module.slice(module.indexOf("def move_record("));
-        expect(move.slice(0, 1600)).toContain("'ConditionExpression': 'attribute_not_exists(#k)'");
-        expect(move.slice(0, 1600)).toContain("'ConditionExpression': 'attribute_exists(#k)'");
+        // A record is moved as assetLocationFolderKeys moves one: read again consistently, compared with the
+        // listing, written only where no record is, and deleted only while every attribute is as read.
+        const move = module.slice(
+            module.indexOf("def move_record("),
+            module.indexOf("\ndef move_item(")
+        );
+        expect(move).toContain("ConsistentRead=True");
+        expect(move).toContain("if current != item:");
+        expect(move).toContain("'ConditionExpression': 'attribute_not_exists(#k)'");
+        expect(move).toContain('unchanged.append(f"#a{index} = :a{index}")');
+        expect(move).toContain("return 'changed' if reasons[1].get('Item') else 'gone'");
+        const step0 = script.slice(script.indexOf("def move_record("));
+        expect(step0.slice(0, 3000)).toContain('unchanged.append(f"#a{index} = :a{index}")');
         // The row flip is conditional on the file key and on no conversion having started.
         const flip = module.slice(module.indexOf("def flip_row("));
         expect(flip.slice(0, 1600)).toContain("#al.#k = :from AND attribute_not_exists(#c)");
