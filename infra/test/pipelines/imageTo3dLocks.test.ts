@@ -38,7 +38,11 @@ interface ConvertedImage {
     upstreamFiles: string[];
     /** Upstream lines the Dockerfile deletes or the lock replaces, with the pyproject override that replaces them. */
     upstreamLinesNotLocked: RegExp[];
+    /** The PyTorch index torch and its siblings come from (default: the CUDA 12.8 index). */
+    torchIndex?: { name: string; url: string };
 }
+
+const CU128 = { name: "pytorch-cu128", url: "https://download.pytorch.org/whl/cu128" };
 
 const CONVERTED: ConvertedImage[] = [
     {
@@ -52,6 +56,43 @@ const CONVERTED: ConvertedImage[] = [
         dockerfile: "Dockerfile.triposr",
         upstreamFiles: ["requirements.txt"],
         upstreamLinesNotLocked: [/^git\+https:\/\/github\.com\/tatsy\/torchmcubes\.git$/],
+    },
+    {
+        // nvdiffrast and pytorch3d are built from pinned commits (out-of-lock.json); pymeshlab is the GPL group's.
+        model: "step1x3d",
+        dockerfile: "Dockerfile.step1x3d",
+        upstreamFiles: ["requirements.txt"],
+        upstreamLinesNotLocked: [
+            /^git\+https:\/\/github\.com\/NVlabs\/nvdiffrast\.git$/,
+            /^git\+https:\/\/github\.com\/facebookresearch\/pytorch3d\.git@stable$/,
+            /^pymeshlab==/,
+        ],
+    },
+    {
+        // The Dockerfile has always filtered these out of upstream's list: torch and torchvision (the CUDA build),
+        // pymeshlab (GPL group) and the demo-only gradio, fastapi and uvicorn.
+        model: "hunyuan3d",
+        dockerfile: "Dockerfile.hunyuan3d",
+        upstreamFiles: ["requirements.txt"],
+        upstreamLinesNotLocked: [/^(torch|torchvision|pymeshlab|gradio|fastapi|uvicorn)$/],
+    },
+    {
+        // CUDA 12.4 torch from its own explicit index (PyPI stays the default for the NVIDIA runtime wheels), the prebuilt
+        // flash-attn wheel in the lock, and five packages built from pinned clones (utils3d hash-checked). Upstream's
+        // setup.sh names no versions and the Dockerfile's own list is what the lock mirrors, so no upstream file is recorded.
+        model: "trellis2",
+        dockerfile: "Dockerfile.trellis2",
+        upstreamFiles: [],
+        upstreamLinesNotLocked: [],
+        torchIndex: { name: "pytorch-cu124", url: "https://download.pytorch.org/whl/cu124" },
+    },
+    {
+        // The Blender agent has no upstream requirements file: its set is the shared pipeline dependencies, LiteLLM and
+        // its dependencies, the CUDA 12.8 torch and what MoGe-2 imports. MoGe and utils3d are built from pinned clones.
+        model: "blenderagent",
+        dockerfile: "Dockerfile.blenderagent",
+        upstreamFiles: [],
+        upstreamLinesNotLocked: [],
     },
 ];
 
@@ -82,7 +123,14 @@ function exportPins(text: string): { name: string; version: string; hashes: numb
     const pins: { name: string; version: string; hashes: number }[] = [];
     for (const line of text.split(/\r?\n/)) {
         const pin = /^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)/.exec(line);
+        // A prebuilt wheel (`name @ https://.../<dist>-<version>[+label]-<tags>.whl`) is read as its public version, the
+        // way the audit and check_installed_set.py read it.
+        const wheel =
+            /^([A-Za-z0-9][A-Za-z0-9._-]*)\s+@\s+https:\/\/[^\s;]*\/[A-Za-z0-9_.]+-([0-9][A-Za-z0-9_.!]*)(?:\+[A-Za-z0-9_.]+)?-[^\s;/]+\.whl\b/.exec(
+                line
+            );
         if (pin) pins.push({ name: normalize(pin[1]), version: pin[2], hashes: 0 });
+        else if (wheel) pins.push({ name: normalize(wheel[1]), version: wheel[2], hashes: 0 });
         else if (/^\s+--hash=sha256:[0-9a-f]{64}/.test(line) && pins.length) {
             pins[pins.length - 1].hashes += 1;
         }
@@ -118,16 +166,19 @@ function tomlArray(text: string, key: string, after = 0): string[] {
 
 describe.each(CONVERTED)(
     "the $model image lock",
-    ({ model, dockerfile, upstreamFiles, upstreamLinesNotLocked }) => {
+    ({ model, dockerfile, upstreamFiles, upstreamLinesNotLocked, torchIndex = CU128 }) => {
         const dir = path.join(CONTAINER_DIR, "locks", model);
         const read = (name: string) => fs.readFileSync(path.join(dir, name), "utf-8");
         const dockerText = fs.readFileSync(path.join(CONTAINER_DIR, dockerfile), "utf-8");
         const steps = instructions(dockerText);
         const pyproject = read("pyproject.toml");
         const frozen = frozenPins(read("frozen-set.txt"));
-        const outOfLock: { name: string; version: string; commit: string }[] = JSON.parse(
-            read("out-of-lock.json")
-        ).packages;
+        const outOfLock: {
+            name: string;
+            version: string;
+            commit: string;
+            treeSha256?: string;
+        }[] = JSON.parse(read("out-of-lock.json")).packages;
 
         it("installs every Python package from a hashed lock, except the recorded source builds", () => {
             const installs = steps.filter((s) => /\bpip3?\s+install\b/.test(s));
@@ -143,12 +194,19 @@ describe.each(CONVERTED)(
                 );
             }
             // What is left is a build from a pinned clone of the recorded out-of-lock packages: no resolver, no index.
-            for (const step of unlocked) {
-                expect(step).toMatch(/--no-deps/);
-                expect(step).toMatch(/--no-build-isolation/);
-                expect(step).toMatch(/\s\/opt\/[a-z0-9]+\s*$/);
+            // One RUN can build several packages, so every `pip install` in it is checked on its own.
+            const builds = unlocked.flatMap((step) =>
+                step
+                    .split(/\bpip3?\s+install\b/)
+                    .slice(1)
+                    .map((segment) => segment.split(/;|&&/)[0].trim())
+            );
+            for (const build of builds) {
+                expect(build).toMatch(/--no-deps/);
+                expect(build).toMatch(/--no-build-isolation/);
+                expect(build).toMatch(/\s\/(opt|tmp)\/[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/);
             }
-            expect(unlocked.length).toBe(outOfLock.length);
+            expect(builds.length).toBe(outOfLock.length);
             // The upgrade of pip, setuptools and wheel that resolved on build day is gone.
             expect(steps.filter((s) => /--upgrade/.test(s) && /\bpip\b/.test(s))).toEqual([]);
             // And no install reads the shared requirements file or an upstream one.
@@ -181,19 +239,19 @@ describe.each(CONVERTED)(
         });
 
         it("takes torch and its siblings from the explicit PyTorch index, and nothing else from it", () => {
-            expect(pyproject).toMatch(
-                /\[\[tool\.uv\.index\]\]\nname = "pytorch-cu128"\nurl = "https:\/\/download\.pytorch\.org\/whl\/cu128"\nexplicit = true/
+            expect(pyproject).toContain(
+                `[[tool.uv.index]]\nname = "${torchIndex.name}"\nurl = "${torchIndex.url}"\nexplicit = true`
             );
             const sources = /\[tool\.uv\.sources\]\n([\s\S]*)$/.exec(pyproject)![1];
             for (const line of sources.split(/\r?\n/).filter((l) => l.trim() !== "")) {
                 expect(line).toMatch(
-                    /^(torch|torchvision|xformers) = \{ index = "pytorch-cu128" \}$/
+                    new RegExp(
+                        `^(torch|torchvision|xformers) = \\{ index = "${torchIndex.name}" \\}$`
+                    )
                 );
             }
             const install = steps.find((s) => /-r \/opt\/locks\/\w+\/requirements\.lock/.test(s))!;
-            expect(install).toMatch(
-                /--extra-index-url https:\/\/download\.pytorch\.org\/whl\/cu128/
-            );
+            expect(install).toContain(`--extra-index-url ${torchIndex.url}`);
         });
 
         it("copies the lock files, the recorded upstream files and the checks into the image", () => {
@@ -207,13 +265,18 @@ describe.each(CONVERTED)(
                 expect(copies).toContain(`locks/${model}/${file}`);
                 expect(fs.existsSync(path.join(dir, file))).toBe(true);
             }
-            expect(copies).toContain(`locks/${model}/upstream /opt/locks/${model}/upstream`);
+            if (upstreamFiles.length > 0) {
+                expect(copies).toContain(`locks/${model}/upstream /opt/locks/${model}/upstream`);
+            }
             expect(copies).toContain(
-                "locks/tools/check_installed_set.py locks/tools/check_upstream_requirements.py /opt/locks/tools/"
+                upstreamFiles.length > 0
+                    ? "locks/tools/check_installed_set.py locks/tools/check_upstream_requirements.py /opt/locks/tools/"
+                    : "locks/tools/check_installed_set.py /opt/locks/tools/"
             );
         });
 
         it("compares each recorded upstream file with the clone right after the clone", () => {
+            if (upstreamFiles.length === 0) return;
             const clone = steps.findIndex(
                 (s) =>
                     /git clone .*\/opt\/\w+ /.test(s) ||
@@ -299,6 +362,14 @@ describe.each(CONVERTED)(
                 expect(entry.version).toMatch(/^\d/);
                 expect(entry.commit).toMatch(/^[0-9a-f]{40}$/);
                 expect(dockerText).toContain(`=${entry.commit}`);
+                // A package built from a clone whose files are hash-checked records the digest the build compares with.
+                if (entry.treeSha256 !== undefined) {
+                    expect(entry.treeSha256).toMatch(/^[0-9a-f]{64}$/);
+                    expect(dockerText).toContain(`=${entry.treeSha256}`);
+                    expect(dockerText).toMatch(
+                        /git ls-files -z \| LC_ALL=C sort -z \| xargs -0 sha256sum \| sha256sum/
+                    );
+                }
             }
         });
 
@@ -312,6 +383,56 @@ describe.each(CONVERTED)(
         });
     }
 );
+
+describe("the Stable3DGen image's pillow and gradio", () => {
+    const dir = path.join(CONTAINER_DIR, "locks", "stable3dgen");
+    const read = (name: string) => fs.readFileSync(path.join(dir, name), "utf-8");
+    const locked = new Map(
+        ["requirements-build.lock", "requirements.lock", "requirements-gpl.lock"].flatMap((file) =>
+            exportPins(read(file)).map((p) => [p.name, p.version] as [string, string])
+        )
+    );
+
+    it("installs pillow 13 or later, with no pillow entry for the image in the audit allowlist", () => {
+        expect(Number((locked.get("pillow") ?? "0").split(".")[0])).toBeGreaterThanOrEqual(13);
+        const entries: { package: string; projects: string[] }[] = JSON.parse(
+            fs.readFileSync(
+                path.join(__dirname, "..", "..", "..", ".github", "python-audit-allowlist.json"),
+                "utf-8"
+            )
+        ).entries;
+        const project = "backendPipelines/genAi/imageTo3d/container/locks/stable3dgen";
+        expect(
+            entries.filter((e) => normalize(e.package) === "pillow" && e.projects.includes(project))
+        ).toEqual([]);
+    });
+
+    it("leaves gradio out of the lock through an override, and the build imports the job's modules without it", () => {
+        expect(locked.has("gradio")).toBe(false);
+        expect(
+            tomlArray(read("pyproject.toml"), "override-dependencies").filter((o) =>
+                o.startsWith("gradio")
+            )
+        ).toEqual(["gradio ; sys_platform == 'never'"]);
+        const dockerText = fs.readFileSync(
+            path.join(CONTAINER_DIR, "Dockerfile.stable3dgen"),
+            "utf-8"
+        );
+        const check = instructions(dockerText).find((s) =>
+            s.includes("Stable3DGen job modules import")
+        );
+        expect(check).toBeDefined();
+        expect(check).toContain("find_spec('gradio') is None");
+        expect(check).toContain("'__main__.py'");
+        expect(check).toContain("from hi3dgen.pipelines import Hi3DGenPipeline");
+        expect(check).toContain("import hubconf");
+        expect(check).toContain("/opt/torchhome/hub/facebookresearch_dinov2_main/hubconf.py");
+        // After the code is copied into the image, so the entry module it loads is the one that ships.
+        const codeCopy = dockerText.indexOf("COPY __init__.py __main__.py");
+        expect(codeCopy).toBeGreaterThan(0);
+        expect(dockerText.indexOf("Stable3DGen job modules import")).toBeGreaterThan(codeCopy);
+    });
+});
 
 describe("the images not yet converted", () => {
     it("still install the shared requirements.txt, and its exemption stays", () => {

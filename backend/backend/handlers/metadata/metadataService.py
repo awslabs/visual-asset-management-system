@@ -21,7 +21,9 @@ from common.apiRoutes import (
     API_FILE_METADATA, API_DATABASE_METADATA,
 )
 from common.validators import validate
-from common.assetLocations import is_folder_location, normalize_base_prefix, object_key_for
+from common.assetLocations import (
+    contains, is_folder_location, normalize_base_prefix, object_key_for, relative_path_in,
+)
 from common.fileAttribution import nested_locations_of_asset
 from common.assetProvenance import (
     METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
@@ -810,6 +812,31 @@ def authorize_asset_read(database_id: str, asset_id: str, claims_and_roles: dict
         raise VAMSGeneralErrorResponse("Asset not found")
     asset.update({"object__type": "asset"})
     return asset
+
+
+def file_record_path(asset: dict, asset_id: str, file_path: str) -> str:
+    """The path a file's metadata and attributes are keyed by: the path the file is listed at
+
+    A request names a file by that path (the CLI) or by its full S3 key (the web's file panel). A path
+    that is a key the asset's location holds, once its leading slash is dropped, names that key, as on
+    the file routes, and is keyed by the key's listed path. Any other path is taken as the listed path,
+    with a leading /{assetId}/ segment dropped.
+
+    Args:
+        asset: The asset record
+        asset_id: The asset ID
+        file_path: The file path of the request (with leading slash)
+
+    Returns:
+        The asset-relative path (with leading slash) the records are keyed by
+    """
+    location = (asset.get('assetLocation') or {}).get('Key')
+    key = file_path[1:] if file_path.startswith('/') else file_path
+    if contains(location, key):
+        return relative_path_in(location, key)
+    if file_path.startswith(f"/{asset_id}/"):
+        return file_path[len(asset_id) + 1:]
+    return file_path
 
 
 def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> bool:
@@ -3214,7 +3241,12 @@ def handle_asset_metadata_delete(event):
 #######################
 
 def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_type: str, query_params: dict, claims_and_roles: dict):
-    """Get metadata or attributes for a file - Returns one page of records"""
+    """Get metadata or attributes for a file - Returns one page of records
+
+    Returns:
+        (page, record path): the GetFileMetadataResponseModel and the path the records were read
+        under (file_record_path of the request path), which the caller audits
+    """
     # Check if querying a specific version
     asset_version_id = query_params.get('assetVersionId')
     if asset_version_id:
@@ -3228,6 +3260,7 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
         asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
                                      "Not authorized to view metadata for this file",
                                      include_archived=bool(query_params.get('showArchived')))
+        file_path = file_record_path(asset, asset_id, file_path)
         
         composite_key = f"{database_id}:{asset_id}:{file_path}"
         table_name = asset_file_metadata_table_name if metadata_type == 'metadata' else file_attribute_table_name
@@ -3315,7 +3348,7 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
             NextToken=next_token
         )
 
-        return result
+        return result, file_path
     except PermissionError as p:
         raise p
     except VAMSGeneralErrorResponse:
@@ -3328,11 +3361,16 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
 def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: str,
                                    metadata_type: str, asset_version_id: str,
                                    query_params: dict, claims_and_roles: dict):
-    """Get file metadata/attributes from a specific version snapshot"""
+    """Get file metadata/attributes from a specific version snapshot
+
+    Returns:
+        (page, record path), as get_file_metadata
+    """
     try:
         asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
                                      "Not authorized to view metadata for this file",
                                      include_archived=bool(query_params.get('showArchived')))
+        file_path = file_record_path(asset, asset_id, file_path)
 
         # Validate asset version exists before querying metadata
         validate_asset_version_exists(database_id, asset_id, asset_version_id)
@@ -3344,7 +3382,7 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
             return GetFileMetadataResponseModel(
                 metadata=[],
                 restrictMetadataOutsideSchemas=False
-            )
+            ), file_path
 
         # Filter for this specific file and type
         file_metadata = [
@@ -3403,7 +3441,7 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
             metadata=page,
             restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
             NextToken=next_token
-        )
+        ), file_path
 
     except PermissionError as p:
         raise p
@@ -3417,12 +3455,15 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
 def create_file_metadata(database_id: str, asset_id: str, request_model: CreateFileMetadataRequestModel, claims_and_roles: dict):
     """Create metadata or attributes for a file (bulk operation)"""
     try:
-        validate_file_exists(database_id, asset_id, request_model.filePath)
+        # Authorize the asset before the file is checked
         asset = validate_asset_exists(database_id, asset_id)
         asset.update({"object__type": "asset"})
         
         if not check_entity_authorization(asset, "POST", claims_and_roles):
             raise PermissionError("Not authorized to create metadata for this file")
+
+        request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
+        validate_file_exists(database_id, asset_id, request_model.filePath)
         
         # Validate 500 record limit: Fetch existing + count with new (separate limits for metadata vs attributes)
         composite_key = f"{database_id}:{asset_id}:{request_model.filePath}"
@@ -3642,7 +3683,7 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
     A REPLACE_ALL that removes stored keys also checks the route's DELETE on ``event``.
     """
     try:
-        validate_file_exists(database_id, asset_id, request_model.filePath)
+        # Authorize the asset before the file is checked
         asset = validate_asset_exists(database_id, asset_id)
         asset.update({"object__type": "asset"})
         
@@ -3655,6 +3696,9 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
             # UPDATE mode requires only PUT permission
             if not check_entity_authorization(asset, "PUT", claims_and_roles):
                 raise PermissionError("Not authorized to update metadata for this file")
+
+        request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
+        validate_file_exists(database_id, asset_id, request_model.filePath)
         
         # Check if user is SYSTEM_USER - bypass schema validation
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -4057,6 +4101,8 @@ def delete_file_metadata(database_id: str, asset_id: str, request_model: DeleteF
         
         if not check_entity_authorization(asset, "DELETE", claims_and_roles):
             raise PermissionError("Not authorized to delete metadata for this file")
+
+        request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
         
         # NEW: Schema validation for deletion
         composite_key = f"{database_id}:{asset_id}:{request_model.filePath}"
@@ -4233,14 +4279,10 @@ def handle_file_metadata_get(event):
         # Parse query parameters - validation handled in model (adds leading slash)
         query_request_model = parse(query_parameters, model=GetFileMetadataRequestModel)
         
-        # Strip assetId prefix if present (after model validation)
-        file_path = query_request_model.filePath
-        if file_path.startswith(f"/{path_request_model.assetId}/"):
-            file_path = file_path[len(path_request_model.assetId)+1:]
-            logger.info(f"Stripped assetId prefix from filePath: {query_request_model.filePath} -> {file_path}")
-        
         query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId, 'showArchived': query_request_model.showArchived}
-        response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
+        # The read keys the requested path by the path the file is listed at and returns it, so the
+        # record names the records read, as the writes do
+        response, file_path = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, query_request_model.filePath, query_request_model.type, query_params, claims_and_roles)
         log_action(event, "metadataGet", database_id=path_request_model.databaseId,
                    asset_id=path_request_model.assetId, file_path=file_path, item_count=_returned_count(response),
                    request_parameters={**query_params, 'type': query_request_model.type})
@@ -4279,11 +4321,7 @@ def handle_file_metadata_post(event):
         # Parse request model - validation handled in model (adds leading slash)
         request_model = parse(body, model=CreateFileMetadataRequestModel)
         
-        # Strip assetId prefix if present (after model validation)
-        if request_model.filePath.startswith(f"/{path_request_model.assetId}/"):
-            request_model.filePath = request_model.filePath[len(path_request_model.assetId)+1:]
-            logger.info(f"Stripped assetId prefix from filePath")
-        
+        # The write sets request_model.filePath to the path the file is listed at
         response = create_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         _log_metadata_write(event, "metadataCreate", response, request_model,
                             database_id=path_request_model.databaseId, asset_id=path_request_model.assetId,
@@ -4323,11 +4361,7 @@ def handle_file_metadata_put(event):
         # Parse request model - validation handled in model (adds leading slash)
         request_model = parse(body, model=UpdateFileMetadataRequestModel)
         
-        # Strip assetId prefix if present (after model validation)
-        if request_model.filePath.startswith(f"/{path_request_model.assetId}/"):
-            request_model.filePath = request_model.filePath[len(path_request_model.assetId)+1:]
-            logger.info(f"Stripped assetId prefix from filePath")
-        
+        # The write sets request_model.filePath to the path the file is listed at
         response = update_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles, event)
         _log_metadata_write(event, "metadataUpdate", response, request_model,
                             database_id=path_request_model.databaseId, asset_id=path_request_model.assetId,
@@ -4367,11 +4401,7 @@ def handle_file_metadata_delete(event):
         # Parse request model - validation handled in model (adds leading slash)
         request_model = parse(body, model=DeleteFileMetadataRequestModel)
         
-        # Strip assetId prefix if present (after model validation)
-        if request_model.filePath.startswith(f"/{path_request_model.assetId}/"):
-            request_model.filePath = request_model.filePath[len(path_request_model.assetId)+1:]
-            logger.info(f"Stripped assetId prefix from filePath")
-        
+        # The write sets request_model.filePath to the path the file is listed at
         response = delete_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         _log_metadata_write(event, "metadataDelete", response, request_model,
                             database_id=path_request_model.databaseId, asset_id=path_request_model.assetId,

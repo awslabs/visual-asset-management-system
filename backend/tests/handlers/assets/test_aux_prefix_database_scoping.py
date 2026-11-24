@@ -65,7 +65,8 @@ class TestAssetVersionsAuxPrefix:
             response = av.revert_asset_version("db1", "asset-1", request, {"tokens": ["alice"]})
 
         assert response.success is True
-        mock_delete.assert_called_once_with("db1/asset-1/scans/pump.e57/")
+        mock_delete.assert_called_once()
+        assert mock_delete.call_args.args == ("db1/asset-1/scans/pump.e57/preview/",)
 
 
 @pytest.mark.unit

@@ -14,7 +14,7 @@ import pytest
 
 from backend.backend.handlers.config import configService
 from backend.tests.ssmParametersStub import (
-    FakeClock, ParameterStoreStub, always, install_clock, load_ssm_parameters, throttled,
+    FakeClock, ParameterStoreStub, always, install_clock, load_deploy_time_values, load_ssm_parameters, throttled,
 )
 
 
@@ -91,7 +91,7 @@ class TestConfigService:
         mock_enforcer.enforceAPI.return_value = True
 
         with patch.object(configService, "dynamodb_client", mock_dynamodb_client), \
-             patch.object(configService, "get_parameter_value", helper.get_parameter_value), \
+             patch.object(configService, "resolve", load_deploy_time_values(helper).resolve), \
              patch.object(configService, "geo_client", mock_geo_client), \
              patch.object(configService, "CasbinEnforcer", return_value=mock_enforcer), \
              patch.object(configService, "request_to_claims", return_value={"tokens": ["test-user"], "roles": []}), \
@@ -146,7 +146,7 @@ class TestConfigService:
         mock_enforcer.enforceAPI.return_value = True
 
         with patch.object(configService, "dynamodb_client", mock_dynamodb_client), \
-             patch.object(configService, "get_parameter_value", helper.get_parameter_value), \
+             patch.object(configService, "resolve", load_deploy_time_values(helper).resolve), \
              patch.object(configService, "geo_client", mock_geo_client), \
              patch.object(configService, "CasbinEnforcer", return_value=mock_enforcer), \
              patch.object(configService, "request_to_claims", return_value={"tokens": ["test-user"], "roles": []}), \
@@ -215,7 +215,8 @@ class TestConfigService:
 
 
 # --------------------------------------------------------------------------------------------- #
-# #1820: the two Parameter Store reads go through common.ssmParameters, cached for five minutes
+# #1820: while the resource names do not carry the two values, they are read through
+# common.ssmParameters, cached for five minutes
 # --------------------------------------------------------------------------------------------- #
 
 _CONFIG_SERVICE_PATH = os.path.abspath(os.path.join(
@@ -236,6 +237,8 @@ def secure_config(monkeypatch):
     helper = load_ssm_parameters()
     clock = install_clock(helper, FakeClock())
     monkeypatch.setitem(sys.modules, "common.ssmParameters", helper)
+    # The resolver the handler binds reads the legacy parameters through this helper.
+    monkeypatch.setitem(sys.modules, "common.deployTimeValues", load_deploy_time_values(helper))
     authz = types.ModuleType("handlers.authz")
     enforcer = MagicMock()
     enforcer.enforceAPI.return_value = True

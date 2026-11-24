@@ -664,6 +664,15 @@ def delete(ctx: click.Context, asset_id: str, database: str, reason: Optional[st
             helpful_message="Use 'vamscli database list' to see available databases."
         )
         raise click.ClickException(str(e))
+    except InvalidAssetDataError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Delete Refused",
+            helpful_message=("The asset was not deleted. Follow the message above, then run the delete again; "
+                             f"'vamscli assets get -d {database} {asset_id} --show-archived' shows the asset.")
+        )
+        raise click.ClickException(str(e))
 
 
 @assets.command()

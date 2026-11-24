@@ -89,11 +89,27 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_V
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 ENV VIRTUAL_ENV=/opt/venv
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+# Every Python package of this image is installed from locks/blenderagent, hashed exports of its uv.lock (#1726): the
+# same versions, from the same files, on every build. The lock holds the image's whole set (the shared pipeline
+# dependencies, the LiteLLM bridge and its dependencies, the CUDA 12.8 torch and the packages MoGe-2 imports), so
+# nothing is resolved at build time and no later step can move a version. pip and the build tools come first from
+# their own lock, then the rest with --require-hashes --no-deps: pip refuses a file whose hash is not in the lock and
+# installs nothing the lock does not name. MoGe and utils3d are installed afterwards from pinned clones (no
+# dependencies: theirs are in the lock). This is the pipeline's virtualenv; Blender runs its own bundled Python, which
+# none of these packages reach.
+COPY locks/blenderagent/requirements-build.lock locks/blenderagent/requirements.lock locks/blenderagent/requirements-gpl.lock locks/blenderagent/out-of-lock.json /opt/locks/blenderagent/
+COPY locks/tools/check_installed_set.py /opt/locks/tools/
+RUN pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/blenderagent/requirements-build.lock
 
-# Shared pipeline dependencies (trimesh, the repair ladder, background removal, boto3).
-COPY requirements.txt /opt/ml/code/requirements.txt
-RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt
+# The shared pipeline dependencies, the bridge from the agent's Responses API to Bedrock (LiteLLM, the OpenAI client
+# the adapter uses to check it, boto3) and torch with the packages MoGe-2 imports. torch is the CUDA 12.8 build from
+# the PyTorch index (the lock pins 2.7.1+cu128 and the hashes are that file's); every other package comes from the
+# default index.
+RUN pip install --no-cache-dir --require-hashes --no-deps \
+    --extra-index-url https://download.pytorch.org/whl/cu128 \
+    -r /opt/locks/blenderagent/requirements.lock && \
+    python -c "import torch; assert torch.version.cuda.startswith('12.8'), torch.version.cuda" && \
+    litellm --version
 
 # Blender, unpacked to /opt/blender and put on PATH. The primary download host is tried first and two
 # public mirrors after it, because the primary has refused automated clients before. Whichever host
@@ -132,30 +148,36 @@ RUN set -eux; \
     rm -rf /tmp/codex /tmp/bwrap /tmp/codex.tar.gz /tmp/bwrap.tar.gz; \
     codex --version
 
-# The Responses-to-Converse bridge, and the OpenAI client the adapter uses to check it, at the versions
-# litellm's own constraints resolve to.
-RUN pip install --no-cache-dir "litellm[proxy]==${LITELLM_VERSION}" openai==2.54.0 boto3==1.44.5 && \
-    litellm --version
-
-# The scripted refit's depth model, MoGe-2, and the CUDA 12.8 torch it runs on. MoGe is cloned at a
-# reviewed commit and installed without its declared dependencies: its model code imports torch, utils3d,
-# huggingface_hub, OpenCV, SciPy and NumPy, and the rest of its list (torchvision, gradio and the demo
-# apps' packages) serves its own apps. utils3d is installed from a commit for the same reason the clone
-# is pinned. The weights are fetched into the model cache at run time, like every other model's.
-ARG TORCH_VERSION=2.7.1
+# The scripted refit's depth model, MoGe-2, and utils3d, which it imports. MoGe is cloned at a reviewed commit and
+# installed without its declared dependencies: its model code imports torch, utils3d, huggingface_hub, OpenCV, SciPy
+# and NumPy (all in the lock), and the rest of its list (torchvision, gradio and the demo apps' packages) serves its
+# own apps. utils3d is built from a clone at a reviewed commit for the same reason; its dependencies are in the lock.
+# Both are installed with pip's build isolation OFF, so the build runs with the setuptools and wheel the lock installed
+# and downloads nothing, and with --no-deps so pip resolves nothing. The weights are fetched into the model cache at
+# run time, like every other model's.
+#
+# utils3d is hash-checked: the clone must be at UTILS3D_COMMIT, and the SHA-256 over its tracked files (the digest of
+# the sorted `sha256sum` lines of `git ls-files`) must equal UTILS3D_TREE_SHA256, recorded in out-of-lock.json too. A
+# moved commit, or content that is not what was reviewed, fails the build.
 ARG MOGE_REPO_URL="https://github.com/microsoft/MoGe.git"
 ARG MOGE_COMMIT=07444410f1e33f402353b99d6ccd26bd31e469e8
 ARG UTILS3D_COMMIT=3fab839f0be9931dac7c8488eb0e1600c236e183
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu128 "torch==${TORCH_VERSION}" && \
-    python -c "import torch; assert torch.version.cuda.startswith('12.8'), torch.version.cuda"
+ARG UTILS3D_TREE_SHA256=73f050a12b7ba005c2815d7e37784536b564d1eb57468a9e54e7303ed626f250
 RUN git clone "$MOGE_REPO_URL" /opt/moge && \
     cd /opt/moge && \
     git checkout --detach ${MOGE_COMMIT} && \
     test "$(git rev-parse HEAD)" = "${MOGE_COMMIT}" && \
     git rev-parse HEAD > /opt/moge/VAMS_UPSTREAM_COMMIT && \
-    pip install --no-cache-dir --no-deps /opt/moge
-RUN pip install --no-cache-dir "utils3d @ git+https://github.com/EasternJournalist/utils3d.git@${UTILS3D_COMMIT}" \
-        opencv-python-headless==5.1.0.95 huggingface_hub==2.4.0 && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /opt/moge
+RUN git clone https://github.com/EasternJournalist/utils3d.git /tmp/utils3d && \
+    cd /tmp/utils3d && \
+    git checkout --detach ${UTILS3D_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${UTILS3D_COMMIT}" && \
+    { test "$(git ls-files -z | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" = "${UTILS3D_TREE_SHA256}" || \
+        { echo "utils3d at ${UTILS3D_COMMIT} does not match UTILS3D_TREE_SHA256: the files are not the ones that were reviewed"; exit 1; }; } && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/utils3d.VAMS_UPSTREAM_COMMIT && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/utils3d && \
+    cd / && rm -rf /tmp/utils3d && \
     python -c "from moge.model.v2 import MoGeModel; import utils3d, cv2, huggingface_hub" && \
     echo "MoGe $(cat /opt/moge/VAMS_UPSTREAM_COMMIT)"
 
@@ -163,10 +185,24 @@ RUN pip install --no-cache-dir "utils3d @ git+https://github.com/EasternJournali
 # carries them; only a hand-run build that sets it to false leaves them out.
 RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
         echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
-        pip install --no-cache-dir pymeshfix==0.18.1 pymeshlab==2025.7.post1; \
+        pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/blenderagent/requirements-gpl.lock; \
     else \
         echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
     fi
+
+# The installed set is exactly the lock plus MoGe and utils3d, built above: this fails the build on any package that
+# is missing, extra or at another version than locks/blenderagent names (the GPL pair only when it was requested), and
+# the LiteLLM version must still be the one LITELLM_VERSION names. pip check confirms the declared dependencies of what
+# is installed, with one exception: MoGe's own requirements list names the demo apps' packages (gradio, pipeline,
+# torchvision) and the full OpenCV, which this image deliberately does not install (the model code imports none of
+# them, and the import check above proves it). Any other unmet requirement fails the build.
+RUN set -eu; \
+    python /opt/locks/tools/check_installed_set.py --dir /opt/locks/blenderagent --gpl "$ENABLE_GPL_MESH_REPAIR"; \
+    test "$(python -c 'import importlib.metadata as m; print(m.version("litellm"))')" = "${LITELLM_VERSION}"; \
+    pip check > /tmp/pip-check.txt || true; \
+    unexpected=$(grep -v -E '^moge 2\.0\.0 requires (gradio|opencv-python|pipeline|torchvision), which is not installed\.$' /tmp/pip-check.txt || true); \
+    rm -f /tmp/pip-check.txt; \
+    if [ -n "$unexpected" ]; then echo "pip check: $unexpected"; exit 1; fi
 
 # rembg resolves its segmentation weights under U2NET_HOME and downloads them on first use, defaulting to a
 # home directory nothing carries between jobs. Pointing the variable at a baked-in copy removes the

@@ -471,7 +471,7 @@ export class CoreVAMSStack extends cdk.Stack {
             apiNestedStack.addStackDependency(customBuilderNestedStack);
 
             //Deploy Static Website and any API proxies (nested stack; after REST API for apiUrl)
-            if (props.config.app.useAlb.enabled || props.config.app.useCloudFront.enabled) {
+            if (Config.webDistributionEnabled(props.config)) {
                 staticWebBuilderNestedStack = new StaticWebBuilderNestedStack(this, "StaticWeb", {
                     config: props.config,
                     vpc: this.vpc,

@@ -35,6 +35,11 @@ ARG FLEXGEMM_COMMIT=6dd94a859c26ee8246888502eada3dd8ad85532e
 # nvdiffrast at the commit its v0.4.0 tag (the one upstream names) points at. A tag can be moved, so the
 # commit is what is checked.
 ARG NVDIFFRAST_COMMIT=253ac4fcea7de5f396371124af597e6cc957bfae
+# utils3d, which the model code imports, at the commit the image has always carried, and the SHA-256 over its tracked
+# files (see the build step below).
+# pragma: allowlist nextline secret
+ARG UTILS3D_COMMIT=9a4eb15e4021b67b12c460c7057d642626897ec8
+ARG UTILS3D_TREE_SHA256=7591516b4425089dee987cdb1f2b3f8cbbfc167952722573eb5c40ed3b82c03e
 # The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects which
 # rungs it walks through the template's REPAIR_BACKENDS setting.
 ARG ENABLE_GPL_MESH_REPAIR=true
@@ -80,22 +85,33 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_V
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 ENV VIRTUAL_ENV=/opt/venv
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+# Every Python package of this image is installed from locks/trellis2, hashed exports of its uv.lock (#1726): the same
+# versions, from the same files, on every build. The lock holds the image's whole set (torch, the shared pipeline
+# dependencies, upstream's basic set, the DINOv3-compatible transformers, utils3d's dependencies and the prebuilt
+# flash-attn wheel), so nothing is resolved at build time and no later step can move a version. pip and the build tools
+# come first from their own lock, then the rest with --require-hashes --no-deps: pip refuses a file whose hash is not
+# in the lock and installs nothing the lock does not name. The extensions below compile AFTER this install, against the
+# numpy and torch the image ships, and nothing installs a package after them.
+COPY locks/trellis2/requirements-build.lock locks/trellis2/requirements.lock locks/trellis2/requirements-gpl.lock locks/trellis2/out-of-lock.json /opt/locks/trellis2/
+COPY locks/tools/check_installed_set.py /opt/locks/tools/
+RUN pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/trellis2/requirements-build.lock && \
     python -c "import sys; assert sys.version_info[:2] == (3, 10), sys.version; print('python', sys.version)"
 
-# The torch build upstream pins. Every extension below compiles against it, so it comes first.
+# The torch build upstream pins, for CUDA 12.4, and every other package. Both indexes are needed: torch and torchvision
+# are the CUDA 12.4 builds from the PyTorch index (the lock pins them to +cu124 and the hashes are those files'), and
+# the PyTorch index does not carry every NVIDIA runtime wheel torch pins -- this torch requires nvidia-cudnn-cu12 9.1.0.70
+# exactly, which is published on PyPI and absent from the CUDA index -- so the default index stays in place and the
+# PyTorch index is added to it.
 #
-# Both indexes are needed. The CUDA 12.4 index is primary so torch resolves to the cu124 build rather
-# than whatever CUDA variant PyPI defaults to, but that index does not carry every NVIDIA runtime wheel
-# torch pins -- this torch requires nvidia-cudnn-cu12==9.1.0.70 exactly, which is published on PyPI and
-# absent from the CUDA index. Naming only the CUDA index excludes PyPI entirely and the resolve fails on
-# that pin.
-RUN pip install --no-cache-dir \
-    --index-url https://download.pytorch.org/whl/cu124 \
-    --extra-index-url https://pypi.org/simple \
-    torch==2.6.0 torchvision==0.21.0 && \
+# The prebuilt flash-attn wheel in the lock is the one for torch's C++ ABI as the pip torch wheels have it (cxx11abiFALSE):
+# the wrong variant imports cleanly and then fails on a missing symbol at run time, so the build checks the ABI here.
+RUN pip install --no-cache-dir --require-hashes --no-deps \
+    --extra-index-url https://download.pytorch.org/whl/cu124 \
+    -r /opt/locks/trellis2/requirements.lock && \
     python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda); \
-assert torch.version.cuda and torch.version.cuda.startswith('12.4'), torch.version.cuda"
+assert torch.version.cuda and torch.version.cuda.startswith('12.4'), torch.version.cuda; \
+assert not torch._C._GLIBCXX_USE_CXX11_ABI, 'this torch has the C++11 ABI; the locked flash-attn wheel is cxx11abiFALSE'" && \
+    python -c "import flash_attn; print('flash_attn', flash_attn.__version__)"
 
 # Every GPU family the pipeline can schedule onto has to be in this list, or an extension compiles for
 # the wrong architecture and fails at runtime with "no kernel image is available for execution on the
@@ -110,28 +126,12 @@ ENV MAX_JOBS=2
 ENV CUDA_HOME=/usr/local/cuda
 RUN test -f "$CUDA_HOME/include/cuda_runtime_api.h" && nvcc --version | tail -2
 
-# Shared pipeline dependencies
-COPY requirements.txt /opt/ml/code/requirements.txt
-RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt
-
-# Upstream's basic dependency set. pillow-simd is deliberately omitted: it is a drop-in replacement for
-# pillow offering a speed-up only, it has to compile, and the shared requirements below reassert pillow
-# and would displace it anyway.
+# transformers is held to 4.56.x by the lock even though upstream leaves it open, because the model's feature extractor
+# reaches into DINOv3's internals rather than calling forward(): it iterates `self.model.layer` on a DINOv3ViTModel.
+# 4.56 holds that ModuleList directly on the model, and a later release moved it into a nested DINOv3ViTEncoder, so the
+# blocks live at `model.model.layer`. With the newer layout the run reaches the GPU, loads all 415 weight tensors, and
+# only then dies on "'DINOv3ViTModel' object has no attribute 'layer'" four minutes in.
 #
-# transformers is PINNED even though upstream leaves it open, because the model's feature extractor
-# reaches into DINOv3's internals rather than calling forward(): it iterates `self.model.layer` on a
-# DINOv3ViTModel. transformers 4.56 holds that ModuleList directly on the model, and a later release
-# moved it into a nested DINOv3ViTEncoder, so the blocks now live at `model.model.layer`. With the
-# newer layout the run reaches the GPU, loads all 415 weight tensors, and only then dies on
-# "'DINOv3ViTModel' object has no attribute 'layer'" four minutes in. Upstream's open requirement
-# silently resolved to whatever was current when it was written.
-RUN pip install --no-cache-dir \
-    imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja trimesh \
-    "transformers>=4.56,<4.57" \
-    tensorboard pandas lpips zstandard kornia timm && \
-    pip install --no-cache-dir \
-    "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8"
-
 # Assert the DINOv3 layout the feature extractor depends on, so a transformers bump fails the BUILD
 # rather than a GPU job. Checked on the class, which needs no weights and no GPU.
 RUN python -c "\
@@ -143,24 +143,6 @@ assert 'self.layer' in src, \
     + ', which is what trellis2/modules/image_feature_extractor.py iterates'; \
 print('transformers', transformers.__version__, 'exposes DINOv3ViTModel.layer as the extractor expects')"
 
-# flash-attn is installed from its published wheel rather than built, which is what makes this image
-# possible: compiling it from source exhausted the build container's memory even serialised to a single
-# job. The wheel is chosen against the interpreter's own C++ ABI, since the wrong variant imports
-# cleanly and then fails on a missing symbol at run time.
-RUN set -eux; \
-    abi=$(python -c "import torch; print('TRUE' if torch._C._GLIBCXX_USE_CXX11_ABI else 'FALSE')"); \
-    case "$abi" in \
-        TRUE) sha=d7d5ccad1cc385bd9d49f8ab61901948f7aa054f3ce9bec5c5a72e0305290017 ;; \
-        FALSE) sha=64ba4ed4a8c4c9b79d8a0959ebe3ffd6f7ea707ae222dbebe6a864237ac0e475 ;; \
-    esac; \
-    wheel="flash_attn-2.7.3+cu12torch2.6cxx11abi${abi}-cp310-cp310-linux_x86_64.whl"; \
-    echo "installing flash-attn for cxx11abi=${abi}"; \
-    curl -fsSL -o "/tmp/${wheel}" "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/${wheel}"; \
-    echo "${sha}  /tmp/${wheel}" | sha256sum -c -; \
-    pip install --no-cache-dir "/tmp/${wheel}"; \
-    rm -f "/tmp/${wheel}"; \
-    python -c "import flash_attn; print('flash_attn', flash_attn.__version__)"
-
 # Clone TRELLIS.2. The o-voxel extension ships inside the repository, so the checkout comes first.
 RUN git clone --recurse-submodules https://github.com/microsoft/TRELLIS.2.git /opt/trellis2 && \
     cd /opt/trellis2 && \
@@ -171,7 +153,8 @@ RUN git clone --recurse-submodules https://github.com/microsoft/TRELLIS.2.git /o
 WORKDIR /opt/trellis2
 
 # The four CUDA extensions upstream builds, each with build isolation off so they compile against the
-# torch installed above rather than pulling their own copy into an isolated environment.
+# torch installed above rather than pulling their own copy into an isolated environment, and with --no-deps so pip
+# resolves nothing: their dependencies are in the lock (out-of-lock.json records each of these packages).
 #
 # Each source tree is deleted in the SAME layer that builds it. A docker layer records what changed, so
 # removing a clone in a later step leaves its bytes in the image and on the builder's disk regardless --
@@ -185,7 +168,7 @@ RUN git clone --recursive https://github.com/JeffreyXiang/CuMesh.git /tmp/extens
     git submodule update --init --recursive && \
     mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/CuMesh.VAMS_UPSTREAM_COMMIT && \
     cd / && \
-    pip install --no-cache-dir /tmp/extensions/CuMesh --no-build-isolation && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/extensions/CuMesh && \
     rm -rf /tmp/extensions/CuMesh
 
 RUN git clone --recursive https://github.com/JeffreyXiang/FlexGEMM.git /tmp/extensions/FlexGEMM && \
@@ -195,7 +178,7 @@ RUN git clone --recursive https://github.com/JeffreyXiang/FlexGEMM.git /tmp/exte
     git submodule update --init --recursive && \
     mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/FlexGEMM.VAMS_UPSTREAM_COMMIT && \
     cd / && \
-    pip install --no-cache-dir /tmp/extensions/FlexGEMM --no-build-isolation && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/extensions/FlexGEMM && \
     rm -rf /tmp/extensions/FlexGEMM
 
 # o-voxel provides the GLB export path the adapter calls, so a missing one is not a degraded run but no
@@ -206,7 +189,7 @@ RUN git clone --recursive https://github.com/JeffreyXiang/FlexGEMM.git /tmp/exte
 # "0 active drivers" on a machine with no GPU. The build container has none, so importing it here fails
 # for a package that is installed correctly. find_spec confirms the install without executing it.
 RUN cp -r /opt/trellis2/o-voxel /tmp/extensions/o-voxel && \
-    pip install --no-cache-dir /tmp/extensions/o-voxel --no-build-isolation && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/extensions/o-voxel && \
     python -c "import importlib.util as u; s = u.find_spec('o_voxel'); \
 assert s is not None, 'o_voxel is not installed'; print('o_voxel installed at', s.origin)" && \
     rm -rf /tmp/extensions/o-voxel
@@ -218,8 +201,23 @@ RUN git clone https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffras
     test "$(git rev-parse HEAD)" = "${NVDIFFRAST_COMMIT}" && \
     mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/nvdiffrast.VAMS_UPSTREAM_COMMIT && \
     cd / && \
-    pip install --no-cache-dir /tmp/extensions/nvdiffrast --no-build-isolation && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/extensions/nvdiffrast && \
     rm -rf /tmp/extensions/nvdiffrast
+
+# utils3d, which the model code imports. It is hash-checked: the clone must be at UTILS3D_COMMIT, and the SHA-256 over its
+# tracked files (the digest of the sorted `sha256sum` lines of `git ls-files`) must equal UTILS3D_TREE_SHA256, which
+# locks/trellis2/out-of-lock.json records too. A moved commit, or content that is not what was reviewed, fails the build.
+# Pure Python; its dependencies are in the lock.
+RUN git clone https://github.com/EasternJournalist/utils3d.git /tmp/extensions/utils3d && \
+    cd /tmp/extensions/utils3d && \
+    git checkout --detach ${UTILS3D_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${UTILS3D_COMMIT}" && \
+    { test "$(git ls-files -z | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" = "${UTILS3D_TREE_SHA256}" || \
+        { echo "utils3d at ${UTILS3D_COMMIT} does not match UTILS3D_TREE_SHA256: the files are not the ones that were reviewed"; exit 1; }; } && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/utils3d.VAMS_UPSTREAM_COMMIT && \
+    cd / && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/extensions/utils3d && \
+    rm -rf /tmp/extensions/utils3d
 
 # The upstream checkout keeps its working tree (the package is imported from it through PYTHONPATH) but
 # not its git history, which is dead weight in every image pull.
@@ -249,7 +247,7 @@ assert not missing, f'not installed: {missing}'; print('gpu-only packages instal
 # carries them; only a hand-run build that sets it to false leaves them out.
 RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
         echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
-        pip install --no-cache-dir pymeshfix==0.18.1 pymeshlab==2025.7.post1; \
+        pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/trellis2/requirements-gpl.lock; \
     else \
         echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
     fi
@@ -258,25 +256,15 @@ RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
 # working directory; adding it to PYTHONPATH keeps the import working from anywhere.
 ENV PYTHONPATH="/opt/trellis2:${PYTHONPATH}"
 
-# A model repo's own dependencies are installed after the shared ones and can pull a shared dependency
-# backwards. Reasserting the shared constraint restores the versions the pipeline's own code is written
-# against, and the check confirms the torch build survived it -- a resolver that replaced the cu124 torch
-# here would leave every extension above linked against a torch that is no longer installed.
-#
-# numpy is restored explicitly for the same reason it is in Dockerfile.sam3d: the shared file requires it
-# without a version, and the four extensions above were COMPILED against whichever numpy was present.
-# Moving it across the 1.x/2.x boundary afterwards leaves those binaries expecting a different dtype
-# struct and they fail at import with "numpy.dtype size changed".
-COPY requirements.txt /opt/ml/code/requirements.txt
-RUN set -eux; \
-    built_numpy=$(python -c "import numpy; print(numpy.__version__)"); \
-    pip install --no-cache-dir -r /opt/ml/code/requirements.txt; \
-    final_numpy=$(python -c "import numpy; print(numpy.__version__)"); \
-    if [ "$built_numpy" != "$final_numpy" ]; then \
-        echo "the shared requirements moved numpy $built_numpy -> $final_numpy; restoring the version the extensions were compiled against"; \
-        pip install --no-cache-dir "numpy==$built_numpy"; \
-    fi; \
-    python -c "import trimesh, manifold3d, torch, numpy; \
+# The installed set is exactly the lock plus the five packages built above: this fails the build on any package that is
+# missing, extra or at another version than locks/trellis2 names (the GPL pair only when it was requested), and pip check
+# confirms the declared dependencies of what is installed. Nothing installs after the extensions, so the numpy they were
+# compiled against is the numpy the image ships; the numpy restore step this image used to need, because a second
+# install of the shared requirements could move it, is gone. The import check confirms the CUDA torch build survived
+# and the repair stack the pipeline's own code is written against is present.
+RUN python /opt/locks/tools/check_installed_set.py --dir /opt/locks/trellis2 --gpl "$ENABLE_GPL_MESH_REPAIR" && \
+    pip check
+RUN python -c "import trimesh, manifold3d, torch, numpy; \
 assert torch.version.cuda and torch.version.cuda.startswith('12.4'), torch.version.cuda; \
 print('trimesh', trimesh.__version__, 'torch', torch.__version__, 'numpy', numpy.__version__)"
 

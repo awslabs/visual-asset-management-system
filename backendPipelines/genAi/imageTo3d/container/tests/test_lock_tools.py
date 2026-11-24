@@ -122,6 +122,48 @@ def test_marker_that_does_not_hold_skips_the_pin(tmp_path):
     assert installed_set.read_lock(str(tmp_path / "requirements.lock")) == {}
 
 
+WHEEL = (
+    "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/"
+    "flash_attn-2.7.3+cu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
+)
+
+
+def _wheel_lock(tmp_path, line):
+    path = tmp_path / "requirements.lock"
+    path.write_text(f"{line} ; {MARKER} \\\n    --hash=sha256:" + "0" * 64 + "\n")
+    return str(path)
+
+
+def test_prebuilt_wheel_line_is_read_as_its_public_version(tmp_path):
+    pins = installed_set.read_lock(_wheel_lock(tmp_path, f"flash-attn @ {WHEEL}"))
+    assert pins == {"flash-attn": ("flash-attn", "2.7.3")}
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git@" + "a" * 40,
+        "flash-attn @ https://github.com/x/y/archive/v2.7.3.tar.gz",
+        # the file is another package's wheel
+        "flash-attn @ https://github.com/x/y/releases/download/v1/other-1.0-py3-none-any.whl",
+        "flash-attn @ http://github.com/x/y/releases/download/v1/flash_attn-2.7.3-py3-none-any.whl",
+    ],
+)
+def test_other_direct_references_are_refused(tmp_path, line):
+    with pytest.raises(SystemExit, match="not a pinned requirement"):
+        installed_set.read_lock(_wheel_lock(tmp_path, line))
+
+
+def test_installed_wheel_at_another_version_fails(tmp_path, monkeypatch, capsys):
+    _lock(tmp_path / "requirements-build.lock", [("pip", "26.3")])
+    (tmp_path / "requirements.lock").write_text(f"flash-attn @ {WHEEL} ; {MARKER} \\\n    --hash=sha256:" + "0" * 64 + "\n")
+    _lock(tmp_path / "requirements-gpl.lock", [])
+    (tmp_path / "out-of-lock.json").write_text(json.dumps({"packages": []}))
+    assert _run(monkeypatch, capsys, tmp_path, [("pip", "26.3"), ("flash_attn", "2.7.3")])[0] == 0
+    code, err = _run(monkeypatch, capsys, tmp_path, [("pip", "26.3"), ("flash_attn", "2.8.0")])
+    assert code == 1 and "different version: flash-attn is 2.8.0, the lock has 2.7.3" in err
+
+
 def _upstream(tmp_path, recorded, cloned):
     (tmp_path / "recorded").mkdir()
     (tmp_path / "clone").mkdir()

@@ -236,12 +236,12 @@ def _get_asset_metadata():
 
 def _get_file_metadata():
     return metadataService.get_file_metadata(
-        "db1", "asset1", "/folder/file.txt", "metadata", {}, CLAIMS)
+        "db1", "asset1", "/folder/file.txt", "metadata", {}, CLAIMS)[0]
 
 
 def _get_file_attributes():
     return metadataService.get_file_metadata(
-        "db1", "asset1", "/folder/file.txt", "attribute", {}, CLAIMS)
+        "db1", "asset1", "/folder/file.txt", "attribute", {}, CLAIMS)[0]
 
 
 def _get_database_metadata():
@@ -394,14 +394,14 @@ class TestTheVersionSnapshotGetsStillReturnTheirRows:
 
     def test_file_version_metadata(self):
         with self._version_harness():
-            response = metadataService.get_file_metadata(
+            response, _ = metadataService.get_file_metadata(
                 "db1", "asset1", "/folder/file.txt", "metadata",
                 {"assetVersionId": "v1"}, CLAIMS)
         assert ("fileKey", "file value", "string") in _triples(response), _triples(response)
 
     def test_file_version_attributes(self):
         with self._version_harness():
-            response = metadataService.get_file_metadata(
+            response, _ = metadataService.get_file_metadata(
                 "db1", "asset1", "/folder/file.txt", "attribute",
                 {"assetVersionId": "v1"}, CLAIMS)
         assert ("attrKey", "attr value", "string") in _triples(response), _triples(response)

@@ -441,6 +441,58 @@ def aux_scope(database_id: Optional[str], location: Optional[str],
     return prefix, aux_owner_filter(database_id, location, object_key, prefix)
 
 
+# The folder of a file's auxiliary base that holds the file's own viewer and preview data
+AUX_VIEWER_DATA_FOLDER = "preview/"
+
+
+def viewer_data_prefix(database_id: Optional[str], object_key: Optional[str]) -> str:
+    """``{databaseId}/{file key}/preview/``, the auxiliary folder of one file's own viewer and preview data.
+
+    Workflows write a file's data there (``common.workflows.executionRecords.aux_preview_file_prefix`` plus the
+    pipeline's viewer subfolder; the Potree pipeline, the one pipeline that writes viewer data, adds
+    ``/PotreeViewer``), and the viewers read it there through the auxiliary stream route (the Potree and VEERUM
+    viewers request ``{file}/preview/PotreeViewer/metadata.json``). The rest of ``{databaseId}/{file key}/``
+    holds the data of other files whose keys start with ``{file key}/``.
+    """
+    return aux_bucket_file_base(database_id, object_key) + AUX_VIEWER_DATA_FOLDER
+
+
+def viewer_data_file_key(database_id: Optional[str], aux_key: Optional[str]) -> Optional[str]:
+    """The file key whose viewer data an auxiliary key under ``{databaseId}/`` is, or None when the key has no
+    viewer-data folder there.
+
+    A file's data is ``{databaseId}/{file key}/preview/...``, and the file key ends at the LAST ``/preview/``
+    segment: the data of a file at ``{file key}/preview`` or below ``{file key}/preview/`` (a folder named like
+    the file) has a further ``preview`` folder of its own, and no pipeline writes a ``preview`` folder inside a
+    file's viewer data. ``db1/p/x.txt/preview/PotreeViewer/metadata.json`` is the data of ``p/x.txt``, and
+    ``db1/p/x.txt/preview/a.glb/preview/PotreeViewer/metadata.json`` that of ``p/x.txt/preview/a.glb``.
+    """
+    base = (database_id or "").strip("/") + "/"
+    key = aux_key or ""
+    if not key.startswith(base):
+        return None
+    path = "/" + key[len(base):]
+    end = path.rfind("/" + AUX_VIEWER_DATA_FOLDER)
+    return path[1:end] if end > 0 else None
+
+
+def viewer_data_scope(database_id: Optional[str], object_key: Optional[str]) -> Tuple[str, Callable[[str], bool]]:
+    """``(prefix, keep)`` of one file's own viewer data: ``viewer_data_prefix`` and the keys under it that are
+    the file's (``viewer_data_file_key`` names the file).
+
+    Another file's data appears under the prefix only for a file at ``{file key}/preview`` or below
+    ``{file key}/preview/`` (a folder named like the file, in this asset or in an asset nested there), and its
+    path below the prefix has a ``preview`` folder segment; every other key is this file's. The file keeps
+    none of its own data.
+    """
+    prefix = viewer_data_prefix(database_id, object_key)
+    own = (object_key or "").strip("/")
+
+    def keep(aux_key: str) -> bool:
+        return viewer_data_file_key(database_id, aux_key) == own
+    return prefix, keep
+
+
 LOCATION_INDEX_NAME = "AssetLocationGSI"
 LOCATION_BUCKET_ATTRIBUTE = "locationBucket"
 LOCATION_KEY_ATTRIBUTE = "locationKey"
@@ -1018,15 +1070,17 @@ class NestedLocations:
 
     def keep_aux(self, database_id: Optional[str], aux_key: Optional[str]) -> bool:
         """Whether an auxiliary-bucket key under this asset's ``{databaseId}/`` base is this asset's to change.
-        Viewer data of a key a nested location holds is that asset's, whatever its database (the rule is
-        ownership); the data of a shared location is kept when the co-owner is of the same database, since
-        both read it at the same auxiliary key."""
+        The key is the viewer data of one file (``viewer_data_file_key``; a key without a viewer-data folder
+        is read as a path): the data of a file a nested location holds is that asset's, whatever its database
+        (the rule is ownership), and the data of this asset's own file stays this asset's even when an asset is
+        stored in a folder named like the file (``{file key}/``). The data of a shared location is kept when
+        the co-owner is of the same database, since both read it at the same auxiliary key."""
         live = _live_identity(database_id, "")[0]
         key = aux_key or ""
         prefix = f"{live}/"
         if not key.startswith(prefix):
             return True
-        candidate = key[len(prefix):]
+        candidate = viewer_data_file_key(live, key) or key[len(prefix):]
         if deeper_holder(self.location, self.locations, candidate) is not None:
             return False
         if any(_live_identity(e.database_id, "")[0] == live for e in self.shared) and \

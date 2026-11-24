@@ -120,7 +120,7 @@ os.makedirs(output_dir, exist_ok=True)
 # alpha gets a whole-frame bounding box instead, so it is never cropped to the subject and the model
 # reconstructs the composition rather than the object. The pipeline's own segmentation stage normally
 # supplies that alpha; this covers the run where it was switched off.
-with Image.open(image_path) as opened:
+with Image.open(image_path, formats=("PNG", "JPEG")) as opened:
     rgba = opened.convert("RGBA")
     already_opaque = min(rgba.getchannel("A").getextrema()) == 255
 
@@ -144,7 +144,7 @@ if len(views) > 1:
 
     shape_image = {}
     for name, path in views.items():
-        with PILImage.open(path) as opened:
+        with PILImage.open(path, formats=("PNG", "JPEG")) as opened:
             shape_image[name] = opened.convert("RGBA")
     print(f"Shape stage conditioned on {len(shape_image)} views: {sorted(shape_image)}", flush=True)
 else:
