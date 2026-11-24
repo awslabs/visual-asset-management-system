@@ -25,7 +25,7 @@ STL stores triangle meshes only. A point cloud -- an XYZ file, or a PLY file tha
 
 ## Multi-File Models
 
-A GLTF file, and an OBJ file with materials, keep part of the model in other files: GLTF buffers (`.bin`) and texture images, and the OBJ material library (`.mtl`) with the base color textures (`map_Kd`) it names. A GLB or PLY file can also name an external texture. The pipeline reads every file the selected input references and downloads each one from the same asset before it loads the model, so upload the companion files to the asset at the paths the model names. A model that this pipeline wrote as GLTF or as a textured OBJ can be converted again, because its companion files are written beside it.
+A GLTF file, and an OBJ file with materials, keep part of the model in other files: GLTF buffers (`.bin`) and texture images, and the OBJ material library (`.mtl`) with the base color textures (`map_Kd`) it names. A GLB or PLY file can also name an external texture. The pipeline reads every file the selected input references and downloads each one from the same asset before it loads the model, so upload the companion files to the asset at the paths the model names. For an asset created on a single existing object (a `bucketExistingKey` without a trailing `/`), the asset holds that file and its companion folder `{key}/`, and the model's references are looked up in that folder: `textures/wood.png` named by the asset's file is `{key}/textures/wood.png`. Other keys in the object's own Amazon S3 folder are not part of the asset and are not read. A model that this pipeline wrote as GLTF or as a textured OBJ can be converted again, because its companion files are written beside it.
 
 Each reference is checked before anything is downloaded:
 

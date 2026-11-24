@@ -86,6 +86,22 @@ def abort_external_workflow(error, task_token):
         logger.error(f"Failed to send task failure callback: {e}")
 
 
+SINGLE_FILE_ASSET_OBJECT_MESSAGE = (
+    "The ModelOps pipeline does not process the file of an asset created on a single existing object "
+    "(a location without a trailing /). Run it on a file of an asset whose location is a folder.")
+
+
+def single_file_asset_object(resolved):
+    """Whether the run's input is the object of a single-file asset: the manifest's asset root for the
+    input (``assetRootS3Key``) has no trailing ``/`` and names the input key itself. Such an asset holds
+    the object and its companion folder ``{key}/``, while the ModelOps state block addresses an input by
+    the folder that holds it, which for that object is not a folder of the asset."""
+    input_files = (resolved or {}).get("inputFiles") or []
+    first = (input_files[0] or {}) if input_files else {}
+    root = (first.get("assetRootS3Key") or "").lstrip("/")
+    return bool(root) and not root.endswith("/") and root == (first.get("key") or "").lstrip("/")
+
+
 def lambda_handler(event, context):
     logger.info(event)
 
@@ -135,6 +151,8 @@ def lambda_handler(event, context):
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
         # Single input file per execution today (SFN/manifest layer is multi-file-ready).
         manifestHelper.enforce_single_input_file(resolved)
+        if single_file_asset_object(resolved):
+            raise Exception(SINGLE_FILE_ASSET_OBJECT_MESSAGE)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
         # Starts excution of pipeline

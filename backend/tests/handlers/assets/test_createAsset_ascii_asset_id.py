@@ -73,11 +73,17 @@ class _Recorder:
     def __init__(self, get_item_result=None):
         self.get_item_calls = []
         self.put_item_calls = []
+        self.query_calls = []
         self._get_item_result = get_item_result if get_item_result is not None else {}
 
     def get_item(self, **kwargs):
         self.get_item_calls.append(kwargs)
         return self._get_item_result
+
+    def query(self, **kwargs):
+        # No asset in any database carries the id: the assetIdGSI read finds nothing.
+        self.query_calls.append(kwargs)
+        return {"Items": []}
 
     def put_item(self, **kwargs):
         self.put_item_calls.append(kwargs)

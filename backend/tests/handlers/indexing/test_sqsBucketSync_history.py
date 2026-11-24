@@ -50,6 +50,7 @@ def _load():
     saved = {name: sys.modules.get(name) for name in stub_names}
     create_asset_stub = types.ModuleType("handlers.assets.createAsset")
     create_asset_stub.create_asset = MagicMock()
+    create_asset_stub.AssetIdInUseError = type("AssetIdInUseError", (Exception,), {})
     sys.modules["handlers.assets.createAsset"] = create_asset_stub
     asset_count_stub = types.ModuleType("handlers.assets.assetCount")
     asset_count_stub.update_asset_count = MagicMock()

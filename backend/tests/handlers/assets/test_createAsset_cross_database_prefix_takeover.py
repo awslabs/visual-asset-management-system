@@ -63,6 +63,8 @@ _OWN_BUCKET_ID = "bucket-record-a"
 _SIBLING_BUCKET_ID = "bucket-record-b"
 _VICTIM_ASSET_ID = "victim-asset"
 _VICTIM_KEY = _BASE_PREFIX + _VICTIM_ASSET_ID + "/"
+# The refusal for a chosen assetId another asset already carries, in any database.
+_ASSET_ID_IN_USE = "Asset with specified ID already exists"
 
 # An asset onboarded through bucketExistingKey: server-generated assetId, caller-chosen key. The two
 # share no segment, which is exactly why an assetId-keyed lookup cannot find it.
@@ -201,6 +203,12 @@ def _wire(m, bucket_records=None, owned_records=(), prefix_exists=False, key_exi
 
     def _query(**kwargs):
         terms = _condition_terms(kwargs.get("KeyConditionExpression"))
+        if kwargs.get("IndexName") == "assetIdGSI":
+            # The assetId-in-use check: every record carrying the id, whatever its bucket.
+            asset_term = terms.get("assetId")
+            if asset_term is None:
+                raise AssertionError(f"an assetIdGSI read must constrain assetId: {terms}")
+            return {"Items": [r for r in owned_records if _term_selects(asset_term, r["assetId"])]}
         bucket_term = terms.get("bucketId")
         if bucket_term is None:
             raise AssertionError(
@@ -256,6 +264,12 @@ def _ownership_lookup_calls(m, bucket_ids=(_OWN_BUCKET_ID, _SIBLING_BUCKET_ID)):
         if term and any(_term_selects(term, bucket_id) for bucket_id in bucket_ids):
             calls.append(call)
     return calls
+
+
+def _bucket_id_index_calls(m):
+    """Every asset-table read made through BucketIdGSI, leaving out the assetId-in-use check."""
+    return [call for call in m.asset_table.query.call_args_list
+            if call.kwargs.get("IndexName") == "BucketIdGSI"]
 
 
 def _assert_nothing_persisted(m):
@@ -494,11 +508,27 @@ class TestOrdinaryCreatesStillSucceed:
         assert response.assetId.startswith("x")
         m.create_prefix_folder.assert_called_once()
 
-    def test_same_asset_id_in_a_bucket_at_a_different_prefix_is_permitted(self):
+
+@pytest.mark.unit
+class TestSameAssetIdAtAnotherLocation:
+    """The location layers pass an assetId that another asset holds elsewhere; the id check refuses it.
+
+    Each case asserts the refusal's text, which is the assetId-in-use answer rather than a location
+    one, so it pins both facts: the location layers still do not claim the case, and assetIds are
+    unique across databases.
+    """
+
+    def _assert_refused_as_in_use(self, m):
+        with pytest.raises(m.VAMSGeneralErrorResponse) as caught:
+            m.create_asset(_request_model(m), {"tokens": ["user1"]})
+        assert str(caught.value).endswith(_ASSET_ID_IN_USE)
+        _assert_nothing_persisted(m)
+
+    def test_same_asset_id_in_a_bucket_at_a_different_prefix_is_refused(self):
         m = _load(fresh=True)
         # A sibling bucket record on the same physical bucket but a different base
-        # prefix is NOT colocated, so an asset holding the same assetId there does
-        # not block this create.
+        # prefix is NOT colocated, so the location layers do not see the asset
+        # holding the same assetId there.
         _wire(
             m,
             bucket_records=[
@@ -513,16 +543,13 @@ class TestOrdinaryCreatesStillSucceed:
             prefix_exists=False,
         )
 
-        response = m.create_asset(_request_model(m), {"tokens": ["user1"]})
+        self._assert_refused_as_in_use(m)
 
-        assert response.assetId == _VICTIM_ASSET_ID
-        m.create_prefix_folder.assert_called_once_with(_BUCKET_NAME, _VICTIM_KEY)
-
-    def test_same_asset_id_at_a_non_overlapping_location_is_permitted(self):
+    def test_same_asset_id_at_a_non_overlapping_location_is_refused(self):
         m = _load(fresh=True)
-        # assetIds are unique per database, not globally. An existing asset that
-        # shares the assetId but was bound (via bucketExistingKey) to an unrelated
-        # location owns no part of the derived prefix, so it must not block.
+        # An existing asset that shares the assetId but was bound (via
+        # bucketExistingKey) to an unrelated location owns no part of the derived
+        # prefix, so only the assetId check refuses it.
         _wire(
             m,
             owned_records=[_asset_record(
@@ -530,10 +557,7 @@ class TestOrdinaryCreatesStillSucceed:
             prefix_exists=False,
         )
 
-        response = m.create_asset(_request_model(m), {"tokens": ["user1"]})
-
-        assert response.assetId == _VICTIM_ASSET_ID
-        m.create_prefix_folder.assert_called_once_with(_BUCKET_NAME, _VICTIM_KEY)
+        self._assert_refused_as_in_use(m)
 
 
 @pytest.mark.unit
@@ -706,8 +730,9 @@ class TestOwnershipCheckCostShape:
 
         m.create_asset(_request_model(m), {"tokens": ["user1"]})
 
-        assert m.asset_table.query.call_count == 1
-        call = m.asset_table.query.call_args
+        lookups = _bucket_id_index_calls(m)
+        assert len(lookups) == 1
+        call = lookups[0]
         terms = _condition_terms(call.kwargs["KeyConditionExpression"])
         # Both key attributes constrained by equality is what makes this O(1); the
         # partition-only form is what makes a create O(assets in the bucket).
@@ -720,14 +745,17 @@ class TestOwnershipCheckCostShape:
         _wire(m, owned_records=[], prefix_exists=False)
         # An exact key-condition lookup returns at most one row, so a paged
         # response can only mean the query degenerated into a partition walk.
-        m.asset_table.query.side_effect = None
-        m.asset_table.query.return_value = {
-            "Items": [], "LastEvaluatedKey": {"bucketId": _OWN_BUCKET_ID, "assetId": "z"}
-        }
+
+        def _paged_bucket_index(**kwargs):
+            if kwargs.get("IndexName") == "assetIdGSI":
+                return {"Items": []}
+            return {"Items": [], "LastEvaluatedKey": {"bucketId": _OWN_BUCKET_ID, "assetId": "z"}}
+
+        m.asset_table.query.side_effect = _paged_bucket_index
 
         m.create_asset(_request_model(m), {"tokens": ["user1"]})
 
-        assert m.asset_table.query.call_count == 1
+        assert len(_bucket_id_index_calls(m)) == 1
 
     def test_bucket_existing_key_check_still_walks_the_partition(self):
         m = _load(fresh=True)
@@ -1351,10 +1379,12 @@ class TestMalformedOwnershipRecords:
         _wire(m, owned_records=[record], prefix_exists=False)
         m.logger = MagicMock()
 
-        response = m.create_asset(_request_model(m), {"tokens": ["user1"]})
-
-        # Skipped, so the create proceeds -- and the skip is on the record.
-        assert response.assetId == _VICTIM_ASSET_ID
+        # Skipped, so the create proceeds past the location checks -- and the skip is on the
+        # record. The record carries the same assetId in another database, so the create then
+        # stops at the assetId check rather than at a location refusal.
+        with pytest.raises(m.VAMSGeneralErrorResponse) as caught:
+            m.create_asset(_request_model(m), {"tokens": ["user1"]})
+        assert str(caught.value).endswith(_ASSET_ID_IN_USE)
         warnings = " ".join(str(c) for c in m.logger.warning.call_args_list)
         assert "no usable assetLocation.Key" in warnings
         assert _VICTIM_ASSET_ID in warnings
@@ -1382,7 +1412,11 @@ class TestMalformedOwnershipRecords:
         )
         m.logger = MagicMock()
 
-        m.create_asset(_request_model(m), {"tokens": ["user1"]})
+        # The same assetId in another database ends the create at the assetId check; the
+        # location check before it walked past the record without logging a skip.
+        with pytest.raises(m.VAMSGeneralErrorResponse) as caught:
+            m.create_asset(_request_model(m), {"tokens": ["user1"]})
+        assert str(caught.value).endswith(_ASSET_ID_IN_USE)
 
         warnings = " ".join(str(c) for c in m.logger.warning.call_args_list)
         assert "no usable assetLocation.Key" not in warnings
