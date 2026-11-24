@@ -86,6 +86,7 @@ from common.indexing.fileEnumeration import (
     resolve_live_database_id,
     scan_bucket_registrations,
 )
+from common.bucketRegistrations import active_registrations, primary_bucket_id, primary_registrations
 from common.assetLocations import (
     RESOLVED_FOUND,
     index_ready,
@@ -96,6 +97,24 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, log_action
 
 logger = safeLogger(service_name="CrReindexer")
+
+
+def registrations_to_walk(registrations: List[Dict]) -> Tuple[List[Dict], Dict[str, List[str]]]:
+    """(the registration rows a file reindex walks, {location bucketId: every row's bucketId}).
+
+    Retired rows are left out; of the rows for one location (`duplicateOfBucketId`) only the row that
+    answers for it is walked, and the map names every active row of that location, the walked row
+    first."""
+    active = active_registrations([r for r in registrations or [] if r.get('bucketName')])
+    walked = primary_registrations(active)
+    member_ids: Dict[str, List[str]] = {}
+    for row in walked:
+        member_ids[primary_bucket_id(row)] = [row.get('bucketId') or '']
+    for row in active:
+        ids = member_ids.setdefault(primary_bucket_id(row), [])
+        if (row.get('bucketId') or '') not in ids:
+            ids.append(row.get('bucketId') or '')
+    return walked, member_ids
 
 # Initialize AWS clients
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -745,9 +764,15 @@ class ReindexUtility:
         try:
             # Get all S3 bucket configurations
             logger.info(f"Scanning S3 buckets table: {self.s3_buckets_table_name}")
-            bucket_configs = self._scan_s3_buckets_table()
-            
-            logger.info(f"Found {len(bucket_configs)} bucket configurations")
+            registrations = self._scan_s3_buckets_table()
+            # A retired registration (it left the configuration) is not walked: no bucket sync and no
+            # grants serve it. Two rows for one location are walked once, as the row that answers for
+            # it, and an asset of either row is found (common/bucketRegistrations.py, as
+            # fileEnumeration walks them).
+            bucket_configs, member_ids = registrations_to_walk(registrations)
+
+            logger.info(f"Found {len(bucket_configs)} bucket configurations to walk "
+                        f"({len(registrations)} registration rows)")
             
             if len(bucket_configs) == 0:
                 logger.warning("No bucket configurations found")
@@ -771,7 +796,8 @@ class ReindexUtility:
                     base_prefix,
                     dry_run,
                     limit - results['total_count'] if limit else None,
-                    bucket_id
+                    bucket_id,
+                    member_ids.get(primary_bucket_id(bucket_config))
                 )
                 
                 results['success_count'] += bucket_results['success']
@@ -1013,17 +1039,28 @@ class ReindexUtility:
         self._asset_db_cache[cache_key] = database_id
         return database_id
 
+    def _resolve_in_location(self, bucket_ids: List[str], asset_id: str) -> Optional[str]:
+        """The active databaseId of `asset_id` in the first of `bucket_ids` (the rows of one location)
+        that holds it, or None."""
+        for bucket_id in bucket_ids or [None]:
+            database_id = self._resolve_database_id(bucket_id, asset_id)
+            if database_id:
+                return database_id
+        return None
+
     def _stamped_asset_file_path(
         self,
         bucket_id: Optional[str],
         database_id: Optional[str],
         asset_id: Optional[str],
-        object_key: str
+        object_key: str,
+        location_ids: Optional[List[str]] = None
     ) -> Optional[str]:
         """Asset-relative path of object_key under the active asset its metadata names, or None.
 
-        The binding holds only when that asset's record belongs to the bucket and its
-        assetLocation.Key holds the key on a path boundary.
+        The binding holds only when that asset's record belongs to the bucket registration (`bucket_id`,
+        or any of `location_ids`, the rows of its location) and its assetLocation.Key holds the key on
+        a path boundary.
         """
         if not database_id or not asset_id:
             return None
@@ -1047,7 +1084,8 @@ class ReindexUtility:
         if not location:
             return None
         asset_bucket_id, location_key = location
-        if bucket_id and asset_bucket_id != bucket_id:
+        allowed_ids = set(location_ids or []) or ({bucket_id} if bucket_id else set())
+        if allowed_ids and asset_bucket_id not in allowed_ids:
             return None
 
         normalized_base = location_key.lstrip('/')
@@ -1069,9 +1107,14 @@ class ReindexUtility:
         base_prefix: str,
         dry_run: bool,
         limit: Optional[int] = None,
-        bucket_id: Optional[str] = None
+        bucket_id: Optional[str] = None,
+        member_bucket_ids: Optional[List[str]] = None
     ) -> Dict:
-        """Process all objects in a bucket and update AssetsMetadata table."""
+        """Process all objects in a bucket and update AssetsMetadata table.
+
+        `member_bucket_ids` are the bucketIds of every row for the walked registration's location (the
+        walked row first); an asset of any of them is the location's. None means `bucket_id` alone."""
+        location_ids = [i for i in (member_bucket_ids or [bucket_id]) if i]
         results = {
             'success': 0,
             'failed': 0,
@@ -1170,7 +1213,7 @@ class ReindexUtility:
                         asset_id = self._extract_asset_id_from_key(obj['Key'], base_prefix)
                         if asset_id and not self._is_valid_asset_id(asset_id):
                             asset_id = None
-                        database_id = self._resolve_database_id(bucket_id, asset_id) if asset_id else None
+                        database_id = self._resolve_in_location(location_ids, asset_id) if asset_id else None
                         file_path = None
 
                         if not asset_id or not database_id:
@@ -1187,7 +1230,8 @@ class ReindexUtility:
                                 # that asset's own location holds the key.
                                 stamped_database_id = metadata.get(DATABASE_ID_METADATA_KEY) or metadata.get('databaseId')
                                 file_path = self._stamped_asset_file_path(
-                                    bucket_id, stamped_database_id, stamped_asset_id, obj['Key'])
+                                    bucket_id, stamped_database_id, stamped_asset_id, obj['Key'],
+                                    location_ids)
                                 if not file_path:
                                     logger.info(
                                         f"Skipping {obj['Key']}: object metadata names asset "
