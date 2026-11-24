@@ -250,7 +250,7 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 `DELETE /database/{databaseId}/assets/{assetId}/deleteFile`
 
-Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files.
+Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files. It also removes the file's metadata, attributes and version records, so the asset's versions no longer list the file.
 
 When Amazon S3 does not delete every version of every file under a prefix, the request returns `400`. The files that were deleted lose their metadata, attributes, version records and auxiliary data, and the remaining files keep theirs, so the delete can be retried. When Amazon S3 does not delete every version of a single file, or its previews cannot be listed, the request returns `400` and the file keeps its previews, auxiliary data and records. When the file is deleted but one of its previews is not, the request returns `400`: the file loses its metadata, version records and auxiliary data, the preview that was kept keeps its version records, and deleting the file again removes it.
 
