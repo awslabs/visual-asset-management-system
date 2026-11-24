@@ -17,6 +17,7 @@ import omni.kit.app
 import omni.ui as ui
 
 from .connector import IsaacVAMSConnector, MalformedXmlError, _free_prim_path, _prim_name
+from .content_connection import ContentConnectionError, VamsContentConnection, content_browser_api
 from .vams_cli_service import (
     PipelineTemplate,
     VamsAccessDeniedError,
@@ -29,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 SETTING_PROFILE = "/exts/vams.connector.isaacsim/profile"
 SETTING_VAMSCLI_PATH = "/exts/vams.connector.isaacsim/vamscli_path"
+# Shows VAMS in the Content window under Omniverse Storage once signed in (Isaac Sim 6.1+).
+SETTING_CONTENT_WINDOW = "/exts/vams.connector.isaacsim/content_window"
 
 _USD_EXTENSIONS = (".usd", ".usda", ".usdc", ".usdz")
 _URDF_EXTENSIONS = (".urdf",)
@@ -199,6 +202,10 @@ class VamsConnectorExtension(omni.ext.IExt):
         profile = settings.get(SETTING_PROFILE) or "default"
         vamscli_path = settings.get(SETTING_VAMSCLI_PATH) or None
         self._profile = profile
+        self._vamscli_path = vamscli_path
+        content_window = settings.get(SETTING_CONTENT_WINDOW)
+        self._content_window_enabled = content_window is None or bool(content_window)
+        self._content = None
 
         self._connector = None
         self._window = None
@@ -275,10 +282,39 @@ class VamsConnectorExtension(omni.ext.IExt):
 
     def _check_existing_session(self):
         if self._adopt_existing_session():
+            self._start_content_connection()
             self._load_databases()
+
+    # =========================================================================
+    # Content window connection
+    # =========================================================================
+
+    def _start_content_connection(self):
+        """Shows VAMS in the Content window (Omniverse Storage > VAMS). A failure leaves the VAMS window working."""
+        current = getattr(self, "_content", None)
+        if not getattr(self, "_content_window_enabled", False) or (current is not None and current.running):
+            return
+        try:
+            import omni.client
+        except ImportError:
+            return
+        self._content = VamsContentConnection(self._profile, self._vamscli_path, omni_client=omni.client,
+                                              content_browser_api=content_browser_api())
+        try:
+            self._content.start()
+            logger.info("VAMS is in the Content window under Omniverse Storage > VAMS")
+        except ContentConnectionError as error:
+            logger.warning("VAMS Content window connection not started: %s", error)
+            self._content = None
+
+    def _stop_content_connection(self):
+        content, self._content = getattr(self, "_content", None), None
+        if content is not None:
+            content.stop()
 
     def on_shutdown(self):
         logger.info("VAMS Connector extension shutting down")
+        self._stop_content_connection()
         if self._connector and self._connector._authenticated and not self._session_adopted:
             try:
                 self._connector.logout()
@@ -416,6 +452,7 @@ class VamsConnectorExtension(omni.ext.IExt):
             self._set_status(f"Authenticated as {username}")
             if self._auth_frame:
                 self._auth_frame.collapsed = True
+            _defer(self._start_content_connection)
             _defer(self._load_databases)
         else:
             self._set_status("Authentication failed")
@@ -433,11 +470,13 @@ class VamsConnectorExtension(omni.ext.IExt):
             self._set_status(f"Authenticated as {user_id} ({kind})")
             if self._auth_frame:
                 self._auth_frame.collapsed = True
+            _defer(self._start_content_connection)
             _defer(self._load_databases)
         else:
             self._set_status("Token/API key authentication failed")
 
     def _on_logout(self):
+        self._stop_content_connection()
         self._connector.logout()
         self._session_adopted = False
         self._selected_db = None
