@@ -364,7 +364,9 @@ def _seed_ami_recipes(resource_properties: Dict[str, Any], result: Dict[str, Lis
         if not build_on_deploy:
             continue
         try:
-            build, build_outcome = recipes.start_build(row, recipes.REQUESTED_BY_DEPLOY, only_if_changed=True)
+            build, build_outcome = recipes.start_build(
+                row, recipes.REQUESTED_BY_DEPLOY, only_if_changed=True,
+                parent_read_wait_seconds=recipes.BACKGROUND_PARENT_IMAGE_READ_WAIT_SECONDS)
         except recipes.RecipeConflict as err:
             result["warnings"].append(f"{label}: build not started ({err})")
             continue

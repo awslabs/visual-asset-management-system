@@ -355,7 +355,9 @@ class TestAmiRecipeSeeding:
         lifecycle.REQUESTED_BY_DEPLOY = "deploy"
         lifecycle.OUTCOME_STARTED, lifecycle.OUTCOME_QUEUED, lifecycle.OUTCOME_SKIPPED_UNCHANGED = "started", "queued", "skipped-unchanged"
         lifecycle.upsert_config_recipe.side_effect = upsert or (lambda manifest, build_on_deploy: ({**manifest, "buildOnDeploy": build_on_deploy}, "changed"))
-        lifecycle.start_build.side_effect = start or (lambda recipe, by, only_if_changed: ({"version": 1}, "started"))
+        lifecycle.BACKGROUND_PARENT_IMAGE_READ_WAIT_SECONDS = 30
+        lifecycle.start_build.side_effect = start or (
+            lambda recipe, by, only_if_changed, parent_read_wait_seconds=0.0: ({"version": 1}, "started"))
         lifecycle.disable_missing_config_recipes.return_value = []
         monkeypatch.setattr(reg, "recipes", lifecycle)
         return lifecycle
@@ -369,7 +371,8 @@ class TestAmiRecipeSeeding:
         assert lifecycle.upsert_config_recipe.call_args.kwargs == {"build_on_deploy": True}
         assert result["registered"] == ["amiRecipe:al2023-desktop"]
         assert result["queued"] == ["amiRecipe:al2023-desktop v1 (started)"]
-        assert lifecycle.start_build.call_args.kwargs == {"only_if_changed": True}
+        # A build the deployment starts waits out a short Parameter Store throttle on its parent image.
+        assert lifecycle.start_build.call_args.kwargs == {"only_if_changed": True, "parent_read_wait_seconds": 30}
         lifecycle.disable_missing_config_recipes.assert_called_once_with(["al2023-desktop"])
 
     def test_disabled_builds_read_nothing(self, monkeypatch):

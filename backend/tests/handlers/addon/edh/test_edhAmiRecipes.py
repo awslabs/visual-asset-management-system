@@ -14,9 +14,13 @@ from backend.backend.handlers.addon.edh.common import edhAmiRecipeStore as store
 from backend.backend.handlers.addon.edh.common.edhClient import EdhError, EdhUnavailableError
 from backend.backend.models.addon.edh import AmiRecipeRequestModel
 from backend.tests.handlers.addon.edh.edhAmiTestSupport import (
-    NOT_FOUND, RECIPE_BODY, create_recipe_table, fake_context, fake_edh,
+    NOT_FOUND, RECIPE_BODY, create_recipe_table, fake_context, fake_edh, install_parent_parameters,
+)
+from backend.tests.handlers.addon.edh.edhParameterStoreTestSupport import (
+    lookup_clock, reads_through_the_shared_lookup, serve_parameters, shared_lookup,
 )
 from backend.tests.handlers.addon.edh.edhTestSupport import DEFAULT_PROJECT
+from backend.tests.ssmParametersStub import always, client_error, throttled
 
 # A component that names the deployment's session secret prefix, as the Isaac Sim sign-in does.
 DEPLOY_COMPONENT = {"name": "060-session-bootstrap", "data": "schemaVersion: 1.0\n# ${DEPLOY_sessionSecretPrefix}\n"}
@@ -118,12 +122,14 @@ def admin_recipe(**overrides):
 
 
 def separate_lookup_clients(ctx):
-    """Give ``ctx`` lookup clients of their own and clear the build clients' calls, so each call shows which
-    pair of clients it went through. Returns the context holding the lookup clients."""
+    """Give ``ctx`` an EC2 lookup client of its own and clear the build clients' and the parameter store's calls,
+    so each EC2 call shows which client it went through. Returns the context holding the lookup client."""
     lookups = fake_context()
-    ctx.lookup_ec2, ctx.lookup_ssm = lookups.ec2, lookups.ssm
+    # The parent image parameter is read through the shared lookup on both paths; keep the test's own answer.
+    lookups.parameter_store = install_parent_parameters(ctx.parameter_store)
+    ctx.lookup_ec2 = lookups.ec2
     ctx.ec2.reset_mock()
-    ctx.ssm.reset_mock()
+    ctx.parameter_store.reset_mock()
     return lookups
 
 
@@ -131,7 +137,7 @@ def lookup_takes(monkeypatch, ctx, call, seconds):
     """Make the save's ``call`` on the lookup clients take ``seconds`` on the clock the lookup budget reads."""
     now = [1000.0]
     monkeypatch.setattr(recipes, "monotonic", lambda: now[0])
-    method = getattr(ctx.lookup_ssm if call == "get_parameter" else ctx.lookup_ec2, call)
+    method = getattr(ctx.parameter_store if call == "get_parameter" else ctx.lookup_ec2, call)
     answer = method.return_value
 
     def slow(**kwargs):
@@ -952,7 +958,7 @@ class TestQueuedBuildStartFailure:
     def test_the_sweep_records_why_the_queued_build_did_not_start_and_starts_it_once_it_can(self, world):
         self._queued_behind_v1(world)
         world["ctx"].ib.get_image.return_value = {"image": {"state": {"status": "FAILED", "reason": "boom"}}}
-        world["ctx"].ssm.get_parameter.side_effect = PARAMETER_MISSING
+        world["ctx"].parameter_store.get_parameter.side_effect = PARAMETER_MISSING
 
         summary = recipes.sweep()
 
@@ -960,7 +966,7 @@ class TestQueuedBuildStartFailure:
         assert v2["status"] == store.STATUS_QUEUED and v2["error"] == PARENT_UNREADABLE
         assert summary["promoted"] == 0 and summary["warnings"] == ["al2023-desktop: RecipeConflict"]
 
-        world["ctx"].ssm.get_parameter.side_effect = None
+        world["ctx"].parameter_store.get_parameter.side_effect = None
         summary = recipes.sweep()
 
         v2 = store.get_build("al2023-desktop", 2)
@@ -969,7 +975,7 @@ class TestQueuedBuildStartFailure:
 
     def test_a_completion_records_it_on_the_queued_row_and_reports_it_to_its_invoker(self, world):
         _row, v1 = self._queued_behind_v1(world)
-        world["ctx"].ssm.get_parameter.side_effect = PARAMETER_MISSING
+        world["ctx"].parameter_store.get_parameter.side_effect = PARAMETER_MISSING
 
         with pytest.raises(recipes.RecipeConflict):
             recipes.handle_image_state(v1["imageBuildVersionArn"], "AVAILABLE", None)
@@ -1072,9 +1078,9 @@ class TestArchitectureAtSave:
         assert store.get_recipe("al2023-desktop") is None
         ctx.ec2.describe_images.assert_called_once_with(ImageIds=[described])
         if parent.startswith("ssm:"):
-            ctx.ssm.get_parameter.assert_called_once_with(Name=parent[len("ssm:"):])
+            ctx.parameter_store.get_parameter.assert_called_once_with(Name=parent[len("ssm:"):])
         else:
-            ctx.ssm.get_parameter.assert_not_called()
+            ctx.parameter_store.get_parameter.assert_not_called()
         assert any(described in warning for warning in warnings_of(recipe_log))
         ctx.ec2.describe_images.return_value = parent_image("x86_64")
         assert admin_recipe(parentImage=parent)["parentImage"] == parent
@@ -1165,7 +1171,7 @@ class TestArchitectureAtSave:
         assert any(PARENT_AMI in warning for warning in warnings_of(recipe_log))
 
     def test_a_parameter_that_cannot_be_read_saves_the_recipe_and_names_why(self, world, recipe_log):
-        world["ctx"].ssm.get_parameter.side_effect = PARAMETER_MISSING
+        world["ctx"].parameter_store.get_parameter.side_effect = PARAMETER_MISSING
 
         assert admin_recipe()["parentImage"] == RECIPE_BODY["parentImage"]
 
@@ -1179,7 +1185,7 @@ class TestArchitectureAtSave:
         assert admin_recipe(parentImage="edhStack:VAMS Base")["parentImage"] == "edhStack:VAMS Base"
 
         ctx.ec2.describe_images.assert_not_called()
-        ctx.ssm.get_parameter.assert_not_called()
+        ctx.parameter_store.get_parameter.assert_not_called()
         assert any("edhStack" in warning for warning in warnings_of(recipe_log))
 
     def test_a_context_that_cannot_be_built_saves_the_recipe_and_names_why(self, world, recipe_log, monkeypatch):
@@ -1211,9 +1217,9 @@ class TestArchitectureAtSave:
             recipes.create_admin_recipe(model, "carol")
 
         lookups.ec2.describe_instance_types.assert_called_once_with(InstanceTypes=[RECIPE_BODY["buildInstanceType"]])
-        lookups.ssm.get_parameter.assert_called_once_with(Name=RECIPE_BODY["parentImage"][len("ssm:"):])
+        ctx.parameter_store.get_parameter.assert_called_once_with(Name=RECIPE_BODY["parentImage"][len("ssm:"):])
         lookups.ec2.describe_images.assert_called_once_with(ImageIds=[PARAMETER_AMI])
-        assert ctx.ec2.method_calls == [] and ctx.ssm.method_calls == []
+        assert ctx.ec2.method_calls == []
 
     @pytest.mark.parametrize("slow,parent,skipped", [
         ("describe_instance_types", RECIPE_BODY["parentImage"], ("get_parameter", "describe_images")),
@@ -1229,7 +1235,7 @@ class TestArchitectureAtSave:
         assert admin_recipe(parentImage=parent)["parentImage"] == parent
 
         for call in skipped:
-            getattr(ctx.lookup_ssm if call == "get_parameter" else ctx.lookup_ec2, call).assert_not_called()
+            getattr(ctx.parameter_store if call == "get_parameter" else ctx.lookup_ec2, call).assert_not_called()
         assert any("lookup budget" in warning for warning in warnings_of(recipe_log))
 
     @pytest.mark.parametrize("slow", ["describe_instance_types", "get_parameter"])
@@ -1363,7 +1369,8 @@ class TestArchitectureAtBuildStart:
         assert outcome == recipes.OUTCOME_STARTED
         ctx.ec2.describe_images.assert_called_once_with(ImageIds=[PARAMETER_AMI])
         ctx.ec2.describe_instance_types.assert_called_once_with(InstanceTypes=[RECIPE_BODY["buildInstanceType"]])
-        assert lookups.ec2.method_calls == [] and lookups.ssm.method_calls == []
+        assert lookups.ec2.method_calls == []
+        ctx.parameter_store.get_parameter.assert_called_once_with(Name=RECIPE_BODY["parentImage"][len("ssm:"):])
 
     def test_a_queued_build_refused_for_its_architecture_stays_queued_until_the_recipe_is_fixed(self, world):
         recipes.start_build(seeded(), "carol", only_if_changed=False)
@@ -1513,13 +1520,13 @@ class TestBuildClaims:
 
     def test_a_launch_refused_after_the_claim_leaves_no_row_and_blocks_no_later_build(self, world):
         row = seeded()
-        world["ctx"].ssm.get_parameter.side_effect = PARAMETER_MISSING
+        world["ctx"].parameter_store.get_parameter.side_effect = PARAMETER_MISSING
 
         with pytest.raises(recipes.RecipeConflict):
             recipes.start_build(row, "carol", only_if_changed=False)
 
         assert store.list_builds("al2023-desktop") == []
-        world["ctx"].ssm.get_parameter.side_effect = None
+        world["ctx"].parameter_store.get_parameter.side_effect = None
         build, outcome = recipes.start_build(row, "carol", only_if_changed=False)
         assert outcome == recipes.OUTCOME_STARTED and build["version"] == 1
 
@@ -2669,3 +2676,185 @@ class TestDeleteWhileAnAmiRemovalIsPending:
         else:
             assert recipes.delete_recipe(store.get_recipe("al2023-desktop")) == []
             assert store._table().scan()["Items"] == []
+
+
+def throttled_until(clock, seconds):
+    """A Parameter Store fault that throttles every read for ``seconds`` on ``clock``, then answers."""
+    recover_at = clock.now + seconds
+
+    def fault(name):
+        if clock.now < recover_at:
+            raise throttled()
+    return fault
+
+
+def parent_wait_on(monkeypatch, clock):
+    """Drive the parent image read's wait (its clock and sleeps) from ``clock``; returns the sleeps it takes."""
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock.sleep(seconds)
+    monkeypatch.setattr(recipes.builder, "_monotonic", clock.monotonic)
+    monkeypatch.setattr(recipes.builder, "_sleep", sleep)
+    return sleeps
+
+
+def read_bound():
+    """The most a parent image read can take: the shared lookup's budget plus one sleep."""
+    helper = shared_lookup()
+    return helper.PARAMETER_READ_BUDGET_SECONDS + helper.READ_RETRY_MAX_SLEEP_SECONDS
+
+
+PARENT_PARAMETER = RECIPE_BODY["parentImage"][len("ssm:"):]
+PARENT_SSM_UNREADABLE = "the parent image's SSM parameter could not be read"
+
+
+@pytest.mark.unit
+class TestTheParentImageParameterAtSave:
+    """A recipe save reads its ssm: parent through common.ssmParameters, fresh each time, and fails open."""
+
+    def test_a_save_reads_the_parent_through_the_shared_lookup(self, world):
+        assert reads_through_the_shared_lookup(recipes.builder), "the parent image is read on a client of its own"
+        assert admin_recipe()["parentImage"] == RECIPE_BODY["parentImage"]
+        world["ctx"].parameter_store.get_parameter.assert_called_once_with(Name=PARENT_PARAMETER)
+        world["ctx"].ec2.describe_images.assert_called_once_with(ImageIds=[PARAMETER_AMI])
+
+    def test_two_saves_read_the_parameter_twice(self, world):
+        model = AmiRecipeRequestModel(**RECIPE_BODY)
+        recipes.require_architecture_match(model, world["ctx"].lookup_ec2)
+        recipes.require_architecture_match(model, world["ctx"].lookup_ec2)
+        assert [call.kwargs for call in world["ctx"].parameter_store.get_parameter.call_args_list] == [
+            {"Name": PARENT_PARAMETER}, {"Name": PARENT_PARAMETER}]
+
+    def test_a_throttled_parameter_saves_the_recipe_within_the_read_bound(self, world, recipe_log, monkeypatch):
+        parameters = serve_parameters(monkeypatch, fault=always(throttled))
+        clock = lookup_clock()
+        started = clock.now
+
+        assert admin_recipe()["parentImage"] == RECIPE_BODY["parentImage"]
+
+        assert clock.now - started <= read_bound()
+        assert parameters.calls, "control: the parent parameter was asked for"
+        world["ctx"].ec2.describe_images.assert_not_called()
+        assert any("parent image parameter not read; architecture not checked (ParameterUnavailableError)" in w
+                   for w in warnings_of(recipe_log))
+
+    @pytest.mark.parametrize("error", [client_error("ParameterNotFound"), client_error("AccessDeniedException")],
+                             ids=["missing", "denied"])
+    def test_a_refused_parameter_saves_the_recipe(self, world, recipe_log, monkeypatch, error):
+        serve_parameters(monkeypatch, fault=always(lambda: error))
+        assert admin_recipe()["parentImage"] == RECIPE_BODY["parentImage"]
+        world["ctx"].ec2.describe_images.assert_not_called()
+        assert any("architecture not checked" in warning for warning in warnings_of(recipe_log))
+
+
+@pytest.mark.unit
+class TestTheParentImageParameterAtBuildStart:
+    """A build start reads the ssm: parent through common.ssmParameters. A build an API request starts makes one
+    bounded read; a build the deployment or the registrar starts waits out a short throttle, and no longer."""
+
+    def _queued_behind_v1(self):
+        row = seeded()
+        recipes.start_build(row, "carol", only_if_changed=False)
+        recipes.start_build(seeded(recipeRevision=2), "dave", only_if_changed=False)
+        return store.get_build("al2023-desktop", 1)
+
+    def test_an_api_build_reads_through_the_shared_lookup_and_pins_what_it_read(self, world):
+        build, outcome = recipes.start_build(seeded(), "carol", only_if_changed=False)
+        assert outcome == recipes.OUTCOME_STARTED and build["resolvedParentAmi"] == PARAMETER_AMI
+        world["ctx"].parameter_store.get_parameter.assert_called_once_with(Name=PARENT_PARAMETER)
+
+    def test_a_later_build_follows_a_changed_parameter(self, world, monkeypatch):
+        parameters = serve_parameters(monkeypatch, values={PARENT_PARAMETER: PARAMETER_AMI})
+        first, _ = recipes.start_build(seeded(), "carol", only_if_changed=False)
+        store.update_build("al2023-desktop", int(first["version"]), status=store.STATUS_FAILED)
+        parameters.values[PARENT_PARAMETER] = PARENT_AMI
+        second, _ = recipes.start_build(seeded(recipeRevision=2), "dave", only_if_changed=False)
+        assert (first["resolvedParentAmi"], second["resolvedParentAmi"]) == (PARAMETER_AMI, PARENT_AMI)
+        assert parameters.calls == [PARENT_PARAMETER, PARENT_PARAMETER]
+
+    def test_a_throttled_api_build_is_refused_within_the_read_bound_and_waits_for_nothing(self, world, monkeypatch):
+        serve_parameters(monkeypatch, fault=always(throttled))
+        clock = lookup_clock()
+        sleeps = parent_wait_on(monkeypatch, clock)
+        started = clock.now
+
+        with pytest.raises(recipes.RecipeConflict) as err:
+            recipes.start_build(seeded(), "carol", only_if_changed=False)
+
+        assert str(err.value) == PARENT_SSM_UNREADABLE
+        assert clock.now - started <= read_bound()
+        assert sleeps == []
+        assert store.list_builds("al2023-desktop") == []
+        world["ctx"].ib.create_component.assert_not_called()
+        world["ctx"].ib.start_image_pipeline_execution.assert_not_called()
+
+    def test_an_api_build_that_promotes_a_queued_build_waits_for_nothing(self, world, monkeypatch):
+        v1 = self._queued_behind_v1()
+        store.update_build("al2023-desktop", int(v1["version"]), status=store.STATUS_FAILED)
+        serve_parameters(monkeypatch, fault=always(throttled))
+        clock = lookup_clock()
+        sleeps = parent_wait_on(monkeypatch, clock)
+        started = clock.now
+
+        with pytest.raises(recipes.RecipeConflict):
+            recipes.start_build(seeded(recipeRevision=3), "erin", only_if_changed=False)
+
+        assert clock.now - started <= read_bound()
+        assert sleeps == []
+        v2 = store.get_build("al2023-desktop", 2)
+        assert v2["status"] == store.STATUS_QUEUED and v2["error"] == PARENT_UNREADABLE
+
+    def test_the_registrar_starts_a_queued_build_after_a_short_throttle(self, world, monkeypatch):
+        v1 = self._queued_behind_v1()
+        clock = lookup_clock()
+        serve_parameters(monkeypatch, values={PARENT_PARAMETER: PARAMETER_AMI}, fault=throttled_until(clock, 12))
+        sleeps = parent_wait_on(monkeypatch, clock)
+
+        outcome = recipes.handle_image_state(v1["imageBuildVersionArn"], "FAILED", "boom")
+
+        assert outcome["outcome"] == "failed"
+        v2 = store.get_build("al2023-desktop", 2)
+        assert v2["status"] == store.STATUS_BUILDING and v2["resolvedParentAmi"] == PARAMETER_AMI
+        assert sleeps, "control: the promotion waited for Parameter Store"
+        assert sum(sleeps) <= recipes.BACKGROUND_PARENT_IMAGE_READ_WAIT_SECONDS
+
+    def test_the_sweep_starts_a_queued_build_after_a_short_throttle(self, world, monkeypatch):
+        self._queued_behind_v1()
+        world["ctx"].ib.get_image.return_value = {"image": {"state": {"status": "FAILED", "reason": "boom"}}}
+        clock = lookup_clock()
+        serve_parameters(monkeypatch, values={PARENT_PARAMETER: PARAMETER_AMI}, fault=throttled_until(clock, 12))
+        parent_wait_on(monkeypatch, clock)
+
+        summary = recipes.sweep()
+
+        assert store.get_build("al2023-desktop", 2)["status"] == store.STATUS_BUILDING
+        assert summary["warnings"] == []
+
+    def test_a_background_wait_ends_when_parameter_store_does_not_recover(self, world, monkeypatch):
+        v1 = self._queued_behind_v1()
+        parameters = serve_parameters(monkeypatch, fault=always(throttled))
+        clock = lookup_clock()
+        parent_wait_on(monkeypatch, clock)
+        started = clock.now
+
+        with pytest.raises(recipes.RecipeConflict):
+            recipes.handle_image_state(v1["imageBuildVersionArn"], "FAILED", "boom")
+
+        assert clock.now - started <= recipes.BACKGROUND_PARENT_IMAGE_READ_WAIT_SECONDS + read_bound()
+        assert parameters.calls, "control: the parameter was asked for"
+        v2 = store.get_build("al2023-desktop", 2)
+        assert v2["status"] == store.STATUS_QUEUED and v2["error"] == PARENT_UNREADABLE
+        world["ctx"].ib.start_image_pipeline_execution.assert_called_once()
+
+    @pytest.mark.parametrize("error", [
+        client_error("ParameterNotFound"), client_error("AccessDeniedException"),
+        EndpointConnectionError(endpoint_url="https://ssm.us-east-1.amazonaws.com"),
+    ], ids=["missing", "denied", "transport"])
+    def test_every_refusal_answers_the_same_conflict(self, world, monkeypatch, error):
+        serve_parameters(monkeypatch, fault=always(lambda: error))
+        with pytest.raises(recipes.RecipeConflict) as err:
+            recipes.start_build(seeded(), "carol", only_if_changed=False)
+        assert str(err.value) == PARENT_SSM_UNREADABLE
+        assert store.list_builds("al2023-desktop") == []
