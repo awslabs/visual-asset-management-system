@@ -145,12 +145,12 @@ You can update the description, expiration date, and active status of an existin
 The expiration is sent only when you change it, so you can still change the description of an expired key or deactivate it. When a self-service key's 365-day window from creation has ended, its expiration date cannot change; create a new key to keep access.
 
 :::tip[Deactivate instead of delete]
-If you need to temporarily revoke access, toggle the key to **Inactive** instead of deleting it. This preserves the key record and allows you to reactivate it later.
+If you need to temporarily revoke access, toggle the key to **Inactive** instead of deleting it. This preserves the key record and allows you to reactivate it later. Access ends within about 45 seconds, because VAMS briefly caches API key authorization.
 :::
 
 ### Deleting an API key
 
-Deleting an API key is permanent and cannot be undone. Any applications or scripts using the key will immediately lose access.
+Deleting an API key is permanent and cannot be undone. Applications or scripts using the key lose access shortly afterward. VAMS briefly caches API key authorization, so a deleted key can keep working for up to about 45 seconds.
 
 1. Select the API key in the table.
 2. Choose **Delete**.
@@ -169,7 +169,7 @@ Follow these recommendations to maintain the security of your VAMS API keys:
 | Rotate keys regularly               | Create new keys and decommission old ones on a regular schedule.                                |
 | Never commit keys to source control | Store API keys in secrets managers (such as AWS Secrets Manager) or CI/CD secret variables.     |
 | Monitor key usage                   | Review the API Key Management page periodically to identify unused or expired keys.             |
-| Deactivate compromised keys         | If a key is compromised, immediately set it to **Inactive** and create a replacement.           |
+| Deactivate compromised keys         | Set a compromised key to **Inactive** right away (takes up to about 45 seconds) and replace it. |
 
 :::warning[Audit logging]
 All API key operations (creation, update, deletion) are recorded in the VAMS audit log. Administrators can review these logs in Amazon CloudWatch to track who created, modified, or deleted API keys.

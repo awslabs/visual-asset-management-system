@@ -2078,6 +2078,1630 @@
             "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
             "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
             "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3804",
+            "package": "accelerate",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "accelerate 1.5.2 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins accelerate==1.5.2 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3716",
+            "package": "datasets",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "datasets 2.19.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.0.1) is not taken here. Step1X-3D's requirements.txt pins datasets==2.19.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2446",
+            "package": "diffusers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "diffusers 0.32.2 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.38.0) is not taken here. Step1X-3D's requirements.txt pins diffusers==0.32.2 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-40",
+            "package": "diffusers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "diffusers 0.32.2 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.38.0) is not taken here. Step1X-3D's requirements.txt pins diffusers==0.32.2 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-41",
+            "package": "diffusers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "diffusers 0.32.2 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.38.0) is not taken here. Step1X-3D's requirements.txt pins diffusers==0.32.2 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4217",
+            "package": "fsspec",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "fsspec 2024.3.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2026.6.0) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-118",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.11.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-119",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.31.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1410",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1423",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-211",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.15.1) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2178",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.15.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2179",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.16.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-63",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.6.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-64",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-65",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.6.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-66",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.6.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2858",
+            "package": "paramiko",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "paramiko 3.5.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.0.0) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112390",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112391",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112393",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112395",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112399",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112400",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112401",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112404",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112406",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112891",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112892",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112893",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112894",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112895",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112897",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112899",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112900",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-128066",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-128067",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96638",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96640",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96778",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-165",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.2.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2249",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.1.1) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2250",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.2.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2252",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.2.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2253",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2254",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2255",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2256",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2257",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2874",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.2.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3451",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3453",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3454",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3493",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3494",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3495",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3496",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4326",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4327",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4329",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4330",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4331",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4332",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4334",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4335",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4337",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4338",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4340",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4341",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4343",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4363",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1851",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.18) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1852",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.22) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3036",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.30) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3037",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.30) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3038",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.26) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3039",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.27) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3040",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.31) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1857",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3043",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3967",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.6.6) is not taken here. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3970",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.4.0) is not taken here. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3974",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.3.3) is not taken here. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3975",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.3.3) is not taken here. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-507",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.4.0) is not taken here. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-115924",
+            "package": "rembg",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "rembg 2.0.65 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.0.82) is not taken here. Step1X-3D's requirements.txt pins rembg==2.0.65 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-55v6-g8pm-pw4c",
+            "package": "rembg",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "rembg 2.0.65 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.0.75) is not taken here. Step1X-3D's requirements.txt pins rembg==2.0.65 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2274",
+            "package": "rembg",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "rembg 2.0.65 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.0.75) is not taken here. Step1X-3D's requirements.txt pins rembg==2.0.65 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1909",
+            "package": "sentencepiece",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "sentencepiece 0.2.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.2.1) is not taken here. Step1X-3D's requirements.txt pins sentencepiece==0.2.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-161",
+            "package": "starlette",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "starlette 0.52.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 1.0.1) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2280",
+            "package": "starlette",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "starlette 0.52.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 1.1.0) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2281",
+            "package": "starlette",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "starlette 0.52.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 1.1.0) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-248",
+            "package": "starlette",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "starlette 0.52.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 1.3.0) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-249",
+            "package": "starlette",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "starlette 0.52.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 1.3.1) is not taken here. It arrives as a dependency of another package of the image. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1976",
+            "package": "tqdm",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "tqdm 4.66.2 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.66.3) is not taken here. Step1X-3D's requirements.txt pins tqdm==4.66.2 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-211",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-212",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-213",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-214",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-215",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-216",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-217",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-218",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-40",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.50.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1977",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.52.1) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1980",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.53.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1981",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.53.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1983",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.53.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1984",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.50.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1985",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.51.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1986",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.52.1) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1987",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.51.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1988",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.53.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2288",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.0.0rc3) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2289",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.3.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2290",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3929",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.10.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-xmj3-9gf7-h52w",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "setuptools 78.1.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 84.1.0) is not taken here. setuptools is a build tool: the source builds run with build isolation off, so they use the one the lock installs. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-49",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "setuptools 78.1.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 78.1.1) is not taken here. setuptools is a build tool: the source builds run with build isolation off, so they use the one the lock installs. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3447",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "setuptools 78.1.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 83.0.0) is not taken here. setuptools is a build tool: the source builds run with build isolation off, so they use the one the lock installs. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-194",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "torch 2.11.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.13.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.8 builds, and the extensions the image compiles link against them. #1873 tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-xmj3-9gf7-h52w",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/hunyuan3d"],
+            "reason": "setuptools 78.1.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 84.1.0) is not taken here. setuptools is a build tool: the source builds run with build isolation off, so they use the one the lock installs. #1874 tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-49",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/hunyuan3d"],
+            "reason": "setuptools 78.1.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 78.1.1) is not taken here. setuptools is a build tool: the source builds run with build isolation off, so they use the one the lock installs. #1874 tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3447",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/hunyuan3d"],
+            "reason": "setuptools 78.1.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 83.0.0) is not taken here. setuptools is a build tool: the source builds run with build isolation off, so they use the one the lock installs. #1874 tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-194",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/hunyuan3d"],
+            "reason": "torch 2.11.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.13.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.8 builds, and the extensions the image compiles link against them. #1874 tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112906",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112907",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112908",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112909",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112910",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112911",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112912",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112913",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112914",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112915",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112934",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112935",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112937",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112938",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112939",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112940",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112941",
+            "package": "filelock",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "filelock 4.1.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.2.1) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2477",
+            "package": "flash-attn",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "flash-attn 2.7.3 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. It is the prebuilt wheel the Dockerfile has always installed for this torch. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112390",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112391",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112393",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112395",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112399",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112400",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112401",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112404",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112406",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112891",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112892",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112893",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112894",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112895",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112897",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112899",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112900",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-128066",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-128067",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96638",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96640",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96778",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-78g4-xqwv-q3g8",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4326",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4327",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4328",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4329",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4330",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4331",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4332",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4333",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4334",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4335",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4336",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4337",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4338",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4339",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4340",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4341",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4342",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4343",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4363",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "pillow 12.3.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-115924",
+            "package": "rembg",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "rembg 2.0.69 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.0.82) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-55v6-g8pm-pw4c",
+            "package": "rembg",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "rembg 2.0.69 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.0.75) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2274",
+            "package": "rembg",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "rembg 2.0.69 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.0.75) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-189",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-190",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-191",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.7.1rc1) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-192",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-193",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.9.1) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-194",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.13.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-195",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.10.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-198",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.7.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-199",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.7.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-200",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.7.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-201",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.7.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-202",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.7.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-203",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.9.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-204",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.9.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-205",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.7.1) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-206",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.9.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-207",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.7.1) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-208",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.7.1) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-209",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.7.1) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-139",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1856",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.10.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1970",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.8.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2286",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "torch 2.6.0 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.10.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.4 builds, and the extensions the image compiles link against them. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-214",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "transformers 4.56.2 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-215",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "transformers 4.56.2 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-216",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "transformers 4.56.2 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-217",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "transformers 4.56.2 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-218",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "transformers 4.56.2 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2288",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "transformers 4.56.2 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.0.0rc3) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2289",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "transformers 4.56.2 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.3.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2290",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "transformers 4.56.2 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3929",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "transformers 4.56.2 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.10.0) is not taken here. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4174",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/trellis2"],
+            "reason": "transformers 4.56.2 is the version the TRELLIS.2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. The Dockerfile does not pin it itself: it is one of the image's packages, installed at the version the baseline build resolved. #1892 tracks the version bumps for the TRELLIS.2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-114612",
+            "package": "litellm",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/blenderagent"],
+            "reason": "litellm 1.100.0 is the version the Blender agent image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 1.104.0rc2) is not taken here. The Blender agent image's Dockerfile asks for litellm[proxy]==1.100.0 exactly. #1893 tracks the version bumps for the Blender agent image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-193",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/blenderagent"],
+            "reason": "torch 2.7.1 is the version the Blender agent image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.9.1) is not taken here. The Dockerfile pins torch to the CUDA 12.8 build the scripted refit's depth model runs on. #1893 tracks the version bumps for the Blender agent image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-194",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/blenderagent"],
+            "reason": "torch 2.7.1 is the version the Blender agent image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.13.0) is not taken here. The Dockerfile pins torch to the CUDA 12.8 build the scripted refit's depth model runs on. #1893 tracks the version bumps for the Blender agent image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-195",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/blenderagent"],
+            "reason": "torch 2.7.1 is the version the Blender agent image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.10.0) is not taken here. The Dockerfile pins torch to the CUDA 12.8 build the scripted refit's depth model runs on. #1893 tracks the version bumps for the Blender agent image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-203",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/blenderagent"],
+            "reason": "torch 2.7.1 is the version the Blender agent image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.9.0) is not taken here. The Dockerfile pins torch to the CUDA 12.8 build the scripted refit's depth model runs on. #1893 tracks the version bumps for the Blender agent image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-204",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/blenderagent"],
+            "reason": "torch 2.7.1 is the version the Blender agent image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.9.0) is not taken here. The Dockerfile pins torch to the CUDA 12.8 build the scripted refit's depth model runs on. #1893 tracks the version bumps for the Blender agent image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-206",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/blenderagent"],
+            "reason": "torch 2.7.1 is the version the Blender agent image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.9.0) is not taken here. The Dockerfile pins torch to the CUDA 12.8 build the scripted refit's depth model runs on. #1893 tracks the version bumps for the Blender agent image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-139",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/blenderagent"],
+            "reason": "torch 2.7.1 is the version the Blender agent image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. The Dockerfile pins torch to the CUDA 12.8 build the scripted refit's depth model runs on. #1893 tracks the version bumps for the Blender agent image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1856",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/blenderagent"],
+            "reason": "torch 2.7.1 is the version the Blender agent image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.10.0) is not taken here. The Dockerfile pins torch to the CUDA 12.8 build the scripted refit's depth model runs on. #1893 tracks the version bumps for the Blender agent image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1970",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/blenderagent"],
+            "reason": "torch 2.7.1 is the version the Blender agent image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.8.0) is not taken here. The Dockerfile pins torch to the CUDA 12.8 build the scripted refit's depth model runs on. #1893 tracks the version bumps for the Blender agent image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2286",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/blenderagent"],
+            "reason": "torch 2.7.1 is the version the Blender agent image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.10.0) is not taken here. The Dockerfile pins torch to the CUDA 12.8 build the scripted refit's depth model runs on. #1893 tracks the version bumps for the Blender agent image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
         }
     ]
 }

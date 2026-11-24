@@ -20,7 +20,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.resourceNames import get_table_name, ResourceKeys
-from common.ssmParameters import get_parameter_value
+from common.deployTimeValues import DeployTimeKeys, resolve_together
 from common.databaseAccess import DatabaseAccessManager  # noqa: F401 -- the search routes' pre-filter, also addressed as handlers.osSemanticSearch.search.DatabaseAccessManager
 from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
 from common.validators import validate
@@ -147,16 +147,19 @@ class SearchServiceUnavailable(Exception):
 
 
 def opensearch_settings() -> Dict[str, str]:
-    """The three aos/* Parameter Store values, read on first OpenSearch use (so a deployment without
-    OpenSearch imports, and init makes no read) through common.ssmParameters, which bounds each read,
-    caches the value per container and backs off after a throttled read. A value that cannot be read
-    raises SearchServiceUnavailable; the parameter name is logged, never returned to the caller."""
+    """The OpenSearch endpoint and the two index names, on first OpenSearch use (so a deployment
+    without OpenSearch imports, and init makes no read). They come from the resource names the
+    import-time table lookup already loaded (common.deployTimeValues), with no Parameter Store call;
+    while a deployment is still adding them, all three are read from aos/* through
+    common.ssmParameters, which bounds each read, caches the value per container and backs off after
+    a throttled read. A value that cannot be resolved raises SearchServiceUnavailable; the parameter
+    name is logged, never returned to the caller."""
     try:
-        return {
-            "asset_index": get_parameter_value(opensearch_asset_index_ssm_param),
-            "file_index": get_parameter_value(opensearch_file_index_ssm_param),
-            "endpoint": get_parameter_value(opensearch_endpoint_ssm_param),
-        }
+        endpoint, asset_index, file_index = resolve_together(
+            (DeployTimeKeys.OPENSEARCH_ENDPOINT, DeployTimeKeys.OPENSEARCH_ASSET_INDEX_NAME,
+             DeployTimeKeys.OPENSEARCH_FILE_INDEX_NAME),
+            (opensearch_endpoint_ssm_param, opensearch_asset_index_ssm_param, opensearch_file_index_ssm_param))
+        return {"asset_index": asset_index, "file_index": file_index, "endpoint": endpoint}
     except Exception as e:
         logger.warning(f"OpenSearch settings could not be read from Parameter Store: {type(e).__name__}")
         raise SearchServiceUnavailable() from e

@@ -69,6 +69,73 @@ const cells: Cell[] = [
                 "https://sqs.us-east-1.amazonaws.com/123456789012/garnet-ingest";
         },
     ],
+    // The cells the deploy-time values in the chunks vary across (resourceNameChunksDeployTimeValues
+    // .test.ts asserts their contents): which values are published and which stacks the chunks wait for.
+    [
+        "OpenSearch off",
+        "commercial",
+        "rnc-nag-opensearch-off",
+        (c) => {
+            c.app.openSearch.useServerless.enabled = false;
+            c.app.openSearch.useProvisioned.enabled = false;
+        },
+    ],
+    [
+        "OpenSearch provisioned",
+        "commercial",
+        "rnc-nag-provisioned",
+        (c) => {
+            c.app.openSearch.useServerless.enabled = false;
+            c.app.openSearch.useProvisioned.enabled = true;
+            c.app.useGlobalVpc.enabled = true;
+        },
+    ],
+    [
+        "OpenSearch Serverless private NEXTGEN, deferred index schema",
+        "commercial",
+        "rnc-nag-private-nextgen-deferred",
+        (c) => {
+            c.app.useGlobalVpc.enabled = true;
+            c.app.useGlobalVpc.addVpcEndpoints = false;
+            c.app.openSearch.useServerless.allowPublic = false;
+            c.app.openSearch.useServerless.nextGen = true;
+            c.app.openSearch.useServerless.deployDeferredIndexSchema = false;
+        },
+    ],
+    [
+        "Location Service off",
+        "commercial",
+        "rnc-nag-location-off",
+        (c) => {
+            c.app.useLocationService.enabled = false;
+        },
+    ],
+    [
+        "CloudFront custom domain",
+        "commercial",
+        "rnc-nag-cloudfront-custom-domain",
+        (c) => {
+            c.app.useCloudFront.customDomain.enabled = true;
+            c.app.useCloudFront.customDomain.domainHost = "vams-t1-web.example.com";
+            c.app.useCloudFront.customDomain.certificateArn =
+                "arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-3333-4444-555555555555";
+            c.app.useCloudFront.customDomain.optionalHostedZoneId = "";
+        },
+    ],
+    [
+        "ALB with a configured domain",
+        "commercial",
+        "rnc-nag-alb",
+        (c) => {
+            c.app.useGlobalVpc.enabled = true;
+            c.app.useCloudFront.enabled = false;
+            c.app.useAlb.enabled = true;
+            c.app.useAlb.domainHost = "vams-t1-alb.example.com";
+            c.app.useAlb.certificateArn =
+                "arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-3333-4444-555555555555";
+            c.app.useAlb.optionalHostedZoneId = "";
+        },
+    ],
     ["GovCloud template", "govcloud", "rnc-nag-govcloud", undefined],
     ["EU Sovereign template", "eusovereign", "rnc-nag-eusc", undefined],
 ];
@@ -100,7 +167,9 @@ describe("resource-name chunks with CDK Nag", () => {
             .filter(
                 (e) =>
                     template === "commercial" ||
-                    /resourceNamesChunks|ResourceNameChunk/.test(`${e.path} ${e.message}`)
+                    /resourceNamesChunks|ResourceNameChunk|LateCoreResourceName/.test(
+                        `${e.path} ${e.message}`
+                    )
             )
             .map((e) => `${e.path}: ${e.message}`.slice(0, 200));
         expect(errors).toEqual([]);

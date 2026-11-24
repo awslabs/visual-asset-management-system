@@ -300,6 +300,8 @@ Removes metadata items from an asset by key.
 
 File-level metadata is attached to individual files within an asset. The same endpoint path handles both file metadata and file attributes, distinguished by a `type` query parameter.
 
+A file's records are keyed by the path the file list shows the file at (`relativePath` in [List Files](files.md#list-files)). `filePath` names the file by that path or by the file's full S3 key (`key` in the file list), and both forms read and write the same records for every kind of asset: an asset in its own folder, an asset created on an existing folder or object, and an asset in a bucket with a base prefix. The exception is a file whose listed path starts with the asset ID as a folder (`/{assetId}/...`) or with the asset's location (`assetLocation.Key`): that listed path is read as another file's path, so name such a file by its full key.
+
 ### Get File Metadata
 
 `GET /database/{databaseId}/assets/{assetId}/metadata/file`
@@ -312,7 +314,7 @@ Retrieves metadata for a specific file within an asset.
 | ---------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------- |
 | `databaseId`     | path     | string  | Yes      | Database identifier.                                                                              |
 | `assetId`        | path     | string  | Yes      | Asset identifier.                                                                                 |
-| `filePath`       | query    | string  | Yes      | Relative file path.                                                                               |
+| `filePath`       | query    | string  | Yes      | The file's listed path (`relativePath`) or its full key (`key`).                                  |
 | `type`           | query    | string  | Yes      | `"metadata"` to retrieve file metadata, or `"attribute"` to retrieve file attributes.             |
 | `maxItems`       | query    | integer | No       | Maximum items to return. Default: `1000`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `pageSize`       | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
@@ -377,11 +379,11 @@ Adds metadata items to a specific file.
 }
 ```
 
-| Field      | Type   | Required | Description                    |
-| ---------- | ------ | -------- | ------------------------------ |
-| `filePath` | string | Yes      | Relative file path.            |
-| `type`     | string | Yes      | `"metadata"` or `"attribute"`. |
-| `metadata` | array  | Yes      | List of metadata items.        |
+| Field      | Type   | Required | Description                                                      |
+| ---------- | ------ | -------- | ---------------------------------------------------------------- |
+| `filePath` | string | Yes      | The file's listed path (`relativePath`) or its full key (`key`). |
+| `type`     | string | Yes      | `"metadata"` or `"attribute"`.                                   |
+| `metadata` | array  | Yes      | List of metadata items.                                          |
 
 **Response:**
 

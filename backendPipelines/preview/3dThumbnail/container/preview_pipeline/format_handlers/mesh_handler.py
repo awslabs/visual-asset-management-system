@@ -539,8 +539,10 @@ def _load_draco(file_path: str) -> pv.PolyData:
     vertices = np.array(mesh.points).reshape(-1, 3)
     colours = getattr(mesh, "colors", None)
 
-    if mesh.faces is not None and len(mesh.faces) > 0:
-        faces = np.array(mesh.faces).reshape(-1, 3)
+    # DracoPy returns a DracoPointCloud for faceless files, which has no faces attribute
+    faces = getattr(mesh, "faces", None)
+    if faces is not None and len(faces) > 0:
+        faces = np.array(faces).reshape(-1, 3)
         n_faces = len(faces)
         pv_faces = np.column_stack([np.full(n_faces, 3), faces]).ravel()
         pv_mesh = pv.PolyData(vertices, pv_faces)
