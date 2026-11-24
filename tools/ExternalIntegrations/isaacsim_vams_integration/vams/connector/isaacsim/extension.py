@@ -294,7 +294,11 @@ class VamsConnectorExtension(omni.ext.IExt):
     def _start_content_connection(self):
         """Shows VAMS in the Content window (Omniverse Storage > VAMS). A failure leaves the VAMS window working."""
         current = getattr(self, "_content", None)
-        if not getattr(self, "_content_window_enabled", False) or (current is not None and current.running):
+        if not getattr(self, "_content_window_enabled", False):
+            return
+        if current is not None and current.running:
+            # A new sign-in: the client library may hold a refused one, so connect again with the new one.
+            current.reconnect()
             return
         try:
             import omni.client

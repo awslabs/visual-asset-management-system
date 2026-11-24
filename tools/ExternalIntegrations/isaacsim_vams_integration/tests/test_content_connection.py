@@ -95,7 +95,14 @@ class FakeRegistry:
         return None
 
 
-def make(cli_env, ready=None, api=None, token_result=None, launches=None, registry=None):
+class _NoLoop:
+    """Stands in for Kit's event loop: runs nothing, so no real loop is created in the tests."""
+
+    def call_soon_threadsafe(self, fn):
+        pass
+
+
+def make(cli_env, ready=None, api=None, token_result=None, launches=None, registry=None, clock=None, tokens=None):
     vamscli, _ = cli_env
     client = FakeClient()
     procs = []
@@ -108,6 +115,8 @@ def make(cli_env, ready=None, api=None, token_result=None, launches=None, regist
         return proc
 
     def run(args, **kwargs):
+        if tokens:
+            return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"token": tokens[0]}) + "\n", stderr="")
         return token_result or subprocess.CompletedProcess(args, 0, stdout=json.dumps({"token": "vams_tok"}) + "\n",
                                                            stderr="")
     def schedule(coroutine):
@@ -116,7 +125,8 @@ def make(cli_env, ready=None, api=None, token_result=None, launches=None, regist
         except StopIteration:
             pass
     conn = cc.VamsContentConnection("edh", vamscli, omni_client=client, content_browser_api=api, popen=popen, run=run,
-                                    registry=registry or FakeRegistry(), schedule=schedule)
+                                    registry=registry or FakeRegistry(), schedule=schedule, loop=_NoLoop(),
+                                    **({"clock": clock} if clock else {}))
     return conn, client, procs
 
 
@@ -241,3 +251,102 @@ def test_start_removes_vams_entries_left_by_an_earlier_session(cli_env):
     conn, _, _ = make(cli_env, api=api, registry=FakeRegistry(stale))
     conn.start()
     assert api.removed == [3]
+
+
+ORIGIN = "http://127.0.0.1:40123/discovery"
+
+
+def test_a_second_request_for_the_same_token_fails_at_once_instead_of_waiting(cli_env):
+    now = [100.0]
+    conn, client, _ = make(cli_env, api=FakeApi(), clock=lambda: now[0])
+    conn.start()
+    ask = client.callbacks[0]
+    assert ask(1, ORIGIN) is True and client.tokens == [(1, "vams_tok")]
+    # VAMS refused it, so the client library asks again: cancelled, not handed out again.
+    assert ask(2, ORIGIN) is True and client.cancelled == [2]
+    now[0] += 30
+    assert ask(3, ORIGIN) is True and client.cancelled == [2, 3]
+    assert len(client.tokens) == 1
+
+
+def test_a_refused_token_is_tried_again_after_the_retry_interval(cli_env):
+    now = [100.0]
+    conn, client, _ = make(cli_env, api=FakeApi(), clock=lambda: now[0])
+    conn.start()
+    ask = client.callbacks[0]
+    ask(1, ORIGIN)
+    ask(2, ORIGIN)
+    now[0] += cc.REFUSED_RETRY_SECONDS + 1
+    assert ask(3, ORIGIN) is True and client.tokens[-1] == (3, "vams_tok")
+
+
+def test_a_new_token_in_the_profile_is_handed_out_at_once(cli_env):
+    now, tokens = [100.0], ["vams_old"]
+    conn, client, _ = make(cli_env, api=FakeApi(), clock=lambda: now[0], tokens=tokens)
+    conn.start()
+    ask = client.callbacks[0]
+    ask(1, ORIGIN)
+    ask(2, ORIGIN)
+    assert client.cancelled == [2]
+    tokens[0] = "vams_renewed"
+    assert ask(3, ORIGIN) is True and client.tokens[-1] == (3, "vams_renewed")
+
+
+def test_a_refusal_is_logged_once_per_episode(cli_env, caplog):
+    now = [100.0]
+    conn, client, _ = make(cli_env, api=FakeApi(), clock=lambda: now[0])
+    conn.start()
+    ask = client.callbacks[0]
+    ask(1, ORIGIN)
+    with caplog.at_level("WARNING"):
+        for handle in range(2, 12):
+            ask(handle, ORIGIN)
+    assert sum("refused" in r.getMessage() for r in caplog.records) == 1
+    assert all("vams_tok" not in r.getMessage() for r in caplog.records)
+
+
+class ImmediateLoop:
+    def __init__(self):
+        self.calls = 0
+
+    def call_soon_threadsafe(self, fn):
+        self.calls += 1
+        fn()
+
+
+def test_a_refusal_starts_one_watch_for_a_new_sign_in(cli_env):
+    now = [100.0]
+    conn, client, _ = make(cli_env, api=FakeApi(), clock=lambda: now[0])
+    loop, scheduled = ImmediateLoop(), []
+    conn._loop, conn._schedule = loop, lambda coroutine: (scheduled.append(coroutine), coroutine.close())
+    conn.start()
+    ask = client.callbacks[0]
+    ask(1, ORIGIN)
+    for handle in range(2, 6):
+        ask(handle, ORIGIN)
+    watches = [c for c in scheduled if c.cr_code.co_name == "_sign_in_watch"]
+    assert loop.calls == 1 and len(watches) == 1
+
+
+def test_the_watch_reconnects_once_the_profile_holds_a_usable_sign_in(cli_env, monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(cc, "SIGN_IN_POLL_SECONDS", 0)
+    now, tokens = [100.0], ["vams_old"]
+    api = FakeApi()
+    conn, client, procs = make(cli_env, api=api, clock=lambda: now[0], tokens=tokens)
+    conn.start()
+    ask = client.callbacks[0]
+    ask(1, ORIGIN)
+    ask(2, ORIGIN)
+    tokens[0] = "vams_renewed"
+    asyncio.run(conn._sign_in_watch())
+    assert procs[0].terminated and len(procs) == 2 and conn.running
+    assert api.removed == [7] and len(api.added) == 2
+    new_ask = client.callbacks[-1]
+    assert new_ask(9, ORIGIN) is True and client.tokens[-1] == (9, "vams_renewed")
+
+
+def test_reconnect_does_nothing_when_not_running(cli_env):
+    conn, _, procs = make(cli_env, api=FakeApi())
+    assert conn.reconnect() is None and procs == []

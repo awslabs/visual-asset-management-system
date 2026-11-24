@@ -14,12 +14,15 @@ Needs Kit 110.2 or later (Isaac Sim 6.1+): earlier Kit has no Omniverse Storage 
 """
 import asyncio
 import collections
+import hashlib
 import json
 import logging
 import os
 import shutil
 import subprocess
 import threading
+import time
+import warnings
 from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
@@ -30,6 +33,13 @@ SERVER_SCRIPT = os.path.join(_HERE, "storage_adapter", "server.py")
 TOKEN_SCRIPT = os.path.join(_HERE, "storage_adapter", "token_helper.py")
 READY_TIMEOUT_SECONDS = 30.0
 TOKEN_TIMEOUT_SECONDS = 20.0
+# A token VAMS refused is not handed out again for this long; until then a request fails at once instead of
+# waiting. The client library asks again, about twice a second and for as long as the request lasts, whenever
+# the token it holds is refused, so without this a request made after the sign-in expired never returns.
+REFUSED_RETRY_SECONDS = 60.0
+# After a refusal the client library does not ask again on its own, so the profile is checked this often and the
+# connection made again once it holds a new sign-in, or the refused one is due for another try.
+SIGN_IN_POLL_SECONDS = 30.0
 
 
 class ContentConnectionError(Exception):
@@ -86,7 +96,8 @@ class VamsContentConnection:
     """Owns the storage adapter process and its registration for one VAMS CLI profile."""
 
     def __init__(self, profile, vamscli_path=None, omni_client=None, content_browser_api=None,
-                 popen=subprocess.Popen, run=subprocess.run, registry=None, schedule=None):
+                 popen=subprocess.Popen, run=subprocess.run, registry=None, schedule=None, clock=time.monotonic,
+                 loop=None):
         self.profile = profile
         self.vamscli_path = vamscli_path
         self._client = omni_client
@@ -103,6 +114,12 @@ class VamsContentConnection:
         self._service_id = None
         self._stderr_tail = collections.deque(maxlen=20)
         self._lock = threading.Lock()
+        self._clock = clock
+        self._given = None          # fingerprint of the token last handed to the client library
+        self._refused = {}          # fingerprint -> when VAMS was seen refusing it
+        self._refusal_logged = False
+        self._loop = loop
+        self._watching = False
 
     @property
     def running(self):
@@ -134,15 +151,79 @@ class VamsContentConnection:
             return None
 
     def on_auth_request(self, auth_handle, server):
-        """``register_storage_auth_callback`` callback. Answers only for this adapter's exact origin."""
+        """``register_storage_auth_callback`` callback. Answers only for this adapter's exact origin.
+
+        The client library asks once, then again whenever VAMS refuses the token it holds (the adapter answers
+        UNAUTHENTICATED). A request for a new token right after one was handed out therefore marks that token as
+        refused. A refused token is not handed out again for REFUSED_RETRY_SECONDS, so the request fails at once;
+        a different token in the profile (a new sign-in, a renewed workstation lease) is handed out at once.
+        """
         if self._origin is None or origin_of(server) != self._origin:
             return False
+        now = self._clock()
+        if self._given is not None:
+            self._refused[self._given] = now
+            self._given = None
         token = self.read_token()
         if not token:
-            logger.warning("VAMS Content window: no VAMS sign-in for profile %s; sign in to browse VAMS", self.profile)
-            self._client.authentication_cancel(auth_handle)
+            self._refuse(auth_handle, "the VAMS CLI profile has no current sign-in")
             return True
+        print_ = hashlib.sha256(token.encode()).hexdigest()
+        refused_at = self._refused.get(print_)
+        if refused_at is not None and now - refused_at < REFUSED_RETRY_SECONDS:
+            self._refuse(auth_handle, "VAMS refused the current sign-in")
+            return True
+        self._refused.pop(print_, None)
+        self._given = print_
+        self._refusal_logged = False
         return bool(self._client.set_storage_access_token(auth_handle, token))
+
+    def _refuse(self, auth_handle, reason):
+        if not self._refusal_logged:
+            logger.warning("VAMS Content window: %s for profile %s; sign in again (on an EDH desktop, renew the "
+                           "workstation lease) to browse VAMS", reason, self.profile)
+            self._refusal_logged = True
+        self._client.authentication_cancel(auth_handle)
+        self._watch_for_sign_in()
+
+    def _watch_for_sign_in(self):
+        """Called on the client library's thread. Starts, once, a check on Kit's event loop that reconnects when
+        the profile holds a usable sign-in again."""
+        if self._watching or self._loop is None:
+            return
+        self._watching = True
+        try:
+            self._loop.call_soon_threadsafe(lambda: self._schedule(self._sign_in_watch()))
+        except RuntimeError:
+            self._watching = False
+
+    def sign_in_usable(self, token):
+        """True when `token` is not a token VAMS refused within REFUSED_RETRY_SECONDS."""
+        refused_at = self._refused.get(hashlib.sha256(token.encode()).hexdigest())
+        return refused_at is None or self._clock() - refused_at >= REFUSED_RETRY_SECONDS
+
+    async def _sign_in_watch(self):
+        try:
+            while self.running:
+                await asyncio.sleep(SIGN_IN_POLL_SECONDS)
+                token = await asyncio.get_event_loop().run_in_executor(None, self.read_token)
+                if token and self.sign_in_usable(token):
+                    self.reconnect()
+                    return
+        finally:
+            self._watching = False
+
+    def reconnect(self):
+        """Makes the connection again with a new adapter, so the client library asks for a sign-in again (once it
+        has been refused one, it does not ask again for the same server). On Kit's main thread."""
+        if not self.running:
+            return None
+        self.stop()
+        try:
+            return self.start()
+        except ContentConnectionError as error:
+            logger.warning("VAMS Content window connection not restarted: %s", error)
+            return None
 
     # ----------------------------------------------------------------------------------------------------------
     # Lifecycle
@@ -176,6 +257,9 @@ class VamsContentConnection:
             if self._origin is None or self._origin[1] != "127.0.0.1":
                 self._stop_process()
                 raise ContentConnectionError("the VAMS storage adapter reported a non-loopback address")
+            if self._loop is None:
+                self._loop = _current_loop()
+            self._given = None
             self._auth_registration = self._client.register_storage_auth_callback(self.on_auth_request)
             self._register()
             return self._discovery_url
@@ -286,6 +370,20 @@ class VamsContentConnection:
             except subprocess.TimeoutExpired:
                 process.kill()
         return self._stderr_tail[-1] if self._stderr_tail else ""
+
+
+def _current_loop():
+    """Kit's event loop: the running one, else the one Kit set as current; None in a plain interpreter."""
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        try:
+            return asyncio.get_event_loop()
+        except RuntimeError:
+            return None
 
 
 def _ensure_future(coroutine):
