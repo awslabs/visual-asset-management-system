@@ -388,7 +388,10 @@ describe("SSM integration surface", () => {
         // vector search enabled), so they are the canonical keys allowed to be absent.
         // The audit log queries table (dynamoTables/auditLogQueriesStorage) is built, and published,
         // only when audit log search is enabled; the EU Sovereign template turns it off.
+        // The map key ARN (location/apiKeyArn) is published only with Amazon Location Service, which
+        // the GovCloud and EU Sovereign templates leave off.
         const searchOff = name === "eusovereign";
+        const locationOff = name !== "commercial";
         const optional = new Set<string>([
             RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer,
             RESOURCE_PARAM_KEYS.lambdaFunctions.vectorReindexer,
@@ -396,17 +399,28 @@ describe("SSM integration surface", () => {
         const required = canonical.filter(
             (key) =>
                 !optional.has(key) &&
-                !(searchOff && key === RESOURCE_PARAM_KEYS.dynamoTables.auditLogQueriesStorage)
+                !(searchOff && key === RESOURCE_PARAM_KEYS.dynamoTables.auditLogQueriesStorage) &&
+                !(locationOff && key === RESOURCE_PARAM_KEYS.location.apiKeyArn)
         );
         for (const key of required) {
             expect(names.filter((n) => n.endsWith(`/resourceNames/${key}`))).toHaveLength(1);
         }
+        if (locationOff) {
+            expect(
+                names.filter((n) =>
+                    n.endsWith(`/resourceNames/${RESOURCE_PARAM_KEYS.location.apiKeyArn}`)
+                )
+            ).toEqual([]);
+        }
         // 76 registry parameters (ResourceNamesBuilder, including the audit log queries table) + the
         // three late-bound ones here (the workflow role ARN, the import function and the copy engine
-        // function), plus one reindexer name per enabled search engine.
+        // function) + the deploy-time values (the OpenSearch endpoint and two index names, the web
+        // URL and, with Amazon Location Service, the map key ARN), plus one reindexer name per
+        // enabled search engine.
         const searchOffCount = searchOff ? 1 : 0;
-        expect(names.length).toBeGreaterThanOrEqual(79 - searchOffCount);
-        expect(names.length).toBeLessThanOrEqual(81 - searchOffCount);
+        const deployTimeValues = locationOff ? 4 : 5;
+        expect(names.length).toBeGreaterThanOrEqual(79 + deployTimeValues - searchOffCount);
+        expect(names.length).toBeLessThanOrEqual(81 + deployTimeValues - searchOffCount);
     });
 
     test.each(ALL_TEMPLATES)("%s binds the workflow role ARN parameter to the role", (name) => {

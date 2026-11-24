@@ -48,3 +48,15 @@ Use the repository's pinned uv (`required-version` in each `pyproject.toml`) and
    `frozen-set.txt`: the diff must be empty, or every difference must be one you meant.
 7. Run `python .github/scripts/python_dependency_audit.py` from the repository root. An advisory in a version that
    stays is added to `.github/python-audit-allowlist.json` with a reason and a review date.
+
+## Two cases the steps above do not cover
+
+-   **A prebuilt wheel** (`locks/trellis2` locks the flash-attn wheel for its torch): name it in `pyproject.toml` as
+    `name @ https://github.com/Dao-AILab/flash-attention/releases/download/v<tag>/<file>.whl`. That is the only prefix
+    the audit accepts (`ALLOWED_DIRECT_URL_PREFIXES`), and it reads the version from the file name. List the package
+    in `frozen-set.txt` by its public version (`flash-attn==2.7.3`, what the installed metadata says). Moving the wheel
+    moves the torch it was built for, the C++ ABI the Dockerfile asserts, and the hash `uv lock` records.
+-   **A pinned clone with no hash of its own** (utils3d in `locks/trellis2` and `locks/blenderagent`): the entry in
+    `out-of-lock.json` carries `treeSha256`, and the Dockerfile's `UTILS3D_TREE_SHA256` holds the same value. When the
+    commit moves, take the new value from the checked-out clone with
+    `git ls-files -z | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum`, and change both places.
