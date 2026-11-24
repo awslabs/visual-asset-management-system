@@ -330,13 +330,18 @@ def update_database(database_id, update_data, claims_and_roles=None, event=None)
         if not casbin_enforcer.enforce(database, "PUT"):
             raise DatabaseAccessDeniedError("Access denied")
         
-        # If defaultBucketId is being updated, verify it exists
+        # If defaultBucketId is being updated, verify it exists. A retired registration (it left the
+        # configuration) is not offered for a database, so moving a database onto one is refused as an
+        # unknown id, as create refuses it. A database already on it keeps it: the edit form sends the
+        # current id with every update, and refusing it would block editing the other fields.
         if 'defaultBucketId' in update_data and update_data['defaultBucketId'] is not None:
             buckets_table = dynamodb.Table(s3_asset_buckets_table)
             bucket_response = buckets_table.query(
                 KeyConditionExpression=Key('bucketId').eq(update_data['defaultBucketId'])
             )
-            if not bucket_response.get('Items') or len(bucket_response['Items']) == 0:
+            items = bucket_response.get('Items') or []
+            moving = update_data['defaultBucketId'] != database.get('defaultBucketId')
+            if not items or (moving and all(is_retired(item) for item in items)):
                 raise VAMSGeneralErrorResponse("Bucket ID not found")
         
         updates = {

@@ -76,3 +76,48 @@ class TestRetiredRegistration:
         assert "def get_bucket_details_by_name(" not in source
         assert "def get_database_id_for_asset_id(" not in source
         assert json.dumps("bucketNameGSI") not in json.dumps(source)
+
+
+# ------------------------------------------------------------------ PUT /database/{databaseId}
+
+from backend.backend.handlers.databases import databaseService as svc  # noqa: E402
+from backend.tests.handlers.databases.test_databaseService_targeted_update import (  # noqa: E402,F401 - fixtures
+    AUTHENTICATED,
+    DATABASE_ID,
+    FakeDatabaseTable,
+    _stored_database,
+    allow_all,  # noqa: F401 - fixture
+    wire,  # noqa: F401 - fixture
+)
+
+
+@pytest.mark.unit
+class TestUpdateRefusesARetiredRegistration:
+    def test_a_database_cannot_be_moved_onto_a_retired_registration(self, wire, allow_all):  # noqa: F811
+        table = FakeDatabaseTable(_stored_database(defaultBucketId="bucket-1"))
+        wire(table, bucket_items=[{"bucketId": "bucket-gone", "retired": True}])
+
+        with pytest.raises(svc.VAMSGeneralErrorResponse) as raised:
+            svc.update_database(DATABASE_ID, {"defaultBucketId": "bucket-gone"}, AUTHENTICATED)
+
+        assert "Bucket ID not found" in str(raised.value)
+        assert table.update_item_calls == []
+        assert table.stored()["defaultBucketId"] == "bucket-1"
+
+    def test_a_database_already_on_a_retired_registration_can_still_be_edited(self, wire, allow_all):  # noqa: F811
+        """The edit form sends the current defaultBucketId with every update."""
+        table = FakeDatabaseTable(_stored_database(defaultBucketId="bucket-gone"))
+        wire(table, bucket_items=[{"bucketId": "bucket-gone", "retired": True}])
+
+        svc.update_database(DATABASE_ID, {"description": "after", "defaultBucketId": "bucket-gone"},
+                            AUTHENTICATED)
+
+        assert table.stored()["description"] == "after"
+
+    def test_a_database_can_be_moved_onto_a_configured_registration(self, wire, allow_all):  # noqa: F811
+        table = FakeDatabaseTable(_stored_database(defaultBucketId="bucket-1"))
+        wire(table, bucket_items=[{"bucketId": "bucket-2"}])
+
+        svc.update_database(DATABASE_ID, {"defaultBucketId": "bucket-2"}, AUTHENTICATED)
+
+        assert table.stored()["defaultBucketId"] == "bucket-2"
