@@ -992,6 +992,17 @@ function dropMarkers(text: string): string {
         .text;
 }
 
+/** Runs the audit script's `split_duplicate_pins` on an export's text. */
+function splitDuplicatePins(text: string): string[] {
+    const code = [
+        "import json, sys",
+        `sys.path.insert(0, ${JSON.stringify(path.join(REPO_ROOT, ".github", "scripts"))})`,
+        "import python_dependency_audit as m",
+        "print(json.dumps(m.split_duplicate_pins(sys.stdin.read())))",
+    ].join("\n");
+    return JSON.parse(execFileSync("python3", ["-c", code], { encoding: "utf8", input: text }));
+}
+
 /**
  * Runs the script's own `audit_export` on a one-file tree with a stand-in for pip-audit that behaves like the
  * real one on markers: a pin whose marker is false on the job's interpreter (a `python_full_version < '3.12'`
@@ -1007,6 +1018,10 @@ function auditExport(text: string, dropEverything = false): string {
             "import json, re, sys",
             "path = sys.argv[sys.argv.index('-r') + 1]",
             "deps = []",
+            "names = re.findall(r'^([A-Za-z0-9][A-Za-z0-9._-]*)==', open(path).read(), re.M)",
+            "dup = [n for n in names if names.count(n) > 1 and not re.search(r'^' + n + r'==\\S+ ;', open(path).read(), re.M)]",
+            "if dup:",
+            "    sys.stderr.write('package ' + dup[0] + ' has duplicate requirements\\n'); sys.exit(2)",
             "for line in open(path).read().split('\\n'):",
             "    m = re.match(r'^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\\s;\\\\]+)(.*)$', line)",
             "    if not m: continue",
@@ -1015,7 +1030,7 @@ function auditExport(text: string, dropEverything = false): string {
                     ? "True"
                     : "(';' in m.group(3) and re.search(r\"< '3\\.12'|win32\", m.group(3)))"
             }: continue`,
-            "    vulns = [{'id': 'PYSEC-1', 'aliases': []}] if m.group(1) == 'vulnpkg' else []",
+            "    vulns = [{'id': 'PYSEC-1', 'aliases': []}] if m.group(1) == 'vulnpkg' and m.group(2).startswith('1.') else []",
             "    deps.append({'name': m.group(1), 'version': m.group(2), 'vulns': vulns})",
             "print(json.dumps({'dependencies': deps}))",
             "sys.exit(1 if any(d['vulns'] for d in deps) else 0)",
@@ -1075,6 +1090,28 @@ function auditExport(text: string, dropEverything = false): string {
         expect(out).toMatch(/^AuditError: pip-audit did not report on 2 pinned package/);
         expect(out).toContain("requirements.lock:1 requests==2.0.0");
         expect(out).toContain("requirements.lock:2 urllib3==2.0.0");
+    });
+
+    test("a package pinned at two versions under different markers is audited once per version", () => {
+        const out = auditExport(
+            `vulnpkg==1.0 ; sys_platform == 'win32' \\\n${hash}\nvulnpkg==2.0 ; sys_platform == 'linux' \\\n${hash}\nrequests==2.0.0\n`
+        );
+        expect(JSON.parse(out)).toEqual([["vulnpkg", "1.0", ["PYSEC-1"]]]);
+    });
+
+    test("a pin repeated with the same name and version is audited once", () => {
+        const out = auditExport(
+            `requests==2.0.0 ; sys_platform == 'win32'\nrequests==2.0.0 ; sys_platform == 'linux'\nvulnpkg==1.0\n`
+        );
+        expect(JSON.parse(out)).toEqual([["vulnpkg", "1.0", ["PYSEC-1"]]]);
+    });
+
+    test("the fake rejects a duplicate package like pip-audit, so an unsplit file would fail", () => {
+        expect(splitDuplicatePins("a==1 ; x\nb==1\na==2 ; y\n")).toEqual([
+            "a==1 ; x\nb==1\n",
+            "a==2 ; y\n",
+        ]);
+        expect(splitDuplicatePins("a==1\na==1\n")).toEqual(["a==1\n"]);
     });
 
     test("the committed exports carry markers that the audit now removes", () => {
