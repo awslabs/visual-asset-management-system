@@ -805,9 +805,11 @@ def preflight_reads(s3_client, bucket: str, versions: List[Dict]) -> str:
     return ''
 
 
-def revert_flip(dynamodb_client, asset_table: str, candidate: Candidate, bucket: str, target: str) -> str:
-    """Give a row whose move copied nothing back its file location, and remove its conversion record, in one
-    write conditional on the row still being pending on ``target``. Returns 'reverted' or 'changed'."""
+def revert_flip(dynamodb_client, asset_table: str, candidate: Candidate, bucket: str, target: str,
+                stored_from: str, file_key: str) -> str:
+    """Give a row whose move copied nothing back its file location (``stored_from`` as the key was stored,
+    ``file_key`` as the location key), and remove its conversion record, in one write conditional on the row
+    still being pending on ``target``. Returns 'reverted' or 'changed'."""
     try:
         dynamodb_client.update_item(
             TableName=asset_table,
@@ -816,8 +818,8 @@ def revert_flip(dynamodb_client, asset_table: str, candidate: Candidate, bucket:
             ConditionExpression='#al.#k = :to AND #c.#s = :pending',
             ExpressionAttributeNames={'#al': 'assetLocation', '#k': 'Key', '#lb': LOCATION_BUCKET_ATTRIBUTE,
                                       '#lk': LOCATION_KEY_ATTRIBUTE, '#c': CONVERSION_ATTRIBUTE, '#s': 'state'},
-            ExpressionAttributeValues={':from': {'S': candidate.stored}, ':bucket': {'S': bucket},
-                                       ':key': {'S': candidate.location}, ':to': {'S': target},
+            ExpressionAttributeValues={':from': {'S': stored_from}, ':bucket': {'S': bucket},
+                                       ':key': {'S': file_key}, ':to': {'S': target},
                                        ':pending': {'S': STATE_PENDING}},
         )
         return 'reverted'
@@ -830,7 +832,8 @@ def revert_flip(dynamodb_client, asset_table: str, candidate: Candidate, bucket:
 def flip_row(dynamodb_client, asset_table: str, candidate: Candidate, bucket: str, plan: Plan, started: str) -> str:
     """Set the folder location and mark the conversion pending, in one write conditional on the location
     still being the file key and the row carrying no conversion. Returns 'flipped' or 'changed'."""
-    conversion = {'from': {'S': candidate.location}, 'to': {'S': plan.target}, 'mode': {'S': plan.outcome},
+    conversion = {'from': {'S': candidate.location}, 'storedFrom': {'S': candidate.stored},
+                  'to': {'S': plan.target}, 'mode': {'S': plan.outcome},
                   'state': {'S': STATE_PENDING}, 'startedAt': {'S': started},
                   'archived': {'L': [{'S': key} for key in plan.archived]}}
     try:
@@ -1475,17 +1478,28 @@ def _stop_move(dynamodb_client, s3_client, asset_table: str, candidate: Candidat
                report: Callable[[Dict], None], base: Dict) -> None:
     """A copy of a move was refused. When no copy of the step is at any target yet, the row gets its file
     location back and the move is reported refused; otherwise the row stays pending on ``target`` and the
-    report says where the file is and how to finish."""
+    report says where the file is and how to finish. ``file_key`` is the conversion's file key: on a resumed
+    row the candidate's own location is already ``target``, so the stored form comes from the record."""
     code = _error_code(error) or str(error)
     counts['errors'] += 1
     written = any(copied_versions(s3_client, bucket, destination,
                                   {e['VersionId'] for e in exact_versions(s3_client, bucket, source)
                                    if not e['Marker']})[0]
                   for source, destination in key_map.items())
-    if not written and revert_flip(dynamodb_client, asset_table, candidate, bucket, target) == 'reverted':
+    if not written:
+        resumed = candidate.conversion.get('state') == STATE_PENDING
+        stored_from = (candidate.conversion.get('storedFrom') or file_key) if resumed else candidate.stored
+        if revert_flip(dynamodb_client, asset_table, candidate, bucket, target, stored_from, file_key) == 'reverted':
+            report(dict(base, part='objects', action='failed', detail=(
+                f"the copy was refused ({code}) before any version was copied; the row has its file location "
+                f"{stored_from} back and no conversion record, so the asset stays single-file. Grant the move's "
+                "S3 and AWS KMS permissions and run the step again")))
+            return
+        counts['changed'] += 1
         report(dict(base, part='objects', action='failed', detail=(
-            f"the copy was refused ({code}) before any version was copied; the row is unchanged and the asset "
-            "stays single-file. Grant the move's S3 and AWS KMS permissions and run the step again")))
+            f"the copy was refused ({code}) before any version was copied, and the row changed since this run "
+            f"read it, so it was not given its file location {stored_from} back. Check the row and run the step "
+            "again")))
         return
     counts['pending'] += 1
     report(dict(base, part='objects', action='left pending', detail=(
