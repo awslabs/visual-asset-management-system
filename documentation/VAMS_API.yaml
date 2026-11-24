@@ -6102,7 +6102,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                     $ref: "#/components/schemas/id_regex"
               - name: "filePath"
                 in: "query"
-                description: "Relative file path (must not end with / for folders)."
+                description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. Must not end with / (a folder)."
                 required: true
                 schema:
                     type: string
@@ -20164,7 +20164,7 @@ components:
             properties:
                 filePath:
                     type: string
-                    description: "Relative file path (must not end with / for folders)"
+                    description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. Must not end with / (a folder)."
                 type:
                     type: string
                     enum: [metadata, attribute]
@@ -20196,7 +20196,7 @@ components:
             properties:
                 filePath:
                     type: string
-                    description: "Relative file path (must not end with / for folders)"
+                    description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. Must not end with / (a folder)."
                 type:
                     type: string
                     enum: [metadata, attribute]
@@ -20231,7 +20231,7 @@ components:
             properties:
                 filePath:
                     type: string
-                    description: "Relative file path (must not end with / for folders)"
+                    description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. Must not end with / (a folder)."
                 type:
                     type: string
                     enum: [metadata, attribute]
