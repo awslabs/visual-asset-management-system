@@ -770,11 +770,10 @@ the host's conversation log and telemetry. Keep both create tools out of
 `create_user_api_key` (self-service) always binds the key to the authenticated
 user and requires an expiry within 365 days. `update_*_api_key` with
 `is_active=False` is the reversible revoke: the key stops authenticating until it
-is re-enabled, and nothing is destroyed. The API Gateway authorizer caches its
-decision for about 30 seconds in both directions: a key that authenticated within
-that window keeps working until it expires, a key refused within it stays refused
-for the same time after re-enabling, and a disabled key not in use is refused on
-its next call.
+is re-enabled, and nothing is destroyed. VAMS briefly caches API key authorization
+in both directions (the API Gateway authorizer cache for 30 seconds and the
+authorizer's API key record cache for 15 seconds): a disabled key can keep working
+for up to about 45 seconds, and a re-enabled key can stay refused for as long.
 
 Zip downloads: `create_zip_download`, `get_zip_download_url`.
 
@@ -929,7 +928,8 @@ result reads `action: "ended"` with the final `status`. `delete_zip_download` pe
 removes a finished job and its archive, and any URL already issued stops working.
 
 API keys: `delete_api_key`, `delete_user_api_key`. Both are permanent and lock
-out every client still presenting the key at once; `update_api_key` /
+out every client still presenting the key within about 45 seconds (VAMS briefly
+caches API key authorization); `update_api_key` /
 `update_user_api_key` with `is_active=False` revokes the same access reversibly
 and is the better first move.
 

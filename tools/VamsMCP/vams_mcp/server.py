@@ -3360,8 +3360,8 @@ if CONFIG.enable_writes:
         is_active: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Use to change an API key's description, expiry or enabled state (admin scope). `is_active=False`
-        is the REVERSIBLE revoke; prefer it to delete_api_key(). Changes can take ~30 seconds (authorizer
-        cache)."""
+        is the REVERSIBLE revoke; prefer it to delete_api_key(). Changes can take up to ~45 seconds
+        (authorizer caches)."""
         payload: Dict[str, Any] = {}
         if description is not None:
             payload["description"] = description
