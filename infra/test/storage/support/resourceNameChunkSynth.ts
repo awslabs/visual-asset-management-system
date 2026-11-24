@@ -8,7 +8,7 @@
  * (`resourceNameChunks.test.ts`, `custom/customResourceNameChunks.test.ts`, the Nag matrix).
  */
 
-import { Resource, SynthResult } from "../../support/templateSynth";
+import { resolveReference, Resource, SynthResult } from "../../support/templateSynth";
 
 /** CloudFormation per-template quotas (not adjustable). */
 export const TEMPLATE_OUTPUT_LIMIT = 200;
@@ -65,8 +65,9 @@ export function sourceOf(chunk: SynthChunk): "core" | "addon" | "custom" | "mixe
 }
 
 /**
- * The raw value of each key in a chunk: the property value that follows `"<key>":"` in the chunk's
- * Fn::Join, or the literal string for a value CDK resolved at synth.
+ * The raw value of each key in a chunk: the literal string for a value CDK resolved at synth, the
+ * reference for a value that is one deploy-time reference, or `{"Fn::Join": ["", [...]]}` of its
+ * literal and reference parts for a value that is both (`"https://" + domainEndpoint`).
  */
 export function rawChunkValues(chunk: SynthChunk): Map<string, unknown> {
     const value = chunk.resource.properties.Value;
@@ -76,17 +77,94 @@ export function rawChunkValues(chunk: SynthChunk): Map<string, unknown> {
         return out;
     }
     const parts: unknown[] = value["Fn::Join"][1];
-    // Literal names sit inside the string parts; tokens follow the part that opens their key.
-    for (const [k, v] of Object.entries<string>(chunk.parsed.m)) {
-        if (v !== "token") out.set(k, v);
+    // Each reference becomes a marker, so the chunk parses as JSON and every value keeps its parts.
+    const refs: unknown[] = [];
+    const text = parts
+        .map((part) => (typeof part === "string" ? part : `@@REF${refs.push(part) - 1}@@`))
+        .join("");
+    for (const [k, v] of Object.entries<string>(JSON.parse(text).m)) {
+        const pieces = v
+            .split(/(@@REF\d+@@)/)
+            .filter((piece) => piece !== "")
+            .map((piece) => {
+                const marker = /^@@REF(\d+)@@$/.exec(piece);
+                return marker ? refs[Number(marker[1])] : piece;
+            });
+        out.set(k, pieces.length === 1 ? pieces[0] : { "Fn::Join": ["", pieces] });
     }
-    parts.forEach((part, i) => {
-        if (typeof part === "string") return;
-        const before = parts[i - 1];
-        const key = typeof before === "string" ? /"([^"]+)":"$/.exec(before)?.[1] : undefined;
-        if (key) out.set(key, part);
-    });
     return out;
+}
+
+/**
+ * A value as a comparable target: the literal itself, the resource a reference resolves to (across
+ * nested-stack outputs and parameters), or the parts joined for a `Fn::Join` of literals and
+ * references.
+ */
+export function valueTargetOf(s: SynthResult, stack: string, value: unknown): string {
+    if (typeof value === "string") return `literal:${value}`;
+    const join = (value as any)?.["Fn::Join"];
+    if (Array.isArray(join) && join[0] === "") {
+        return (join[1] as unknown[]).map((part) => valueTargetOf(s, stack, part)).join(" + ");
+    }
+    const target = attributeTargetOf(s, stack, value);
+    if (target) return target;
+    const resource = resolveReference(s, stack, value);
+    return resource
+        ? `${resource.stack}/${resource.logicalId}`
+        : `unresolved:${JSON.stringify(value)}`;
+}
+
+/**
+ * `<stack>/<logical id>.<attribute>` for a `Fn::GetAtt` of an attribute other than `Arn` (a domain
+ * name, an endpoint), followed across nested-stack outputs and parameters; `.Ref` for a `Ref` to a
+ * resource. Undefined when the value is neither.
+ */
+function attributeTargetOf(
+    s: SynthResult,
+    fromStack: string,
+    reference: unknown
+): string | undefined {
+    let stack = fromStack;
+    let value: any = reference;
+    for (let hops = 0; hops < 8; hops++) {
+        const getAtt = value?.["Fn::GetAtt"];
+        if (Array.isArray(getAtt)) {
+            const [logicalId, attribute] = getAtt as [string, string];
+            if (!/^Outputs\./.test(attribute)) {
+                return s.templates[stack]?.Resources?.[logicalId]
+                    ? `${stack}/${logicalId}.${attribute}`
+                    : undefined;
+            }
+            const outputName = attribute.replace(/^Outputs\./, "");
+            const nested = Object.entries<any>(s.templates).find(
+                ([, tpl]) => tpl.Outputs?.[outputName]
+            );
+            if (!nested) return undefined;
+            [stack, value] = [nested[0], nested[1].Outputs[outputName].Value];
+            continue;
+        }
+        if (typeof value?.Ref === "string") {
+            if (s.templates[stack]?.Resources?.[value.Ref]) return `${stack}/${value.Ref}.Ref`;
+            const parent = s
+                .ofType("AWS::CloudFormation::Stack")
+                .find((r) => r.properties.Parameters?.[value.Ref] !== undefined);
+            if (!parent) return undefined;
+            [stack, value] = [parent.stack, parent.properties.Parameters[value.Ref]];
+            continue;
+        }
+        const join = value?.["Fn::Join"];
+        if (Array.isArray(join) && join[0] === "") {
+            return (join[1] as unknown[])
+                .map((part) =>
+                    typeof part === "string"
+                        ? `literal:${part}`
+                        : attributeTargetOf(s, stack, part) ?? `unresolved:${JSON.stringify(part)}`
+                )
+                .join(" + ");
+        }
+        return undefined;
+    }
+    return undefined;
 }
 
 /** Parameter, output and resource counts and the body size of one template. */

@@ -68,13 +68,13 @@ def test_get_asset_links(client, archived):
 
 @pytest.mark.parametrize("archived", [True, False])
 def test_list_asset_comments(client, archived):
-    server.list_asset_comments("a1", include_archived=archived)
+    server.list_asset_comments("db1", "a1", include_archived=archived)
     assert client.api.list_asset_comments.call_args.kwargs["show_archived"] is archived
 
 
 @pytest.mark.parametrize("archived", [True, False])
 def test_list_asset_version_comments(client, archived):
-    server.list_asset_version_comments("a1", "1", include_archived=archived)
+    server.list_asset_version_comments("db1", "a1", "1", include_archived=archived)
     assert client.api.list_asset_version_comments.call_args.kwargs["show_archived"] is archived
 
 

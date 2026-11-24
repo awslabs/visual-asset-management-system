@@ -697,11 +697,16 @@ class TestCompletionIsAFile:
 
     def test_the_dockerfile_carries_the_refits_depth_model_at_pinned_revisions(self):
         """The MoGe clone's own pin is checked with every other clone's in containerBuildSources.test.ts; the
-        utils3d install is a pip URL that check does not read, and the import check is what proves the
+        utils3d clone is also hash-checked (its commit and the SHA-256 of its tracked files, which
+        locks/blenderagent/out-of-lock.json records too), and the import check is what proves the
         dependencies MoGe was installed without are the ones it needs."""
         dockerfile = open(os.path.join(_CONTAINER_DIR, "Dockerfile.blenderagent"), encoding="utf-8").read()
         assert re.search(r"^ARG MOGE_COMMIT=[0-9a-f]{40}$", dockerfile, re.M)
         assert re.search(r"^ARG UTILS3D_COMMIT=[0-9a-f]{40}$", dockerfile, re.M)
-        assert "utils3d.git@${UTILS3D_COMMIT}" in dockerfile
-        assert "pip install --no-cache-dir --no-deps /opt/moge" in dockerfile
+        assert re.search(r"^ARG UTILS3D_TREE_SHA256=[0-9a-f]{64}$", dockerfile, re.M)
+        assert 'test "$(git rev-parse HEAD)" = "${UTILS3D_COMMIT}"' in dockerfile
+        assert '= "${UTILS3D_TREE_SHA256}"' in dockerfile
+        assert "pip install --no-cache-dir --no-build-isolation --no-deps /opt/moge" in dockerfile
+        assert "pip install --no-cache-dir --no-build-isolation --no-deps /tmp/utils3d" in dockerfile
+        assert "git+https://github.com/EasternJournalist/utils3d" not in dockerfile
         assert "from moge.model.v2 import MoGeModel" in dockerfile, "the MoGe install is never verified"

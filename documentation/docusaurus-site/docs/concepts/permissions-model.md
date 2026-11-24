@@ -454,11 +454,10 @@ The routes are registered in every deployment and answer `404` while `app.pipeli
 
 ### Comment routes
 
-| Route                                                                            | Methods                | Tier 2 Object Type | Tier 2 Fields                                  |
-| -------------------------------------------------------------------------------- | ---------------------- | ------------------ | ---------------------------------------------- |
-| `/comments/assets/{assetId}`                                                     | GET                    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
-| `/comments/assets/{assetId}/assetVersionId/{assetVersionId}`                     | GET                    | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
-| `/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}` | GET, POST, PUT, DELETE | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| Route                                                          | Methods          | Tier 2 Object Type | Tier 2 Fields                                  |
+| -------------------------------------------------------------- | ---------------- | ------------------ | ---------------------------------------------- |
+| `/comments/database/{databaseId}/assets/{assetId}`             | GET, POST        | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/comments/database/{databaseId}/assets/{assetId}/{commentId}` | GET, PUT, DELETE | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Pipeline and workflow routes
 

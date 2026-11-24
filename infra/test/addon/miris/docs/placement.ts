@@ -97,7 +97,7 @@ export const allowed: AddonDocsAllowance[] = [
     },
     {
         page: "additional/revisions.md",
-        sections: ["### 2.8.0"],
+        sections: ["### 2.7.0"],
         reason: "Rule-mandated: the release notes of the release that ships the add-on.",
     },
 ];

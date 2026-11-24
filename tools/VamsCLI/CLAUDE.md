@@ -48,7 +48,7 @@ tools/VamsCLI/
       tag_type.py            # Tag type management
       metadata.py            # Metadata operations (unified API)
       metadata_schema.py     # Metadata schema management (list, get, create, update, delete)
-      comment.py             # Asset version comments (list, get, add, update, delete)
+      comment.py             # Asset comments (list, get, add, update, delete)
       subscription.py        # Asset event subscriptions (list, create, update, delete, unsubscribe, check)
       features.py            # Feature switch inspection
       search.py              # Search (OpenSearch keyword commands + `search nlp` over POST /search/nlp, gated on VECTORSEARCH)
@@ -136,7 +136,8 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 
 Comment and subscription cover the comments and subscriptions APIs:
 
--   `comment list|get|add|update|delete` -- `list` takes `-v/--asset-version-id` to switch from the asset-wide route to the version-scoped one; `get`, `add`, `update` and `delete` address a comment by asset, asset version and comment ID
+-   `comment list|get|add|update|delete` -- every command takes `-d/--database-id` and `-a/--asset-id` (two databases may hold assets with the same asset ID). `list` takes `-v/--asset-version-id` as a query filter; `add` sends the version in the body and reports the `commentId` the API generates; `get`, `update` and `delete` address a comment by its own `-c/--comment-id`
+-   `subscription create|update|delete|unsubscribe|check` -- each takes a required `-d/--database-id`, sent as `databaseId` in the body
 -   `subscription list|create|update|delete|unsubscribe|check` -- `delete` removes the whole subscription (and, for an asset, its notification topic); `unsubscribe` removes one subscriber and is a different route
 
 Zip-download covers the Download as Zip (prepared downloads) API:
@@ -450,14 +451,11 @@ API_ASSET_VERSION_UNARCHIVE = "/database/{databaseId}/assets/{assetId}/assetvers
    an entry in `_PREFIX_ONLY_CONSTANTS` naming why; prefer a format-string constant matching a
    registered route, since the exemption list is the one place this check can be widened.
 
-6. **One route cannot be reached with `str.format`.** `API_COMMENTS_ASSET_VERSION_COMMENT` ends in
-   `{assetVersionId:commentId}` — the API's composite sort key, which is two values joined by a
-   colon inside a single path segment. `str.format` reads everything after the colon as a format
-   spec, so formatting that constant raises `ValueError`. `build_comment_path()` (module level in
-   `utils/api_client.py`) substitutes the parts instead, and is the only place that should: it also
-   rejects a colon in either part, because the handlers split the segment and read element `[1]` as
-   the commentId — an extra colon shifts which value is validated, and a missing one makes that
-   index raise, which surfaces as a `500` rather than a rejected request.
+6. **Every route constant is a `str.format` template filled through `route_path()`.** The comment
+   routes (`API_COMMENTS_ASSET`, `API_COMMENTS_ASSET_COMMENT`) carry `{databaseId}`, `{assetId}` and
+   `{commentId}` as separate segments, so no constant needs a hand-built path. A value that would
+   change a route's target (a dimension such as the asset version a comment is about) is a query
+   parameter or a body field, never a segment joined into another one.
 
 ### 8. Authentication Flow
 

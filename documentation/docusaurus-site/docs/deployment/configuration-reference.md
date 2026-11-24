@@ -1885,7 +1885,7 @@ The cloud assembly produced with `generateReportOnly` set to `true` is for the r
 
 Because the roles in `precreatedRoles` are created outside VAMS, `environments.aws.PermissionBoundaryArn` does not apply to them; set the boundary when you create them.
 
-A pre-created Lambda role carries the statements of the current report only, so regenerate the report after an upgrade and add what is new. Since 2.8.0, every VAMS Lambda role also has `ssm:GetParameters` on `arn:<partition>:ssm:<region>:<account-id>:parameter/<name>-<baseStackName>-<region>/resourceNamesChunks/*`, beside the existing statement on `.../resourceNames/*`. Without it, functions fall back to reading every resource name one call per 10 names, as before.
+A pre-created Lambda role carries the statements of the current report only, so regenerate the report after an upgrade and add what is new. Since 2.7.0, every VAMS Lambda role also has `ssm:GetParameters` on `arn:<partition>:ssm:<region>:<account-id>:parameter/<name>-<baseStackName>-<region>/resourceNamesChunks/*`, beside the existing statement on `.../resourceNames/*`. Without it, functions fall back to reading every resource name one call per 10 names, as before.
 
 #### `iamRoleConfig.json` format
 

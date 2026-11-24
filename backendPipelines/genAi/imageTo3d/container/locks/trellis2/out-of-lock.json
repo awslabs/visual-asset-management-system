@@ -1,0 +1,35 @@
+{
+    "packages": [
+        {
+            "name": "cumesh",
+            "version": "0.0.1",
+            "source": "the CuMesh clone at CUMESH_COMMIT, built in the Dockerfile",
+            "commit": "12289e1062f0603f2f0d0771b02e1395d247f26f"
+        },
+        {
+            "name": "flex_gemm",
+            "version": "1.0.0",
+            "source": "the FlexGEMM clone at FLEXGEMM_COMMIT, built in the Dockerfile",
+            "commit": "6dd94a859c26ee8246888502eada3dd8ad85532e"
+        },
+        {
+            "name": "o_voxel",
+            "version": "0.0.1",
+            "source": "the TRELLIS.2 clone at TRELLIS2_COMMIT, o-voxel directory, built in the Dockerfile",
+            "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd"
+        },
+        {
+            "name": "nvdiffrast",
+            "version": "0.4.0",
+            "source": "the nvdiffrast clone at NVDIFFRAST_COMMIT, built in the Dockerfile",
+            "commit": "253ac4fcea7de5f396371124af597e6cc957bfae"
+        },
+        {
+            "name": "utils3d",
+            "version": "0.0.2",
+            "source": "the utils3d clone at UTILS3D_COMMIT, built in the Dockerfile; the build checks the SHA-256 of the checked-out tree below",
+            "commit": "9a4eb15e4021b67b12c460c7057d642626897ec8",
+            "treeSha256": "7591516b4425089dee987cdb1f2b3f8cbbfc167952722573eb5c40ed3b82c03e"
+        }
+    ]
+}

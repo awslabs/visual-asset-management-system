@@ -44,10 +44,11 @@ from common.s3PathPatterns import (
     select_newest_preview_file,
 )
 from common.assetLocations import (
-    NESTED_PATH_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations, aux_file_prefix,
+    NESTED_PATH_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations,
     aux_owner_filter, aux_scope, contains,
-    fill_location_attributes, folder_listing_prefix, in_folder, is_folder_location, is_location_object,
+    fill_location_attributes, folder_listing_prefix, held_objects, in_folder, is_folder_location,
     names_own_object, normalize_base_prefix, object_key_for, relative_path_in,
+    viewer_data_prefix, viewer_data_scope,
 )
 from common.fileAttribution import nested_locations_of_asset
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
@@ -693,25 +694,6 @@ def _list_single_file_location_page(bucket: str, location: str, list_params: Dic
         page['NextContinuationToken'] = folder['NextContinuationToken']
     return page
 
-def _is_location_object(location: str, object_key: str) -> bool:
-    """Whether a key is the object of a single-file location (the location key itself)."""
-    return is_location_object(location, object_key)
-
-def aux_file_base(database_id: str, location: str, object_key: str) -> str:
-    """Auxiliary-bucket prefix of one file's own derived data (``common.assetLocations.aux_file_prefix``)."""
-    return aux_file_prefix(database_id, location, object_key)
-
-def aux_file_bases(source_db: str, source_location: str, source_key: str,
-                   dest_db: str, dest_location: str, dest_key: str) -> Tuple[str, str]:
-    """Source and destination auxiliary prefixes for a copy or move of one file. When either side is
-    the object of a single-file location both stop at ``preview/``, so the data lands in the same
-    layout and no companion entry's data moves with it."""
-    source = aux_bucket_asset_file_base(source_db, source_key)
-    dest = aux_bucket_asset_file_base(dest_db, dest_key)
-    if _is_location_object(source_location, source_key) or _is_location_object(dest_location, dest_key):
-        return source + "preview/", dest + "preview/"
-    return source, dest
-
 def _call_with_keep(operation: Callable, *args, keep: Optional[Callable[[str], bool]] = None):
     """Call an auxiliary-data operation, passing ``keep`` only when there is one (folder assets need none)."""
     return operation(*args) if keep is None else operation(*args, keep=keep)
@@ -964,6 +946,40 @@ def delete_s3_prefix(bucket: str, prefix: str) -> List[str]:
     
     return deleted_files
 
+
+# A file record cleanup reads each file's rows up to this many files, and the asset's rows above it
+FILE_RECORDS_PER_FILE_QUERY_LIMIT = 100
+# Rows read, and deleted, per page when a cleanup reads the asset's rows
+FILE_RECORDS_DELETE_PAGE_SIZE = 500
+
+# Answers for a delete Amazon S3 does not complete. Generic: they name no key, bucket or path.
+FILE_DELETE_INCOMPLETE_MESSAGE = (
+    "Error deleting file: the file could not be fully deleted from the asset's storage. Check that VAMS "
+    "can delete objects in the asset's storage bucket (its permissions and any object lock), then try "
+    "again. The file and its previews were kept.")
+FILE_PREVIEWS_DELETE_INCOMPLETE_MESSAGE = (
+    "Error deleting file: the file was deleted, but its previews could not all be deleted from the asset's "
+    "storage. Check that VAMS can delete objects in the asset's storage bucket (its permissions and any "
+    "object lock), then delete the file again to remove the previews that were kept.")
+PREFIX_DELETE_INCOMPLETE_MESSAGE = (
+    "Error deleting files: the files under the prefix could not all be deleted from the asset's storage. "
+    "Check that VAMS can delete objects in the asset's storage bucket (its permissions and any object "
+    "lock), then try again. The remaining files were kept.")
+
+
+class S3PrefixDeleteIncomplete(Exception):
+    """A prefix delete left at least one object version or delete marker in place.
+
+    ``deleted_keys`` lists the keys whose every version and delete marker is gone, ``failed_keys`` the
+    keys that still have one. Both are empty when the prefix could not be listed, so nothing was deleted.
+    """
+
+    def __init__(self, deleted_keys: List[str], failed_keys: List[str]):
+        super().__init__(f"{len(failed_keys)} key(s) not deleted, {len(deleted_keys)} deleted")
+        self.deleted_keys = deleted_keys
+        self.failed_keys = failed_keys
+
+
 def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[str] = None,
                                   folder: Optional[str] = None,
                                   nested: Optional[NestedLocations] = None) -> List[str]:
@@ -978,54 +994,91 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
         
     Returns:
         List of deleted file keys
+
+    Raises:
+        S3PrefixDeleteIncomplete: The prefix could not be listed, or a key keeps a version or delete
+            marker. It names the keys that were deleted and the keys that were not. A bucket that does
+            not exist is an empty listing, not a failure.
     """
-    deleted_files = []
+    # Collect unique keys across all pages (versions and delete markers)
+    keys_to_delete = []
+    processed_keys = set()
 
     try:
         # Get all object versions under the prefix
         paginator = s3_client.get_paginator('list_object_versions')
 
-        # Collect unique keys across all pages (versions and delete markers)
-        keys_to_delete = []
-        processed_keys = set()
+        def list_versions(list_prefix, cap=None):
+            if cap:
+                response = s3_client.list_object_versions(Bucket=bucket, Prefix=list_prefix, MaxKeys=cap)
+                return response.get('Versions', []) + response.get('DeleteMarkers', [])
+            return (entry for page in paginator.paginate(Bucket=bucket, Prefix=list_prefix)
+                    for entry in page.get('Versions', []) + page.get('DeleteMarkers', []))
 
-        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            for entry in page.get('Versions', []) + page.get('DeleteMarkers', []):
-                key = entry['Key']
-                if location is not None and not _held_in_folder(location, folder, key, nested):
-                    continue
-                if key not in processed_keys:
-                    processed_keys.add(key)
-                    keys_to_delete.append(key)
+        # A whole single-file location is read through its own prefixes, so keys that only share its
+        # characters are never listed; any other prefix is listed as given and filtered
+        if location is not None and folder is None and not is_folder_location(location):
+            entries = held_objects(location, list_versions)
+        else:
+            entries = list_versions(prefix)
 
-        # Delete each key's versions in parallel; per-key work is independent
-        if keys_to_delete:
-            max_workers = min(MAX_PARALLEL_S3_WORKERS, len(keys_to_delete))
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                results = list(executor.map(
-                    lambda key: (key, delete_s3_object_all_versions(bucket, key)),
-                    keys_to_delete
-                ))
-            deleted_files.extend(key for key, ok in results if ok)
-        
-        # Check if the prefix folder itself exists and delete it if it does
-        # Ensure the prefix ends with a slash for folder check
-        folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
-        if location is None or _held_in_folder(location, folder, folder_prefix, nested):
-            try:
-                # Check if the folder marker exists
-                s3_client.head_object(Bucket=bucket, Key=folder_prefix)
-                # Delete the folder marker if it exists
-                if delete_s3_object_all_versions(bucket, folder_prefix):
-                    deleted_files.append(folder_prefix)
-            except ClientError as e:
-                # If the folder doesn't exist, that's fine
-                if e.response['Error']['Code'] != '404' and e.response['Error']['Code'] != 'NoSuchKey':
-                    logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
-    
+        for entry in entries:
+            key = entry['Key']
+            if location is not None and not _held_in_folder(location, folder, key, nested):
+                continue
+            if key not in processed_keys:
+                processed_keys.add(key)
+                keys_to_delete.append(key)
+    except ClientError as e:
+        # A bucket that no longer exists holds nothing, so there is nothing left to delete
+        if e.response.get('Error', {}).get('Code') == 'NoSuchBucket':
+            logger.warning(f"Bucket {bucket} does not exist, so nothing is left to delete under prefix {prefix}")
+            return []
+        logger.exception(f"Error listing object versions under prefix {prefix}: {e}")
+        raise S3PrefixDeleteIncomplete([], []) from e
     except Exception as e:
-        logger.exception(f"Error deleting all versions under prefix {prefix}: {e}")
-    
+        logger.exception(f"Error listing object versions under prefix {prefix}: {e}")
+        raise S3PrefixDeleteIncomplete([], []) from e
+
+    deleted_files = []
+    failed_files = []
+
+    # Delete each key's versions in parallel; per-key work is independent
+    if keys_to_delete:
+        max_workers = min(MAX_PARALLEL_S3_WORKERS, len(keys_to_delete))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(
+                lambda key: (key, delete_s3_object_all_versions(bucket, key)),
+                keys_to_delete
+            ))
+        for key, ok in results:
+            (deleted_files if ok else failed_files).append(key)
+
+    # Check if the prefix folder itself exists and delete it if it does, unless the listing returned it
+    # Ensure the prefix ends with a slash for folder check
+    folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
+    if folder_prefix not in processed_keys and (location is None
+                                                or _held_in_folder(location, folder, folder_prefix, nested)):
+        try:
+            # Check if the folder marker exists
+            s3_client.head_object(Bucket=bucket, Key=folder_prefix)
+            # Delete the folder marker if it exists
+            if delete_s3_object_all_versions(bucket, folder_prefix):
+                deleted_files.append(folder_prefix)
+            else:
+                failed_files.append(folder_prefix)
+        except ClientError as e:
+            # If the folder doesn't exist, that's fine
+            if e.response['Error']['Code'] != '404' and e.response['Error']['Code'] != 'NoSuchKey':
+                logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
+        except Exception as e:
+            logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
+
+    if failed_files:
+        logger.error(f"{len(failed_files)} key(s) under prefix {prefix} kept a version or delete marker, "
+                     f"{len(deleted_files)} deleted")
+        raise S3PrefixDeleteIncomplete(deleted_files, failed_files)
+
     return deleted_files
 
 def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
@@ -1779,46 +1832,62 @@ def is_allowed_preview_extension(file_path: str) -> bool:
     return False
 
 def find_preview_files_for_base(bucket: str, base_key: str) -> List[str]:
-    """Find preview files for a base file
-    
+    """Find preview files for a base file; a listing error is logged and gives an empty list
+
     Args:
         bucket: The S3 bucket
         base_key: The base file key
-        
+
+    Returns:
+        List of preview file keys
+    """
+    try:
+        return list_preview_files_for_base(bucket, base_key)
+    except Exception as e:
+        logger.warning(f"Error finding preview files for {base_key}: {e}")
+        return []
+
+
+def _own_preview_files(bucket: str, location: str, object_key: str) -> List[str]:
+    """The preview files a location holds for one of its objects; a listing error is raised."""
+    return [key for key in list_preview_files_for_base(bucket, object_key) if contains(location, key)]
+
+
+def list_preview_files_for_base(bucket: str, base_key: str) -> List[str]:
+    """Preview files of a base file, sorted; a listing error is raised
+
+    Args:
+        bucket: The S3 bucket
+        base_key: The base file key
+
     Returns:
         List of preview file keys
     """
     preview_files = []
-    
-    try:
-        filename = os.path.basename(base_key)
+    filename = os.path.basename(base_key)
 
-        # The prefix is the base file's own key, so a same-named file in a subfolder does not match
-        prefix = f"{base_key}{PREVIEW_FILE_PATTERN}"
-        
-        # Create the pattern to match preview files for this base file
-        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
-        
-        logger.info(f"Searching for preview files in bucket {bucket} with prefix {prefix}")
-        logger.info(f"Looking for pattern: {pattern}")
-        
-        # List objects in the directory
-        paginator = s3_client.get_paginator('list_objects_v2')
-        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            for obj in page.get('Contents', []):
-                key = obj['Key']
-                base_filename = os.path.basename(key)
-                
-                # Check if this is a preview file for our base file
-                if base_filename.startswith(pattern):
-                    preview_files.append(key)
-        
-        # Sort the preview files alphabetically
-        preview_files.sort()
-        
-    except Exception as e:
-        logger.warning(f"Error finding preview files for {base_key}: {e}")
-    
+    # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+    prefix = f"{base_key}{PREVIEW_FILE_PATTERN}"
+
+    # Create the pattern to match preview files for this base file
+    pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
+
+    logger.info(f"Searching for preview files in bucket {bucket} with prefix {prefix}")
+    logger.info(f"Looking for pattern: {pattern}")
+
+    # List objects in the directory
+    paginator = s3_client.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get('Contents', []):
+            key = obj['Key']
+            base_filename = os.path.basename(key)
+
+            # Check if this is a preview file for our base file
+            if base_filename.startswith(pattern):
+                preview_files.append(key)
+
+    # Sort the preview files alphabetically
+    preview_files.sort()
     return preview_files
 
 def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -> List[Dict]:
@@ -2306,6 +2375,95 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
     return deleted_count
 
 
+def delete_files_metadata(databaseId: str, assetId: str, relative_file_paths: List[str]) -> int:
+    """Delete the metadata and attributes of several files of one asset.
+
+    Up to ``FILE_RECORDS_PER_FILE_QUERY_LIMIT`` files, each file's rows are read from the
+    ``DatabaseIdAssetIdFilePathIndex``, so only the rows of those files are read. Above that, the asset's
+    rows are read from the ``DatabaseIdAssetIdIndex`` one page of at most ``FILE_RECORDS_DELETE_PAGE_SIZE``
+    rows at a time, and each page's rows of the given files are deleted before the next page is read, so
+    memory stays flat however large the asset. Only the leading ``/`` of a path is normalized; a path is
+    otherwise matched as stored. Folder paths and an empty path (the asset's own metadata) are skipped.
+    Failures are logged, not raised.
+
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        relative_file_paths: Asset-relative file paths, with or without a leading slash
+
+    Returns:
+        Number of rows deleted
+    """
+    composite_keys = set()
+    for path in relative_file_paths or []:
+        path = (path or '').lstrip('/')
+        if path and not path.endswith('/'):
+            composite_keys.add(f"{databaseId}:{assetId}:/{path}")
+    if not composite_keys:
+        return 0
+
+    deleted_count = 0
+    for table, row_key in ((asset_file_metadata_table, 'metadataKey'), (file_attribute_table, 'attributeKey')):
+        if not table:
+            continue
+        try:
+            with table.batch_writer() as batch:
+                for item in _file_record_rows(table, databaseId, assetId, composite_keys):
+                    file_key = item.get('databaseId:assetId:filePath')
+                    if file_key in composite_keys and row_key in item:
+                        batch.delete_item(Key={row_key: item[row_key], 'databaseId:assetId:filePath': file_key})
+                        deleted_count += 1
+        except Exception as e:
+            logger.warning(f"Error deleting file {row_key} rows for {databaseId}:{assetId}: {e}")
+
+    logger.info(f"Deleted {deleted_count} metadata and attribute row(s) for {len(composite_keys)} file(s) "
+                f"in {databaseId}:{assetId}")
+    return deleted_count
+
+
+def _file_record_rows(table, databaseId: str, assetId: str, composite_keys: set):
+    """The rows of the given files: per-file reads for a small set, the asset's rows page by page above it."""
+    if len(composite_keys) <= FILE_RECORDS_PER_FILE_QUERY_LIMIT:
+        for composite_key in sorted(composite_keys):
+            yield from query_all_items(
+                table,
+                IndexName='DatabaseIdAssetIdFilePathIndex',
+                KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+            )
+        return
+    query_kwargs = {
+        'IndexName': 'DatabaseIdAssetIdIndex',
+        'KeyConditionExpression': Key('databaseId:assetId').eq(f"{databaseId}:{assetId}"),
+        'Limit': FILE_RECORDS_DELETE_PAGE_SIZE,
+    }
+    while True:
+        response = table.query(**query_kwargs)
+        yield from response.get('Items', [])
+        if 'LastEvaluatedKey' not in response:
+            break
+        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+
+def delete_auxiliary_files_of_keys(databaseId: str, keys: List[str]) -> None:
+    """Delete the own viewer data of deleted files (``common.assetLocations.viewer_data_scope``).
+
+    Each file's data sits in its own ``preview/`` folder, so the data of the files that remain, including
+    a kept file or a nested asset's file in a folder named like a deleted file, stays. The deletes run on
+    the S3 worker pool and log their failures.
+
+    Args:
+        databaseId: The database ID owning the asset
+        keys: Full S3 keys of the files whose every version is gone
+    """
+    scopes = [viewer_data_scope(databaseId, key) for key in keys or [] if not key.endswith('/')]
+    if not scopes:
+        return
+
+    with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_S3_WORKERS, len(scopes))) as executor:
+        list(executor.map(lambda scope: _call_with_keep(delete_assetAuxiliary_files, scope[0], keep=scope[1]),
+                          scopes))
+
+
 def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, confirm_permanent_delete: bool, claims_and_roles: Dict) -> FileOperationResponseModel:
     """Permanently delete a file or files under a prefix
     
@@ -2368,7 +2526,10 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
             has_versions = any(version['Key'] == full_key for version in versions_response.get('Versions', []))
             has_delete_markers = any(marker['Key'] == full_key for marker in versions_response.get('DeleteMarkers', []))
             
-            if not (has_versions or has_delete_markers):
+            # A file whose own delete went through while one of its previews was kept is still
+            # found, so the delete can be run again for those previews
+            if not (has_versions or has_delete_markers) and \
+                    not any(nested.keep(key) for key in _own_preview_files(bucket, base_key, full_key)):
                 raise VAMSGeneralErrorResponse(f"File not found.")
         else:
             # For prefix, check if at least one object exists, then for archived objects
@@ -2381,35 +2542,54 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     
     # Delete file(s)
     affected_files = []
+    incomplete = None
+    kept_previews = []
     
     if is_prefix:
-        # Delete all files under prefix including all versions
-        deleted_keys = delete_s3_prefix_all_versions(bucket, full_key, location=base_key, folder=folder,
-                                                     nested=nested)
+        # Delete all files under prefix including all versions; a partial delete still clears the
+        # records and auxiliary data of the files it removed, then fails
+        try:
+            deleted_keys = delete_s3_prefix_all_versions(bucket, full_key, location=base_key, folder=folder,
+                                                         nested=nested)
+        except S3PrefixDeleteIncomplete as e:
+            incomplete = e
+            deleted_keys = e.deleted_keys
 
-        # Delete aux files under prefix if they exist
-        folder_aux = aux_bucket_asset_file_base(databaseId, full_key)
-        _call_with_keep(delete_assetAuxiliary_files, folder_aux,
-                        keep=_keep_aux(aux_owner_filter(databaseId, base_key, full_key, folder_aux), nested,
-                                       databaseId))
+        # Delete aux files under prefix if they exist; the files that remain, and a nested asset's
+        # files, keep theirs
+        if incomplete is None:
+            folder_aux = aux_bucket_asset_file_base(databaseId, full_key)
+            _call_with_keep(delete_assetAuxiliary_files, folder_aux,
+                            keep=_keep_aux(aux_owner_filter(databaseId, base_key, full_key, folder_aux), nested,
+                                           databaseId))
+        else:
+            delete_auxiliary_files_of_keys(databaseId, [key for key in deleted_keys if contains(base_key, key)])
         
-        # Convert full keys to relative paths and delete metadata
+        # Convert full keys to relative paths and delete the metadata of non-folder files
         for key in deleted_keys:
             if contains(base_key, key):
-                relative_path = _relative_to_location(base_key, key).lstrip('/')
-                affected_files.append(relative_path)
-                
-                # Delete metadata for non-folder files
-                if not key.endswith('/'):
-                    delete_file_metadata(databaseId, assetId, relative_path)
+                affected_files.append(_relative_to_location(base_key, key).lstrip('/'))
+        delete_files_metadata(databaseId, assetId, affected_files)
     else:
         # Check if this is a preview file - don't allow direct operations on preview files
         if is_preview_file(file_path):
             raise VAMSGeneralErrorResponse(f"Cannot directly delete preview files. Delete the base file instead.")
             
-        # For base files, also delete any associated preview files the asset holds
-        preview_files = [preview_file for preview_file in find_preview_files_for_base(bucket, full_key)
-                         if contains(base_key, preview_file) and nested.keep(preview_file)]
+        # List the preview files the asset holds for this file before anything is deleted, so a
+        # listing S3 refuses changes nothing
+        try:
+            preview_files = [preview_file for preview_file in _own_preview_files(bucket, base_key, full_key)
+                             if nested.keep(preview_file)]
+        except Exception as e:
+            logger.exception(f"Error listing the preview files of {full_key}: {e}")
+            raise VAMSGeneralErrorResponse(FILE_DELETE_INCOMPLETE_MESSAGE)
+
+        # Delete the main file including all versions; when S3 keeps a version, its previews and
+        # derived data stay with it
+        if not delete_s3_object_all_versions(bucket, full_key):
+            raise VAMSGeneralErrorResponse(FILE_DELETE_INCOMPLETE_MESSAGE)
+
+        # Then its previews; a preview S3 keeps keeps its records, and the request fails below
         for preview_file in preview_files:
             if delete_s3_object_all_versions(bucket, preview_file):
                 # Get relative path for reporting
@@ -2417,16 +2597,12 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
                 
                 affected_files.append(rel_preview_path)
                 logger.info(f"Deleted preview file: {rel_preview_path}")
+            else:
+                kept_previews.append(preview_file)
         
-        # Delete the main file including all versions
-        success = delete_s3_object_all_versions(bucket, full_key)
-
-        # Delete aux files if they exist
-        aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
-        _call_with_keep(delete_assetAuxiliary_files, aux_prefix, keep=aux_keep)
-        
-        if not success:
-            raise VAMSGeneralErrorResponse(f"Failed to delete file.")
+        # Delete the file's own viewer data; another file's in a folder named like this file stays
+        aux_prefix, aux_keep = viewer_data_scope(databaseId, full_key)
+        delete_assetAuxiliary_files(aux_prefix, keep=aux_keep)
         
         affected_files.append(file_path)
         
@@ -2437,6 +2613,12 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
 
     # Clean up version snapshot records in DynamoDB for deleted files
     delete_file_version_records(databaseId, assetId, affected_files)
+
+    if incomplete is not None:
+        raise VAMSGeneralErrorResponse(PREFIX_DELETE_INCOMPLETE_MESSAGE)
+    if kept_previews:
+        logger.error(f"{len(kept_previews)} preview file(s) of {full_key} kept a version after the file was deleted")
+        raise VAMSGeneralErrorResponse(FILE_PREVIEWS_DELETE_INCOMPLETE_MESSAGE)
 
     # Send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -2920,11 +3102,9 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         source_location=source_base_key
     )
 
-    # Copy auxiliary files if they exist
-    source_aux, dest_aux = aux_file_bases(databaseId, source_base_key, source_key,
-                                          effective_dest_db, dest_base_key, dest_key)
-    _call_with_keep(copy_auxiliary_files, source_aux, dest_aux,
-                    keep=aux_owner_filter(databaseId, source_base_key, source_key, source_aux))
+    # Copy the file's own viewer data, not another file's in a folder named like it
+    source_aux, source_keep = viewer_data_scope(databaseId, source_key)
+    copy_auxiliary_files(source_aux, viewer_data_prefix(effective_dest_db, dest_key), keep=source_keep)
 
     # Copy metadata and attributes to the destination (merge with existing)
     source_rel = source_path.lstrip('/')
@@ -3085,10 +3265,9 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
         source_location=base_key
     )
     
-    # Move auxiliary files if they exist
-    source_aux, dest_aux = aux_file_bases(databaseId, base_key, source_key, databaseId, base_key, dest_key)
-    _call_with_keep(move_auxiliary_files, source_aux, dest_aux,
-                    keep=aux_owner_filter(databaseId, base_key, source_key, source_aux))
+    # Move the file's own viewer data, not another file's in a folder named like it
+    source_aux, source_keep = viewer_data_scope(databaseId, source_key)
+    move_auxiliary_files(source_aux, viewer_data_prefix(databaseId, dest_key), keep=source_keep)
 
     # Move metadata and attributes: copy to new path (merge), then delete from old path
     source_rel = source_path.lstrip('/')
@@ -3203,9 +3382,9 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         logger.exception(f"Error reverting file version: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to revert file version.")
 
-    #Delete aux files for asset as they don't match anymore with the version.
-    aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
-    _call_with_keep(delete_assetAuxiliary_files, aux_prefix, keep=aux_keep)
+    # Delete the file's own viewer data, which no longer matches the reverted version
+    aux_prefix, aux_keep = viewer_data_scope(databaseId, full_key)
+    delete_assetAuxiliary_files(aux_prefix, keep=aux_keep)
 
     #send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -4580,8 +4759,10 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
             show_archived=show_archived
         )
         
+        # The record names the path the file is listed at (the response's relativePath), whichever form
+        # the request used, as the file metadata routes do
         log_action(event, "fileInfoGet", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
-                   file_path=request_model.filePath,
+                   file_path=response.relativePath,
                    request_parameters={"includeVersions": request_model.includeVersions, "showArchived": show_archived})
         return success(body=response.dict())
     
@@ -4814,8 +4995,13 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
     full_key = resolve_asset_file_path(base_key, file_path)
     nested = nested_locations_for(asset, bucket, base_key)
     refuse_nested_key(nested, full_key, "File not found.")
-    aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
-    aux_keep = _keep_aux(aux_keep, nested, databaseId)
+    if full_key.endswith('/'):
+        # A folder: the data of every file in it, except a nested asset's
+        aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
+        aux_keep = _keep_aux(aux_keep, nested, databaseId)
+    else:
+        # A file: its own viewer data, not another file's in a folder named like it
+        aux_prefix, aux_keep = viewer_data_scope(databaseId, full_key)
 
     # Check if auxiliary files exist under the prefix
     file_count = 0

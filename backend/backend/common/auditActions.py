@@ -60,8 +60,7 @@ from common.apiRoutes import (
     API_COGNITO_USER_BY_ID,
     API_COGNITO_USER_RESET_PASSWORD,
     API_COMMENTS_ASSET,
-    API_COMMENTS_ASSET_VERSION,
-    API_COMMENTS_ASSET_VERSION_COMMENT,
+    API_COMMENTS_ASSET_COMMENT,
     API_COMPLIANCE_AUDIT,
     API_COMPLIANCE_AUDIT_ASSET,
     API_COMPLIANCE_BIND_ASSET,
@@ -290,11 +289,12 @@ CORE_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
         POST: spec("pipelineOutputUpload", "file", group=GROUP_FILE_UPLOAD, legacy_function="log_file_upload"),
     }),
     # Comments
-    **route_entries(API_COMMENTS_ASSET, {GET: read("commentList", "comment")}),
-    **route_entries(API_COMMENTS_ASSET_VERSION, {GET: read("commentList", "comment")}),
-    **route_entries(API_COMMENTS_ASSET_VERSION_COMMENT, {
-        GET: read("commentGet", "comment"),
+    **route_entries(API_COMMENTS_ASSET, {
+        GET: read("commentList", "comment"),
         POST: spec("commentCreate", "comment"),
+    }),
+    **route_entries(API_COMMENTS_ASSET_COMMENT, {
+        GET: read("commentGet", "comment"),
         PUT: spec("commentUpdate", "comment"),
         DELETE: spec("commentDelete", "comment"),
     }),

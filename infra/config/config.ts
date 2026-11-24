@@ -6528,6 +6528,16 @@ export function apiCustomDomainHost(config: ConfigPublic): string | undefined {
     return customDomain && customDomain.enabled ? customDomain.domainHost : undefined;
 }
 
+/**
+ * Whether the deployment serves the web app through a web distribution, CloudFront or an ALB. The
+ * core stack builds the static web stack, which publishes the web URL parameters, only then; the
+ * secure-config function gets the web URL parameter's name only then, so an API-only deployment
+ * answers an empty web URL without a Parameter Store lookup.
+ */
+export function webDistributionEnabled(config: ConfigPublic): boolean {
+    return config.app.useAlb.enabled || config.app.useCloudFront.enabled;
+}
+
 // One externally owned pipeline bridge allowed to register sub-executions on the orchestration bus.
 // The bus resource policy grants events:PutEvents to the account root carrying an aws:PrincipalArn
 // condition on roleArnPattern, so only roles matching the pattern can publish. invokeTargets lists

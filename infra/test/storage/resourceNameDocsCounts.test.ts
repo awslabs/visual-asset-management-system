@@ -18,6 +18,9 @@
  * themselves (the reindexer names each only when its feature is enabled), so they are neither in the
  * ResourceNamesBuilder count nor guaranteed to exist. The storage builder registers the other two
  * `integration` values (the orchestration bus ARN and event source prefix) through the registry.
+ * The deploy-time values (`openSearch/*`, `web/*`, `location/*`) are published the same way, by the
+ * search, static web and Location Service stacks, each only when its feature is deployed; the shipped
+ * commercial configuration publishes all of them.
  * details.md is the one page that also states the grand total with the late-bound names included.
  */
 
@@ -38,8 +41,12 @@ const LAMBDAS = size(RESOURCE_PARAM_KEYS.lambdaFunctions);
 const INTEGRATION = size(RESOURCE_PARAM_KEYS.integration);
 // `integration/workflowExecutionRoleArn` is published by ApiBuilder2, not through the registry.
 const INTEGRATION_LATE_BOUND = 1;
+const OPENSEARCH = size(RESOURCE_PARAM_KEYS.openSearch);
+const WEB = size(RESOURCE_PARAM_KEYS.web);
+const LOCATION = size(RESOURCE_PARAM_KEYS.location);
+const DEPLOY_TIME = OPENSEARCH + WEB + LOCATION;
 const PUBLISHED_BY_REGISTRY = DYNAMO + LEGACY + S3 + LOGS + INTEGRATION - INTEGRATION_LATE_BOUND;
-const GRAND_TOTAL = PUBLISHED_BY_REGISTRY + INTEGRATION_LATE_BOUND + LAMBDAS;
+const GRAND_TOTAL = PUBLISHED_BY_REGISTRY + INTEGRATION_LATE_BOUND + LAMBDAS + DEPLOY_TIME;
 
 const AWS_RESOURCES = "documentation/docusaurus-site/docs/architecture/aws-resources.md";
 const DETAILS = "documentation/docusaurus-site/docs/architecture/details.md";
@@ -64,6 +71,9 @@ describe("the registry the doc counts are compared against is populated", () => 
         expect(S3).toBeGreaterThan(0);
         expect(LOGS).toBeGreaterThan(0);
         expect(LAMBDAS).toBeGreaterThan(0);
+        expect(OPENSEARCH).toBeGreaterThan(0);
+        expect(WEB).toBeGreaterThan(0);
+        expect(LOCATION).toBeGreaterThan(0);
     });
 });
 
@@ -90,6 +100,9 @@ describe("architecture/aws-resources.md states the registry's counts", () => {
         ["cloudwatchLogGroups/*", LOGS],
         ["lambdaFunctions/*", LAMBDAS],
         ["integration/*", INTEGRATION],
+        ["openSearch/*", OPENSEARCH],
+        ["web/*", WEB],
+        ["location/*", LOCATION],
     ])("SSM Parameter Store table row %s", (group, expected) => {
         const escaped = group.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
         const row = new RegExp("resourceNames/" + escaped + "`\\s*\\|\\s*(\\d+)\\s*\\|");
@@ -116,7 +129,8 @@ describe("architecture/details.md states the resource-name parameter counts", ()
                 DETAILS
             )
         ).toBe(INTEGRATION);
-        expect(documentedFigure(md, /(\d+) Lambda function names?\)/, DETAILS)).toBe(LAMBDAS);
+        expect(documentedFigure(md, /(\d+) Lambda function names?;/, DETAILS)).toBe(LAMBDAS);
+        expect(documentedFigure(md, /(\d+) deploy-time values under/, DETAILS)).toBe(DEPLOY_TIME);
         expect(documentedFigure(md, /materializes (\d+) of them/, DETAILS)).toBe(
             PUBLISHED_BY_REGISTRY
         );

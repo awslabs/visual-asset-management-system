@@ -108,6 +108,8 @@ class ResourceParamKeys:
     LEGACY_METADATA_SCHEMA_STORAGE_TABLE = "dynamoTables/legacy/metadataSchemaStorage"
     LEGACY_TAG_STORAGE_TABLE = "dynamoTables/legacy/tagStorage"
     LEGACY_TAG_TYPE_STORAGE_TABLE = "dynamoTables/legacy/tagTypeStorage"
+    LEGACY_COMMENT_STORAGE_TABLE_V1 = "dynamoTables/legacy/commentStorageV1"
+    LEGACY_SUBSCRIPTIONS_STORAGE_TABLE_V1 = "dynamoTables/legacy/subscriptionsStorageV1"
 
     # Non-asset S3 buckets
     ASSET_AUXILIARY_BUCKET = "s3Buckets/assetAuxiliary"
@@ -134,6 +136,13 @@ class ResourceParamKeys:
     INTEGRATION_ORCHESTRATION_BUS_ARN = "integration/orchestrationBusArn"
     INTEGRATION_ORCHESTRATION_EVENT_SOURCE_PREFIX = "integration/orchestrationEventSourcePrefix"
     INTEGRATION_WORKFLOW_EXECUTION_ROLE_ARN = "integration/workflowExecutionRoleArn"
+
+    # Deploy-time values, each published only when its feature is deployed
+    OPENSEARCH_ENDPOINT = "openSearch/endpoint"
+    OPENSEARCH_ASSET_INDEX_NAME = "openSearch/assetIndexName"
+    OPENSEARCH_FILE_INDEX_NAME = "openSearch/fileIndexName"
+    WEB_DEPLOYED_URL = "web/deployedUrl"
+    LOCATION_API_KEY_ARN = "location/apiKeyArn"
 
 
 class SsmResourceLookup:

@@ -231,7 +231,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
         if (asset?.assetId && user.username && !isArchived) {
             checkSubscriptionStatus(user.username);
         }
-    }, [asset?.assetId, isArchived]);
+    }, [asset?.assetId, databaseId, isArchived]);
 
     // Check if user is subscribed to this asset
     const checkSubscriptionStatus = async (username: string): Promise<void> => {
@@ -241,6 +241,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
             const result = (await checkSubscription({
                 userId: username,
                 assetId: asset.assetId,
+                databaseId,
             })) as [boolean, any];
 
             if (result[0] && result[1] === "success") {
@@ -265,6 +266,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
             entityName: "Asset",
             subscribers: [userName],
             entityId: asset.assetId,
+            databaseId,
         };
 
         try {

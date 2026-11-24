@@ -50,6 +50,15 @@ The v2.7 release introduces:
      consistent passes, writes a report of the rows it could not index, and writes the completion
      marker (an SSM parameter under the resource-name prefix) last. Nothing reads the index before the
      marker exists. No S3 call is made.
+  5. Comments and subscriptions stored by database and asset id. The v2.7 deploy adds the V2 comment and
+     subscription tables and keeps the v2.6 tables, keyed by the asset id alone, as sources. The
+     ``commentSubscriptionKeys`` step copies every v2.6 row into the key of the asset it belongs to: the one
+     database holding an asset with that id, or, when several do, the one the evidence names (the comment's
+     asset version exists there and predates the comment; each subscriber goes to the database whose asset
+     topic it is on), or the one an operator mapping file names. A comment or subscriber it cannot place is
+     reported and left where it is; no v2.6 row is ever written or deleted. Each copy is recorded with it,
+     so a repeat copies only what earlier runs left and never undoes what users changed since. Required
+     right after the deploy on a deployment with comments or subscriptions; resumable.
 
 Configuration: set ``resource_names_ssm_param_prefix`` (from the core stack output
 ``ResourceNamesSSMParamPrefixOutput``); every table and function name is then resolved from SSM
@@ -88,16 +97,18 @@ Requirements:
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Callable, Dict, Iterator, List, NamedTuple, Optional, Tuple
 
 import boto3
-from boto3.dynamodb.types import TypeDeserializer
+from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from botocore.config import Config
 from botocore.exceptions import ClientError, ReadTimeoutError
 
@@ -149,6 +160,8 @@ _DYNAMODB_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'}
 _S3_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 _SSM_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 _ASSET_LOCATION_DESERIALIZER = TypeDeserializer()
+_COMMENT_SUBSCRIPTION_SERIALIZER = TypeSerializer()
+_SNS_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 # One attempt: a synchronous invoke that outlives the read timeout is reported as "continues in the
 # background" and never re-issued (a retry would start a second clear or a second enqueue pass).
 _LAMBDA_CLIENT_CONFIG = Config(connect_timeout=10, read_timeout=900,
@@ -2320,16 +2333,672 @@ def run_asset_location_index_step(config: dict, args, base_param_prefix, profile
 
 
 #######################
+# STEP: commentSubscriptionKeys
+#######################
+
+# v2.7 stores comments and subscriptions by database and asset id. The v2.6 tables keyed them by the asset
+# id alone, and the v2.7 deploy keeps those tables as this step's sources (published under
+# dynamoTables/legacy/). The step copies every V1 row into the V2 key of the asset it belongs to and never
+# writes or deletes a V1 row. The key shapes mirror backend/backend/common/commentSubscriptionKeys.py.
+COMMENT_SUBSCRIPTION_STEP = 'commentSubscriptionKeys'
+COMMENT_V1_PARTITION_KEY = 'assetId'
+COMMENT_V1_SORT_KEY = 'assetVersionId:commentId'
+COMMENT_V2_PARTITION_KEY = 'databaseId:assetId'
+COMMENT_V2_SORT_KEY = 'commentId'
+COMMENT_DELETED_SUFFIX = '#deleted'
+SUBSCRIPTION_V1_SORT_KEY = 'entityName_entityId'
+SUBSCRIPTION_V2_SORT_KEY = 'entityName:databaseId:entityId'
+ARCHIVED_DATABASE_SUFFIX = '#deleted'
+ASSET_ID_INDEX = 'assetIdGSI'
+COMMENT_SUBSCRIPTION_WRITES_PER_SECOND = 25
+COMMENT_SUBSCRIPTION_PAGE_SIZE = 500
+# Copy records: one item per v2.6 comment row and per v2.6 subscriber the step has copied, kept in the V2
+# comment table under a reserved partition per asset id and written in the same transaction as the copy.
+# A database id never contains '#' (the ID rule), so the partition never meets a comment's, and VAMS reads
+# the comment table only by an asset's partition, so no API, web, CLI or MCP read returns one. A record
+# outlives what users do with the copy afterwards (edit, delete, unsubscribe, delete the subscription or
+# the asset), so a later run never copies that row or subscriber again. Its sort key is a SHA-256 hash of
+# the v2.6 row key and, for a subscriber, the subscriber's user id, which is all a later run compares, so
+# no record holds a user id in clear.
+COPY_RECORD_PARTITION_PREFIX = '#commentSubscriptionKeys:'
+COPY_RECORD_SORT_PREFIX = 'sha256:'
+TRANSACT_MAX_ITEMS = 100
+COMMENT_SUBSCRIPTION_ATTEMPTS = 5
+# Classes of the JSON Lines report: one per v2.6 comment row, one per subscriber of a v2.6 subscription row.
+COMMENT_SUBSCRIPTION_CLASSES = (
+    'placed', 'resolvedByVersions', 'resolvedBySnsTopic', 'resolvedByMapping', 'alreadyPresent', 'alreadyCopied',
+    'ambiguous', 'duplicateCommentId', 'noAsset', 'noSubscribers', 'unreadable',
+)
+_COMMENT_SUBSCRIPTION_LEFT = ('ambiguous', 'duplicateCommentId', 'noAsset', 'unreadable')
+_RETRYABLE_CANCELLATIONS = {'None', 'ConditionalCheckFailed', 'TransactionConflict'}
+
+
+def _plain(item: Dict) -> Dict:
+    return {k: _ASSET_LOCATION_DESERIALIZER.deserialize(v) for k, v in (item or {}).items()}
+
+
+def _wire(value: Dict) -> Dict:
+    return {k: _COMMENT_SUBSCRIPTION_SERIALIZER.serialize(v) for k, v in value.items()}
+
+
+def parse_v1_comment_key(partition: str, sort_key: str) -> Optional[Tuple[str, bool, str, str]]:
+    """(assetId, deleted, assetVersionId, commentId) of a V1 comment row, or None when unreadable.
+
+    A soft-deleted comment's partition ends with '#deleted'. A comment id never contains ':' (the API
+    validated it with the ID rule), so the last ':' of the sort key separates it from the version id."""
+    deleted = partition.endswith(COMMENT_DELETED_SUFFIX)
+    asset_id = partition[:-len(COMMENT_DELETED_SUFFIX)] if deleted else partition
+    version_id, sep, comment_id = sort_key.rpartition(':')
+    if not asset_id or not sep or not version_id or not comment_id:
+        return None
+    return asset_id, deleted, version_id, comment_id
+
+
+def parse_v1_subscription_key(sort_key: str) -> Optional[Tuple[str, str]]:
+    """(entityName, entityId) of a V1 subscription row. An entity name never contains '#'."""
+    entity_name, sep, entity_id = sort_key.partition('#')
+    if not sep or not entity_name or not entity_id:
+        return None
+    return entity_name, entity_id
+
+
+def copy_record_source_hash(source_table: str, v1_partition: str, v1_sort_key: str,
+                            subscriber: Optional[str] = None) -> str:
+    """SHA-256 (hex) of what a later run compares: the V1 row's table and key and, for a subscriber, its id.
+
+    The input is the JSON array [table, partition, sort key(, subscriber)] with no spaces, so no two
+    sources share an input."""
+    parts = [source_table, v1_partition, v1_sort_key] + ([subscriber] if subscriber is not None else [])
+    canonical = json.dumps(parts, separators=(',', ':'), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def copy_record_key(asset_id: str, sort_key: str) -> Dict[str, str]:
+    """Key of a copy record of one v2.6 comment row or subscriber, in the V2 comment table."""
+    return {COMMENT_V2_PARTITION_KEY: f"{COPY_RECORD_PARTITION_PREFIX}{asset_id}", COMMENT_V2_SORT_KEY: sort_key}
+
+
+def copy_record_sort_key(source_hash: str) -> str:
+    return f"{COPY_RECORD_SORT_PREFIX}{source_hash}"
+
+
+# Pre-release builds of this step keyed copy records by the V1 sort key and, for a subscriber, its user id in
+# clear. A run reads such a record when no hashed one exists, honours it, and rewrites it in the hashed form.
+def legacy_comment_copy_source(deleted: bool, v1_sort_key: str) -> str:
+    return f"comment|{'deleted' if deleted else 'live'}|{v1_sort_key}"
+
+
+def legacy_subscription_copy_source(event_name: str, subscriber: str) -> str:
+    return f"subscription|{event_name}|{subscriber}"
+
+
+class CommentSubscriptionCopy:
+    """Copies the V1 comment and subscription rows into their database-keyed V2 tables."""
+
+    def __init__(self, dynamodb_client, sns_client, cfg: Dict, dry_run: bool, limit: Optional[int] = None,
+                 writes_per_second: float = COMMENT_SUBSCRIPTION_WRITES_PER_SECOND,
+                 mapping: Optional[Dict[str, str]] = None, page_size: int = COMMENT_SUBSCRIPTION_PAGE_SIZE,
+                 run_id: Optional[str] = None):
+        self.ddb = dynamodb_client
+        self.sns = sns_client
+        self.cfg = cfg
+        self.dry_run = dry_run
+        self.limit = limit
+        self.pause = (1.0 / writes_per_second) if writes_per_second else 0
+        self.mapping = mapping or {}
+        self.page_size = page_size
+        # The run a copy record names; a resumed run takes the one its checkpoint saved (run_table)
+        self.run_id = run_id or uuid.uuid4().hex
+        self.current_run_id = self.run_id
+        self._candidates: Dict[str, List[str]] = {}
+        self._versions: Dict[Tuple[str, str], Optional[Tuple[set, str]]] = {}
+        self._endpoints: Dict[Tuple[str, str], set] = {}
+        self._emails: Dict[str, str] = {}
+        # Pre-release copy records found, and rewritten in the hashed form (a dry run rewrites none)
+        self.legacy_records_found = 0
+        self.legacy_records_rewritten = 0
+
+    # ----- the assets an id belongs to -----
+
+    def candidate_databases(self, asset_id: str) -> List[str]:
+        """The databases holding an asset with this id, live or archived, from assetIdGSI (paged)."""
+        if asset_id not in self._candidates:
+            rows = _query_all(self.ddb, self.cfg['asset_storage_table_name'], 'assetId', asset_id,
+                              index=ASSET_ID_INDEX)
+            databases = set()
+            for row in rows:
+                database_id = _attr_s(row, 'databaseId')
+                if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
+                    database_id = database_id[:-len(ARCHIVED_DATABASE_SUFFIX)]
+                if database_id:
+                    databases.add(database_id)
+            self._candidates[asset_id] = sorted(databases)
+        return self._candidates[asset_id]
+
+    def _asset_row(self, database_id: str, asset_id: str) -> Optional[Dict]:
+        for partition in (database_id, f"{database_id}{ARCHIVED_DATABASE_SUFFIX}"):
+            item = self.ddb.get_item(TableName=self.cfg['asset_storage_table_name'],
+                                     Key=_wire({'databaseId': partition, 'assetId': asset_id})).get('Item')
+            if item:
+                return _plain(item)
+        return None
+
+    def _asset_versions(self, database_id: str, asset_id: str) -> Optional[Tuple[set, str]]:
+        """(version ids, earliest version dateCreated) of one asset, from the asset versions table."""
+        key = (database_id, asset_id)
+        if key not in self._versions:
+            rows = [_plain(row) for row in _query_all(self.ddb, self.cfg['asset_versions_storage_table_name'],
+                                                     'databaseId:assetId', f"{database_id}:{asset_id}")]
+            if not rows:
+                self._versions[key] = None
+            else:
+                created = sorted(str(row.get('dateCreated') or '') for row in rows if row.get('dateCreated'))
+                self._versions[key] = ({str(row.get('assetVersionId')) for row in rows},
+                                       created[0] if created else '')
+        return self._versions[key]
+
+    def _subscriber_addresses(self, subscribers: List[str]) -> set:
+        """The subscriber ids and the e-mail addresses the user table holds for them."""
+        addresses = set()
+        for user_id in subscribers:
+            addresses.add(str(user_id).lower())
+            if user_id not in self._emails:
+                item = self.ddb.get_item(TableName=self.cfg['user_storage_table_name'],
+                                         Key=_wire({'userId': user_id})).get('Item')
+                self._emails[user_id] = str(_plain(item).get('email') or '') if item else ''
+            if self._emails[user_id]:
+                addresses.add(self._emails[user_id].lower())
+        return addresses
+
+    def _topic_endpoints(self, database_id: str, asset_id: str) -> set:
+        key = (database_id, asset_id)
+        if key not in self._endpoints:
+            endpoints = set()
+            row = self._asset_row(database_id, asset_id)
+            topic = (row or {}).get('snsTopic')
+            if topic:
+                kwargs = {'TopicArn': topic}
+                while True:
+                    try:
+                        response = self.sns.list_subscriptions_by_topic(**kwargs)
+                    except ClientError as e:
+                        if e.response.get('Error', {}).get('Code') == 'NotFound':
+                            break
+                        raise
+                    for subscription in response.get('Subscriptions', []):
+                        endpoints.add(str(subscription.get('Endpoint') or '').lower())
+                    if not response.get('NextToken'):
+                        break
+                    kwargs['NextToken'] = response['NextToken']
+            self._endpoints[key] = endpoints
+        return self._endpoints[key]
+
+    def resolve(self, asset_id: str, evidence: Callable[[str], bool], evidence_class: str
+                ) -> Tuple[Optional[str], str, List[str]]:
+        """(databaseId or None, report class, candidates) for a V1 comment row or subscriber of this asset id.
+
+        One candidate database: placed there. Several: the evidence rule, then the operator mapping file
+        (honoured only when it names a candidate); otherwise ambiguous. Never more than one database."""
+        candidates = self.candidate_databases(asset_id)
+        if not candidates:
+            return None, 'noAsset', candidates
+        if len(candidates) == 1:
+            return candidates[0], 'placed', candidates
+        matching = [database_id for database_id in candidates if evidence(database_id)]
+        if len(matching) == 1:
+            return matching[0], evidence_class, candidates
+        mapped = self.mapping.get(asset_id)
+        if mapped in candidates:
+            return mapped, 'resolvedByMapping', candidates
+        return None, 'ambiguous', candidates
+
+    def place_subscriber(self, asset_id: str, subscriber: str) -> Tuple[Optional[str], str, List[str]]:
+        """Where one v2.6 subscriber goes: the database whose asset topic has the subscriber's endpoint (its id
+        or its e-mail address in the user table). The mapping file decides only for a subscriber on no
+        candidate's topic, or on several."""
+        addresses = self._subscriber_addresses([subscriber])
+
+        def evidence(database_id: str) -> bool:
+            return bool(self._topic_endpoints(database_id, asset_id) & addresses)
+
+        return self.resolve(asset_id, evidence, 'resolvedBySnsTopic')
+
+    # ----- copy records -----
+
+    def _get_copy_record(self, asset_id: str, sort_key: str) -> Optional[Dict]:
+        item = self.ddb.get_item(TableName=self.cfg['comment_storage_table_name'],
+                                 Key=_wire(copy_record_key(asset_id, sort_key)), ConsistentRead=True).get('Item')
+        return _plain(item) if item else None
+
+    def _copy_record(self, asset_id: str, source_hash: str, legacy_source: str) -> Optional[Dict]:
+        """The copy record of a V1 comment row or subscriber, or None when no run copied it.
+
+        A record in the pre-release form (legacy_source as its sort key) counts as well; a real run rewrites
+        it in the hashed form and deletes it, in one transaction."""
+        copied = self._get_copy_record(asset_id, copy_record_sort_key(source_hash))
+        if copied:
+            return copied
+        legacy = self._get_copy_record(asset_id, legacy_source)
+        if not legacy:
+            return None
+        self.legacy_records_found += 1
+        if not self.dry_run:
+            table = self.cfg['comment_storage_table_name']
+            attributes = {k: v for k, v in legacy.items() if k not in (COMMENT_V2_PARTITION_KEY, COMMENT_V2_SORT_KEY)}
+            rewritten = dict(copy_record_key(asset_id, copy_record_sort_key(source_hash)), **attributes)
+            # A failed condition means another run rewrote it meanwhile; the record is honoured either way
+            if self._transact([
+                {'Put': {'TableName': table, 'Item': _wire(rewritten),
+                         'ConditionExpression': 'attribute_not_exists(#k)',
+                         'ExpressionAttributeNames': {'#k': COMMENT_V2_SORT_KEY}}},
+                {'Delete': {'TableName': table, 'Key': _wire(copy_record_key(asset_id, legacy_source)),
+                            'ConditionExpression': 'attribute_exists(#k)',
+                            'ExpressionAttributeNames': {'#k': COMMENT_V2_SORT_KEY}}},
+            ]):
+                self.legacy_records_rewritten += 1
+        return legacy
+
+    def _copy_record_put(self, asset_id: str, source_hash: str, source_table: str, database_id: str,
+                         result: str) -> Dict:
+        item = dict(copy_record_key(asset_id, copy_record_sort_key(source_hash)), step=COMMENT_SUBSCRIPTION_STEP,
+                    sourceTable=source_table, assetId=asset_id, placedInDatabaseId=database_id, result=result,
+                    runId=self.current_run_id, copiedAt=datetime.now(timezone.utc).isoformat())
+        return {'Put': {'TableName': self.cfg['comment_storage_table_name'], 'Item': _wire(item),
+                        'ConditionExpression': 'attribute_not_exists(#k)',
+                        'ExpressionAttributeNames': {'#k': COMMENT_V2_SORT_KEY}}}
+
+    def _reported(self, record: Dict, copied: Dict) -> Dict:
+        """The report line of a row or subscriber with a copy record: 'alreadyCopied', or the class it was
+        copied with when this run (resumed after an interruption) copied it, as an uninterrupted run reports it."""
+        same_run = copied.get('runId') == self.current_run_id and copied.get('result')
+        return dict(record, databaseId=copied.get('placedInDatabaseId'),
+                    result=copied['result'] if same_run else 'alreadyCopied')
+
+    # ----- writes -----
+
+    def _paced(self) -> None:
+        if self.pause:
+            time.sleep(self.pause)
+
+    def _transact(self, actions: List[Dict]) -> bool:
+        """Writes the actions in one transaction. False when a condition no longer held: re-read and retry."""
+        try:
+            self.ddb.transact_write_items(TransactItems=actions)
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') != 'TransactionCanceledException':
+                raise
+            reasons = {str(reason.get('Code') or 'None') for reason in e.response.get('CancellationReasons') or []}
+            if reasons - _RETRYABLE_CANCELLATIONS:
+                raise
+            return False
+        self._paced()
+        return True
+
+    def _existing_comment(self, database_id: str, asset_id: str, comment_id: str) -> Optional[Dict]:
+        """The V2 comment with this id on the asset, live or in its '#deleted' partition, or None."""
+        for suffix in ('', COMMENT_DELETED_SUFFIX):
+            key = {COMMENT_V2_PARTITION_KEY: f"{database_id}:{asset_id}{suffix}", COMMENT_V2_SORT_KEY: comment_id}
+            item = self.ddb.get_item(TableName=self.cfg['comment_storage_table_name'], Key=_wire(key),
+                                     ConsistentRead=True).get('Item')
+            if item:
+                return _plain(item)
+        return None
+
+    def copy_comment(self, item: Dict) -> List[Dict]:
+        partition = _attr_s(item, COMMENT_V1_PARTITION_KEY)
+        sort_key = _attr_s(item, COMMENT_V1_SORT_KEY)
+        record = {'table': 'comment', 'v1Key': {COMMENT_V1_PARTITION_KEY: partition, COMMENT_V1_SORT_KEY: sort_key}}
+        parsed = parse_v1_comment_key(partition, sort_key)
+        if parsed is None:
+            return [dict(record, result='unreadable')]
+        asset_id, deleted, version_id, comment_id = parsed
+        record.update(assetId=asset_id, deleted=deleted, commentId=comment_id)
+        source_hash = copy_record_source_hash('comment', partition, sort_key)
+        legacy_source = legacy_comment_copy_source(deleted, sort_key)
+        comment = _plain(item)
+        created = str(comment.get('dateCreated') or '')
+
+        def evidence(database_id: str) -> bool:
+            # The comment's version counts only when some candidate has it: a comment made in the web app
+            # before v2.7 may carry another value (the S3 version or the asset id) in place of the asset
+            # version id. The asset must also have existed when the comment was made.
+            versions = self._asset_versions(database_id, asset_id)
+            if versions is None:
+                return False
+            version_ids, first_created = versions
+            known = any(version_id in (self._asset_versions(db, asset_id) or (set(), ''))[0]
+                        for db in self.candidate_databases(asset_id))
+            if known and version_id not in version_ids:
+                return False
+            return not created or not first_created or first_created <= created
+
+        for _ in range(COMMENT_SUBSCRIPTION_ATTEMPTS):
+            # Copied before: left as users left it (edited, deleted), even when its asset is gone since
+            copied = self._copy_record(asset_id, source_hash, legacy_source)
+            if copied:
+                return [self._reported(record, copied)]
+            database_id, result, candidates = self.resolve(asset_id, evidence, 'resolvedByVersions')
+            record['candidates'] = candidates
+            if database_id is None:
+                return [dict(record, result=result)]
+            record['databaseId'] = database_id
+
+            existing = self._existing_comment(database_id, asset_id, comment_id)
+            if existing is not None:
+                same = existing.get('assetVersionId') == version_id and \
+                    existing.get('dateCreated') == comment.get('dateCreated')
+                if not same:
+                    return [dict(record, result='duplicateCommentId')]
+                # The comment is there (live or deleted): only the copy record is missing
+                result = 'alreadyPresent'
+                actions = [self._copy_record_put(asset_id, source_hash, 'comment', database_id, result)]
+            else:
+                v2_partition = f"{database_id}:{asset_id}{COMMENT_DELETED_SUFFIX if deleted else ''}"
+                target = {k: v for k, v in comment.items() if k not in (COMMENT_V1_PARTITION_KEY, COMMENT_V1_SORT_KEY)}
+                target.update({COMMENT_V2_PARTITION_KEY: v2_partition, COMMENT_V2_SORT_KEY: comment_id,
+                               'databaseId': database_id, 'assetId': asset_id, 'assetVersionId': version_id})
+                actions = [{'Put': {'TableName': self.cfg['comment_storage_table_name'], 'Item': _wire(target),
+                                    'ConditionExpression': 'attribute_not_exists(#k)',
+                                    'ExpressionAttributeNames': {'#k': COMMENT_V2_SORT_KEY}}},
+                           self._copy_record_put(asset_id, source_hash, 'comment', database_id, result)]
+            if self.dry_run or self._transact(actions):
+                return [dict(record, result=result)]
+        return [dict(record, result='unreadable', detail='the V2 rows kept changing; run the step again')]
+
+    def _write_subscribers(self, event_name: str, v1_sort_key: str, entity_name: str, asset_id: str,
+                           database_id: str, lines: Dict[str, Dict], subscribers: List[str]) -> bool:
+        """Adds the subscribers to the V2 row of the asset in this database, with a copy record each, in one
+        transaction conditional on the subscriber list it read. A subscriber the row already lists gets its
+        copy record only ('alreadyPresent'). False when the row or a copy record changed meanwhile."""
+        table = self.cfg['subscriptions_storage_table_name']
+        key = {'eventName': event_name, SUBSCRIPTION_V2_SORT_KEY: f"{entity_name}:{database_id}:{asset_id}"}
+        existing = self.ddb.get_item(TableName=table, Key=_wire(key), ConsistentRead=True).get('Item')
+        row = _plain(existing) if existing else None
+        current = [str(s) for s in ((row or {}).get('subscribers') or [])]
+        for subscriber in subscribers:
+            if subscriber in current:
+                lines[subscriber]['result'] = 'alreadyPresent'
+        if self.dry_run:
+            return True
+        new = [s for s in subscribers if s not in current]
+        actions = []
+        if row is None:
+            actions.append({'Put': {'TableName': table, 'Item': _wire(dict(
+                key, entityName=entity_name, databaseId=database_id, entityId=asset_id, subscribers=new)),
+                'ConditionExpression': 'attribute_not_exists(#k)',
+                'ExpressionAttributeNames': {'#k': SUBSCRIPTION_V2_SORT_KEY}}})
+        elif new:
+            # Conditional on the list read above, so a subscriber added or removed meanwhile is never undone
+            update = {'TableName': table, 'Key': _wire(key), 'UpdateExpression': 'SET #s = :new',
+                      'ExpressionAttributeNames': {'#s': 'subscribers'}}
+            if 'subscribers' in row:
+                update.update(ConditionExpression='#s = :old',
+                              ExpressionAttributeValues=_wire({':new': current + new, ':old': current}))
+            else:
+                update['ExpressionAttributeNames']['#k'] = SUBSCRIPTION_V2_SORT_KEY
+                update.update(ConditionExpression='attribute_exists(#k) AND attribute_not_exists(#s)',
+                              ExpressionAttributeValues=_wire({':new': new}))
+            actions.append({'Update': update})
+        for subscriber in subscribers:
+            source_hash = copy_record_source_hash('subscription', event_name, v1_sort_key, subscriber)
+            actions.append(self._copy_record_put(asset_id, source_hash, 'subscription', database_id,
+                                                 lines[subscriber]['result']))
+        return self._transact(actions)
+
+    def copy_subscription(self, item: Dict) -> List[Dict]:
+        """One report line per subscriber of the V1 row: each subscriber is placed on its own evidence."""
+        row = _plain(item)
+        event_name = str(row.get('eventName') or '')
+        sort_key = str(row.get(SUBSCRIPTION_V1_SORT_KEY) or '')
+        record = {'table': 'subscription', 'v1Key': {'eventName': event_name, SUBSCRIPTION_V1_SORT_KEY: sort_key}}
+        parsed = parse_v1_subscription_key(sort_key)
+        if parsed is None or not event_name or parsed[0] != 'Asset':
+            return [dict(record, result='unreadable')]
+        entity_name, asset_id = parsed
+        record['assetId'] = asset_id
+        subscribers = list(dict.fromkeys(str(s) for s in (row.get('subscribers') or [])))
+        if not subscribers:
+            return [dict(record, result='noSubscribers')]
+
+        for _ in range(COMMENT_SUBSCRIPTION_ATTEMPTS):
+            lines: Dict[str, Dict] = {}
+            pending: Dict[str, List[str]] = {}
+            for subscriber in subscribers:
+                line = dict(record, subscriber=subscriber)
+                # Copied before: an unsubscribe or a deleted subscription since then stays as the user left it
+                copied = self._copy_record(asset_id,
+                                           copy_record_source_hash('subscription', event_name, sort_key, subscriber),
+                                           legacy_subscription_copy_source(event_name, subscriber))
+                if copied:
+                    lines[subscriber] = self._reported(line, copied)
+                    continue
+                database_id, result, candidates = self.place_subscriber(asset_id, subscriber)
+                lines[subscriber] = dict(line, candidates=candidates, result=result)
+                if database_id is not None:
+                    lines[subscriber]['databaseId'] = database_id
+                    pending.setdefault(database_id, []).append(subscriber)
+            written = True
+            for database_id, placed in pending.items():
+                for start in range(0, len(placed), TRANSACT_MAX_ITEMS - 1):
+                    chunk = placed[start:start + TRANSACT_MAX_ITEMS - 1]
+                    if not self._write_subscribers(event_name, sort_key, entity_name, asset_id, database_id, lines,
+                                                   chunk):
+                        written = False
+                        break
+                if not written:
+                    break
+            if written:
+                return [lines[s] for s in subscribers]
+        return [dict(record, subscriber=s, result='unreadable', detail='the V2 row kept changing; run the step again')
+                for s in subscribers]
+
+    # ----- the scan -----
+
+    def run_table(self, source_table: str, key_names: Tuple[str, str], copy: Callable[[Dict], List[Dict]], report,
+                  checkpoint_path: str, counts: Dict[str, int], resume: bool) -> bool:
+        """Scan one V1 table page by page, copying each row and saving the scan position after each page.
+
+        Returns True when the table was scanned to its end, False when --limit stopped it (the position is
+        then saved after the last row examined, so --resume continues with the next one)."""
+        start_key = None
+        self.current_run_id = self.run_id
+        checkpoint = _read_checkpoint(checkpoint_path, source_table) if resume else None
+        if checkpoint:
+            counts.update(checkpoint.get('counts') or {})
+            self.current_run_id = checkpoint.get('runId') or self.run_id
+            if checkpoint.get('complete'):
+                logger.info(f"{source_table} was scanned to its end by the run being resumed "
+                            f"({counts['scanned']} row(s)).")
+                return True
+            start_key = checkpoint.get('exclusiveStartKey')
+            logger.info(f"Resuming {source_table} from {checkpoint_path} after {counts['scanned']} row(s).")
+        else:
+            _write_copy_checkpoint(checkpoint_path, source_table, None, counts, self.current_run_id, report, False)
+        while True:
+            kwargs = {'TableName': source_table, 'ConsistentRead': True, 'Limit': self.page_size}
+            if start_key:
+                kwargs['ExclusiveStartKey'] = start_key
+            response = self.ddb.scan(**kwargs)
+            last_key = None
+            for item in response.get('Items', []):
+                if self.limit is not None and counts['scanned'] >= self.limit:
+                    logger.info(f"Limit of {self.limit} row(s) reached for {source_table}; stopping.")
+                    if last_key is not None:
+                        _write_copy_checkpoint(checkpoint_path, source_table, last_key, counts, self.current_run_id,
+                                               report, False)
+                    return False
+                last_key = {name: item[name] for name in key_names if name in item}
+                counts['scanned'] += 1
+                try:
+                    records = copy(item)
+                except ClientError as e:
+                    records = [{'table': source_table, 'result': 'unreadable', 'detail': str(e)}]
+                for record in records:
+                    counts[record['result']] += 1
+                    report.write(json.dumps(record, default=str) + '\n')
+                    if record['result'] in _COMMENT_SUBSCRIPTION_LEFT:
+                        subscriber = f" subscriber {record['subscriber']}" if record.get('subscriber') else ''
+                        logger.info(f"  {'[DRY RUN] ' if self.dry_run else ''}{record.get('table')} "
+                                    f"{record.get('assetId', '?')}{subscriber}: {record['result']}")
+                report.flush()
+            start_key = response.get('LastEvaluatedKey')
+            if not start_key:
+                break
+            _write_copy_checkpoint(checkpoint_path, source_table, start_key, counts, self.current_run_id, report, False)
+        _write_copy_checkpoint(checkpoint_path, source_table, None, counts, self.current_run_id, report, True)
+        return True
+
+
+def _write_copy_checkpoint(path: str, source_table: str, start_key: Optional[Dict], counts: Dict[str, int],
+                           run_id: str, report, complete: bool) -> None:
+    """The scan position, the counts and the report length after the last finished page, and the run id.
+
+    A resumed run cuts the report back to that length, so the rows of the interrupted page are reported
+    once, and reports what that run copied with the class it was copied with."""
+    report.flush()
+    tmp = f"{path}.tmp"
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump({'assetTable': source_table, 'exclusiveStartKey': start_key, 'counts': counts, 'runId': run_id,
+                   'reportOffset': os.fstat(report.fileno()).st_size, 'complete': complete}, f)
+    os.replace(tmp, path)
+
+
+def _comment_subscription_files(output_dir: str, dry_run: bool, table: str) -> Tuple[str, str]:
+    mode = 'dry-run' if dry_run else 'execute'
+    return (os.path.join(output_dir, f"{COMMENT_SUBSCRIPTION_STEP}-{mode}-report.jsonl"),
+            os.path.join(output_dir, f"{COMMENT_SUBSCRIPTION_STEP}-{table}-{mode}-checkpoint.json"))
+
+
+def load_resolution_file(path: Optional[str]) -> Dict[str, str]:
+    """The operator's {"<assetId>": "<databaseId>"} mapping for ids several databases hold."""
+    if _is_unset(path):
+        return {}
+    with open(path, 'r', encoding='utf-8') as f:
+        mapping = json.load(f)
+    if not isinstance(mapping, dict) or not all(isinstance(k, str) and isinstance(v, str)
+                                                for k, v in mapping.items()):
+        raise ValueError(f"{path} must be a JSON object mapping asset ids to database ids")
+    return mapping
+
+
+def run_comment_subscription_keys_step(config: dict, args, base_param_prefix, profile, region,
+                                       dry_run) -> int:
+    """Copy the V1 comment and subscription rows into the database-keyed V2 tables. Returns 0 on success."""
+    try:
+        resolve = make_resolver(config, base_param_prefix, profile, region)
+        cfg = {
+            'comment_storage_table_name_v1': resolve(
+                'comment_storage_table_name_v1', ResourceParamKeys.LEGACY_COMMENT_STORAGE_TABLE_V1),
+            'subscriptions_storage_table_name_v1': resolve(
+                'subscriptions_storage_table_name_v1', ResourceParamKeys.LEGACY_SUBSCRIPTIONS_STORAGE_TABLE_V1),
+            'comment_storage_table_name': resolve(
+                'comment_storage_table_name', ResourceParamKeys.COMMENT_STORAGE_TABLE),
+            'subscriptions_storage_table_name': resolve(
+                'subscriptions_storage_table_name', ResourceParamKeys.SUBSCRIPTIONS_STORAGE_TABLE),
+            'asset_storage_table_name': resolve('asset_storage_table_name', ResourceParamKeys.ASSET_STORAGE_TABLE),
+            'asset_versions_storage_table_name': resolve(
+                'asset_versions_storage_table_name', ResourceParamKeys.ASSET_VERSIONS_STORAGE_TABLE),
+            'user_storage_table_name': resolve('user_storage_table_name', ResourceParamKeys.USER_STORAGE_TABLE),
+        }
+        mapping = load_resolution_file(config.get('comment_subscription_resolution_file'))
+    except Exception as e:
+        logger.error(f"Failed preparing the {COMMENT_SUBSCRIPTION_STEP} step: {e}")
+        return 1
+    if cfg['comment_storage_table_name_v1'] == cfg['comment_storage_table_name'] or \
+            cfg['subscriptions_storage_table_name_v1'] == cfg['subscriptions_storage_table_name']:
+        logger.error(f"{COMMENT_SUBSCRIPTION_STEP}: a source table is also its target. Deploy v2.7 first, or fix "
+                     "the *_table_name overrides in the config.")
+        return 1
+
+    output_dir = config.get('comment_subscription_output_dir') or os.getcwd()
+    os.makedirs(output_dir, exist_ok=True)
+    limit = args.limit if args.limit is not None else config.get('limit')
+    rate = config.get('comment_subscription_writes_per_second')
+    rate = COMMENT_SUBSCRIPTION_WRITES_PER_SECOND if rate is None else float(rate)
+    session = _session(profile, region)
+    copier = CommentSubscriptionCopy(session.client('dynamodb', config=_DYNAMODB_CLIENT_CONFIG),
+                                     session.client('sns', config=_SNS_CLIENT_CONFIG), cfg, dry_run,
+                                     limit=limit, writes_per_second=rate, mapping=mapping)
+    report_path, _ = _comment_subscription_files(output_dir, dry_run, 'comments')
+    tables = (
+        ('comments', cfg['comment_storage_table_name_v1'], (COMMENT_V1_PARTITION_KEY, COMMENT_V1_SORT_KEY),
+         copier.copy_comment),
+        ('subscriptions', cfg['subscriptions_storage_table_name_v1'], ('eventName', SUBSCRIPTION_V1_SORT_KEY),
+         copier.copy_subscription),
+    )
+    checkpoint_paths = [_comment_subscription_files(output_dir, dry_run, name)[1] for name, _, _, _ in tables]
+    resume = bool(args.resume) and any(os.path.exists(path) for path in checkpoint_paths)
+    if args.resume and not resume:
+        logger.info(f"{COMMENT_SUBSCRIPTION_STEP}: no checkpoint to resume from; starting over.")
+
+    logger.info("=" * 80)
+    logger.info("VAMS v2.6 -> v2.7 COMMENT AND SUBSCRIPTION KEYS")
+    logger.info(f"Comments:      {cfg['comment_storage_table_name_v1']} -> {cfg['comment_storage_table_name']}")
+    logger.info(f"Subscriptions: {cfg['subscriptions_storage_table_name_v1']} -> "
+                f"{cfg['subscriptions_storage_table_name']}")
+    logger.info(f"Report:        {report_path}   Mapping entries: {len(mapping)}")
+    logger.info(f"Dry Run: {dry_run}   Limit: {limit}   Resume: {args.resume}   Writes/s: {rate}")
+    logger.info("=" * 80)
+
+    totals = {}
+    complete = True
+    try:
+        if resume:
+            # A checkpoint of another table is refused here, before the report is touched
+            saved = [_read_checkpoint(path, source) for (_, source, _, _), path in zip(tables, checkpoint_paths)]
+            offsets = [c['reportOffset'] for c in saved if c and c.get('reportOffset') is not None]
+            if offsets and os.path.exists(report_path):
+                # The lines written after the last saved page are written again by the resumed scan
+                with open(report_path, 'r+b') as f:
+                    f.truncate(offsets[-1])
+        else:
+            for path in checkpoint_paths:
+                if os.path.exists(path):
+                    os.remove(path)
+        with open(report_path, 'a' if resume else 'w', encoding='utf-8') as report:
+            for (name, source, key_names, copy), checkpoint_path in zip(tables, checkpoint_paths):
+                counts = {'scanned': 0, **{c: 0 for c in COMMENT_SUBSCRIPTION_CLASSES}}
+                complete = copier.run_table(source, key_names, copy, report, checkpoint_path, counts,
+                                            resume) and complete
+                totals[name] = counts
+    except Exception as e:
+        logger.error(f"{COMMENT_SUBSCRIPTION_STEP} step failed: {e}. Re-run with --resume to continue from the last "
+                     "saved page.")
+        return 1
+    if complete:
+        for path in checkpoint_paths:
+            if os.path.exists(path):
+                os.remove(path)
+
+    logger.info("=" * 80)
+    logger.info(f"COMMENT AND SUBSCRIPTION KEYS SUMMARY{' (DRY RUN: counts of what a real run would write)' if dry_run else ''}")
+    for name, counts in totals.items():
+        logger.info(f"  {name}: " + ", ".join(f"{k} {v}" for k, v in counts.items()))
+    if copier.legacy_records_found:
+        logger.info(f"  {copier.legacy_records_found} copy record(s) of a pre-release build found and honoured, "
+                    f"{copier.legacy_records_rewritten} rewritten in the hashed form"
+                    f"{' (a real run rewrites them)' if dry_run else ''}.")
+    left = sum(counts['ambiguous'] + counts['duplicateCommentId'] for counts in totals.values())
+    if left:
+        logger.info(f"  {left} comment row(s) or subscriber(s) were left in the V1 tables (ambiguous or "
+                    "duplicateCommentId). Name the database of each ambiguous asset id in "
+                    "comment_subscription_resolution_file and run the step again: it copies only what earlier "
+                    "runs left.")
+    logger.info("=" * 80)
+    return 0 if all(counts['unreadable'] == 0 for counts in totals.values()) else 1
+
+
+#######################
 # CLI
 #######################
 
 STEP_CHOICES = ('assetLocationFolderKeys', 'orphanedTriggers', 'vectorBackfill', 'metadataBackfill',
-                'systemPipelineRetirement', 'assetLocationIndex', 'all')
+                'systemPipelineRetirement', 'commentSubscriptionKeys', 'assetLocationIndex', 'all')
 
 
 def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vectors: bool,
                    backfills_metadata: bool = False, fixes_locations: bool = False,
-                   indexes_locations: bool = False) -> str:
+                   indexes_locations: bool = False, copies_comments: bool = False) -> str:
     """What a real run changes, deletes, bills or rewrites, phrased to follow "This run will"."""
     parts = []
     if fixes_locations:
@@ -2337,6 +3006,9 @@ def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vecto
                      "single-file asset's copy named like its file (assetLocationFolderKeys)")
     if deletes_triggers:
         parts.append('delete orphaned workflow-trigger rows (orphanedTriggers)')
+    if copies_comments:
+        parts.append('copy every comment and subscription into the tables keyed by database and asset id '
+                     '(commentSubscriptionKeys)')
     if clears_vectors:
         parts.append('delete every stored vector (vectorBackfill --clear-vectors)')
     if backfills_vectors:
@@ -2373,7 +3045,8 @@ def _account_id(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description='VAMS v2.6 to v2.7 data migration (asset location folder keys, orphaned trigger cleanup, '
-                    'vector index backfill, system-pipeline retirement report, asset location index backfill). '
+                    'vector index backfill, system-pipeline retirement report, comment and subscription keys, '
+                    'asset location index backfill). '
                     'Dry run by default.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -2405,6 +3078,9 @@ Examples:
 
   # Backfill the asset location index (writes two attributes on every asset row, then the completion marker)
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps assetLocationIndex
+
+  # Copy the v2.6 comments and subscriptions into the tables keyed by database and asset id
+  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps commentSubscriptionKeys
 
 Notes:
   - Every run is a DRY RUN unless --execute is given AND the config's dry_run is false. The shipped
@@ -2441,7 +3117,16 @@ Notes:
     marker last. It resumes from its checkpoint file after an interruption, and a second run writes no row.
   - --limit caps asset rows examined (assetLocationFolderKeys, assetLocationIndex; a limited index run never
     writes the completion marker), trigger rows examined (orphanedTriggers), is forwarded as the reindexer's
-    limit (vectorBackfill), and caps rows listed per section (systemPipelineRetirement).
+    limit (vectorBackfill), caps rows listed per section (systemPipelineRetirement), and caps V1 rows examined
+    per table (commentSubscriptionKeys).
+  - commentSubscriptionKeys is required after the v2.7 deploy on a deployment with comments or subscriptions:
+    until it runs, existing comments do not show and existing subscriptions read as not subscribed (change
+    e-mails keep arriving: they use each asset's topic). It writes commentSubscriptionKeys-<mode>-report.jsonl,
+    saves its scan position after every page (--resume continues from it), never overwrites a V2 row, and
+    never writes or deletes a v2.6 row. Ids several databases hold that the evidence cannot place are left as
+    'ambiguous': name their database in comment_subscription_resolution_file and run the step again. A
+    repeat copies only what earlier runs left ('alreadyCopied' for the rest), so it never brings back a
+    deleted comment, an unsubscribed user or a deleted subscription.
         """
     )
 
@@ -2456,7 +3141,7 @@ Notes:
     parser.add_argument('--limit', type=int,
                         help='Cap on rows examined / files enqueued (testing)')
     parser.add_argument('--resume', action='store_true',
-                        help='assetLocationFolderKeys: continue the asset scan from the checkpoint a '
+                        help='assetLocationFolderKeys and commentSubscriptionKeys: continue the scan from the checkpoint a '
                              'stopped run of the same mode (dry run or real) saved. Default: start over.')
     parser.add_argument('--clear-vectors', dest='clear_vectors', action='store_true',
                         help='vectorBackfill: delete every stored vector before re-embedding '
@@ -2496,6 +3181,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_metadata_backfill = args.steps in ('metadataBackfill', 'all')
     run_retirement_report = args.steps in ('systemPipelineRetirement', 'all')
     run_asset_location_index = args.steps in ('assetLocationIndex', 'all')
+    run_comment_subscription_keys = args.steps in ('commentSubscriptionKeys', 'all')
 
     # Dry run unless --execute was given (args.dry_run is False only then) AND the config does not
     # pin dry_run: true. Either source can force a dry run; neither can force a real one alone.
@@ -2552,6 +3238,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             step_plan.append('metadataBackfill')
     if run_retirement_report:
         step_plan.append('systemPipelineRetirement')
+    if run_comment_subscription_keys:
+        step_plan.append('commentSubscriptionKeys')
     if run_asset_location_index:
         step_plan.append('assetLocationIndex')
 
@@ -2573,10 +3261,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         base_param_prefix=base_param_prefix,
         dry_run=dry_run,
         args_dry_run=args.dry_run,
-        gated=run_location_keys or run_orphaned_triggers or backfills_vectors or backfills_metadata or run_asset_location_index,
+        gated=run_location_keys or run_orphaned_triggers or backfills_vectors or backfills_metadata
+        or run_asset_location_index or run_comment_subscription_keys,
         gated_summary=_gated_summary(run_orphaned_triggers, backfills_vectors, clears_vectors,
                                      backfills_metadata, fixes_locations=run_location_keys,
-                                     indexes_locations=run_asset_location_index),
+                                     indexes_locations=run_asset_location_index,
+                                     copies_comments=run_comment_subscription_keys),
         confirm_account=args.confirm_account,
         step_plan=step_plan,
     ):
@@ -2632,6 +3322,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         rc = run_system_pipeline_retirement_step(config, args, base_param_prefix, profile, region,
                                                  dry_run)
         _record('systemPipelineRetirement', rc)
+        if rc != 0:
+            exit_code = rc
+
+    # Independent of the location steps: it reads the asset table's assetIdGSI and the version records only.
+    if run_comment_subscription_keys:
+        logger.info("")
+        logger.info("##### STEP: Comment and subscription keys #####")
+        rc = run_comment_subscription_keys_step(config, args, base_param_prefix, profile, region, dry_run)
+        _record('commentSubscriptionKeys', rc)
         if rc != 0:
             exit_code = rc
 
