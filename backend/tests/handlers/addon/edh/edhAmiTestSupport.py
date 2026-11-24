@@ -113,8 +113,9 @@ def fake_context(ami="ami-0abc0abc0abc0abc0", image_status="AVAILABLE"):
     ec2.describe_instances_error = None
     paginators = {"describe_instances": _describe_instances_paginator(ec2)}
     ec2.get_paginator.side_effect = lambda name: paginators[name]
-    ctx = ib_mod.ImageBuilderContext(prefix="vams-test-edh", region="us-east-1", partition="aws", account="123456789012",
-                                     subnet_id="subnet-1", security_group_id="sg-1", instance_profile_name="prof",
+    ctx = ib_mod.ImageBuilderContext(prefix="vams-test-edh", region="us-east-1", partition="aws",
+                                     account="123456789012", subnet_id="subnet-1", security_group_id="sg-1",
+                                     instance_profile_name="prof",
                                      cluster_id=os.environ["EDH_CLUSTER_ID"], ib=ib, ec2=ec2,
                                      deployment_parameters=ib_mod.deployment_parameters_from_env(),
                                      lookup_ec2=ec2)

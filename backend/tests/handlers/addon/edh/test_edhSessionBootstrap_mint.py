@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
-from botocore.exceptions import ClientError, EndpointConnectionError
+from botocore.exceptions import EndpointConnectionError
 
 from backend.backend.common.constants import TEMPORARY_SESSION_KEY_NAME_PREFIX
 from backend.backend.common.validators import object_name_pattern

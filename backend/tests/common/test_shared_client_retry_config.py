@@ -735,7 +735,7 @@ class TestParameterStoreReadsAreBounded:
                 allowance = PARAMETER_STORE_DEPLOY_TIME_MODULES.get(label)
                 if allowance is not None and operation in allowance[0]:
                     continue
-                unexplained.append(f"{label}:{line} {receiver}.{operation}()")
+                unexplained.append("{}:{} {}.{}()".format(label, line, receiver, operation))
         assert surveyed, "the walker found no Parameter Store call at all, not even in the shared lookups"
         assert unexplained == [], (
             "these call Parameter Store outside common/resourceNames.py and common/ssmParameters.py. Read the value "
@@ -745,7 +745,7 @@ class TestParameterStoreReadsAreBounded:
     @pytest.mark.parametrize("relative_path", sorted(SYSTEMS_MANAGER_CLIENT_MODULES))
     def test_a_systems_manager_module_calls_no_parameter_store_operation(self, relative_path):
         calls = _operation_calls(_parse(relative_path), PARAMETER_STORE_OPERATIONS)
-        assert calls == [], f"{relative_path} calls Parameter Store ({calls}); read through common.ssmParameters"
+        assert calls == [], f"{relative_path} calls Parameter Store ({calls}), so read through common.ssmParameters"
 
     @pytest.mark.parametrize("relative_path", sorted(PARAMETER_STORE_DEPLOY_TIME_MODULES))
     def test_a_deploy_time_module_still_builds_its_client_and_calls_each_listed_operation(self, relative_path):

@@ -1433,8 +1433,8 @@ class TestTheControllerIdIsReadThroughTheSharedLookup:
         (_client_error("ParameterNotFound", "GetParameter"), "ParameterNotFoundError"),
         (_client_error("AccessDeniedException", "GetParameter"), "ParameterReadError"),
     ], ids=["throttled", "missing", "denied"])
-    def test_a_refused_read_ends_the_run_controller_not_found_within_the_read_bound(self, monkeypatch, rsa_key, error,
-                                                                                   error_class):
+    def test_a_refused_read_ends_the_run_controller_not_found_within_the_read_bound(
+            self, monkeypatch, rsa_key, error, error_class):
         fakes = install(monkeypatch, rsa_key, ssm=FakeSsm(parameter_error=error))
         clock = lookup_clock()
         started = clock.now
@@ -1446,6 +1446,7 @@ class TestTheControllerIdIsReadThroughTheSharedLookup:
         assert fakes.ssm.lookup_reads, "control: the parameter was asked for"
         assert fakes.ssm.sent == [] and fakes.secrets.writes == []
         assert json.loads(fakes.metrics[0])[sync.METRIC_FAILURES] == 1
-        unread = [record[2] for record in fakes.log.records if record[0] == "EDH controller instance id could not be read"]
+        unread = [record[2] for record in fakes.log.records
+                  if record[0] == "EDH controller instance id could not be read"]
         assert unread == [{"error": error_class}]
         assert INSTANCE_ID not in json.dumps(fakes.log.records, default=str)
