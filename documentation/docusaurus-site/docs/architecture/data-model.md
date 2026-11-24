@@ -630,14 +630,16 @@ Reads treat a row whose `expiresAt` has passed as absent, since DynamoDB removes
 
 ### Classification Tables
 
-| Table                     | Partition Key | Sort Key                   |
-| ------------------------- | ------------- | -------------------------- |
-| TagStorageTableV2         | `databaseId`  | `tagName`                  |
-| TagTypeStorageTableV2     | `databaseId`  | `tagTypeName`              |
-| SubscriptionsStorageTable | `eventName`   | `entityName_entityId`      |
-| CommentStorageTable       | `assetId`     | `assetVersionId:commentId` |
+| Table                       | Partition Key        | Sort Key                                                    |
+| --------------------------- | -------------------- | ----------------------------------------------------------- |
+| TagStorageTableV2           | `databaseId`         | `tagName`                                                   |
+| TagTypeStorageTableV2       | `databaseId`         | `tagTypeName`                                               |
+| SubscriptionsStorageTableV2 | `eventName`          | `entityName:databaseId:entityId`                            |
+| CommentStorageTableV2       | `databaseId:assetId` | `commentId` (LSI `AssetVersionIdLSI`, SK: `assetVersionId`) |
 
 Tags and tag types are database-namespaced. The partition key is the `databaseId` — the literal `GLOBAL` for global entries — and the sort key is the name, so `(databaseId, name)` is the uniqueness boundary and the same name can exist in different databases. Each table carries a name GSI (`tagNameIndex` on `TagStorageTableV2`, `tagTypeNameIndex` on `TagTypeStorageTableV2`) for cross-database name lookups. The former single-key `TagStorageTable`/`TagTypeStorageTable` are retained as legacy migration sources.
+
+Comments and subscriptions are keyed by database and asset id, because the same asset id can exist in more than one database. A comment's partition is `databaseId:assetId` and its sort key is its own `commentId`; the asset version it is about is the `assetVersionId` attribute, which the `AssetVersionIdLSI` index lists by. A soft-deleted comment moves to the `databaseId:assetId#deleted` partition. A subscription's sort key is `entityName:databaseId:entityId`, and the row also carries `entityName`, `databaseId` and `entityId` as plain attributes. The v2.6 `CommentStorageTable` and `SubscriptionsStorageTable`, keyed by asset id alone, are retained as migration sources for the `commentSubscriptionKeys` migration step, which records each comment and subscriber it copies in the comment table under a partition `#commentSubscriptionKeys:<assetId>` that no API reads, so a repeat run never copies one again.
 
 ### Configuration Tables
 
@@ -665,7 +667,7 @@ Where:
 -   `relative_path` is zero or more subdirectory levels within the asset
 -   `filename` is the actual file name
 
-An asset created on an existing bucket folder (`bucketExistingKey`, see [Assets](../concepts/assets.md)) uses that folder as its root instead of `{baseAssetsPrefix}{assetId}/`, so its keys need not contain the asset ID. A file's relative path is the part of its key after the asset's root.
+An asset created on an existing bucket folder (`bucketExistingKey`, see [Assets](../concepts/assets.md)) uses that folder as its root instead of `{baseAssetsPrefix}{assetId}/`, so its keys need not contain the asset ID. A file's relative path is the part of its key after the asset's root. An asset created from a single object key (a `bucketExistingKey` with no trailing `/`) holds that object at `/{file name}`, its companion folder `{key}/` and its previews; see [Files](../api/files.md#list-files).
 
 #### File Output Conventions
 

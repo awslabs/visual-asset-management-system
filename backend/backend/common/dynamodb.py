@@ -249,23 +249,20 @@ def to_update_expr(record, op="SET") -> Tuple[Dict[str, str], Dict[str, Any], st
 
 
 def get_asset_object_from_id(databaseId, assetId, include_archived=False):
-    """Resolve an asset record for authorization, keyed by databaseId+assetId or by assetId alone.
+    """Read one asset record by its database and asset id, annotated for authorization.
 
-    Returns the asset record annotated with object__type 'asset', or None when the asset
-    does not exist. Callers must handle the None: an object with no attributes evaluates
-    against ABAC criteria as if the asset were present, which produces allow/deny outcomes
-    for an asset that is not there.
+    An asset is identified by its database and asset id together: two databases may hold assets
+    with the same asset id, so both are required. The live partition is read first; with
+    include_archived and no live row, the archived row (stored databaseId "<databaseId>#deleted")
+    is returned instead, so the flag never changes which record a live asset resolves to.
 
-    With include_archived, an assetId alone that matches no live asset resolves to its
-    archived record instead (stored databaseId "<databaseId>#deleted"). A live match always
-    wins, so the flag never changes which record a live asset resolves to.
+    Returns the stored record annotated with object__type 'asset', or None when neither partition
+    holds the asset. Callers decide Tier 2 on asset_authorization_object(record, databaseId,
+    assetId, include_archived) before they reveal a None as a 404.
 
-    Raises VAMSGeneralErrorResponse when assetId is empty, when the read fails, and when
-    an assetId alone matches more than one live asset (assetIds are unique within a
-    database, not across databases, so that match cannot be resolved without a databaseId),
-    or, with include_archived, more than one archived asset and no live one.
+    Raises VAMSGeneralErrorResponse when either id is empty and when the read fails.
     """
-    if not assetId:
+    if not databaseId or not assetId:
         raise VAMSGeneralErrorResponse("Empty assetId or databaseId received")
 
     try:
@@ -274,86 +271,16 @@ def get_asset_object_from_id(databaseId, assetId, include_archived=False):
         logger.exception("Failed resolving asset storage table name")
         raise
 
-    if databaseId:
-        """Get asset details from DynamoDB"""
-        try:
-            response = asset_table.query(
-                KeyConditionExpression=Key('databaseId').eq(databaseId) & Key('assetId').eq(assetId),
-                ScanIndexForward=False
-            )
-            
-            if not response.get('Items'):
-                return None
+    try:
+        item = get_asset_record(asset_table, databaseId, assetId, include_archived=include_archived)
+    except Exception as e:
+        logger.exception(f"Error getting asset details: {e}")
+        raise VAMSGeneralErrorResponse("Error retrieving asset.")
 
-            #get first object
-            asset_object = response['Items'][0]
-            asset_object.update({
-                "object__type": "asset"
-            })
-            return asset_object
-        
-        except Exception as e:
-            logger.exception(f"Error getting asset details: {e}")
-            raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
-    else:
-        #Kept right now for backwards capability until all tables can be updated to use datbaseId/Assetid (comments, subscriptions, asset links)
-        #assetIdGSI is partitioned on assetId, so this is a keyed read of the index that
-        #returns only the rows carrying this assetId, not a filtered pass over the table.
-        try:
-            items = query_all_items(
-                asset_table,
-                IndexName='assetIdGSI',
-                KeyConditionExpression=Key('assetId').eq(assetId)
-            )
-        except Exception as e:
-            logger.exception(f"Error getting asset details: {e}")
-            raise VAMSGeneralErrorResponse("Error retrieving asset.")
-
-        #Archiving rewrites a record under a "{databaseId}#deleted" partition, so an
-        #archived row is not the live asset and cannot stand in for it.
-        live_items = [
-            item for item in items
-            if not str(item.get('databaseId', '')).endswith('#deleted')
-            and item.get('status') != 'archived'
-        ]
-
-        #assetIds are unique within a database only. Two live matches cannot be
-        #distinguished without a databaseId, so the ambiguity is surfaced instead of
-        #resolved to whichever row the index returned first.
-        if len(live_items) > 1:
-            logger.error(
-                f"assetId {assetId} matches {len(live_items)} live assets, in databases "
-                f"{sorted(str(item.get('databaseId')) for item in live_items)}"
-            )
-            raise VAMSGeneralErrorResponse("Asset ID matches more than one asset. Provide a database ID.")
-
-        candidates = live_items
-        if not live_items and include_archived:
-            candidates = [
-                item for item in items
-                if str(item.get('databaseId', '')).endswith(ARCHIVED_ASSET_DATABASE_SUFFIX)
-            ]
-            if len(candidates) > 1:
-                logger.error(
-                    f"assetId {assetId} matches {len(candidates)} archived assets, in databases "
-                    f"{sorted(str(item.get('databaseId')) for item in candidates)}"
-                )
-                raise VAMSGeneralErrorResponse("Asset ID matches more than one asset. Provide a database ID.")
-
-        if not candidates:
-            logger.info(
-                f"No live asset for assetId {assetId}. Archived matches: {len(items)}")
-            return None
-
-        item = candidates[0]
-        return {
-            "object__type": "asset",
-            "assetId": item.get('assetId'),
-            "assetName": item.get('assetName'),
-            "databaseId": item.get('databaseId'),
-            "assetType": item.get('assetType'),
-            "tags": list(item.get('tags') or [])
-        }
+    if not item:
+        return None
+    item.update({"object__type": "asset"})
+    return item
 
 
 # Ceilings for a boto3 paginator's PaginationConfig budget. build_full_result() accumulates pages

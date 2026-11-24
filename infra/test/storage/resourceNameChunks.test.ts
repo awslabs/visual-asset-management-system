@@ -636,12 +636,12 @@ describe("chunk layout per configuration (recorded: a change that adds names sho
         const s = synthFor("commercial", false);
         expect(layout(s)).toEqual({
             chunks: 7,
-            names: 82,
+            names: 84,
             perSource: { core: 7 },
             stacks: ["root"],
         });
         // The six late core names fill the last core chunk's spare room: no chunk is added.
-        expect(namesPerChunk(s)).toEqual([13, 13, 13, 13, 10, 9, 11]);
+        expect(namesPerChunk(s)).toEqual([13, 13, 13, 13, 10, 9, 13]);
         expectLateCoreNamesLast(s, LATE_CORE_ORDER);
         // Every chunk waits for storage and for each stack a late core name is read from. With
         // CloudFront's own domain the web URL is a deploy-time value, so StaticWeb is one of them.
@@ -662,7 +662,7 @@ describe("chunk layout per configuration (recorded: a change that adds names sho
         const s = synthFor("commercial", true);
         expect(layout(s)).toEqual({
             chunks: 8,
-            names: 84,
+            names: 86,
             perSource: { core: 7, addon: 1 },
             stacks: ["root"],
         });
@@ -688,8 +688,8 @@ describe("chunk layout per configuration (recorded: a change that adds names sho
     });
 
     test.each([
-        ["govcloud", [13, 13, 13, 13, 10, 9, 10]],
-        ["eusovereign", [13, 13, 13, 13, 10, 10, 8]],
+        ["govcloud", [13, 13, 13, 13, 10, 9, 12]],
+        ["eusovereign", [13, 13, 13, 13, 10, 10, 10]],
     ] as [TemplateName, number[]][])("%s template", (name, perChunk) => {
         const s = synthFor(name, false);
         expect(namesPerChunk(s)).toEqual(perChunk);

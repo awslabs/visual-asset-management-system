@@ -1282,7 +1282,9 @@ export function storageResourcesBuilder(
         newlyCreatedBucket
     );
 
-    const commentStorageTable = new dynamodb.Table(scope, "CommentStorageTable", {
+    // Legacy comment table (V1, keyed by assetId alone) — kept as the source of the v2.6 to v2.7
+    // commentSubscriptionKeys migration step, not used by Lambda handlers
+    const commentStorageTableV1 = new dynamodb.Table(scope, "CommentStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
             name: "assetId",
@@ -1292,6 +1294,31 @@ export function storageResourcesBuilder(
             name: "assetVersionId:commentId",
             type: dynamodb.AttributeType.STRING,
         },
+    });
+
+    // Comments of one asset, keyed by its database and asset id. A soft-deleted comment moves to the
+    // "<databaseId>:<assetId>#deleted" partition. The comment's target (the asset version today) is
+    // an attribute, listed through the local secondary index; an LSI can only be defined when the
+    // table is created.
+    const commentStorageTable = new dynamodb.Table(scope, "CommentStorageTableV2", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "commentId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    commentStorageTable.addLocalSecondaryIndex({
+        indexName: "AssetVersionIdLSI",
+        sortKey: {
+            name: "assetVersionId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
     });
 
     const appFeatureEnabledStorageTable = new dynamodb.Table(
@@ -2292,7 +2319,9 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    const subscriptionsStorageTable = new dynamodb.Table(scope, "SubscriptionsStorageTable", {
+    // Legacy subscription table (V1, entity keyed by its id alone) — kept as the source of the
+    // v2.6 to v2.7 commentSubscriptionKeys migration step, not used by Lambda handlers
+    const subscriptionsStorageTableV1 = new dynamodb.Table(scope, "SubscriptionsStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
             name: "eventName",
@@ -2300,6 +2329,20 @@ export function storageResourcesBuilder(
         },
         sortKey: {
             name: "entityName_entityId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    // Subscriptions keyed by the entity's database and id: "<entityName>:<databaseId>:<entityId>"
+    // (entity names and database ids never contain ':'; an asset id may).
+    const subscriptionsStorageTable = new dynamodb.Table(scope, "SubscriptionsStorageTableV2", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "eventName",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "entityName:databaseId:entityId",
             type: dynamodb.AttributeType.STRING,
         },
     });
@@ -3860,6 +3903,9 @@ export function storageResourcesBuilder(
             storageResources.dynamo.tagStorageTableLegacy.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.tagTypeStorage]:
             storageResources.dynamo.tagTypeStorageTableLegacy.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.commentStorageV1]: commentStorageTableV1.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.subscriptionsStorageV1]:
+            subscriptionsStorageTableV1.tableName,
     };
     Object.entries(resourceNameParamValues).forEach(([paramKey, value]) => {
         resourceNameRegistry.register({ paramKey, value });

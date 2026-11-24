@@ -106,7 +106,7 @@ const CELLS: Cell[] = [
         template: "commercial",
         late: everyLateKey,
         readFrom: DEFAULT_READ,
-        layout: [13, 13, 13, 13, 10, 9, 11],
+        layout: [13, 13, 13, 13, 10, 9, 13],
     },
     {
         label: "minimal: CloudFront, no VPC, no CMK, no WAF, OpenSearch off",
@@ -122,7 +122,7 @@ const CELLS: Cell[] = [
         },
         late: [ENGINE, WEB, LOCATION],
         readFrom: ["ApiBuilder2", "LocationService", "StaticWeb", "StorageResourcesBuilder"],
-        layout: [13, 13, 13, 13, 10, 9, 8],
+        layout: [13, 13, 13, 13, 10, 9, 10],
     },
     {
         label: "hardened: KMS CMK, global VPC for all Lambdas with endpoints, WAF",
@@ -137,7 +137,7 @@ const CELLS: Cell[] = [
         },
         late: everyLateKey,
         readFrom: DEFAULT_READ,
-        layout: [13, 13, 13, 13, 10, 9, 11],
+        layout: [13, 13, 13, 13, 10, 9, 13],
     },
     {
         label: "OpenSearch provisioned",
@@ -150,7 +150,7 @@ const CELLS: Cell[] = [
         },
         late: everyLateKey,
         readFrom: DEFAULT_READ,
-        layout: [13, 13, 13, 13, 10, 9, 11],
+        layout: [13, 13, 13, 13, 10, 9, 13],
     },
     {
         label: "OpenSearch Serverless private NEXTGEN, deferred index schema",
@@ -165,7 +165,7 @@ const CELLS: Cell[] = [
         },
         late: everyLateKey,
         readFrom: DEFAULT_READ,
-        layout: [13, 13, 13, 13, 10, 9, 11],
+        layout: [13, 13, 13, 13, 10, 9, 13],
     },
     {
         label: "Location Service off",
@@ -176,7 +176,7 @@ const CELLS: Cell[] = [
         },
         late: [ENGINE, ...OPENSEARCH, WEB],
         readFrom: ["ApiBuilder2", "SearchBuilder", "StaticWeb", "StorageResourcesBuilder"],
-        layout: [13, 13, 13, 13, 10, 9, 10],
+        layout: [13, 13, 13, 13, 10, 9, 12],
     },
     {
         label: "CloudFront custom domain (a literal web URL)",
@@ -191,7 +191,7 @@ const CELLS: Cell[] = [
         },
         late: everyLateKey,
         readFrom: ["ApiBuilder2", "LocationService", "SearchBuilder", "StorageResourcesBuilder"],
-        layout: [13, 13, 13, 13, 10, 9, 11],
+        layout: [13, 13, 13, 13, 10, 9, 13],
     },
     {
         label: "ALB with a configured domain (a literal web URL)",
@@ -200,7 +200,7 @@ const CELLS: Cell[] = [
         mutate: alb,
         late: everyLateKey,
         readFrom: ["ApiBuilder2", "LocationService", "SearchBuilder", "StorageResourcesBuilder"],
-        layout: [13, 13, 13, 13, 10, 9, 11],
+        layout: [13, 13, 13, 13, 10, 9, 13],
     },
     {
         label: "API only: no web distribution (neither CloudFront nor an ALB)",
@@ -209,7 +209,7 @@ const CELLS: Cell[] = [
         mutate: apiOnly,
         late: [ENGINE, ...OPENSEARCH, LOCATION],
         readFrom: ["ApiBuilder2", "LocationService", "SearchBuilder", "StorageResourcesBuilder"],
-        layout: [13, 13, 13, 13, 10, 9, 10],
+        layout: [13, 13, 13, 13, 10, 9, 12],
     },
     {
         label: "every add-on on",
@@ -218,21 +218,21 @@ const CELLS: Cell[] = [
         mutate: allAddonsOn,
         late: everyLateKey,
         readFrom: ["AddonBuilder", ...DEFAULT_READ],
-        layout: [13, 13, 13, 13, 10, 9, 11, 2],
+        layout: [13, 13, 13, 13, 10, 9, 13, 2],
     },
     {
         label: "GovCloud template",
         template: "govcloud",
         late: [ENGINE, ...OPENSEARCH, WEB],
         readFrom: ["ApiBuilder2", "SearchBuilder", "StorageResourcesBuilder"],
-        layout: [13, 13, 13, 13, 10, 9, 10],
+        layout: [13, 13, 13, 13, 10, 9, 12],
     },
     {
         label: "EU Sovereign template",
         template: "eusovereign",
         late: [ENGINE, ...OPENSEARCH, WEB],
         readFrom: ["ApiBuilder2", "SearchBuilder", "StorageResourcesBuilder"],
-        layout: [13, 13, 13, 13, 10, 10, 8],
+        layout: [13, 13, 13, 13, 10, 10, 10],
     },
 ];
 

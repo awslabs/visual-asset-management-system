@@ -14,7 +14,8 @@ from backend.backend.handlers.subscription import unsubscribeService as unsub_sv
 
 CLAIMS = {"tokens": ["alice"], "roles": ["admin"], "mfaEnabled": False}
 ASSET = {"assetId": "a1", "databaseId": "db1", "assetName": "Bracket"}
-BODY = {"eventName": "Asset Version Change", "entityName": "Asset", "entityId": "a1", "subscribers": ["bob"]}
+BODY = {"eventName": "Asset Version Change", "entityName": "Asset", "entityId": "a1", "databaseId": "db1",
+        "subscribers": ["bob"]}
 
 
 def _event(method, body):
@@ -32,7 +33,8 @@ def wired(monkeypatch):
         monkeypatch.setattr(module, "log_action", recorder)
         monkeypatch.setattr(module, "request_to_claims", lambda event: CLAIMS)
         monkeypatch.setattr(module, "CasbinEnforcer", enforcer)
-        monkeypatch.setattr(module, "get_asset_object_from_id", lambda database_id, asset_id: dict(ASSET))
+        monkeypatch.setattr(module, "get_asset_object_from_id",
+                            lambda database_id, asset_id, include_archived=False: dict(ASSET))
     monkeypatch.setattr(svc, "validate_pagination_info", lambda params: None)
     return recorder, enforcer
 
@@ -53,6 +55,7 @@ class TestSubscriptionRecords:
         kwargs = recorder.call_args.kwargs
         assert kwargs["database_id"] == "db1" and kwargs["asset_id"] == "a1"
         assert kwargs["changes"]["subscribers"] == ["bob"] and kwargs["item_count"] == 1
+        assert kwargs["subscriptionId"] == "Asset Version Change#Asset#db1#a1"
 
     def test_a_write_that_failed_records_nothing(self, wired, monkeypatch):
         recorder, _ = wired
@@ -73,11 +76,14 @@ class TestSubscriptionRecords:
         event["requestContext"]["http"]["path"] = "/unsubscribe"
         assert unsub_svc.lambda_handler(event, None)["statusCode"] == 200
         assert recorder.call_args.args == (event, "subscriptionUnsubscribe")
+        assert recorder.call_args.kwargs["subscriptionId"] == "Asset Version Change#Asset#db1#a1"
+        assert recorder.call_args.kwargs["database_id"] == "db1"
 
     def test_a_check_records_the_request(self, wired, monkeypatch):
         recorder, _ = wired
         monkeypatch.setattr(check_svc, "check_subscriptions", lambda body: {"statusCode": 200, "body": "{}"})
-        event = _event("POST", {"userId": "bob", "assetId": "a1"})
+        event = _event("POST", {"userId": "bob", "assetId": "a1", "databaseId": "db1"})
         assert check_svc.lambda_handler(event, None)["statusCode"] == 200
         assert recorder.call_args.args == (event, "subscriptionCheck")
-        assert recorder.call_args.kwargs["request_parameters"] == {"userId": "bob", "assetId": "a1"}
+        assert recorder.call_args.kwargs["request_parameters"] == {
+            "userId": "bob", "databaseId": "db1", "assetId": "a1"}

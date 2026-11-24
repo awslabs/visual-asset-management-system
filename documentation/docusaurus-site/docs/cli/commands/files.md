@@ -265,20 +265,20 @@ vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/file.gltf"
 
 ## file archive
 
-Archive a file or all files under a prefix (soft delete, recoverable).
+Archive a file or every file in a folder (soft delete, recoverable).
 
 ```bash
 vamscli file archive [OPTIONS]
 ```
 
-| Option             | Type | Required | Description                                  |
-| ------------------ | ---- | -------- | -------------------------------------------- |
-| `-d`, `--database` | TEXT | Yes      | Database ID                                  |
-| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                     |
-| `-p`, `--path`     | TEXT | Yes      | File path to archive                         |
-| `--prefix`         | FLAG | No       | Archive all files under the path as a prefix |
-| `--json-input`     | TEXT | No       | JSON parameters as a string or `@file` path  |
-| `--json-output`    | FLAG | No       | Output raw JSON response                     |
+| Option             | Type | Required | Description                                             |
+| ------------------ | ---- | -------- | ------------------------------------------------------- |
+| `-d`, `--database` | TEXT | Yes      | Database ID                                             |
+| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                                |
+| `-p`, `--path`     | TEXT | Yes      | File path to archive                                    |
+| `--prefix`         | FLAG | No       | Treat the path as a folder and archive every file in it |
+| `--json-input`     | TEXT | No       | JSON parameters as a string or `@file` path             |
+| `--json-output`    | FLAG | No       | Output raw JSON response                                |
 
 ```bash
 vamscli file archive -d my-db -a my-asset -p "/file.gltf"
@@ -311,21 +311,21 @@ vamscli file unarchive -d my-db -a my-asset -p "/file.gltf"
 
 ## file delete
 
-Permanently delete a file or all files under a prefix.
+Permanently delete a file or every file in a folder.
 
 ```bash
 vamscli file delete [OPTIONS]
 ```
 
-| Option             | Type | Required | Description                                 |
-| ------------------ | ---- | -------- | ------------------------------------------- |
-| `-d`, `--database` | TEXT | Yes      | Database ID                                 |
-| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                    |
-| `-p`, `--path`     | TEXT | Yes      | File path to delete                         |
-| `--prefix`         | FLAG | No       | Delete all files under the path as a prefix |
-| `--confirm`        | FLAG | Yes      | Confirm permanent deletion                  |
-| `--json-input`     | TEXT | No       | JSON parameters as a string or `@file` path |
-| `--json-output`    | FLAG | No       | Output raw JSON response                    |
+| Option             | Type | Required | Description                                            |
+| ------------------ | ---- | -------- | ------------------------------------------------------ |
+| `-d`, `--database` | TEXT | Yes      | Database ID                                            |
+| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                               |
+| `-p`, `--path`     | TEXT | Yes      | File path to delete                                    |
+| `--prefix`         | FLAG | No       | Treat the path as a folder and delete every file in it |
+| `--confirm`        | FLAG | Yes      | Confirm permanent deletion                             |
+| `--json-input`     | TEXT | No       | JSON parameters as a string or `@file` path            |
+| `--json-output`    | FLAG | No       | Output raw JSON response                               |
 
 ```bash
 vamscli file delete -d my-db -a my-asset -p "/file.gltf" --confirm

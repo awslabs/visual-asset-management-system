@@ -123,7 +123,7 @@ describe("a fork's custom resource name", () => {
         const forkChunk = all.find((c) => FORK_KEY in c.parsed.m)!;
         expect(Object.keys(forkChunk.parsed.m)).toEqual([FORK_KEY]);
         expect(all.map((c) => Object.keys(c.parsed.m).length)).toEqual([
-            13, 13, 13, 13, 10, 9, 11, 1,
+            13, 13, 13, 13, 10, 9, 13, 1,
         ]);
         // No nested stack waits for a chunk.
         const chunkIds = new Set(all.map((c) => c.logicalId));
