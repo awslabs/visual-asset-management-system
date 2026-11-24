@@ -348,6 +348,7 @@ An asset file's key is the asset's root key followed by the file's relative path
 `{assetRoot}{relative_path}/{filename}`, where the relative path has zero or more subdirectories. The
 root is usually `{baseAssetsPrefix}{assetId}/`. An asset created on an existing bucket folder
 (`bucketExistingKey`) keeps that folder as its root, so its keys need not contain the asset ID.
+An asset created from a single object key before v2.7 (a `bucketExistingKey` that named a file, which v2.7 refuses), until the upgrade step `assetLocationFileToFolder` converts it to a folder asset, holds that object at `/{file name}`, its companion folder `{key}/` and its previews; see [Files](../api/files.md#list-files).
 
 The output paths point to the run's output folders, not to the asset. The process-output step writes
 each file it finds there to the same relative path within the asset.

@@ -46,7 +46,7 @@ The `assetId` cannot contain forward slashes (`/`) because it is used as an Amaz
 
 ## Asset location in Amazon S3
 
-Each asset's files are stored under a unique prefix within the database's Amazon S3 bucket:
+Each asset's files are stored under a unique prefix within the database's Amazon S3 bucket by default:
 
 ```
 s3://{bucketName}/{baseAssetsPrefix}{assetId}/
@@ -60,6 +60,8 @@ s3://vams-assets-bucket/assets/scan-001/
     scan-001/textures/diffuse.png
     scan-001/textures/normal.png
 ```
+
+An asset created from a single object key before v2.7 (a `bucketExistingKey` that named a file, which v2.7 refuses), until the upgrade step `assetLocationFileToFolder` converts it to a folder asset, holds that object at `/{file name}`, its companion folder `{key}/` and its previews; see [Files](../api/files.md#list-files).
 
 A file belongs to the deepest stored location that contains it. Creating an asset whose location sits inside
 another asset's folder is refused, but a deployment can still hold such a pair (the `assetLocationIndex`
