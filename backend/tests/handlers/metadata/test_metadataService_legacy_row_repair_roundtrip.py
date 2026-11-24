@@ -276,12 +276,12 @@ def _get_asset_metadata():
 
 def _get_file_metadata():
     return metadataService.get_file_metadata(
-        "db1", "asset1", FILE_PATH, "metadata", {}, CLAIMS)
+        "db1", "asset1", FILE_PATH, "metadata", {}, CLAIMS)[0]
 
 
 def _get_file_attributes():
     return metadataService.get_file_metadata(
-        "db1", "asset1", FILE_PATH, "attribute", {}, CLAIMS)
+        "db1", "asset1", FILE_PATH, "attribute", {}, CLAIMS)[0]
 
 
 def _get_database_metadata():

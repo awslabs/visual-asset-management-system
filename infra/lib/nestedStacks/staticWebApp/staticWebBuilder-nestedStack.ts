@@ -32,6 +32,8 @@ import {
     apiOriginVerifyCurrentValueReference,
 } from "../../helper/apiOriginVerify";
 import { buildApiOriginVerifyRotationFunction } from "../../lambdaBuilder/authFunctions";
+import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
+import { publishLateCoreResourceName } from "../resourceNames/lateCoreResourceNames";
 
 export interface StaticWebBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -364,6 +366,17 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
             // Add dependency to ensure website is created
             webUrlSSMParameter.node.addDependency(website);
+
+            // The same URL as a core resource name, carried by the resource-name chunk parameters,
+            // so the secure-config call reads it with no Parameter Store call of its own.
+            // WebUrlDeploymentParamSSM stays published for the add-ons that read it.
+            publishLateCoreResourceName(
+                this,
+                props.config,
+                RESOURCE_PARAM_KEYS.web.deployedUrl,
+                website.endPointURL,
+                { dependsOn: [website] }
+            );
         }
 
         //ALB deploy
@@ -471,6 +484,17 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
             // Add dependency to ensure website is created
             webUrlSSMParameter.node.addDependency(website);
+
+            // The same URL as a core resource name, carried by the resource-name chunk parameters,
+            // so the secure-config call reads it with no Parameter Store call of its own.
+            // WebUrlDeploymentParamSSM stays published for the add-ons that read it.
+            publishLateCoreResourceName(
+                this,
+                props.config,
+                RESOURCE_PARAM_KEYS.web.deployedUrl,
+                website.endPointURL,
+                { dependsOn: [website] }
+            );
 
             this.endpointURL = website.endPointURL;
             this.albEndpoint = website.albEndpoint;

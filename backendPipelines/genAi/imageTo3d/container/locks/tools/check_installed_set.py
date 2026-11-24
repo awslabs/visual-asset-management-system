@@ -12,8 +12,10 @@ packages the interpreter sees and fails on
   - an installed package that neither the lock nor out-of-lock.json names;
   - a recorded out-of-lock package that is missing or at another version.
 
-The lock files are pinned `name==version ; marker` lines; a line whose marker does not hold on this machine
-is skipped. Only names and versions are printed.
+The lock files are pinned `name==version ; marker` lines, and `name @ <url of a .whl file> ; marker` lines for a
+prebuilt wheel (the version is the one in the wheel's file name, without a local label such as `+cu12torch2.6`,
+which is what the installed package's metadata carries); a line whose marker does not hold on this machine is
+skipped. Only names and versions are printed.
 
 Usage: check_installed_set.py --dir <locks/<model> directory in the image> [--gpl true|false]
 Standard library plus `packaging`, which the locks install (it is a dependency of the build tools).
@@ -27,6 +29,11 @@ import re
 import sys
 
 LOCK_LINE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)\s*(?:;\s*(.*?))?\s*(?:\\)?$")
+# A prebuilt wheel: `name @ https://.../<dist>-<version>-<tags>.whl ; marker`. Its file name carries the version.
+WHEEL_LINE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s+@\s+https://[^\s;?#%]*/([A-Za-z0-9_.]+)-([0-9][A-Za-z0-9_.!+]*)-[^\s;/?#%]+\.whl"
+    r"\s*(?:;\s*(.*?))?\s*(?:\\)?$"
+)
 
 
 def canonical(name):
@@ -57,9 +64,13 @@ def read_lock(path):
         if not raw or raw[0] in " #\t":
             continue
         match = LOCK_LINE.match(raw)
-        if not match:
-            raise SystemExit(f"{path}:{number}: not a pinned requirement: {raw[:80]!r}")
-        name, version, marker = match.groups()
+        if match:
+            name, version, marker = match.groups()
+        else:
+            wheel = WHEEL_LINE.match(raw)
+            if not wheel or canonical(wheel.group(1)) != canonical(wheel.group(2)):
+                raise SystemExit(f"{path}:{number}: not a pinned requirement: {raw[:80]!r}")
+            name, version, marker = wheel.group(1), wheel.group(3).split("+", 1)[0], wheel.group(4)
         if evaluate(marker):
             pins[canonical(name)] = (name, version)
     return pins

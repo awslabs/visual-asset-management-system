@@ -24,7 +24,7 @@ from common.eventLogSummary import event_log_summary, exception_log_summary
 from common.bucketRegistrations import REGISTRATION_DUPLICATE_OF_FIELD, active_registrations
 from common.indexerEvents import carry_bucket_id_stamp, s3_records_from_indexer_message, stamped_bucket_id
 from common.resourceNames import get_table_name, ResourceKeys
-from common.ssmParameters import get_parameter_value
+from common.deployTimeValues import DeployTimeKeys, resolve_together
 from common.s3MetadataKeys import (
     SEARCHABLE_VAMS_METADATA_KEYS,
     is_system_metadata_key,
@@ -91,14 +91,17 @@ opensearch_endpoint: Optional[str] = None
 
 
 def load_opensearch_settings() -> None:
-    """Read the file index name and the OpenSearch endpoint into the module globals the indexing
-    functions use, through common.ssmParameters: each read is bounded, cached per container and backs
+    """Set the file index name and the OpenSearch endpoint in the module globals the indexing
+    functions use. They come from the resource names the import-time table lookup already loaded
+    (common.deployTimeValues), with no Parameter Store call; while a deployment is still adding them,
+    both are read from aos/* through common.ssmParameters, bounded, cached per container and backing
     off after a throttled read. The handler calls it before it handles any record, so a value that
-    cannot be read fails the batch before anything is written, and every record of the batch is
+    cannot be resolved fails the batch before anything is written, and every record of the batch is
     reported failed for redelivery."""
     global opensearch_file_index, opensearch_endpoint
-    opensearch_file_index = get_parameter_value(opensearch_file_index_ssm_param)
-    opensearch_endpoint = get_parameter_value(opensearch_endpoint_ssm_param)
+    opensearch_endpoint, opensearch_file_index = resolve_together(
+        (DeployTimeKeys.OPENSEARCH_ENDPOINT, DeployTimeKeys.OPENSEARCH_FILE_INDEX_NAME),
+        (opensearch_endpoint_ssm_param, opensearch_file_index_ssm_param))
 
 
 # Initialize DynamoDB tables

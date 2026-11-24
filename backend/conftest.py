@@ -269,6 +269,14 @@ def setup_mock_imports():
     )
     sys.modules['common.ssmParameters'] = ssm_parameters_module
 
+    # deployTimeValues (the OpenSearch, web URL and map key values, from the resource names or the
+    # parameters that held them before) is loaded fresh after both, so it binds this test's copies.
+    deploy_time_values_module = import_module_from_path(
+        'common.deployTimeValues',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'deployTimeValues.py')
+    )
+    sys.modules['common.deployTimeValues'] = deploy_time_values_module
+
     # assetHistory is a real module (asset lifecycle history writer); load it
     asset_history_module = import_module_from_path(
         'common.assetHistory',
