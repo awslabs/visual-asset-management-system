@@ -2,14 +2,18 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 import os
+import random
 import time
+from datetime import datetime, timedelta, timezone
 import boto3
 import json
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, HTTPClientError
+from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from common.validators import validate
 from customLogging.logger import safeLogger
 from common.constants import UNALLOWED_MIME_LIST, UNALLOWED_FILE_EXTENSION_LIST
+from common.s3MetadataKeys import VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY, is_own_upload_object
 
 logger = safeLogger()
 
@@ -33,6 +37,20 @@ S3_ASSET_CLIENT_CONFIG = Config(
     signature_version='s3v4',
     s3={'addressing_style': 'path', 'us_east_1_regional_endpoint': 'regional'},
     retries={'max_attempts': 5, 'mode': 'adaptive'},
+    max_pool_connections=S3_CLIENT_MAX_POOL_CONNECTIONS
+)
+
+# The client for the final single-request copy of an upload or a workflow output (#1848): the asset
+# configuration with ONE attempt. That copy is not safe to repeat: Amazon S3 can store the new version
+# and still answer a retryable error (503 SlowDown under a burst on one key), and an SDK retry then
+# stores a second, identical version. copy_s3_object_repeat_safe() retries it itself, after checking
+# whether the failed attempt landed. Adaptive mode keeps the client-side rate limiter, which learns from
+# the throttles. A recorded Rule 6 departure (DELIBERATE_DEPARTURES in
+# tests/common/test_shared_client_retry_config.py); only that copy's CopyObject or PutObject uses it.
+S3_ASSET_SINGLE_ATTEMPT_CLIENT_CONFIG = Config(
+    signature_version='s3v4',
+    s3={'addressing_style': 'path', 'us_east_1_regional_endpoint': 'regional'},
+    retries={'total_max_attempts': 1, 'mode': 'adaptive'},
     max_pool_connections=S3_CLIENT_MAX_POOL_CONNECTIONS
 )
 
@@ -275,6 +293,21 @@ def s3_resource_for_region(region: str = None):
         resource = boto3.resource('s3', region_name=region, config=S3_ASSET_CLIENT_CONFIG)
         _s3_resources_by_region[region] = resource
     return resource
+
+
+_s3_single_attempt_clients_by_region = {}
+
+
+def s3_single_attempt_client_for_region(region: str = None):
+    """The one-attempt S3 client for ``region`` (the deployment Region when None), built once per
+    Region with S3_ASSET_SINGLE_ATTEMPT_CLIENT_CONFIG. Used only for the writes of
+    copy_s3_object_repeat_safe(); every read keeps s3_client_for_region()'s SDK retries."""
+    region = region or deployment_region()
+    client = _s3_single_attempt_clients_by_region.get(region)
+    if client is None:
+        client = boto3.client('s3', region_name=region, config=S3_ASSET_SINGLE_ATTEMPT_CLIENT_CONFIG)
+        _s3_single_attempt_clients_by_region[region] = client
+    return client
 
 
 # ---------------------------------------------------------------------------------------------
@@ -612,6 +645,248 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
                 put_args[header] = value
     dest_client.upload_fileobj(source_object['Body'], dest_bucket, dest_key,
                                ExtraArgs=put_args or None)
+
+
+# ---------------------------------------------------------------------------------------------
+# The final copy of an upload or workflow output, safe to repeat (#1848).
+#
+# Below SINGLE_REQUEST_COPY_MAX_BYTES a managed copy is ONE CopyObject (and the in-VPC cross-Region
+# stream ONE PutObject). Under a burst of writes to one key Amazon S3 can store that request's new
+# version and still answer 503 SlowDown, and an SDK retry then stores a second, identical version.
+# copy_s3_object_repeat_safe() therefore sends each attempt on the one-attempt client and, after a
+# retryable failure, waits the backoff botocore would have waited and checks whether the failed
+# attempt landed, by the per-call token the caller stamped in the object's metadata
+# (VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY; equality, never presence or size). A landed attempt is
+# success; otherwise it copies again, within the attempts the asset client's retries allow. At and
+# above the threshold s3transfer copies by multipart, and a multipart upload completes to at most one
+# object, so that path is copy_s3_object() unchanged.
+# ---------------------------------------------------------------------------------------------
+
+# s3transfer's multipart threshold (boto3 TransferConfig().multipart_threshold): a copy or upload
+# smaller than this is one request.
+SINGLE_REQUEST_COPY_MAX_BYTES = 8 * 1024 * 1024
+# The attempts S3_ASSET_CLIENT_CONFIG's retries allow (max_attempts 5 resolves to 6 in total), and
+# botocore's backoff between them (botocore 1.43.126 retries/standard.py ExponentialBackoff,
+# delay_amount lines 425-429: rand(0, 1) * min(2 ** i, 20), i the 0-based attempt).
+SINGLE_REQUEST_COPY_MAX_ATTEMPTS = 6
+SINGLE_REQUEST_COPY_BACKOFF_BASE = 2
+SINGLE_REQUEST_COPY_MAX_BACKOFF_SECONDS = 20
+# The landed check lists the versions written since the copy started, less this margin for the clock
+# difference between Lambda and Amazon S3, and reads at most this many of them.
+LANDED_CHECK_CLOCK_MARGIN_SECONDS = 2
+LANDED_CHECK_MAX_VERSION_HEADS = 50
+
+# What botocore's standard retry checker retries (botocore 1.43.126 retries/standard.py:
+# TransientRetryableChecker lines 485-526, ThrottledRetryableChecker lines 529-557), so the loop retries
+# exactly what the asset client's SDK retries did. S3 models no retryable error shapes, and a 200 whose
+# body is an error arrives as status 500 (botocore handlers.py _handle_200_error, lines 1293-1307).
+_RETRYABLE_TRANSIENT_ERROR_CODES = frozenset({
+    'RequestTimeout', 'RequestTimeoutException', 'PriorRequestNotComplete',
+})
+_RETRYABLE_TRANSIENT_STATUS_CODES = frozenset({500, 502, 503, 504})
+_RETRYABLE_THROTTLING_ERROR_CODES = frozenset({
+    'Throttling', 'ThrottlingException', 'ThrottledException', 'RequestThrottledException',
+    'TooManyRequestsException', 'ProvisionedThroughputExceededException',
+    'TransactionInProgressException', 'RequestLimitExceeded', 'BandwidthLimitExceeded',
+    'LimitExceededException', 'RequestThrottled', 'SlowDown', 'PriorRequestNotComplete',
+    'EC2ThrottledException',
+})
+_NOT_FOUND_CODES = frozenset({'404', 'NoSuchKey', 'NotFound', 'NoSuchVersion'})
+# A HEAD by version id of a delete marker answers 405.
+_DELETE_MARKER_CODES = frozenset({'405', 'MethodNotAllowed'})
+
+
+def _error_code(error) -> str:
+    if isinstance(error, ClientError):
+        return (error.response.get('Error') or {}).get('Code') or ''
+    return ''
+
+
+def _error_label(error) -> str:
+    return _error_code(error) or type(error).__name__
+
+
+def is_retryable_write_error(error) -> bool:
+    """Whether botocore's standard retry checker would have retried ``error``: a throttling code, a
+    transient code or status (500/502/503/504), or a connection error or read timeout. A connection
+    error or read timeout may have landed, so the caller checks before it copies again."""
+    if isinstance(error, (BotocoreConnectionError, HTTPClientError)):
+        return True
+    if not isinstance(error, ClientError):
+        return False
+    code = _error_code(error)
+    status = (error.response.get('ResponseMetadata') or {}).get('HTTPStatusCode')
+    return (code in _RETRYABLE_THROTTLING_ERROR_CODES or code in _RETRYABLE_TRANSIENT_ERROR_CODES
+            or status in _RETRYABLE_TRANSIENT_STATUS_CODES)
+
+
+def single_request_copy_backoff(attempt: int, rng) -> float:
+    """botocore's delay after the 0-based ``attempt`` fails: rand(0, 1) * min(2 ** attempt, 20)."""
+    return rng() * min(SINGLE_REQUEST_COPY_BACKOFF_BASE ** attempt, SINGLE_REQUEST_COPY_MAX_BACKOFF_SECONDS)
+
+
+def _version_named_by_error(error):
+    """The version id an error response names (``x-amz-version-id``), or None. botocore keeps every
+    response's headers, error responses included, lowercased in ResponseMetadata.HTTPHeaders."""
+    if not isinstance(error, ClientError):
+        return None
+    headers = (error.response.get('ResponseMetadata') or {}).get('HTTPHeaders') or {}
+    version_id = {str(name).lower(): value for name, value in headers.items()}.get('x-amz-version-id')
+    return version_id if version_id and version_id != 'null' else None
+
+
+def _landed_version(client, bucket: str, key: str, write_token: str, error, since: datetime):
+    """(landed, version_id) after a failed attempt of a copy that stamped ``write_token``.
+
+    1. The version the error names: carries the token -> landed; does not exist -> that attempt did
+       not land (an attempt writes at most the version its response names); refused or other -> 2.
+    2. The current object carries the token -> landed (an unversioned or suspended bucket has no
+       other object, and this is the quiet case).
+    3. Versioned bucket only: the key's versions written since ``since`` (less the clock margin),
+       oldest first, up to LANDED_CHECK_MAX_VERSION_HEADS of them; the first with the token -> landed.
+    Anything else, a refused or failed read included, is not confirmed: the caller copies again, so a
+    token that cannot be found ends with the attempt budget rather than a loop.
+    """
+    checked = set()
+    named = _version_named_by_error(error)
+    if named:
+        checked.add(named)
+        try:
+            head = client.head_object(Bucket=bucket, Key=key, VersionId=named)
+            if is_own_upload_object(head, write_token):
+                return True, head.get('VersionId') or named
+        except ClientError as e:
+            if _error_code(e) in _NOT_FOUND_CODES:
+                return False, None
+            logger.warning(f"Could not read version {named} of {key} after a failed copy "
+                           f"({_error_label(e)}), so the current object is checked")
+        except Exception as e:
+            logger.warning(f"Could not read version {named} of {key} after a failed copy "
+                           f"({_error_label(e)}), so the current object is checked")
+
+    try:
+        current = client.head_object(Bucket=bucket, Key=key)
+    except Exception as e:
+        if _error_code(e) not in _NOT_FOUND_CODES:
+            logger.warning(f"Could not read {key} after a failed copy ({_error_label(e)})")
+        return False, None
+    if is_own_upload_object(current, write_token):
+        return True, current.get('VersionId')
+    current_version = current.get('VersionId')
+    if not current_version or current_version == 'null':
+        return False, None
+    checked.add(current_version)
+
+    try:
+        page = client.list_object_versions(Bucket=bucket, Prefix=key, MaxKeys=S3_VERSIONS_PAGE_SIZE)
+    except Exception as e:
+        logger.warning(f"Could not list the versions of {key} after a failed copy ({_error_label(e)})")
+        return False, None
+    floor = since - timedelta(seconds=LANDED_CHECK_CLOCK_MARGIN_SECONDS)
+    # The prefix also lists longer keys; only this key's entries count. A key's versions are listed
+    # newest first, and the failed attempt wrote before the writers that followed it, so read the
+    # newly written versions oldest first.
+    candidates = [entry for entry in reversed(page.get('Versions') or [])
+                  if entry.get('Key') == key and entry.get('VersionId') not in checked
+                  and not (isinstance(entry.get('LastModified'), datetime) and entry['LastModified'] < floor)]
+    candidates.sort(key=lambda entry: entry['LastModified']
+                    if isinstance(entry.get('LastModified'), datetime) else floor)
+    for entry in candidates[:LANDED_CHECK_MAX_VERSION_HEADS]:
+        try:
+            head = client.head_object(Bucket=bucket, Key=key, VersionId=entry['VersionId'])
+        except ClientError as e:
+            if _error_code(e) in _NOT_FOUND_CODES or _error_code(e) in _DELETE_MARKER_CODES:
+                continue
+            logger.warning(f"Could not read a version of {key} after a failed copy ({_error_label(e)})")
+            return False, None
+        except Exception as e:
+            logger.warning(f"Could not read a version of {key} after a failed copy ({_error_label(e)})")
+            return False, None
+        if is_own_upload_object(head, write_token):
+            return True, entry['VersionId']
+    return False, None
+
+
+def copy_s3_object_repeat_safe(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str,
+                               extra_args: dict, write_token: str, source_size, source_version_id: str = None,
+                               sleep=time.sleep, rng=random.random):
+    """Copy an upload's or a workflow output's staged object to its final key without ever writing it
+    twice, and return the version id of the object that landed (None on an unversioned bucket and on
+    the delegated multipart path).
+
+    ``extra_args`` takes the managed-copy ExtraArgs shape and must replace the metadata
+    (``MetadataDirective: REPLACE``) with a ``Metadata`` that carries ``write_token`` under
+    VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY: a fresh value per call, so the landed check can tell this
+    call's object from every other one at the key. ``source_size`` is the staged object's
+    ContentLength. Below SINGLE_REQUEST_COPY_MAX_BYTES the copy is one request on the destination
+    Region's one-attempt client: a server-side CopyObject, or, when the Lambdas run in the VPC and the
+    Regions differ, one GET of the source and a PutObject with the same arguments (copy_s3_object()'s
+    streaming branch). A retryable failure (is_retryable_write_error) is followed by botocore's backoff
+    and the landed check; a landed attempt is success, logged once, and is not copied again. A copy
+    that did not land is sent again, up to SINGLE_REQUEST_COPY_MAX_ATTEMPTS attempts, and the last
+    error is raised. Any other error is raised at once. A size at or over the threshold, or an unknown
+    size, is copy_s3_object() unchanged. ``sleep`` and ``rng`` are injectable for tests.
+
+    Raises:
+        ValueError: ``extra_args`` does not replace the metadata with one carrying ``write_token``.
+    """
+    extra_args = dict(extra_args or {})
+    metadata = extra_args.get('Metadata')
+    if (not write_token or extra_args.get('MetadataDirective') != 'REPLACE' or not isinstance(metadata, dict)
+            or metadata.get(VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY) != write_token):
+        raise ValueError("A repeat-safe copy must replace the metadata with one that carries its write token")
+    if not isinstance(source_size, int) or source_size >= SINGLE_REQUEST_COPY_MAX_BYTES:
+        copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, extra_args=extra_args,
+                       source_version_id=source_version_id)
+        return None
+
+    source_region = bucket_region_for_name(source_bucket)
+    dest_region = bucket_region_for_name(dest_bucket)
+    read_client = s3_client_for_region(dest_region)
+    write_client = s3_single_attempt_client_for_region(dest_region)
+    copy_source = {'Bucket': source_bucket, 'Key': source_key}
+    if source_version_id:
+        copy_source['VersionId'] = source_version_id
+
+    if source_region == dest_region or not lambdas_in_vpc():
+        def write():
+            return write_client.copy_object(CopySource=copy_source, Bucket=dest_bucket, Key=dest_key,
+                                            **extra_args)
+    else:
+        logger.info(f"Streaming cross-Region copy {source_region} -> {dest_region} for {dest_key}")
+        # Read once: below the threshold the body fits in memory, and every attempt sends the same bytes.
+        body = s3_client_for_region(source_region).get_object(**copy_source)['Body'].read()
+        put_args = {key: value for key, value in extra_args.items() if key not in _COPY_ARGS_NOT_FOR_PUT}
+
+        def write():
+            return write_client.put_object(Bucket=dest_bucket, Key=dest_key, Body=body, **put_args)
+
+    started = datetime.now(timezone.utc)
+    for attempt in range(SINGLE_REQUEST_COPY_MAX_ATTEMPTS):
+        try:
+            response = write()
+        except Exception as error:
+            if not is_retryable_write_error(error):
+                raise
+            last_attempt = attempt == SINGLE_REQUEST_COPY_MAX_ATTEMPTS - 1
+            if not last_attempt:
+                # botocore waits before a retry and not after the last attempt; the wait also gives a
+                # stored version time to show before it is looked for.
+                sleep(single_request_copy_backoff(attempt, rng))
+            landed, version_id = _landed_version(read_client, dest_bucket, dest_key, write_token, error,
+                                                 started)
+            if landed:
+                logger.info(f"Copy to {dest_key} answered {_error_label(error)} on attempt {attempt + 1}, "
+                            f"but it landed as version {version_id}, so it is not copied again")
+                return version_id
+            if last_attempt:
+                logger.warning(f"Copy to {dest_key} answered {_error_label(error)} on attempt "
+                               f"{attempt + 1} of {SINGLE_REQUEST_COPY_MAX_ATTEMPTS} and did not land")
+                raise
+            logger.warning(f"Copy to {dest_key} answered {_error_label(error)} on attempt {attempt + 1} "
+                           f"and was not confirmed as landed, so it is copied again")
+            continue
+        return response.get('VersionId')
 
 
 class _RegionRoutingPaginator:

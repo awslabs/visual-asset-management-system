@@ -163,7 +163,7 @@ def _run(refuse_upload=None, refuse_engine=None, refuse_metadata=None, with_prev
         p(uf, "log_file_upload")
         p(uf, "update_asset_attributes")
         p(uf, "s3", s3)
-        p(uf.s3_resource.meta, "client", s3)
+        p(uf, "copy_s3_object_repeat_safe", new=h.repeat_safe_copy_on(s3))
         p(uf, "MAX_PARALLEL_S3_WORKERS", 1)
         p(uf, "LARGE_FILE_THRESHOLD_BYTES", h.THRESHOLD)
         p(po.loc, "LARGE_FILE_THRESHOLD_BYTES", h.THRESHOLD)
