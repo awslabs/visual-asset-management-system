@@ -7,7 +7,8 @@ A single-file asset's location names one object (``p/model.gltf``, no trailing `
 holds besides it is its companion folder ``p/model.gltf/``. The object's parent directory ``p/`` also
 holds keys the asset does not hold (``p/other/``, ``p/model.gltf.previewFile.png/``, ``p/tex.png``). The
 manifest records the location as the input's ``assetRootS3Key``, and the resources the object names are
-looked up under the companion folder."""
+looked up under the companion folder. Only ``p/model.gltf.previewFile.{ext}`` counts as its existing
+preview."""
 
 import json
 import os
@@ -44,12 +45,9 @@ class TestASingleFileAssetsGltfResources:
     ])
     def test_resources_come_from_the_companion_folder_only(self, tmp_path, object_key, asset_root):
         keys = _requested(tmp_path, object_key, asset_root)
-        assert keys, "nothing was requested"
-        for key in keys:
-            assert key.lstrip("/").startswith(LOCATION + "/"), key
-        assert {k.lstrip("/") for k in keys} == {
-            LOCATION + "/tex.png", LOCATION + "/other/tex.png", LOCATION + "/sibling.png",
-            LOCATION + "/model.gltf.previewFile.png/x.png"}
+        assert set(keys) == {
+            object_key + "/tex.png", object_key + "/other/tex.png", object_key + "/sibling.png",
+            object_key + "/model.gltf.previewFile.png/x.png"}
 
     def test_a_resource_through_the_downloaded_object_is_skipped(self, tmp_path):
         # The .gltf sits at its file name locally, so model.gltf/x.png would need a folder there.
@@ -62,6 +60,18 @@ class TestASingleFileAssetsGltfResources:
     @pytest.mark.parametrize("asset_root", ["", "p/other.gltf"])
     def test_any_other_root_keeps_the_input_directory(self, tmp_path, asset_root):
         assert "p/tex.png" in _requested(tmp_path, LOCATION, asset_root)
+
+    @pytest.mark.parametrize("listed, found", [
+        ([LOCATION + ".previewFile.", LOCATION + ".previewFile.png/x.png"], None),
+        ([LOCATION + ".previewFile.png/x.png", LOCATION + ".previewFile.gif"],
+         LOCATION + ".previewFile.gif"),
+    ])
+    def test_only_the_objects_own_preview_counts_as_existing(self, listed, found):
+        # p/model.gltf.previewFile.png/ is a folder beside the object, not a preview of it.
+        stage_input = StageInput(bucketName=BUCKET, objectKey=LOCATION, fileExtension=".gltf",
+                                 assetRootS3Key=LOCATION)
+        with patch.object(core.s3, "list_objects_with_prefix", MagicMock(return_value=listed)):
+            assert core._check_existing_preview(stage_input, "model.gltf", False) == found
 
     def test_the_stage_input_carries_the_asset_root(self):
         stage_input = StageInput(**{"bucketName": BUCKET, "objectKey": LOCATION, "fileExtension": ".gltf",

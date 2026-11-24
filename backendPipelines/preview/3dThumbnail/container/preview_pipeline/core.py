@@ -555,7 +555,7 @@ def _gltf_dependency_dir(object_key: str, asset_root: str = "") -> str:
     key = (object_key or "").lstrip("/")
     root = (asset_root or "").lstrip("/")
     if root and not root.endswith("/") and root == key:
-        return key
+        return object_key
     return os.path.dirname(object_key)
 
 
@@ -674,6 +674,10 @@ def _check_existing_preview(stage_input: StageInput, input_basename: str, localT
             existing_keys = s3.list_objects_with_prefix(
                 stage_input.bucketName, s3_prefix
             )
+            # A preview is {file name}.previewFile.{ext}; a key under a folder of that name is not one
+            existing_keys = [
+                k for k in existing_keys if k[len(s3_prefix):] and "/" not in k[len(s3_prefix):]
+            ]
             if existing_keys:
                 logger.info(f"Found existing S3 preview: {existing_keys[0]}")
                 return existing_keys[0]
