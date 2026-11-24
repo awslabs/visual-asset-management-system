@@ -964,6 +964,44 @@ describe("the v2.6 to v2.7 commentSubscriptionKeys step and what users did befor
         expect(readme).not.toContain("`Scan` on the database table");
     });
 
+    it("tries a failed history read once per run: it ends the step, never a row", () => {
+        // D1919-7: a ClientError there becomes HistoryScanError, which is no ClientError, so run_table's per-row
+        // catch does not report it against the row and go on to the next row (which would scan again); the
+        // step's catch-all ends the run with exit 1 and the --resume hint, as an interruption does.
+        const deletes = method("_permanent_deletes");
+        const tried = deletes.indexOf("try:");
+        const caught = deletes.indexOf("except ClientError as e:");
+        expect(tried).toBeGreaterThan(-1);
+        expect(caught).toBeGreaterThan(deletes.indexOf("_paginate(self.ddb.scan"));
+        expect(deletes.slice(caught)).toMatch(/raise HistoryScanError\(/);
+        expect(deletes.slice(caught)).toContain(") from e");
+        expect(script).toMatch(/^class HistoryScanError\(Exception\):/m);
+        expect(script).not.toMatch(/class HistoryScanError\([^)]*ClientError/);
+        const table = method("run_table");
+        expect(table).toMatch(/records = copy\(item\)\s*\n\s*except ClientError as e:/);
+        expect(table).not.toMatch(/except (Exception|HistoryScanError)/);
+        for (const name of [
+            "copy_comment",
+            "copy_subscription",
+            "resolve",
+            "place_subscriber",
+            "deleted_databases",
+        ]) {
+            expect({
+                name,
+                catchesAll: /except (Exception|HistoryScanError)\b|except:/.test(method(name)),
+            }).toEqual({
+                name,
+                catchesAll: false,
+            });
+        }
+        const step = pyFunction("run_comment_subscription_keys_step");
+        expect(step).toMatch(
+            /except Exception as e:\s*\n\s*logger\.error\(f"\{COMMENT_SUBSCRIPTION_STEP\} step failed: \{e\}\. Re-run with --resume/
+        );
+        expect(readme).toMatch(/If that read fails, the step\s+stops at once/);
+    });
+
     it("copies a single candidate's subscriber only when it is on that asset's topic", () => {
         expect(tuple("COMMENT_SUBSCRIPTION_CLASSES")).toContain("notOnTopic");
         expect(tuple("_COMMENT_SUBSCRIPTION_LEFT")).toContain("notOnTopic");

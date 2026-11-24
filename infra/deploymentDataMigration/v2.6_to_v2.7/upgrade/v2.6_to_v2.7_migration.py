@@ -2446,6 +2446,10 @@ ASSET_HISTORY_PERMANENT_DELETE = 'permanentDelete'
 _RETRYABLE_CANCELLATIONS = {'None', 'ConditionalCheckFailed', 'TransactionConflict'}
 
 
+class HistoryScanError(Exception):
+    """The asset history read failed. Not a ClientError, so it ends the commentSubscriptionKeys step at once."""
+
+
 def _plain(item: Dict) -> Dict:
     return {k: _ASSET_LOCATION_DESERIALIZER.deserialize(v) for k, v in (item or {}).items()}
 
@@ -2568,22 +2572,33 @@ class CommentSubscriptionCopy:
         table, filtered on the permanentDelete records and projected to their key and time, read once per run.
 
         The cost follows the size of the history table (one read per 1 MB page), not the number of databases
-        times the number of asset ids, and it is paid only when some v2.6 row's id has a live candidate."""
+        times the number of asset ids, and it is paid only when some v2.6 row's id has a live candidate.
+
+        A failed read is tried once per run: it raises HistoryScanError, which is not a ClientError, so it is not
+        reported against the row (run_table) but ends the step as an interruption does, and --resume continues
+        from the last saved page with the scan tried again."""
         if self._deletes is None:
             deletes: Dict[str, Dict[str, str]] = {}
-            for row in _paginate(self.ddb.scan, TableName=self.cfg['asset_history_storage_table_name'],
-                                 FilterExpression='#c = :d', ProjectionExpression='#p, #db, #a, #r',
-                                 ExpressionAttributeNames={'#c': 'changeSource', '#p': ASSET_HISTORY_PARTITION_KEY,
-                                                           '#db': 'databaseId', '#a': 'assetId', '#r': 'recordDate'},
-                                 ExpressionAttributeValues=_wire({':d': ASSET_HISTORY_PERMANENT_DELETE})):
-                key_database, _, key_asset = _attr_s(row, ASSET_HISTORY_PARTITION_KEY).partition(':')
-                database_id = _attr_s(row, 'databaseId') or key_database
-                asset_id = _attr_s(row, 'assetId') or key_asset
-                if not database_id or not asset_id:
-                    continue
-                when = _attr_s(row, 'recordDate')
-                latest = deletes.setdefault(asset_id, {})
-                latest[database_id] = max(when, latest.get(database_id, ''))
+            try:
+                for row in _paginate(self.ddb.scan, TableName=self.cfg['asset_history_storage_table_name'],
+                                     FilterExpression='#c = :d', ProjectionExpression='#p, #db, #a, #r',
+                                     ExpressionAttributeNames={'#c': 'changeSource',
+                                                               '#p': ASSET_HISTORY_PARTITION_KEY, '#db': 'databaseId',
+                                                               '#a': 'assetId', '#r': 'recordDate'},
+                                     ExpressionAttributeValues=_wire({':d': ASSET_HISTORY_PERMANENT_DELETE})):
+                    key_database, _, key_asset = _attr_s(row, ASSET_HISTORY_PARTITION_KEY).partition(':')
+                    database_id = _attr_s(row, 'databaseId') or key_database
+                    asset_id = _attr_s(row, 'assetId') or key_asset
+                    if not database_id or not asset_id:
+                        continue
+                    when = _attr_s(row, 'recordDate')
+                    latest = deletes.setdefault(asset_id, {})
+                    latest[database_id] = max(when, latest.get(database_id, ''))
+            except ClientError as e:
+                raise HistoryScanError(
+                    f"could not read the permanentDelete records of the asset history table "
+                    f"({e.response.get('Error', {}).get('Code', 'error')}), so no row of an id a database still "
+                    f"holds was placed past this point") from e
             self._deletes = deletes
         return self._deletes
 
