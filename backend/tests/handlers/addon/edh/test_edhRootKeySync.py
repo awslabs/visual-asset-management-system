@@ -38,6 +38,10 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 import backend.backend.handlers.addon.edh.edhRootKeySync as sync
+from backend.tests.handlers.addon.edh.edhParameterStoreTestSupport import (
+    lookup_clock, reads_through_the_shared_lookup, serve_parameters, shared_lookup,
+)
+from backend.tests.ssmParametersStub import throttled
 from backend.backend.handlers.addon.edh.common import edhRootKeySyncTrigger as trigger
 from backend.tests.handlers.addon.edh.edhRootKeySyncTestSupport import (
     PUBLIC_KEY_ALLOWED_PATTERN, document_content, step_lines,
@@ -180,7 +184,10 @@ class FakeSsm:
         self.output = output
         self.run_script = run_script
         self.tmp_path = tmp_path
+        # GetParameter calls on the sync's own Systems Manager client (there should be none), and the names the
+        # shared parameter lookup read for the sync (ControllerParameterStore).
         self.parameter_reads = []
+        self.lookup_reads = []
         self.sent = []
         self.invocation_reads = []
         self.script_output = None
@@ -232,6 +239,20 @@ class FakeSsm:
         output = self.output if self.output is not None else self.script_output
         return {"CommandId": kwargs["CommandId"], "InstanceId": kwargs["InstanceId"], "Status": status,
                 "StandardOutputContent": output if status == "Success" else "", "ResponseCode": 0}
+
+
+class ControllerParameterStore:
+    """EDH's ControllerInstanceId parameter as the shared lookup (common.ssmParameters) reads it, answered from the
+    FakeSsm's ``instance_id`` and ``parameter_error``, so a test configures the parameter where it always did."""
+
+    def __init__(self, ssm):
+        self.ssm = ssm
+
+    def get_parameter(self, Name, **kwargs):
+        self.ssm.lookup_reads.append(Name)
+        if self.ssm.parameter_error is not None:
+            raise self.ssm.parameter_error
+        return {"Parameter": {"Name": Name, "Type": "String", "Value": self.ssm.instance_id}}
 
 
 class FakeSecretsManager:
@@ -311,6 +332,7 @@ def install(monkeypatch, rsa_key, *, ssm=None, secrets=None, table=None, keys=No
                   keys=keys or KeyRecorder(rsa_key), ec2=ec2 or FakeEc2(), clock=clock or FakeClock(),
                   log=RecordingLogger(), metrics=[])
     monkeypatch.setattr(sync, "_ssm_client", lambda: fakes.ssm)
+    serve_parameters(monkeypatch, ControllerParameterStore(fakes.ssm))
     monkeypatch.setattr(sync, "_secretsmanager_client", lambda: fakes.secrets)
     monkeypatch.setattr(sync, "_lock_table", lambda: fakes.table)
     monkeypatch.setattr(sync, "_generate_private_key", fakes.keys)
@@ -382,8 +404,8 @@ class TestTheKeyIsCopied:
 
         run(fakes)
 
-        assert fakes.ssm.parameter_reads == [
-            {"Name": f"/edh/{sync.EDH_CLUSTER_ID}/configuration/ControllerInstanceId"}]
+        assert fakes.ssm.lookup_reads == [f"/edh/{sync.EDH_CLUSTER_ID}/configuration/ControllerInstanceId"]
+        assert fakes.ssm.parameter_reads == []
         assert len(fakes.ssm.sent) == 1
         sent = fakes.ssm.sent[0]
         assert sent["DocumentName"] == sync.EDH_ROOT_KEY_DOCUMENT_NAME
@@ -903,7 +925,7 @@ class TestRateLimit:
         fakes = install(monkeypatch, rsa_key, table=FakeLockTable(held_at=recent))
 
         assert run(fakes) == {"outcome": sync.OUTCOME_RATE_LIMITED}
-        assert fakes.ssm.parameter_reads == []
+        assert fakes.ssm.lookup_reads == [] and fakes.ssm.parameter_reads == []
         assert fakes.ssm.sent == []
         assert fakes.secrets.reads == [] and fakes.secrets.writes == []
 
@@ -1381,3 +1403,49 @@ class TestTheDocumentScriptMatchesTheRunsKey:
         assert result.stdout == ""
         assert NEW_KEY not in result.stderr
         assert list(workdir.iterdir()) == []
+
+
+@pytest.mark.unit
+class TestTheControllerIdIsReadThroughTheSharedLookup:
+    """The controller's instance id is read through common.ssmParameters, fresh on every run, bounded under
+    throttling; any refusal ends the run controllerNotFound and logs the error class, never a value. The sync's
+    own Systems Manager client serves the document checks and Run Command only."""
+
+    CONTROLLER_PARAMETER = f"/edh/{sync.EDH_CLUSTER_ID}/configuration/ControllerInstanceId"
+
+    def test_the_read_goes_through_the_shared_lookup_not_the_syncs_client(self, monkeypatch, rsa_key):
+        assert reads_through_the_shared_lookup(sync), "the controller id is read on the sync's own client"
+        fakes = install(monkeypatch, rsa_key)
+        run(fakes)
+        assert fakes.ssm.lookup_reads == [self.CONTROLLER_PARAMETER]
+        assert fakes.ssm.parameter_reads == []
+        assert len(fakes.ssm.sent) == 1, "control: the run reached the controller"
+
+    def test_every_read_is_fresh(self, monkeypatch, rsa_key):
+        fakes = install(monkeypatch, rsa_key)
+        assert sync._controller_instance_id() == INSTANCE_ID
+        fakes.ssm.instance_id = "i-0fedcba9876543210"
+        assert sync._controller_instance_id() == "i-0fedcba9876543210"
+        assert fakes.ssm.lookup_reads == [self.CONTROLLER_PARAMETER, self.CONTROLLER_PARAMETER]
+
+    @pytest.mark.parametrize("error,error_class", [
+        (throttled(), "ParameterUnavailableError"),
+        (_client_error("ParameterNotFound", "GetParameter"), "ParameterNotFoundError"),
+        (_client_error("AccessDeniedException", "GetParameter"), "ParameterReadError"),
+    ], ids=["throttled", "missing", "denied"])
+    def test_a_refused_read_ends_the_run_controller_not_found_within_the_read_bound(self, monkeypatch, rsa_key, error,
+                                                                                   error_class):
+        fakes = install(monkeypatch, rsa_key, ssm=FakeSsm(parameter_error=error))
+        clock = lookup_clock()
+        started = clock.now
+
+        assert run(fakes) == {"outcome": sync.OUTCOME_CONTROLLER_NOT_FOUND}
+
+        helper = shared_lookup()
+        assert clock.now - started <= helper.PARAMETER_READ_BUDGET_SECONDS + helper.READ_RETRY_MAX_SLEEP_SECONDS
+        assert fakes.ssm.lookup_reads, "control: the parameter was asked for"
+        assert fakes.ssm.sent == [] and fakes.secrets.writes == []
+        assert json.loads(fakes.metrics[0])[sync.METRIC_FAILURES] == 1
+        unread = [record[2] for record in fakes.log.records if record[0] == "EDH controller instance id could not be read"]
+        assert unread == [{"error": error_class}]
+        assert INSTANCE_ID not in json.dumps(fakes.log.records, default=str)
