@@ -192,7 +192,7 @@ class TestEnumerationWalksRegistrations:
         assets = _AssetIndex({("b1", "a1"): "db1", ("b1d", "a2"): "db2", ("b9", "a3"): "db3"})
 
         refs, token = fe.enumerate_latest_live_files(s3_client=s3, buckets_table=_Scan(registrations),
-                                                      asset_table=assets)
+                                                     asset_table=assets)
 
         assert token is None
         assert sorted((r.asset_id, r.bucket_id) for r in refs) == [("a1", "b1"), ("a2", "b1d")]

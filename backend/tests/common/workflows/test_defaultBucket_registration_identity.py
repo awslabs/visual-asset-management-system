@@ -29,7 +29,7 @@ def _table(items):
 
 def _row(bucket_id, prefix, **extra):
     row = {"bucketId": bucket_id, "bucketName": "customer-bucket", "baseAssetsPrefix": prefix,
-           "bucketName:baseAssetsPrefix": f"customer-bucket:{prefix}", "isDefault": True}
+           "bucketName:baseAssetsPrefix": "customer-bucket:" + prefix, "isDefault": True}
     row.update(extra)
     return row
 

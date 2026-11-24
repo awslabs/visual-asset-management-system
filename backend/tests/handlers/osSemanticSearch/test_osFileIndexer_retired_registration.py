@@ -19,7 +19,7 @@ from backend.tests.handlers.osSemanticSearch.test_osFileIndexer_permanent_delete
 
 @pytest.mark.unit
 class TestRegisteredPrefixes:
-    def test_a_retired_registration_does_not_split_keys(self, fileIndexer):
+    def test_a_retired_registration_does_not_split_keys(self, fileIndexer):  # noqa: F811 - the imported fixture
         registry = _BucketRegistry({}, by_bucket_name={"shared-bucket": [
             {"bucketName": "shared-bucket", "baseAssetsPrefix": "old/", "retired": True},
             {"bucketName": "shared-bucket", "baseAssetsPrefix": "new/"},
