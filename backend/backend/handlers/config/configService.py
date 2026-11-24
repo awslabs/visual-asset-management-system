@@ -178,6 +178,8 @@ def get_web_deployed_url():
         The web deployed URL or empty string if not configured/available
     """
     if not web_deployed_url_ssm_param:
+        # Unset when the deployment has no web distribution (neither CloudFront nor an ALB), which
+        # publishes no web URL: nothing to look up.
         logger.info("Web Deployed URL SSM parameter name not configured")
         return ""
 

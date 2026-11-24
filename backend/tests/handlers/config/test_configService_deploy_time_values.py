@@ -50,7 +50,7 @@ def _paginator():
     return paginator
 
 
-def _load(monkeypatch, store, location=True, env=None):
+def _load(monkeypatch, store, location=True, env=None, web=True):
     serve(monkeypatch, store)
     authz = types.ModuleType("handlers.authz")
     enforcer = MagicMock()
@@ -62,7 +62,11 @@ def _load(monkeypatch, store, location=True, env=None):
     monkeypatch.setitem(sys.modules, "handlers.auth", auth)
     monkeypatch.setenv("LOCATION_SERVICE_API_KEY_ARN_SSM_PARAM", LOCATION_PARAM)
     monkeypatch.setenv("LOCATION_SERVICE_URL_FORMAT", "https://maps.test/<apiKey>" if location else "")
-    monkeypatch.setenv("WEB_DEPLOYED_URL_SSM_PARAM", WEB_PARAM)
+    if web:
+        monkeypatch.setenv("WEB_DEPLOYED_URL_SSM_PARAM", WEB_PARAM)
+    else:
+        # A deployment without a web distribution: the builder does not set the variable.
+        monkeypatch.delenv("WEB_DEPLOYED_URL_SSM_PARAM", raising=False)
     for key, value in (env or {}).items():
         monkeypatch.setenv(key, value)
     with patch("boto3.client", return_value=MagicMock()):
@@ -115,6 +119,19 @@ class TestSecureConfigWithTheResourceNames:
         assert body["webDeployedUrl"] == "https://chunk.example.com"
         assert store.parameter_reads() == []
         module.geo_client.describe_key.assert_not_called()
+
+    def test_with_no_web_distribution_nothing_is_looked_up_for_the_web_url(self, monkeypatch):
+        # An API-only deployment: no web URL is published and the variable naming it is unset. The
+        # store holds both web URL parameters, so a lookup would find one; none may be made.
+        store = ChunkedParameterStore({**TABLES, "location/apiKeyArn": KEY_ARN},
+                                      {WEB_PARAM: "https://stale.example.com",
+                                       f"{PREFIX}/web/deployedUrl": "https://stale.example.com"})
+        module = _load(monkeypatch, store, web=False)
+        for _ in range(2):
+            body = _get(module)
+            assert body["webDeployedUrl"] == ""
+            assert body["locationServiceApiUrl"] == "https://maps.test/key-value"
+        assert (store.count("GetParameters"), store.parameter_reads()) == (1, [])
 
     def test_a_refused_lookup_answers_200_with_empty_urls_and_reads_no_legacy_parameter(self, monkeypatch):
         def fault(operation, _names):

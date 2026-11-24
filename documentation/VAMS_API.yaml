@@ -129,7 +129,7 @@ paths:
                                         description: "Amazon Location Service map style descriptor URL with embedded API key; empty when Location Services is not enabled"
                                     webDeployedUrl:
                                         type: string
-                                        description: "Deployed web application URL; empty when not configured"
+                                        description: "Deployed web application URL; empty when the deployment has no web distribution (neither CloudFront nor an Application Load Balancer)"
                                 required:
                                     - featuresEnabled
                                     - locationServiceApiUrl

@@ -62,6 +62,12 @@ function allAddonsOn(c: any): void {
         "https://sqs.us-east-1.amazonaws.com/123456789012/garnet-ingest";
 }
 
+/** An API-only deployment, which getConfig() allows with a warning: no static web stack is built. */
+function apiOnly(c: any): void {
+    c.app.useCloudFront.enabled = false;
+    c.app.useAlb.enabled = false;
+}
+
 function alb(c: any): void {
     c.app.useGlobalVpc.enabled = true;
     c.app.useCloudFront.enabled = false;
@@ -195,6 +201,15 @@ const CELLS: Cell[] = [
         late: everyLateKey,
         readFrom: ["ApiBuilder2", "LocationService", "SearchBuilder", "StorageResourcesBuilder"],
         layout: [13, 13, 13, 13, 10, 9, 11],
+    },
+    {
+        label: "API only: no web distribution (neither CloudFront nor an ALB)",
+        template: "commercial",
+        key: "dtv-api-only",
+        mutate: apiOnly,
+        late: [ENGINE, ...OPENSEARCH, LOCATION],
+        readFrom: ["ApiBuilder2", "LocationService", "SearchBuilder", "StorageResourcesBuilder"],
+        layout: [13, 13, 13, 13, 10, 9, 10],
     },
     {
         label: "every add-on on",
@@ -406,5 +421,45 @@ describe.each(CELLS.map((cell) => [cell.label, cell] as [string, Cell]))("%s", (
                 chunks: ssm.some((st) => resourcesOf(st).some((r) => r.endsWith(chunkArn))),
             }).toEqual({ handler, chunks: true });
         }
+    });
+});
+
+/**
+ * The secure-config function gets the web URL parameter's name (`WEB_DEPLOYED_URL_SSM_PARAM`) exactly
+ * when a web distribution is deployed, which is when the static web stack publishes the web URL. On
+ * an API-only deployment the variable is absent, so the handler answers an empty web URL with no
+ * Parameter Store lookup instead of missing on the per-key and the legacy parameter every few minutes.
+ */
+describe("the secure-config function names the web URL parameter only with a web distribution", () => {
+    const WEB_ENV = "WEB_DEPLOYED_URL_SSM_PARAM";
+    const cellNamed = (prefix: string): Cell => {
+        const found = CELLS.filter((c) => c.label.startsWith(prefix));
+        expect(found).toHaveLength(1);
+        return found[0];
+    };
+    const configServiceEnv = (s: SynthResult): Record<string, unknown> =>
+        lambdaByHandler(s, "handlers.config.configService.lambda_handler").properties.Environment
+            ?.Variables ?? {};
+
+    test("API only: the variable is absent and no web URL parameter exists", () => {
+        const s = synthCell(cellNamed("API only"));
+        const env = configServiceEnv(s);
+        // Control: the function's environment was read (the map key variables are still set).
+        expect(Object.keys(env)).toContain("LOCATION_SERVICE_URL_FORMAT");
+        expect(Object.keys(env)).not.toContain(WEB_ENV);
+        expect(parameterNamed(s, `/${rootStackKey(s)}/web/deployedUrl`)).toEqual([]);
+        expect(parameterNamed(s, `${prefixOf(s)}/${WEB}`)).toEqual([]);
+    });
+
+    test.each([
+        "commercial default",
+        "CloudFront custom domain",
+        "ALB with a configured domain",
+        "GovCloud template",
+    ])("%s: the variable names the web URL parameter the static web stack creates", (prefix) => {
+        const s = synthCell(cellNamed(prefix));
+        const name = `/${rootStackKey(s)}/web/deployedUrl`;
+        expect(configServiceEnv(s)[WEB_ENV]).toBe(name);
+        expect(parameterNamed(s, name)).toHaveLength(1);
     });
 });
