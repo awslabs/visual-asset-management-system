@@ -21,6 +21,8 @@ from common.apiRoutes import (
     API_FILE_METADATA, API_DATABASE_METADATA,
 )
 from common.validators import validate
+from common.s3 import asset_file_paths, key_has_any_version
+from common.assetLocations import AssetFilePaths
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -665,6 +667,28 @@ def validate_asset_exists(database_id: str, asset_id: str) -> dict:
         raise VAMSGeneralErrorResponse("Error validating asset")
 
 
+def file_record_path(database_id: str, asset_id: str, file_path: str) -> str:
+    """The path a file's metadata and attributes are keyed by: the path the file is listed at, for a request
+    path in any form the file routes accept (the web sends the file's full key). A path that starts with
+    ``/{assetId}/`` drops that segment, as before; when the asset or its location cannot be read the path is
+    used as given, so existence and authorization stay with the caller's checks."""
+    if file_path.startswith(f"/{asset_id}/"):
+        return file_path[len(asset_id) + 1:]
+    try:
+        asset = asset_storage_table.get_item(Key={'databaseId': database_id, 'assetId': asset_id}).get('Item')
+        location = ((asset or {}).get('assetLocation') or {}).get('Key')
+        if not location:
+            return file_path
+        paths = AssetFilePaths(location, key_exists=lambda key: key_has_any_version(
+            get_bucket_details(asset['bucketId'])['bucketName'], key, client=s3))
+        # The request model adds a leading '/', so the full key of a single file's object arrives as '/{key}'
+        value = file_path[1:] if file_path[1:] == paths.location else file_path
+        return paths.path_for(paths.request_key_for(value)) or file_path
+    except Exception as e:
+        logger.warning(f"Could not read the location of asset {asset_id}; keying metadata by the path given: {e}")
+        return file_path
+
+
 def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> bool:
     """Validate that a file exists in S3
     
@@ -691,18 +715,10 @@ def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> boo
         if 'assetLocation' not in asset or 'Key' not in asset['assetLocation']:
             raise VAMSGeneralErrorResponse("Asset location not found")
         
-        # Use the asset's actual location as the base path
-        asset_base_path = asset['assetLocation']['Key']
-        
-        # Ensure asset base path ends with slash
-        if not asset_base_path.endswith('/'):
-            asset_base_path += '/'
-        
-        # Remove leading slash from file_path before combining (to avoid double slash)
-        normalized_file_path = file_path.lstrip('/')
-        
-        # Construct full S3 key using asset's actual location
-        full_key = f"{asset_base_path}{normalized_file_path}"
+        # The key the asset-relative path names in the asset's location (common.assetLocations)
+        full_key = asset_file_paths(bucket_name, asset['assetLocation']['Key'], client=s3).key_for(file_path)
+        if full_key is None:
+            raise VAMSGeneralErrorResponse("File not found in S3")
         
         # Check if file exists in S3
         try:
@@ -3951,11 +3967,9 @@ def handle_file_metadata_get(event):
         # Parse query parameters - validation handled in model (adds leading slash)
         query_request_model = parse(query_parameters, model=GetFileMetadataRequestModel)
         
-        # Strip assetId prefix if present (after model validation)
-        file_path = query_request_model.filePath
-        if file_path.startswith(f"/{path_request_model.assetId}/"):
-            file_path = file_path[len(path_request_model.assetId)+1:]
-            logger.info(f"Stripped assetId prefix from filePath: {query_request_model.filePath} -> {file_path}")
+        # Key the request by the path the file is listed at (after model validation)
+        file_path = file_record_path(path_request_model.databaseId, path_request_model.assetId,
+                                     query_request_model.filePath)
         
         query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId}
         response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
@@ -3994,10 +4008,9 @@ def handle_file_metadata_post(event):
         # Parse request model - validation handled in model (adds leading slash)
         request_model = parse(body, model=CreateFileMetadataRequestModel)
         
-        # Strip assetId prefix if present (after model validation)
-        if request_model.filePath.startswith(f"/{path_request_model.assetId}/"):
-            request_model.filePath = request_model.filePath[len(path_request_model.assetId)+1:]
-            logger.info(f"Stripped assetId prefix from filePath")
+        # Key the request by the path the file is listed at (after model validation)
+        request_model.filePath = file_record_path(path_request_model.databaseId, path_request_model.assetId,
+                                                  request_model.filePath)
         
         response = create_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
@@ -4035,10 +4048,9 @@ def handle_file_metadata_put(event):
         # Parse request model - validation handled in model (adds leading slash)
         request_model = parse(body, model=UpdateFileMetadataRequestModel)
         
-        # Strip assetId prefix if present (after model validation)
-        if request_model.filePath.startswith(f"/{path_request_model.assetId}/"):
-            request_model.filePath = request_model.filePath[len(path_request_model.assetId)+1:]
-            logger.info(f"Stripped assetId prefix from filePath")
+        # Key the request by the path the file is listed at (after model validation)
+        request_model.filePath = file_record_path(path_request_model.databaseId, path_request_model.assetId,
+                                                  request_model.filePath)
         
         response = update_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
@@ -4076,10 +4088,9 @@ def handle_file_metadata_delete(event):
         # Parse request model - validation handled in model (adds leading slash)
         request_model = parse(body, model=DeleteFileMetadataRequestModel)
         
-        # Strip assetId prefix if present (after model validation)
-        if request_model.filePath.startswith(f"/{path_request_model.assetId}/"):
-            request_model.filePath = request_model.filePath[len(path_request_model.assetId)+1:]
-            logger.info(f"Stripped assetId prefix from filePath")
+        # Key the request by the path the file is listed at (after model validation)
+        request_model.filePath = file_record_path(path_request_model.databaseId, path_request_model.assetId,
+                                                  request_model.filePath)
         
         response = delete_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())

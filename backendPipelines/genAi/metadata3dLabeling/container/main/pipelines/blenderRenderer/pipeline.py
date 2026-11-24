@@ -15,6 +15,28 @@ logger = log.get_logger()
 #docker build -f Dockerfile_BlenderRenderer -t blender:v1 .
 #docker run -it -v ${PWD}/inputTest:/data/input:ro -v ${PWD}/outputTest:/data/output:rw blender:v1 "localTest" "BLENDERRENDERER"
 
+def hierarchy_path(object_key: str, asset_root: str = '') -> str:
+    """The S3 prefix whose files are downloaded beside the input: the input's own directory, or, for
+    the object of a single-file asset (an asset root without a trailing ``/`` that names the input key
+    itself), the asset's companion folder ``{key}/``. The object's own directory holds keys the asset
+    does not hold."""
+    key = (object_key or '').lstrip('/')
+    root = (asset_root or '').lstrip('/')
+    if root and not root.endswith('/') and root == key:
+        return object_key + '/'
+    return object_key.removesuffix(os.path.basename(object_key))
+
+
+def passes_through_file(local_root: str, local_path: str) -> bool:
+    """Whether a folder on the way from local_root to local_path is already a file there."""
+    parent = os.path.dirname(local_path)
+    while parent.startswith(local_root + os.sep):
+        if os.path.exists(parent) and not os.path.isdir(parent):
+            return True
+        parent = os.path.dirname(parent)
+    return False
+
+
 def run(stage: PipelineStage, inputMetadata: str = '', inputParameters: str = '', localTest: bool = False) -> PipelineStage:
     """
     Run the Blender Renderer Pipeline.
@@ -84,9 +106,14 @@ def run(stage: PipelineStage, inputMetadata: str = '', inputParameters: str = ''
         filePathsToDownload = []
 
         if includeAllAssetFileHierarchyFiles == "True":
-            #Get all S3 file paths at input bucket directory location
-            logger.info("Getting All Files in Bucket Directory Path: " + input.bucketName + ":" + input.objectKey.removesuffix(os.path.basename(input.objectKey)))
-            filePathsToDownload = s3.get_all_files_in_path(bucket=input.bucketName, path=input.objectKey.removesuffix(os.path.basename(input.objectKey)))
+            #Get all S3 file paths at the input's directory location (hierarchy_path)
+            hierarchyPath = hierarchy_path(input.objectKey, input.assetRootS3Key)
+            logger.info("Getting All Files in Bucket Directory Path: " + input.bucketName + ":" + hierarchyPath)
+            filePathsToDownload = s3.get_all_files_in_path(bucket=input.bucketName, path=hierarchyPath)
+            if hierarchyPath != input.objectKey.removesuffix(os.path.basename(input.objectKey)):
+                #A single-file asset's object is not under its companion folder: stage it at its file name
+                filePathsToDownload = [{"key": input.objectKey, "relativePath": os.path.basename(input.objectKey)}] + [
+                    f for f in filePathsToDownload if f['relativePath'].lstrip('/') != os.path.basename(input.objectKey)]
         else:
             #Get only the S3 file path at input bucket directory location
             logger.info("Getting Single File in Bucket: " + input.bucketName + ":" + input.objectKey)
@@ -110,6 +137,11 @@ def run(stage: PipelineStage, inputMetadata: str = '', inputParameters: str = ''
             # Confine the write to the input directory
             if not localPath.startswith(input_dir_root + os.sep):
                 logger.error(f"Skipping file resolving outside the input directory: {filePath['key']}")
+                continue
+
+            # A folder on the way that is already a file (the staged object sits at its file name)
+            if passes_through_file(input_dir_root, localPath):
+                logger.warning(f"Skipping file whose local path runs through a downloaded file: {filePath['key']}")
                 continue
 
             # Ensure parent directory exists for nested file structures

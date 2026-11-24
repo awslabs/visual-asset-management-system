@@ -192,6 +192,7 @@ def lambda_handler(event, context):
         "externalSfnTaskToken": external_sfn_task_token,
         "assetId": asset_id,
         "databaseId": database_id,
+        "assetRootS3Key": event.get('assetRootS3Key', ''),
     }
 
     try:

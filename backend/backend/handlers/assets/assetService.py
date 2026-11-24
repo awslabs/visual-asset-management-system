@@ -22,6 +22,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
+from common.assetLocations import contains
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items
 from common.s3 import is_object_version_archived, list_all_object_versions
@@ -630,7 +631,10 @@ def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, 
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         if 'Contents' in page:
             for obj in page.get('Contents', []):
-                files.append(obj['Key'])
+                # The prefix also matches keys that only share its characters; a single-file
+                # location holds its own key, its companion folder and its own previews only
+                if contains(prefix, obj['Key']):
+                    files.append(obj['Key'])
 
     def _archive_one(key):
         try:
@@ -764,6 +768,8 @@ def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None
                 if not delete_marker.get('IsLatest'):
                     continue
                 key = delete_marker['Key']
+                if not contains(prefix, key):
+                    continue
                 relative_path = normalize_history_file_path(
                     key[len(prefix):] if key.startswith(prefix) else key
                 )
@@ -1802,8 +1808,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 # Get bucket from assetLocation or use default
                 logger.info(f"Deleting S3 asset objects and all versions with prefix {prefix} from bucket {bucket_name}")
                 
-                # Delete all objects and all versions with this prefix
-                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix)
+                # Delete all objects and all versions this location holds
+                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix, location=prefix)
                 deleted_items["s3_objects"].extend(deleted_keys)
                 
                 # Also delete any auxiliary files
@@ -1815,8 +1821,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 # Get bucket from assetLocation or use default
                 logger.info(f"Deleting S3 preview objects and all versions with prefix {prefix} from bucket {bucket_name}")
                 
-                # Delete all objects and all versions with this prefix
-                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix)
+                # Delete all objects and all versions this location holds
+                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix, location=prefix)
                 deleted_items["s3_objects"].extend(deleted_keys)
         
         # 2. Delete from asset table (both active and archived locations)

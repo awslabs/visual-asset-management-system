@@ -371,6 +371,8 @@ When using Isaac Lab through the VAMS pipeline, the container automatically cons
 
 The pipeline converts these to `video_length = numEpisodes × stepsPerEpisode`.
 
+The uploaded `train-config.json` and `evaluate-config.json` keep the run's settings (`jobName`, `trainingConfig` and `customEnvironmentS3Uri`) and leave out the workflow's callback, location and bucket fields.
+
 ---
 
 ## Troubleshooting
