@@ -1967,12 +1967,11 @@ if CONFIG.enable_writes:
 
         Only the arguments given change; at least one is required. `is_active=False` is the
         REVERSIBLE revoke — the key stops authenticating until it is set back to True, and its value
-        is untouched — so prefer it to delete_api_key() when access may need restoring. The API
-        Gateway authorizer caches its decision for ~30 seconds in BOTH directions: a key that
-        authenticated in that window keeps working until it expires, and a key refused in that window
-        stays refused for the same time after being re-enabled; a disabled key that was not in use is
-        refused at once. `expires_at` is ISO 8601; an empty string clears the expiry in this scope. The
-        key value is never returned.
+        is untouched — so prefer it to delete_api_key() when access may need restoring. VAMS caches API
+        key authorization in BOTH directions (the API Gateway authorizer cache for 30 seconds and the
+        authorizer's API key record cache for 15 seconds): a disabled key can keep working for up to
+        ~45 seconds, and a re-enabled key can stay refused for as long. `expires_at` is ISO 8601; an
+        empty string clears the expiry in this scope. The key value is never returned.
         """
         payload: Dict[str, Any] = {}
         if description is not None:
@@ -1993,10 +1992,10 @@ if CONFIG.enable_writes:
     ) -> Dict[str, Any]:
         """Update one of the AUTHENTICATED user's own API keys.
 
-        Same fields, the same reversible revoke (`is_active=False`) and the same ~30-second authorizer
-        cache window as update_api_key(), limited to the caller's keys — another user's key is reported
-        as not found. `expires_at` must stay within 365 days of the key's ORIGINAL creation date and
-        cannot be cleared in this scope.
+        Same fields, the same reversible revoke (`is_active=False`) and the same authorizer caching
+        (up to ~45 seconds) as update_api_key(), limited to the caller's keys — another user's key is
+        reported as not found. `expires_at` must stay within 365 days of the key's ORIGINAL creation
+        date and cannot be cleared in this scope.
         """
         payload: Dict[str, Any] = {}
         if description is not None:
@@ -2208,8 +2207,8 @@ if CONFIG.enable_destructive:
     def delete_api_key(api_key_id: str) -> Dict[str, Any]:
         """PERMANENTLY delete an API key (administrative scope). Irreversible.
 
-        Every client still presenting the key is locked out at once. Consider
-        update_api_key(is_active=False) first: it revokes the same access and can be undone.
+        Every client still presenting the key is locked out within ~45 seconds (authorizer caches).
+        Consider update_api_key(is_active=False) first: it revokes the same access and can be undone.
         """
         return CLIENT.api.delete_api_key(api_key_id)
 
