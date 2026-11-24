@@ -108,6 +108,8 @@ class ResourceParamKeys:
     LEGACY_METADATA_SCHEMA_STORAGE_TABLE = "dynamoTables/legacy/metadataSchemaStorage"
     LEGACY_TAG_STORAGE_TABLE = "dynamoTables/legacy/tagStorage"
     LEGACY_TAG_TYPE_STORAGE_TABLE = "dynamoTables/legacy/tagTypeStorage"
+    LEGACY_COMMENT_STORAGE_TABLE_V1 = "dynamoTables/legacy/commentStorageV1"
+    LEGACY_SUBSCRIPTIONS_STORAGE_TABLE_V1 = "dynamoTables/legacy/subscriptionsStorageV1"
 
     # Non-asset S3 buckets
     ASSET_AUXILIARY_BUCKET = "s3Buckets/assetAuxiliary"

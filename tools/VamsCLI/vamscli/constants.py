@@ -93,18 +93,15 @@ API_FILE_METADATA = "/database/{databaseId}/assets/{assetId}/metadata/file"
 API_DATABASE_METADATA = "/database/{databaseId}/metadata"
 
 # Comments API Endpoints
-# The composite sort key `assetVersionId:commentId` is two values joined by a colon inside a single
-# path segment, so the third constant is not `str.format`-able: format() reads everything after the
-# colon as a format spec and raises. `build_comment_path()` in utils/api_client.py substitutes it.
-API_COMMENTS_ASSET = "/comments/assets/{assetId}"
-API_COMMENTS_ASSET_VERSION = "/comments/assets/{assetId}/assetVersionId/{assetVersionId}"
-API_COMMENTS_ASSET_VERSION_COMMENT = (
-    "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}"
-)
+# An asset's comments are addressed by its database and asset id; a comment by its own id. The asset
+# version a comment is about is a query filter on the listing and a body field on create.
+API_COMMENTS_ASSET = "/comments/database/{databaseId}/assets/{assetId}"
+API_COMMENTS_ASSET_COMMENT = "/comments/database/{databaseId}/assets/{assetId}/{commentId}"
 
 # Subscription API Endpoints
 # DELETE /subscriptions removes the whole subscription record (and its SNS topic); DELETE
 # /unsubscribe removes one subscriber from it. Two operations on the same record, not aliases.
+# Every write and the check name the asset's database (databaseId) in the body.
 API_SUBSCRIPTIONS = "/subscriptions"
 API_CHECK_SUBSCRIPTION = "/check-subscription"
 API_UNSUBSCRIBE = "/unsubscribe"

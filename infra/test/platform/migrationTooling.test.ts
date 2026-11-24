@@ -405,9 +405,15 @@ describe.each(MIGRATIONS)("$dir migration README IAM policy", (migration) => {
     /** The mapped actions the script needs that `readmeText` does not name. */
     function undocumentedActions(readmeText: string): string[] {
         const migrationScript = readMigrationFile(migration, migration.script);
-        return CALL_TO_ACTION.filter(
-            ([call, action]) => call.test(migrationScript) && !readmeText.includes(action)
-        ).map(([, action]) => action);
+        // Two calls can need one action (put_item and transact_write_items both need PutItem), so each
+        // action is reported once.
+        return Array.from(
+            new Set(
+                CALL_TO_ACTION.filter(
+                    ([call, action]) => call.test(migrationScript) && !readmeText.includes(action)
+                ).map(([, action]) => action)
+            )
+        );
     }
 
     it("documents an IAM action for every mutating or paid call the migration makes", () => {
@@ -420,8 +426,12 @@ describe.each(MIGRATIONS)("$dir migration README IAM policy", (migration) => {
         // `dynamodb_client.query` / `.scan` forms that a `.query(` literal never matched.
         const readme = readMigrationFile(migration, migration.readme);
         const migrationScript = readMigrationFile(migration, migration.script);
-        const needed = CALL_TO_ACTION.filter(([call]) => call.test(migrationScript)).map(
-            ([, action]) => action
+        const needed = Array.from(
+            new Set(
+                CALL_TO_ACTION.filter(([call]) => call.test(migrationScript)).map(
+                    ([, action]) => action
+                )
+            )
         );
         expect(needed.length).toBeGreaterThan(0);
         for (const action of needed) {
@@ -579,7 +589,7 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
 
     it("walks no Amazon S3 bucket itself; the backfills hand the walk to the reindexer", () => {
         // Only assetLocationFolderKeys reads Amazon S3: one HeadObject, the versions of one exact key at a
-        // time, and one single-key listing under '{key}/'.
+        // time, one single-key listing under '{key}/', and one single-version listing under '{key}/'.
         const start = script.indexOf("# STEP: assetLocationFolderKeys\n");
         const end = script.indexOf("# STEP: orphanedTriggers\n");
         expect(start).toBeGreaterThan(-1);
@@ -593,8 +603,12 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
         const listings = locationStep.match(/list_objects_v2\([^)]*\)/g) ?? [];
         expect(listings).toHaveLength(1);
         expect(listings[0]).toContain("MaxKeys=1");
-        const versionListings = locationStep.match(/\.list_object_versions\(/g) ?? [];
-        expect(versionListings).toHaveLength(1);
+        const versionListings = locationStep.match(/\.list_object_versions\([^)]*\)/g) ?? [];
+        expect(versionListings).toHaveLength(2);
+        // The second listing is the archived-folder probe under '{key}/', one entry only.
+        expect(versionListings.filter((call) => call.includes('Prefix=f"{key}/"'))).toEqual([
+            '.list_object_versions(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)',
+        ]);
         const exact = locationStep.slice(locationStep.indexOf("def exact_key_versions("));
         expect(exact.slice(0, 900)).toContain("if entry['Key'] == key");
         expect(script).not.toMatch(/auxiliary/i);
@@ -602,8 +616,8 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
 
     it("moves the copy's records without overwriting, and leaves vectors and execution history", () => {
         const move = script.slice(script.indexOf("def move_record("));
-        expect(move.slice(0, 2000)).toContain("'ConditionExpression': 'attribute_not_exists(#k)'");
-        expect(move.slice(0, 2000)).toContain("'ConditionExpression': 'attribute_exists(#k)'");
+        expect(move.slice(0, 3000)).toContain("'ConditionExpression': 'attribute_not_exists(#k)'");
+        expect(move.slice(0, 3000)).toContain("unchanged = ['attribute_exists(#k)']");
         const block = script.slice(script.indexOf("COPY_TABLE_KEYS = ("));
         const tables = Array.from(
             block.slice(0, block.indexOf("\n)\n")).matchAll(/'([A-Z0-9_]+)'/g)
@@ -640,8 +654,129 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
         expect(body).toMatch(/gated=run_location_keys or /);
         expect(script).toContain("ConditionExpression='#loc.#key = :old'");
         expect(script).toMatch(/parser\.add_argument\('--resume'/);
-        expect(readme).toContain("assetLocationFolderKeys-dry-run-report.jsonl");
+        expect(readme).toContain("assetLocationFolderKeys-dry-run-report-<UTC time>.jsonl");
         expect(readme).toContain("--resume");
+    });
+
+    /** The source of one top-level Python function, up to the next top-level definition. */
+    function pyFunction(name: string): string {
+        const start = script.indexOf(`\ndef ${name}(`);
+        expect(start).toBeGreaterThan(-1);
+        const next = script.slice(start + 1).search(/\n(def |class |#{5,})/);
+        return script.slice(start + 1, next < 0 ? undefined : start + 1 + next + 1);
+    }
+
+    it("classes an archived folder by its versions under '{key}/', after the live listing finds none", () => {
+        const classify = pyFunction("classify_asset_location");
+        const live = classify.indexOf(
+            'list_objects_v2(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)'
+        );
+        const archived = classify.indexOf(
+            'list_object_versions(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)'
+        );
+        expect(live).toBeGreaterThan(-1);
+        expect(archived).toBeGreaterThan(live);
+        expect(classify.slice(archived)).toMatch(
+            /if versions\.get\('Versions'\) or versions\.get\('DeleteMarkers'\):\s*\n\s*return 'folder-without-slash', 'archived'/
+        );
+        expect(classify.slice(archived).indexOf("return 'no-objects'")).toBeGreaterThan(-1);
+    });
+
+    it("re-reads each record consistently and deletes it only if it is unchanged since that read", () => {
+        const move = pyFunction("move_record");
+        const read = move.indexOf("get_item(TableName=table, Key=old_key, ConsistentRead=True)");
+        const transact = move.indexOf("transact_write_items(");
+        expect(read).toBeGreaterThan(-1);
+        expect(transact).toBeGreaterThan(read);
+        // The new record is built from the read, and a record that differs from the listing is left.
+        expect(move).toContain("new_item = dict(current)");
+        expect(move).toMatch(/if current != item:\s*\n\s*return 'changed'/);
+        // The delete is conditioned on every non-key attribute of that read.
+        expect(move).toMatch(
+            /for index, attr in enumerate\(sorted\(a for a in current if a not in key_names\)\)/
+        );
+        expect(move).toContain('unchanged.append(f"#a{index} = :a{index}")');
+        expect(move).toContain("'ReturnValuesOnConditionCheckFailure': 'ALL_OLD'");
+    });
+
+    it("decides a cancelled move by its cancellation reasons and raises on any other reason", () => {
+        const move = pyFunction("move_record");
+        expect(move).toContain("e.response.get('CancellationReasons')");
+        expect(move).toMatch(
+            /if codes\[:1\] == \['ConditionalCheckFailed'\]:\s*\n\s*return 'clash'/
+        );
+        expect(move).toMatch(
+            /codes\[1\] == 'ConditionalCheckFailed':\s*\n\s*return 'changed' if reasons\[1\]\.get\('Item'\) else 'gone'/
+        );
+        // Any other cancellation (a transaction conflict, throttling) is an error: the function ends in a raise.
+        expect(move.trimEnd()).toMatch(/\n\s+raise$/);
+        // No probe of the target decides the outcome after a cancellation.
+        const after = move.slice(move.indexOf("except ClientError as e:"));
+        expect(after).not.toContain("get_item(");
+    });
+
+    it("leaves an asset unmarked, and the step non-zero, while a record of it was edited during the move", () => {
+        const part = pyFunction("move_companion_copy_records");
+        expect(part).toMatch(
+            /if dry_run or counts\['errors'\] != errors_before or counts\['records-changed'\] != changed_before:\s*\n\s*return/
+        );
+        expect(tuple(script, "COPY_COUNTERS")).toEqual(
+            expect.arrayContaining(["records-changed", "copy-chains-deeper"])
+        );
+        const step = pyFunction("run_asset_location_folder_keys_step");
+        expect(step).toMatch(
+            /incomplete = counts\['errors'\] or counts\['unreadable'\] or \(\s*not dry_run and \(counts\['records-changed'\] or /
+        );
+        expect(readme).toContain("edited during the move");
+    });
+
+    it("keeps a real run non-zero, so the backfills wait, until a copy of the copy is moved by hand", () => {
+        const step = pyFunction("run_asset_location_folder_keys_step");
+        expect(step).toMatch(
+            /incomplete = [^\n]*\n?[^\n]*not dry_run and \(counts\['records-changed'\] or counts\['copy-chains-deeper'\]\)\)/
+        );
+        // The README gives the hand move and the marker, its attribute, type and value form.
+        expect(readme).toContain("SET assetLocationCopyRecordsMovedAt = :t");
+        expect(readme).toContain("attribute_not_exists(assetLocationCopyRecordsMovedAt)");
+        expect(readme).toMatch(/string\s+attribute \(`S`\) holding the UTC time in ISO 8601/);
+        expect(readme).toMatch(/On\s+a real run the step then exits non-zero/);
+    });
+
+    it("looks for a copy of the copy before it marks a single-file asset that has no copy", () => {
+        const part = pyFunction("move_companion_copy_records");
+        const body = part.slice(part.indexOf("name = key.rsplit('/', 1)[-1]"));
+        const chain = body.indexOf('exact_key_versions(s3_client, bucket, f"{key}/{name}/{name}"');
+        const earlyFinish = body.search(/if not copy_versions:\s*\n\s*finish\(\)/);
+        expect(chain).toBeGreaterThan(-1);
+        expect(earlyFinish).toBeGreaterThan(chain);
+        // The read lists name that listing.
+        expect(readme).toContain("one version of `{key}/{name}/{name}` (`MaxKeys=1`)");
+    });
+
+    it("writes one report per run, so a later run keeps the lines an earlier one wrote", () => {
+        const files = pyFunction("_location_files");
+        expect(files).toContain("stamp = started.strftime('%Y%m%dT%H%M%SZ')");
+        expect(files).toContain('f"{LOCATION_STEP}-{mode}-report-{stamp}.jsonl"');
+        const fix = pyFunction("fix_asset_location_folder_keys");
+        expect(fix).toContain("with open(report_path, 'a', encoding='utf-8') as report:");
+        expect(fix).not.toMatch(/report_mode|open\(report_path, 'w'/);
+        expect(fix).toContain("report_path = checkpoint['report']");
+    });
+
+    it("holds the billed backfills on a real run whose location step did not finish", () => {
+        const body = pyFunction("main");
+        expect(body).toMatch(
+            /if rc != 0:\s*\n\s*exit_code = rc\s*\n\s*location_keys_unfinished = not dry_run\n/
+        );
+        expect(body.indexOf("location_keys_unfinished = not dry_run")).toBeLessThan(
+            body.indexOf("run_vector_backfill_step(")
+        );
+        expect(body).toContain("if run_vector_backfill and not location_keys_unfinished:");
+        expect(body).toContain("if run_metadata_backfill and not location_keys_unfinished:");
+        expect(readme).toContain("skips `vectorBackfill` and `metadataBackfill`");
+        // A key that can never be read (an unregistered bucket) has a way on: the backfill run on its own.
+        expect(readme).toMatch(/whose bucket is not registered in the S3 asset buckets table/);
+        expect(body).toMatch(/A key that can never be read \(an "\s*\n\s*"unregistered bucket\)/);
     });
 
     it("documents what the deploy creates for Download as Zip and the copy engine", () => {
@@ -758,12 +893,47 @@ describe("the v2.6 to v2.7 assetLocationIndex step writes what the backend reads
         ).map((m) => m[1]);
         expect(steps.indexOf("assetLocationIndex")).toBe(steps.indexOf("all") - 1);
         expect(steps[0]).toBe("assetLocationFolderKeys");
-        expect(body).toMatch(
-            /if run_asset_location_index and location_keys_failed and not dry_run:/
-        );
+        expect(body).toMatch(/if run_asset_location_index and location_keys_unfinished:/);
         // A key the folder-keys step fixes after the index ran keeps its indexed key in step.
         const append = script.slice(script.indexOf("def append_location_slash("));
         expect(append.slice(0, append.indexOf("\ndef "))).toContain("ASSET_LOCATION_KEY_ATTRIBUTE");
+    });
+
+    it("is held on a real run whose folder-keys step did not finish, with a way on for a key never read", () => {
+        const body = script.slice(script.indexOf("def main("));
+        // The flag is set in the folder-keys step's failure branch, before the steps it holds.
+        const folderKeys = body.slice(body.indexOf("run_asset_location_folder_keys_step("));
+        const branch = folderKeys.slice(0, folderKeys.indexOf("if run_orphaned_triggers:"));
+        expect(branch).toMatch(
+            /if rc != 0:\s*\n\s*exit_code = rc\s*\n\s*location_keys_unfinished = not dry_run\n/
+        );
+        // The index step runs only in the branch the flag does not hold.
+        const held = body.slice(
+            body.indexOf("if run_asset_location_index and location_keys_unfinished:")
+        );
+        const runs = held.indexOf("elif run_asset_location_index:");
+        expect(runs).toBeGreaterThan(-1);
+        expect(runs).toBeLessThan(held.indexOf("run_asset_location_index_step("));
+        const skip = held.slice(0, runs).replace(/"\s*\n\s*"/g, "");
+        expect(skip).toContain("outcomes.append(('assetLocationIndex', held_outcome))");
+        expect(skip).toContain("exit_code = exit_code or 1");
+        expect(skip).toContain(
+            "once you have checked its report, run --steps assetLocationIndex on its own."
+        );
+        const readme = readMigrationFile(release, release.readme);
+        const guide = fs.readFileSync(
+            path.join(DOCS_ROOT, "deployment/update-the-solution.md"),
+            "utf8"
+        );
+        for (const page of [readme, guide]) {
+            expect(page).toMatch(/run `--steps assetLocationIndex` on\s+its own/);
+            expect(page).not.toContain("skipped: assetLocationFolderKeys failed in this run");
+        }
+        // The step writes rows whose attributes are missing or wrong, not only rows that lack them.
+        const config = readMigrationFile(release, "v2.6_to_v2.7_migration_config.json");
+        expect(readme).not.toContain("writes only the rows that lack the attributes");
+        expect(guide).not.toContain("writes only rows that lack the two attributes");
+        expect(config).not.toContain("every asset row that lacks them");
     });
 
     it("writes the table name into the marker, which the backend requires", () => {

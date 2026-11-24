@@ -309,7 +309,7 @@ from ..constants import (
     API_ASSET_LINKS, API_ASSET_LINKS_SINGLE, API_ASSET_LINKS_UPDATE, API_ASSET_LINKS_DELETE, API_ASSET_LINKS_FOR_ASSET,
     API_METADATA,
     API_METADATA_SCHEMA_LIST, API_METADATA_SCHEMA_BY_ID,
-    API_COMMENTS_ASSET, API_COMMENTS_ASSET_VERSION, API_COMMENTS_ASSET_VERSION_COMMENT,
+    API_COMMENTS_ASSET, API_COMMENTS_ASSET_COMMENT,
     API_SUBSCRIPTIONS, API_CHECK_SUBSCRIPTION, API_UNSUBSCRIBE,
     API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING, API_SEARCH_NLP,
     API_PIPELINES, API_DATABASE_PIPELINES, API_DATABASE_PIPELINE,
@@ -379,35 +379,6 @@ from .logging import scrub_text
 # (_is_business_refusal_429): retrying cannot clear them. The core one is the per-user active zip
 # download cap; the add-ons declare theirs in addon_constants.py.
 _BUSINESS_REFUSAL_429_MESSAGES = (ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE,) + tuple(ADDON_BUSINESS_REFUSAL_429_MESSAGES)
-
-
-def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) -> str:
-    """Build the comment route whose last segment is the composite `assetVersionId:commentId` key.
-
-    The two values are joined with a colon into ONE path segment, so the constant cannot be
-    formatted: `str.format` treats the text after the colon in `{assetVersionId:commentId}` as a
-    format spec and raises. The parts are substituted literally instead.
-
-    Neither part may contain a colon. The handlers split the segment on ':' and read element [1]
-    as the commentId, so a third colon shifts which value is validated, and a missing one makes
-    that index raise — a 500 rather than a rejected request.
-    """
-    from .exceptions import InvalidCommentDataError
-
-    for label, value in (('asset version ID', asset_version_id), ('comment ID', comment_id)):
-        if not value:
-            raise InvalidCommentDataError(f"A {label} is required to address a comment")
-        if ':' in value:
-            raise InvalidCommentDataError(
-                f"The {label} may not contain a colon; it is the separator of the "
-                "assetVersionId:commentId key"
-            )
-
-    return API_COMMENTS_ASSET_VERSION_COMMENT.replace(
-        '{assetId}', _path_segment(asset_id)
-    ).replace(
-        '{assetVersionId:commentId}', f"{_path_segment(asset_version_id)}:{_path_segment(comment_id)}"
-    )
 
 
 def _has_control_character(text: str) -> bool:
@@ -1746,7 +1717,9 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """Permanently delete a file or files under a prefix."""
         try:
             endpoint = route_path(API_DELETE_FILE, databaseId=database_id, assetId=asset_id)
-            response = self.delete(endpoint, include_auth=True, json=delete_data)
+            # raise_http_errors: the status code reaches the mapping below instead of becoming a
+            # generic APIError in _make_request.
+            response = self.delete(endpoint, include_auth=True, json=delete_data, raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -1983,8 +1956,10 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             }
             if reason:
                 data['reason'] = reason
-                
-            response = self.delete(endpoint, include_auth=True, json=data)
+
+            # raise_http_errors: the status code reaches the mapping below instead of becoming a
+            # generic APIError in _make_request.
+            response = self.delete(endpoint, include_auth=True, json=data, raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -7293,33 +7268,40 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             params['startingToken'] = starting_token
         return params
 
-    def list_asset_comments(self, asset_id: str, max_items: Optional[int] = None,
+    def list_asset_comments(self, database_id: str, asset_id: str, max_items: Optional[int] = None,
                             page_size: Optional[int] = None,
                             starting_token: Optional[str] = None,
-                            show_archived: bool = False) -> Dict[str, Any]:
+                            show_archived: bool = False,
+                            asset_version_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        List every comment on an asset using the /comments/assets/{assetId} GET endpoint.
+        List the comments on an asset using the /comments/database/{databaseId}/assets/{assetId}
+        GET endpoint, optionally only those on one asset version.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID
             max_items: Maximum number of comments to return (optional)
             page_size: Comments per page (optional)
             starting_token: Pagination token (optional)
+            show_archived: Also find an archived asset
+            asset_version_id: Only the comments on this asset version (optional query filter)
 
         Returns:
             API response data: {"message": [comments]}. The route bounds the read with the
             pagination parameters but returns no NextToken, so the token cannot be followed.
 
         Raises:
-            AssetNotFoundError: When the asset cannot be resolved
+            AssetNotFoundError: When the database holds no such asset
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = route_path(API_COMMENTS_ASSET, assetId=asset_id)
+        endpoint = route_path(API_COMMENTS_ASSET, databaseId=database_id, assetId=asset_id)
         params = self._comment_pagination_params(max_items, page_size, starting_token)
         if show_archived:
             # Also find an archived asset
             params['showArchived'] = 'true'
+        if asset_version_id:
+            params['assetVersionId'] = asset_version_id
 
         try:
             response = self.get(
@@ -7328,7 +7310,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                raise AssetNotFoundError(f"Asset '{asset_id}' not found")
+                raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
@@ -7340,65 +7322,45 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to list comments: {e}")
 
-    def list_asset_version_comments(self, asset_id: str, asset_version_id: str,
+    def list_asset_version_comments(self, database_id: str, asset_id: str, asset_version_id: str,
                                     max_items: Optional[int] = None,
                                     page_size: Optional[int] = None,
                                     starting_token: Optional[str] = None,
                                     show_archived: bool = False) -> Dict[str, Any]:
         """
-        List the comments on one version of an asset using the
-        /comments/assets/{assetId}/assetVersionId/{assetVersionId} GET endpoint.
+        List the comments on one version of an asset: the asset's comment listing filtered by
+        the assetVersionId query parameter.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID
             asset_version_id: Asset version ID
             max_items: Maximum number of comments to return (optional)
             page_size: Comments per page (optional)
             starting_token: Pagination token (optional)
+            show_archived: Also find an archived asset
 
         Returns:
             API response data: {"message": [comments]}
 
         Raises:
-            AssetNotFoundError: When the asset cannot be resolved
+            AssetNotFoundError: When the database holds no such asset
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = route_path(
-            API_COMMENTS_ASSET_VERSION,
-            assetId=asset_id, assetVersionId=asset_version_id)
-        params = self._comment_pagination_params(max_items, page_size, starting_token)
-        if show_archived:
-            # Also find an archived asset
-            params['showArchived'] = 'true'
+        return self.list_asset_comments(
+            database_id, asset_id, max_items=max_items, page_size=page_size,
+            starting_token=starting_token, show_archived=show_archived,
+            asset_version_id=asset_version_id)
 
-        try:
-            response = self.get(
-                endpoint, include_auth=True, raise_http_errors=True, params=params)
-            return response.json()
-
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                raise AssetNotFoundError(f"Asset '{asset_id}' not found")
-            elif e.response.status_code in [401, 403]:
-                raise AuthenticationError(f"Authentication failed: {e}")
-            else:
-                raise APIError(f"Failed to list version comments: {e}")
-
-        except GlobalInfrastructureError:
-            raise
-
-        except Exception as e:
-            raise APIError(f"Failed to list version comments: {e}")
-
-    def get_comment(self, asset_id: str, asset_version_id: str, comment_id: str) -> Dict[str, Any]:
+    def get_comment(self, database_id: str, asset_id: str, comment_id: str) -> Dict[str, Any]:
         """
-        Get a single comment using the composite-key GET endpoint
-        /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}.
+        Get a single comment using the
+        /comments/database/{databaseId}/assets/{assetId}/{commentId} GET endpoint.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID
-            asset_version_id: Asset version ID the comment is attached to
             comment_id: Comment ID
 
         Returns:
@@ -7407,14 +7369,15 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Raises:
             CommentNotFoundError: When no such comment exists. The endpoint answers 200 with an
                 empty object rather than a 404, so the emptiness is what identifies it.
-            InvalidCommentDataError: When the two key parts cannot form the composite key
-            AssetNotFoundError: When the asset cannot be resolved
+            InvalidCommentDataError: When the request is rejected
+            AssetNotFoundError: When the database holds no such asset
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        from .exceptions import CommentNotFoundError
+        from .exceptions import CommentNotFoundError, InvalidCommentDataError
 
-        endpoint = build_comment_path(asset_id, asset_version_id, comment_id)
+        endpoint = route_path(API_COMMENTS_ASSET_COMMENT, databaseId=database_id, assetId=asset_id,
+                              commentId=comment_id)
 
         try:
             response = self.get(endpoint, include_auth=True, raise_http_errors=True)
@@ -7422,7 +7385,10 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                raise AssetNotFoundError(f"Asset '{asset_id}' not found")
+                raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                raise InvalidCommentDataError(f"Comment could not be read: {error_message}")
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
@@ -7438,41 +7404,42 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             raise CommentNotFoundError(f"Comment '{comment_id}' not found")
         return body
 
-    def add_comment(self, asset_id: str, asset_version_id: str, comment_id: str,
+    def add_comment(self, database_id: str, asset_id: str, asset_version_id: str,
                     comment_body: str) -> Dict[str, Any]:
         """
-        Add a comment using the composite-key POST endpoint
-        /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}.
+        Add a comment using the /comments/database/{databaseId}/assets/{assetId} POST endpoint.
+
+        The endpoint generates the comment's ID and returns it.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID
-            asset_version_id: Asset version ID to attach the comment to
-            comment_id: Comment ID (the caller owns this value; the endpoint writes
-                unconditionally, so reusing an existing one overwrites that comment)
+            asset_version_id: Asset version ID the comment is about
             comment_body: Comment text
 
         Returns:
-            API response data: {"message": "Succeeded"}
+            API response data: {"message": "Succeeded", "commentId": "<generated id>"}
 
         Raises:
             InvalidCommentDataError: When the request is rejected, including a comment body over
                 the endpoint's length limit
-            AssetNotFoundError: When the asset cannot be resolved
+            AssetNotFoundError: When the database holds no such asset
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
         from .exceptions import InvalidCommentDataError
 
-        endpoint = build_comment_path(asset_id, asset_version_id, comment_id)
+        endpoint = route_path(API_COMMENTS_ASSET, databaseId=database_id, assetId=asset_id)
 
         try:
-            response = self.post(endpoint, data={'commentBody': comment_body},
-                                 include_auth=True, raise_http_errors=True)
+            response = self.post(
+                endpoint, data={'commentBody': comment_body, 'assetVersionId': asset_version_id},
+                include_auth=True, raise_http_errors=True)
             return response.json()
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                raise AssetNotFoundError(f"Asset '{asset_id}' not found")
+                raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
             elif e.response.status_code == 400:
                 error_message = _api_error_message(e.response, str(e))
                 raise InvalidCommentDataError(f"Comment could not be added: {error_message}")
@@ -7487,17 +7454,17 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to add comment: {e}")
 
-    def update_comment(self, asset_id: str, asset_version_id: str, comment_id: str,
+    def update_comment(self, database_id: str, asset_id: str, comment_id: str,
                        comment_body: str) -> Dict[str, Any]:
         """
-        Replace a comment's text using the composite-key PUT endpoint
-        /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}.
+        Replace a comment's text using the
+        /comments/database/{databaseId}/assets/{assetId}/{commentId} PUT endpoint.
 
         Only the comment's creator may edit it; the endpoint answers 403 otherwise.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID
-            asset_version_id: Asset version ID the comment is attached to
             comment_id: Comment ID
             comment_body: New comment text
 
@@ -7512,7 +7479,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         from .exceptions import CommentNotFoundError, InvalidCommentDataError
 
-        endpoint = build_comment_path(asset_id, asset_version_id, comment_id)
+        endpoint = route_path(API_COMMENTS_ASSET_COMMENT, databaseId=database_id, assetId=asset_id,
+                              commentId=comment_id)
 
         try:
             response = self.put(endpoint, data={'commentBody': comment_body},
@@ -7521,8 +7489,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                # The endpoint reports both a missing comment ("Record not found") and an
-                # unresolvable asset ("Asset not found") as 404, so its message is carried through.
+                # The endpoint reports both a missing comment ("Record not found") and a missing
+                # asset ("Asset not found") as 404, so its message is carried through.
                 error_message = _api_error_message(e.response, str(e))
                 raise CommentNotFoundError(f"Comment could not be updated: {error_message}")
             elif e.response.status_code == 400:
@@ -7539,17 +7507,17 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to update comment: {e}")
 
-    def delete_comment(self, asset_id: str, asset_version_id: str, comment_id: str) -> Dict[str, Any]:
+    def delete_comment(self, database_id: str, asset_id: str, comment_id: str) -> Dict[str, Any]:
         """
-        Delete a comment using the composite-key DELETE endpoint
-        /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}.
+        Delete a comment using the
+        /comments/database/{databaseId}/assets/{assetId}/{commentId} DELETE endpoint.
 
         The comment is soft-deleted: the record moves to a '#deleted' partition rather than being
         removed. Only the comment's creator may delete it; the endpoint answers 403 otherwise.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID
-            asset_version_id: Asset version ID the comment is attached to
             comment_id: Comment ID
 
         Returns:
@@ -7563,7 +7531,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         from .exceptions import CommentNotFoundError, InvalidCommentDataError
 
-        endpoint = build_comment_path(asset_id, asset_version_id, comment_id)
+        endpoint = route_path(API_COMMENTS_ASSET_COMMENT, databaseId=database_id, assetId=asset_id,
+                              commentId=comment_id)
 
         try:
             response = self.delete(endpoint, include_auth=True, raise_http_errors=True)
@@ -7591,7 +7560,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     # Subscription API Methods
     # ------------------------------------------------------------------
     # /subscriptions carries all four verbs and keys a subscription on
-    # (eventName, entityName, entityId); the subscribers list is part of the record. The endpoint
+    # (eventName, entityName, databaseId, entityId); the subscribers list is part of the record. The endpoint
     # requires a non-empty subscribers list on DELETE as well, even though the delete removes the
     # whole record. /unsubscribe is the different operation: it removes ONE subscriber from a
     # record that otherwise stays. Both answer with the {"message": ...} envelope.
@@ -7640,21 +7609,23 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             raise APIError(f"Failed to list subscriptions: {e}")
 
     @staticmethod
-    def _subscription_body(event_name: str, entity_name: str, entity_id: str,
+    def _subscription_body(event_name: str, entity_name: str, database_id: str, entity_id: str,
                            subscribers: List[str]) -> Dict[str, Any]:
         """The request body every /subscriptions and /unsubscribe write takes.
 
-        All four keys are required on all of them — the endpoint rejects a body missing any one,
-        including a DELETE, where the subscribers list is validated but not used.
+        All five keys are required on all of them — the endpoint rejects a body missing any one,
+        including a DELETE, where the subscribers list is validated but not used. An asset is
+        identified by its database and asset id, so databaseId names the entity's database.
         """
         return {
             'eventName': event_name,
             'entityName': entity_name,
+            'databaseId': database_id,
             'entityId': entity_id,
             'subscribers': list(subscribers),
         }
 
-    def create_subscription(self, event_name: str, entity_name: str, entity_id: str,
+    def create_subscription(self, event_name: str, entity_name: str, database_id: str, entity_id: str,
                             subscribers: List[str]) -> Dict[str, Any]:
         """
         Create a subscription, or add subscribers to an existing one, using the
@@ -7663,6 +7634,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Args:
             event_name: Event to subscribe to (the API accepts 'Asset Version Change')
             entity_name: Entity type (the API accepts 'Asset')
+            database_id: Database ID of the entity's asset
             entity_id: ID of the entity — the assetId for an Asset subscription
             subscribers: VAMS user IDs to subscribe. Each is resolved to the e-mail on the
                 user's profile, falling back to the user ID when it is itself an e-mail address.
@@ -7682,7 +7654,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         try:
             response = self.post(
                 API_SUBSCRIPTIONS,
-                data=self._subscription_body(event_name, entity_name, entity_id, subscribers),
+                data=self._subscription_body(event_name, entity_name, database_id, entity_id, subscribers),
                 include_auth=True, raise_http_errors=True)
             return response.json()
 
@@ -7706,7 +7678,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to create subscription: {e}")
 
-    def update_subscription(self, event_name: str, entity_name: str, entity_id: str,
+    def update_subscription(self, event_name: str, entity_name: str, database_id: str, entity_id: str,
                             subscribers: List[str]) -> Dict[str, Any]:
         """
         Replace a subscription's subscriber list using the /subscriptions PUT endpoint.
@@ -7717,6 +7689,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Args:
             event_name: Event the subscription is for
             entity_name: Entity type
+            database_id: Database ID of the entity's asset
             entity_id: ID of the entity
             subscribers: The complete new list of VAMS user IDs
 
@@ -7735,7 +7708,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         try:
             response = self.put(
                 API_SUBSCRIPTIONS,
-                data=self._subscription_body(event_name, entity_name, entity_id, subscribers),
+                data=self._subscription_body(event_name, entity_name, database_id, entity_id, subscribers),
                 include_auth=True, raise_http_errors=True)
             return response.json()
 
@@ -7759,7 +7732,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to update subscription: {e}")
 
-    def delete_subscription(self, event_name: str, entity_name: str, entity_id: str,
+    def delete_subscription(self, event_name: str, entity_name: str, database_id: str, entity_id: str,
                             subscribers: List[str]) -> Dict[str, Any]:
         """
         Delete a whole subscription using the /subscriptions DELETE endpoint. For an Asset
@@ -7768,6 +7741,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Args:
             event_name: Event the subscription is for
             entity_name: Entity type
+            database_id: Database ID of the entity's asset
             entity_id: ID of the entity
             subscribers: Required by the endpoint, which validates the list and then removes the
                 whole record regardless of its contents
@@ -7788,7 +7762,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             response = self.delete(
                 API_SUBSCRIPTIONS,
                 include_auth=True, raise_http_errors=True,
-                json=self._subscription_body(event_name, entity_name, entity_id, subscribers))
+                json=self._subscription_body(event_name, entity_name, database_id, entity_id, subscribers))
             return response.json()
 
         except requests.exceptions.HTTPError as e:
@@ -7811,7 +7785,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to delete subscription: {e}")
 
-    def unsubscribe(self, event_name: str, entity_name: str, entity_id: str,
+    def unsubscribe(self, event_name: str, entity_name: str, database_id: str, entity_id: str,
                     subscriber: str) -> Dict[str, Any]:
         """
         Remove one subscriber from a subscription using the /unsubscribe DELETE endpoint. The
@@ -7820,6 +7794,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Args:
             event_name: Event the subscription is for
             entity_name: Entity type
+            database_id: Database ID of the entity's asset
             entity_id: ID of the entity
             subscriber: The one VAMS user ID to remove. The endpoint reads only the first entry
                 of the list it is sent, so this takes a single value rather than a list.
@@ -7840,7 +7815,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             response = self.delete(
                 API_UNSUBSCRIBE,
                 include_auth=True, raise_http_errors=True,
-                json=self._subscription_body(event_name, entity_name, entity_id, [subscriber]))
+                json=self._subscription_body(event_name, entity_name, database_id, entity_id, [subscriber]))
             return response.json()
 
         except requests.exceptions.HTTPError as e:
@@ -7862,7 +7837,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         except Exception as e:
             raise APIError(f"Failed to unsubscribe: {e}")
 
-    def check_subscription(self, asset_id: str, user_id: str) -> Dict[str, Any]:
+    def check_subscription(self, database_id: str, asset_id: str, user_id: str) -> Dict[str, Any]:
         """
         Check whether a user is subscribed to an asset's version changes using the
         /check-subscription POST endpoint.
@@ -7871,6 +7846,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         neither is a parameter here.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID to check
             user_id: VAMS user ID to look for among the subscribers
 
@@ -7890,7 +7866,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         try:
             response = self.post(
                 API_CHECK_SUBSCRIPTION,
-                data={'assetId': asset_id, 'userId': user_id},
+                data={'databaseId': database_id, 'assetId': asset_id, 'userId': user_id},
                 include_auth=True, raise_http_errors=True)
             return response.json()
 

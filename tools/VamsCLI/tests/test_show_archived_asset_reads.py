@@ -53,9 +53,9 @@ _CLIENT_READS = [
     ("asset-link-metadata",
      lambda c, archived: c.get_asset_link_metadata_v2('link-1', show_archived=archived)),
     ("asset-comments",
-     lambda c, archived: c.list_asset_comments('a1', show_archived=archived)),
+     lambda c, archived: c.list_asset_comments('db1', 'a1', show_archived=archived)),
     ("asset-version-comments",
-     lambda c, archived: c.list_asset_version_comments('a1', '1', show_archived=archived)),
+     lambda c, archived: c.list_asset_version_comments('db1', 'a1', '1', show_archived=archived)),
 ]
 
 
@@ -89,7 +89,7 @@ _COMMANDS = [
      'metadata', 'get_file_metadata_v2'),
     ("metadata-asset-link-list", metadata, ['asset-link', 'list', '--asset-link-id', 'link-1'],
      'metadata', 'get_asset_link_metadata_v2'),
-    ("comment-list", comment, ['list', '-a', 'a1'], 'comment', 'list_asset_comments'),
+    ("comment-list", comment, ['list', '-d', 'db1', '-a', 'a1'], 'comment', 'list_asset_comments'),
 ]
 
 _REPLIES = {

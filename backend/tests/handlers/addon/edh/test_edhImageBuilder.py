@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Image Builder materialization: deterministic names and versions, already-exists reuse, parent
 resolution, image description and cleanup — against recording fakes of the three AWS clients."""
+import dataclasses
 import re
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -10,6 +11,11 @@ import pytest
 from botocore.exceptions import ClientError
 
 from backend.backend.handlers.addon.edh.common import edhImageBuilder as ib_mod
+from backend.tests.handlers.addon.edh.edhAmiTestSupport import install_parent_parameters, parent_parameters
+from backend.tests.handlers.addon.edh.edhParameterStoreTestSupport import (
+    lookup_clock, reads_through_the_shared_lookup, serve_parameters, shared_lookup,
+)
+from backend.tests.ssmParametersStub import always, throttled
 
 ALREADY = type("ResourceAlreadyExistsException", (Exception,), {})
 NOT_FOUND = type("ResourceNotFoundException", (Exception,), {})
@@ -71,13 +77,14 @@ def ctx(**overrides):
     ec2 = MagicMock()
     ec2.describe_images.return_value = {"Images": [{"RootDeviceName": "/dev/xvda", "BlockDeviceMappings": [
         {"DeviceName": "/dev/xvda", "Ebs": {"SnapshotId": "snap-1"}}]}]}
-    ssm = MagicMock()
-    ssm.get_parameter.return_value = {"Parameter": {"Value": "ami-0abc0abc0abc0abc0"}}
     values = dict(prefix="vams-t-edh", region="us-east-1", partition="aws", account="123456789012",
                   subnet_id="subnet-1", security_group_id="sg-1", instance_profile_name="prof",
-                  cluster_id="edh-test", ib=ib, ec2=ec2, ssm=ssm)
+                  cluster_id="edh-test", ib=ib, ec2=ec2)
     values.update(overrides)
-    return ib_mod.ImageBuilderContext(**values)
+    context = ib_mod.ImageBuilderContext(**values)
+    # The parent image parameter is read through common.ssmParameters; its answer goes behind that lookup.
+    context.parameter_store = install_parent_parameters(parent_parameters())
+    return context
 
 
 @pytest.mark.unit
@@ -271,19 +278,19 @@ class TestContextFromEnv:
     def test_the_artefacts_bucket_is_optional_and_read_from_the_environment(self, monkeypatch):
         _set_build_environment(monkeypatch)
         monkeypatch.delenv("EDH_AMI_BUILD_ARTEFACTS_BUCKET", raising=False)
-        ctx_empty = ib_mod.context_from_env(ib=MagicMock(), ec2=MagicMock(), ssm=MagicMock())
+        ctx_empty = ib_mod.context_from_env(ib=MagicMock(), ec2=MagicMock())
         assert ctx_empty.artefacts_bucket == ""
         monkeypatch.setenv("EDH_AMI_BUILD_ARTEFACTS_BUCKET", "vams-artefacts")
-        ctx_set = ib_mod.context_from_env(ib=MagicMock(), ec2=MagicMock(), ssm=MagicMock())
+        ctx_set = ib_mod.context_from_env(ib=MagicMock(), ec2=MagicMock())
         assert ctx_set.artefacts_bucket == "vams-artefacts"
 
     def test_the_deployment_values_are_read_from_the_environment(self, monkeypatch):
         _set_build_environment(monkeypatch)
         monkeypatch.delenv("EDH_SESSION_SECRET_PREFIX", raising=False)
-        unset = ib_mod.context_from_env(ib=MagicMock(), ec2=MagicMock(), ssm=MagicMock())
+        unset = ib_mod.context_from_env(ib=MagicMock(), ec2=MagicMock())
         assert unset.deployment_parameters == {"sessionSecretPrefix": ""}
         monkeypatch.setenv("EDH_SESSION_SECRET_PREFIX", "team-a/edh-session/")
-        assert ib_mod.context_from_env(ib=MagicMock(), ec2=MagicMock(), ssm=MagicMock()).deployment_parameters == (
+        assert ib_mod.context_from_env(ib=MagicMock(), ec2=MagicMock()).deployment_parameters == (
             {"sessionSecretPrefix": "team-a/edh-session/"})
         assert ib_mod.deployment_parameters_from_env() == {"sessionSecretPrefix": "team-a/edh-session/"}
 
@@ -296,12 +303,14 @@ class TestContextFromEnv:
             built.append((name, config))
             return MagicMock(name=name)
         monkeypatch.setattr(ib_mod.boto3, "client", client)
-        ec2, ssm = MagicMock(), MagicMock()
+        ec2 = MagicMock()
 
-        c = ib_mod.context_from_env(ib=MagicMock(), ec2=ec2, ssm=ssm)
+        c = ib_mod.context_from_env(ib=MagicMock(), ec2=ec2)
 
-        assert [name for name, _ in built] == ["ec2", "ssm"]
-        assert c.lookup_ec2 is not ec2 and c.lookup_ssm is not ssm
+        # The parent image parameter is read through common.ssmParameters, so no SSM client is built.
+        assert [name for name, _ in built] == ["ec2"]
+        assert c.lookup_ec2 is not ec2
+        assert not hasattr(c, "ssm") and not hasattr(c, "lookup_ssm")
         for _, config in built:
             assert (config.connect_timeout, config.read_timeout) == (2, 3)
             # Two attempts in all; botocore reads max_attempts as retries after the first.
@@ -309,12 +318,11 @@ class TestContextFromEnv:
 
     def test_given_lookup_clients_are_used_and_a_bare_context_has_none(self, monkeypatch):
         _set_build_environment(monkeypatch)
-        lookup_ec2, lookup_ssm = MagicMock(), MagicMock()
-        c = ib_mod.context_from_env(ib=MagicMock(), ec2=MagicMock(), ssm=MagicMock(),
-                                    lookup_ec2=lookup_ec2, lookup_ssm=lookup_ssm)
-        assert c.lookup_ec2 is lookup_ec2 and c.lookup_ssm is lookup_ssm
+        lookup_ec2 = MagicMock()
+        c = ib_mod.context_from_env(ib=MagicMock(), ec2=MagicMock(), lookup_ec2=lookup_ec2)
+        assert c.lookup_ec2 is lookup_ec2
         bare = ctx()
-        assert bare.lookup_ec2 is None and bare.lookup_ssm is None
+        assert bare.lookup_ec2 is None
 
 
 @pytest.mark.unit
@@ -408,7 +416,7 @@ class TestParentResolution:
     def test_an_ssm_parameter_is_read(self):
         c = ctx()
         assert ib_mod.resolve_parent_image("ssm:/aws/service/x", ctx=c, edh_client=None, kind="vdi") == "ami-0abc0abc0abc0abc0"
-        c.ssm.get_parameter.assert_called_once_with(Name="/aws/service/x")
+        c.parameter_store.get_parameter.assert_called_once_with(Name="/aws/service/x")
 
     def test_an_edh_stack_is_looked_up_by_name_in_the_kind_catalog(self):
         edh = MagicMock()
@@ -433,7 +441,7 @@ class TestParentResolutionRefusalsNameNoInput:
 
     def test_an_unreadable_ssm_parameter(self, monkeypatch):
         c = ctx()
-        c.ssm.get_parameter.side_effect = _client_error("ParameterNotFound")
+        c.parameter_store.get_parameter.side_effect = _client_error("ParameterNotFound")
         refusal, logged = self._refusal_and_log(monkeypatch, "ssm:/team/parent-ami", c=c)
         assert refusal == ib_mod.PARENT_SSM_PARAMETER_UNREADABLE
         assert "/team/parent-ami" not in refusal and "ParameterNotFound" not in refusal
@@ -718,3 +726,76 @@ class TestImagesAndCleanup:
         warnings = ib_mod.delete_recipe_resources(c, {"componentArns": [managed, referenced, own]})
         assert [call.kwargs["componentBuildVersionArn"] for call in c.ib.delete_component.call_args_list] == [own]
         assert warnings == []
+
+
+@pytest.mark.unit
+class TestTheParentImageParameterRead:
+    """An ssm: parent is read through common.ssmParameters: one bounded read, repeated on a Parameter Store that
+    cannot be reached in time only while the caller's wait lasts."""
+
+    def _wait_on(self, monkeypatch):
+        clock = lookup_clock()
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            clock.sleep(seconds)
+        monkeypatch.setattr(ib_mod, "_monotonic", clock.monotonic)
+        monkeypatch.setattr(ib_mod, "_sleep", sleep)
+        return clock, sleeps
+
+    def test_the_read_goes_through_the_shared_lookup_and_the_context_holds_no_ssm_client(self):
+        assert reads_through_the_shared_lookup(ib_mod), "the parent image is read on a client of its own"
+        names = {field.name for field in dataclasses.fields(ib_mod.ImageBuilderContext)}
+        assert "ssm" not in names and "lookup_ssm" not in names
+        c = ctx()
+        assert ib_mod.resolve_parent_image("ssm:/aws/service/x", ctx=c, edh_client=None, kind="vdi") == (
+            "ami-0abc0abc0abc0abc0")
+        c.parameter_store.get_parameter.assert_called_once_with(Name="/aws/service/x")
+
+    def test_without_a_wait_a_throttled_read_is_refused_within_the_budget(self, monkeypatch):
+        c = ctx()
+        serve_parameters(monkeypatch, fault=always(throttled))
+        clock, sleeps = self._wait_on(monkeypatch)
+        started = clock.now
+        with pytest.raises(ib_mod.ParentImageUnavailable) as err:
+            ib_mod.resolve_parent_image("ssm:/aws/service/x", ctx=c, edh_client=None, kind="vdi")
+        helper = shared_lookup()
+        assert str(err.value) == ib_mod.PARENT_SSM_PARAMETER_UNREADABLE
+        assert clock.now - started <= helper.PARAMETER_READ_BUDGET_SECONDS + helper.READ_RETRY_MAX_SLEEP_SECONDS
+        assert sleeps == []
+
+    def test_a_wait_rides_out_a_short_throttle(self, monkeypatch):
+        clock = lookup_clock()
+        recover_at = clock.now + 12
+
+        def fault(name):
+            if clock.now < recover_at:
+                raise throttled()
+        parameters = serve_parameters(monkeypatch, values={"/aws/service/x": "ami-0fedcba9876543210"}, fault=fault)
+        _, sleeps = self._wait_on(monkeypatch)
+        assert ib_mod.read_parent_parameter("/aws/service/x", transient_wait_seconds=30) == "ami-0fedcba9876543210"
+        assert sleeps and set(sleeps) == {ib_mod.PARENT_IMAGE_READ_RETRY_PAUSE_SECONDS}
+        assert parameters.calls, "control: the parameter was asked for"
+
+    def test_a_wait_ends_when_parameter_store_does_not_recover(self, monkeypatch):
+        c = ctx()
+        serve_parameters(monkeypatch, fault=always(throttled))
+        clock, sleeps = self._wait_on(monkeypatch)
+        started = clock.now
+        with pytest.raises(ib_mod.ParentImageUnavailable):
+            ib_mod.resolve_parent_image("ssm:/aws/service/x", ctx=c, edh_client=None, kind="vdi",
+                                        transient_wait_seconds=30)
+        helper = shared_lookup()
+        assert clock.now - started <= 30 + helper.PARAMETER_READ_BUDGET_SECONDS + helper.READ_RETRY_MAX_SLEEP_SECONDS
+        assert sum(sleeps) <= 30
+
+    def test_a_refusal_that_is_not_transient_is_not_waited_on(self, monkeypatch):
+        c = ctx()
+        parameters = serve_parameters(monkeypatch, fault=always(lambda: _client_error("AccessDeniedException")))
+        _, sleeps = self._wait_on(monkeypatch)
+        with pytest.raises(ib_mod.ParentImageUnavailable) as err:
+            ib_mod.resolve_parent_image("ssm:/team/parent-ami", ctx=c, edh_client=None, kind="vdi",
+                                        transient_wait_seconds=30)
+        assert str(err.value) == ib_mod.PARENT_SSM_PARAMETER_UNREADABLE
+        assert sleeps == [] and parameters.calls == ["/team/parent-ami"]

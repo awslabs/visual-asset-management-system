@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -22,6 +23,12 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+from common.ssmParameters import (
+    ParameterNotFoundError,
+    ParameterReadError,
+    ParameterUnavailableError,
+    read_parameter_value,
+)
 from customLogging.logger import safeLogger
 from models.addon.edh import AMI_RECIPE_COMPONENT_DATA_MAX_BYTES
 from .edhCatalogFields import KIND_BY_IMAGE_KIND
@@ -29,9 +36,14 @@ from .edhCatalogFields import KIND_BY_IMAGE_KIND
 logger = safeLogger(service_name="EdhImageBuilder")
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
-# The clients a recipe save looks the architecture up with: two attempts in all, each bounded by its connect
-# and read timeouts. edhAmiRecipes.ARCHITECTURE_LOOKUP_BUDGET_SECONDS bounds the lookups of one save.
+# The EC2 client a recipe save looks the architecture up with: two attempts in all, each bounded by its connect
+# and read timeouts. edhAmiRecipes.ARCHITECTURE_LOOKUP_BUDGET_SECONDS bounds the lookups of one save. The parent
+# image's parameter is read through common.ssmParameters, which bounds that read on its own.
 lookup_retry_config = Config(connect_timeout=2, read_timeout=3, retries={'total_max_attempts': 2, 'mode': 'standard'})
+# A build started at deployment or by the registrar rides out a short Parameter Store throttle on its parent
+# image's parameter: while the caller's wait lasts, a read Parameter Store could not answer in time is repeated
+# after this pause. A build an API request starts waits for nothing beyond the one bounded read.
+PARENT_IMAGE_READ_RETRY_PAUSE_SECONDS = 5.0
 
 RECIPE_TAG = "vams:edhAmiRecipe"
 HASH_TAG = "vams:edhAmiRecipeHash"
@@ -79,6 +91,10 @@ IN_USE_INSTANCE_STATES = ("pending", "running", "stopping", "stopped")
 
 _PLACEHOLDER = re.compile(r"\$\{(ASSET|PARAM|DEPLOY)_([^}]*)\}")
 
+# Clock and sleep of the parent image read's wait.
+_monotonic = time.monotonic
+_sleep = time.sleep
+
 
 class ParentImageUnavailable(Exception):
     """The recipe's parent image cannot be resolved to an AMI id."""
@@ -103,22 +119,20 @@ class ImageBuilderContext:
     cluster_id: str
     ib: Any
     ec2: Any
-    ssm: Any
     # Bucket the recipe bundles and asset trees were uploaded to; empty when the deployment seeds no
     # recipe with assets.
     artefacts_bucket: str = ""
     # ``${DEPLOY_<key>}`` values, keyed as DEPLOYMENT_PARAMETERS.
     deployment_parameters: Dict[str, str] = field(default_factory=dict)
-    # EC2 and SSM clients on lookup_retry_config, for the architecture lookups of a recipe save.
+    # EC2 client on lookup_retry_config, for the architecture lookups of a recipe save.
     lookup_ec2: Any = None
-    lookup_ssm: Any = None
 
 
 def deployment_parameters_from_env() -> Dict[str, str]:
     return {key: os.environ.get(variable, "") for key, (variable, _) in DEPLOYMENT_PARAMETERS.items()}
 
 
-def context_from_env(*, ib=None, ec2=None, ssm=None, lookup_ec2=None, lookup_ssm=None) -> ImageBuilderContext:
+def context_from_env(*, ib=None, ec2=None, lookup_ec2=None) -> ImageBuilderContext:
     return ImageBuilderContext(
         prefix=os.environ["EDH_AMI_BUILD_PREFIX"],
         cluster_id=os.environ["EDH_CLUSTER_ID"],
@@ -132,9 +146,7 @@ def context_from_env(*, ib=None, ec2=None, ssm=None, lookup_ec2=None, lookup_ssm
         deployment_parameters=deployment_parameters_from_env(),
         ib=ib or boto3.client("imagebuilder", config=retry_config),
         ec2=ec2 or boto3.client("ec2", config=retry_config),
-        ssm=ssm or boto3.client("ssm", config=retry_config),
         lookup_ec2=lookup_ec2 or boto3.client("ec2", config=lookup_retry_config),
-        lookup_ssm=lookup_ssm or boto3.client("ssm", config=lookup_retry_config),
     )
 
 
@@ -242,16 +254,34 @@ def build_instance_types(recipe: Dict[str, Any]) -> List[str]:
     return [value] if isinstance(value, str) else list(value)
 
 
-def resolve_parent_image(parent_image: str, *, ctx: ImageBuilderContext, edh_client, kind: str) -> str:
+def read_parent_parameter(name: str, *, transient_wait_seconds: float = 0.0) -> str:
+    """The parent image parameter's value, read now through common.ssmParameters (bounded, uncached: a public
+    "latest" parameter moves when AWS publishes an AMI). A read refused because Parameter Store could not be
+    reached in time (``ParameterUnavailableError``) is repeated after ``PARENT_IMAGE_READ_RETRY_PAUSE_SECONDS``
+    while ``transient_wait_seconds`` lasts; every other refusal, and the last transient one, is raised."""
+    deadline = _monotonic() + max(0.0, transient_wait_seconds)
+    while True:
+        try:
+            return read_parameter_value(name)
+        except ParameterUnavailableError:
+            if _monotonic() + PARENT_IMAGE_READ_RETRY_PAUSE_SECONDS > deadline:
+                raise
+            _sleep(PARENT_IMAGE_READ_RETRY_PAUSE_SECONDS)
+
+
+def resolve_parent_image(parent_image: str, *, ctx: ImageBuilderContext, edh_client, kind: str,
+                         transient_wait_seconds: float = 0.0) -> str:
+    """The recipe's parent image as an AMI id. An ``ssm:`` parent is read through ``read_parent_parameter``,
+    waiting up to ``transient_wait_seconds`` on a Parameter Store that cannot be reached in time; any refusal is
+    ParentImageUnavailable(PARENT_SSM_PARAMETER_UNREADABLE)."""
     if parent_image.startswith("ami-"):
         return parent_image
     if parent_image.startswith(PARENT_SSM_PREFIX):
         name = parent_image[len(PARENT_SSM_PREFIX):]
         try:
-            return ctx.ssm.get_parameter(Name=name)["Parameter"]["Value"]
-        except ClientError as err:
-            logger.warning(f"Parent image SSM parameter {name} could not be read "
-                           f"({err.response.get('Error', {}).get('Code')})")
+            return read_parent_parameter(name, transient_wait_seconds=transient_wait_seconds)
+        except (ParameterNotFoundError, ParameterUnavailableError, ParameterReadError, ValueError) as err:
+            logger.warning(f"Parent image SSM parameter {name} could not be read ({type(err).__name__})")
             raise ParentImageUnavailable(PARENT_SSM_PARAMETER_UNREADABLE)
     if parent_image.startswith(PARENT_EDH_STACK_PREFIX):
         stack_name = parent_image[len(PARENT_EDH_STACK_PREFIX):]

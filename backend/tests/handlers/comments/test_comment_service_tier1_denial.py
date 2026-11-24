@@ -17,9 +17,10 @@ from backend.tests.conftest import TestComment  # noqa: F401
 import backend.backend.handlers.comments.commentService as commentService
 
 _CALLER = "test_email@amazon.com"
+_DATABASE_ID = "comment-denial-db"
 _ASSET_ID = "x-comment-denial-asset"
-_VERSION_AND_COMMENT_ID = "test-version-id:test-comment-id"
-_PATH = f"/comments/assets/{_ASSET_ID}/assetVersionId:commentId/{_VERSION_AND_COMMENT_ID}"
+_COMMENT_ID = "test-comment-id"
+_PATH = f"/comments/database/{_DATABASE_ID}/assets/{_ASSET_ID}/{_COMMENT_ID}"
 
 
 def _rest_event(method, query=None):
@@ -33,7 +34,7 @@ def _rest_event(method, query=None):
             "identity": {"sourceIp": "10.0.0.1"},
             "authorizer": {"jwt": {"claims": {"sub": "test_sub", "email": _CALLER}}},
         },
-        "pathParameters": {"assetId": _ASSET_ID, "assetVersionId:commentId": _VERSION_AND_COMMENT_ID},
+        "pathParameters": {"databaseId": _DATABASE_ID, "assetId": _ASSET_ID, "commentId": _COMMENT_ID},
         "queryStringParameters": query,
     }
 
@@ -75,7 +76,7 @@ def _install(monkeypatch, tokens, api_allowed):
 def _assert_denied(response, reached):
     assert response["statusCode"] == 403
     assert json.loads(response["body"]) == {"message": "Action not allowed"}
-    assert _ASSET_ID not in response["body"]
+    assert _ASSET_ID not in response["body"] and _DATABASE_ID not in response["body"]
     assert reached == []
 
 

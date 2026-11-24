@@ -147,15 +147,15 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 }
 ```
 
-| Field               | Type          | Required | Description                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`        | string        | Yes      | Target database identifier.                                                                                                                                                                                                                                                                                                                                                                  |
-| `assetName`         | string        | Yes      | Display name for the asset (1-256 characters).                                                                                                                                                                                                                                                                                                                                               |
-| `description`       | string        | Yes      | Asset description (4-256 characters).                                                                                                                                                                                                                                                                                                                                                        |
-| `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                                                                                                                                                                                                                                                                                                         |
-| `assetId`           | string        | No       | Explicit asset identifier (2-255 characters), ASCII characters only. Cannot contain forward slashes. Cannot be `pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces`, `vams.preparedDownloads`. Auto-generated if omitted.                                                                                                                |
-| `tags`              | array[string] | No       | Tags for categorization. Each name must resolve in the asset's database or `GLOBAL`, and every required tag type that has tags must be represented. See [Tags](../concepts/tags.md).                                                                                                                                                                                                         |
-| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket for the new asset. A key ending in `/` is a folder; any other key is one object with its folder `{key}/` and previews. A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces` or `vams.preparedDownloads`) as any path segment is refused with 400. |
+| Field               | Type          | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------- | ------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`        | string        | Yes      | Target database identifier.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `assetName`         | string        | Yes      | Display name for the asset (1-256 characters).                                                                                                                                                                                                                                                                                                                                                                              |
+| `description`       | string        | Yes      | Asset description (4-256 characters).                                                                                                                                                                                                                                                                                                                                                                                       |
+| `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                                                                                                                                                                                                                                                                                                                                        |
+| `assetId`           | string        | No       | Explicit asset identifier (2-255 characters), ASCII characters only. Cannot contain forward slashes. Cannot be `pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces`, `vams.preparedDownloads`. Auto-generated if omitted.                                                                                                                                               |
+| `tags`              | array[string] | No       | Tags for categorization. Each name must resolve in the asset's database or `GLOBAL`, and every required tag type that has tags must be represented. See [Tags](../concepts/tags.md).                                                                                                                                                                                                                                        |
+| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket for the new asset. A key ending in `/` is a folder; any other key is one object with its folder `{key}/` and previews. A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces` or `vams.preparedDownloads`) as any path segment under the bucket's base prefix is refused with 400. |
 
 **Response:**
 
@@ -168,12 +168,12 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                                                                                              |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters or validation error, including `The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location.` and `The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID.` |
-| `403`  | Not authorized to create assets in this database.                                                                                                                                                                                                                        |
-| `404`  | Database not found.                                                                                                                                                                                                                                                      |
-| `500`  | Internal server error.                                                                                                                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                                                                                                                       |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters or validation error, including a `message` that contains `The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location.` or `The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID.` |
+| `403`  | Not authorized to create assets in this database.                                                                                                                                                                                                                                                 |
+| `404`  | Database not found.                                                                                                                                                                                                                                                                               |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                            |
 
 ---
 
@@ -530,7 +530,7 @@ An archived asset stays readable until it is unarchived or permanently deleted. 
 | `GET /database/{databaseId}/assets/{assetId}/metadata` and `.../metadata/file`                  | Asset and file metadata.                                                                                                          |
 | `GET /database/{databaseId}/assets/{assetId}/asset-links`                                       | The asset's relationships.                                                                                                        |
 | `GET /asset-links/{assetLinkId}/metadata`                                                       | The metadata of a link whose linked asset is archived.                                                                            |
-| `GET /comments/assets/{assetId}` and `.../assetVersionId/{assetVersionId}`                      | The asset's comments.                                                                                                             |
+| `GET /comments/database/{databaseId}/assets/{assetId}` (with `assetVersionId` for one version)  | The asset's comments.                                                                                                             |
 
 `showArchived` accepts `true`, `false`, `1`, `0`, `yes`, and `no`; any other value is rejected with `400`. Without it, each route answers for an archived asset as it does for an asset that does not exist.
 
@@ -545,6 +545,8 @@ An archived asset is read-only. Write routes ignore `showArchived` and refuse ev
 Permanently deletes an asset, including all associated files, metadata, versions, and every version of its auxiliary data. The temporary working files a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `vams.assetExports/`, are not deleted.
 
 Asset subscribers are notified by email when the asset is archived. A permanent delete removes the asset's subscriptions and notification topic and sends no email.
+
+The asset's Amazon S3 objects are deleted before any of its records. When Amazon S3 does not delete every object version (for example, access to the bucket is denied or the objects are locked), the request returns `400` and the asset keeps its records and its remaining files, so the delete can be retried once the cause is fixed. The files that were deleted lose their metadata, attributes, version records and auxiliary data. An asset whose bucket no longer exists is deleted.
 
 :::danger[Irreversible Operation]
 This operation permanently removes the asset and all its data. It cannot be undone. Consider using [Archive Asset](#archive-asset) for soft-deletion instead.
@@ -587,12 +589,12 @@ A body is required; `confirmPermanentDelete` must be `true`. An empty body retur
 
 **Error Responses:**
 
-| Status | Description                                                 |
-| ------ | ----------------------------------------------------------- |
-| `400`  | Missing body or `confirmPermanentDelete` not set to `true`. |
-| `403`  | Not authorized to delete this asset.                        |
-| `404`  | Asset not found.                                            |
-| `500`  | Internal server error.                                      |
+| Status | Description                                                                                                                                   |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Missing body or `confirmPermanentDelete` not set to `true`, or Amazon S3 did not delete every object version of the asset; the asset is kept. |
+| `403`  | Not authorized to delete this asset.                                                                                                          |
+| `404`  | Asset not found.                                                                                                                              |
+| `500`  | Internal server error.                                                                                                                        |
 
 ---
 

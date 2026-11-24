@@ -1682,19 +1682,19 @@ def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
 @click.option('-d', '--database', 'database_id', required=True, help='Database ID')
 @click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
 @click.option('-p', '--path', 'file_path', required=True, help='File path to archive')
-@click.option('--prefix', is_flag=True, help='Archive all files under the path as a prefix')
+@click.option('--prefix', is_flag=True, help='Treat the path as a folder and archive every file in it')
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
 @requires_setup_and_auth
 def archive_file(ctx: click.Context, database_id: str, asset_id: str, file_path: str, prefix: bool, json_input: str, json_output: bool):
-    """Archive a file or files under a prefix (soft delete).
+    """Archive a file or every file in a folder (soft delete).
     
     Examples:
         # Archive a single file
         vamscli file archive -d my-db -a my-asset -p "/file.gltf"
         
-        # Archive all files under a prefix
+        # Archive every file in a folder
         vamscli file archive -d my-db -a my-asset -p "/folder/" --prefix
         
         # Archive with JSON input
@@ -1837,20 +1837,20 @@ def unarchive_file(ctx: click.Context, database_id: str, asset_id: str, file_pat
 @click.option('-d', '--database', 'database_id', required=True, help='Database ID')
 @click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
 @click.option('-p', '--path', 'file_path', required=True, help='File path to delete')
-@click.option('--prefix', is_flag=True, help='Delete all files under the path as a prefix')
+@click.option('--prefix', is_flag=True, help='Treat the path as a folder and delete every file in it')
 @click.option('--confirm', is_flag=True, help='Confirm permanent deletion (required)')
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
 @requires_setup_and_auth
 def delete_file(ctx: click.Context, database_id: str, asset_id: str, file_path: str, prefix: bool, confirm: bool, json_input: str, json_output: bool):
-    """Permanently delete a file or files under a prefix.
+    """Permanently delete a file or every file in a folder.
     
     Examples:
         # Delete a single file (requires confirmation)
         vamscli file delete -d my-db -a my-asset -p "/file.gltf" --confirm
         
-        # Delete all files under a prefix
+        # Delete every file in a folder
         vamscli file delete -d my-db -a my-asset -p "/folder/" --prefix --confirm
         
         # Delete with JSON input

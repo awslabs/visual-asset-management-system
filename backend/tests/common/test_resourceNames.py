@@ -236,6 +236,8 @@ TOOLING_ONLY_LEGACY_KEYS = {
     "dynamoTables/legacy/assetLinksStorage",
     "dynamoTables/legacy/metadataStorage",
     "dynamoTables/legacy/metadataSchemaStorage",
+    "dynamoTables/legacy/commentStorageV1",
+    "dynamoTables/legacy/subscriptionsStorageV1",
 }
 
 # Legacy keys the mirror carries. No handler resolves either one -- the per-database tag
