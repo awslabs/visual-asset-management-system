@@ -4,8 +4,9 @@
 """A permanent delete sends no subscription email.
 
 Subscribers are notified when the asset is archived. A permanent delete removes the asset's SNS
-topic and its subscription record before anything else, so a notification sent afterwards
-publishes to a topic that no longer exists. The delete still removes the topic.
+topic and its subscription record right after its S3 objects, before its other records, so a
+notification sent afterwards publishes to a topic that no longer exists. The delete still removes
+the topic.
 """
 
 from unittest.mock import MagicMock

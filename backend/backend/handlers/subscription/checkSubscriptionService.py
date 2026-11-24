@@ -12,12 +12,15 @@ from common.validators import validate, normalize_userid
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
-from common.dynamodb import get_asset_object_from_id
+from common.dynamodb import get_asset_object_from_id, asset_authorization_object
+from common.commentSubscriptionKeys import subscription_key
+from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, log_action
 
 claims_and_roles = {}
 logger = safeLogger(service="CheckSubscriptionService")
+
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 
@@ -30,30 +33,19 @@ except Exception as e:
     logger.exception("Failed loading resource names")
     raise e
 
+# The one event and entity a check answers for
+EVENT_NAME = "Asset Version Change"
+ENTITY_NAME = "Asset"
+
 
 def check_subscriptions(body):
     response = copy.deepcopy(STANDARD_JSON_RESPONSE)
-    # TODO: Read this from constants.
-    event_name = "Asset Version Change"
-    entity_name = "Asset"
     subscription_table = dynamodb.Table(subscription_table_name)
-    result = subscription_table.query(
-        KeyConditionExpression='#entityNameId = :entityNameId AND #eventName = :eventName',
-        FilterExpression='contains(#subscribers, :userId)',
-        ExpressionAttributeNames={
-            '#entityNameId': 'entityName_entityId',
-            '#eventName': 'eventName',
-            '#subscribers': 'subscribers',
-        },
-        ExpressionAttributeValues={
-            ':entityNameId': f'{entity_name}#{body["assetId"]}',
-            ':eventName': event_name,
-            ':userId': body["userId"],
-        }
-    )
+    item = subscription_table.get_item(
+        Key=subscription_key(EVENT_NAME, ENTITY_NAME, body["databaseId"], body["assetId"])
+    ).get('Item')
 
-    item = result.get('Items', [])
-    if item:
+    if item and body["userId"] in (item.get('subscribers') or []):
         response['statusCode'] = 200
         response['body'] = json.dumps({"message": "success"})
     else:
@@ -86,23 +78,29 @@ def lambda_handler(event, context):
 
     try:
         httpMethod = event['requestContext']['http']['method']
+        body = event['body']
 
-        if not event['body'].get('userId') or not event['body'].get('assetId'):
-            message = "userId and assetId are required fields."
+        if not isinstance(body, dict) or not body.get('userId') or not body.get('assetId') \
+                or not body.get('databaseId'):
+            message = "userId, assetId and databaseId are required fields."
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": message})
             return response
 
         # The stored subscriber ids are normalized, so the id being checked is normalized too
-        event['body']['userId'] = normalize_userid(event['body']['userId'])
+        body['userId'] = normalize_userid(body['userId'])
 
         (valid, message) = validate({
             'userId': {
-                'value': event['body']['userId'],
+                'value': body['userId'],
                 'validator': 'USERID'
             },
+            'databaseId': {
+                'value': body['databaseId'],
+                'validator': 'ID'
+            },
             'assetId': {
-                'value': event['body']['assetId'],
+                'value': body['assetId'],
                 'validator': 'ASSET_ID'
             }
         })
@@ -128,39 +126,31 @@ def lambda_handler(event, context):
             response['body'] = json.dumps({"message": "Not Authorized"})
             return response
 
-        asset_object = get_asset_object_from_id(None, event['body']["assetId"])
+        # Tier 2 on the asset of the named database, decided before its existence is revealed
+        database_id, asset_id = body["databaseId"], body["assetId"]
+        asset_object = get_asset_object_from_id(database_id, asset_id)
+        authorization_object = asset_authorization_object(asset_object, database_id, asset_id)
+        if httpMethod != 'POST' or not casbin_enforcer.enforce(authorization_object, "GET"):
+            response['statusCode'] = 403
+            response['body'] = json.dumps({"message": "Not Authorized"})
+            return response
         if asset_object is None:
-            # A missing asset is checked as a provisional object built from the assetId (the
-            # route carries no databaseId), so the 404 is answered only when that check allows
-            if len(claims_and_roles["tokens"]) == 0:
-                response['statusCode'] = 403
-                response['body'] = json.dumps({"message": "Not Authorized"})
-                return response
-            if not casbin_enforcer.enforce({"assetId": event['body']["assetId"], "object__type": "asset"}, "GET"):
-                response['statusCode'] = 403
-                response['body'] = json.dumps({"message": "Not Authorized"})
-                return response
             response['statusCode'] = 404
             response['body'] = json.dumps({"message": "Asset not found"})
             return response
 
-        asset_object.update({"object__type": "asset"})
-
-        allowed = False
-        if len(claims_and_roles["tokens"]) > 0:
-            if casbin_enforcer.enforce(asset_object, "GET"):
-                allowed = True
-
-        if allowed and httpMethod == 'POST':
-            result = check_subscriptions(event['body'])
-            log_action(event, "subscriptionCheck", database_id=asset_object.get('databaseId'),
-                       asset_id=event['body']["assetId"],
-                       request_parameters={"userId": event['body']['userId'], "assetId": event['body']['assetId']})
-            return result
-        else:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Not Authorized"})
-            return response
+        result = check_subscriptions(body)
+        log_action(event, "subscriptionCheck", database_id=database_id, asset_id=asset_id,
+                   request_parameters={"userId": body['userId'], "databaseId": database_id,
+                                       "assetId": asset_id})
+        return result
+    except VAMSGeneralErrorResponse as v:
+        # Raised by the asset lookup when an id is empty or the read fails. The message names no
+        # caller-supplied value, so it is returned as the client-facing reason.
+        logger.exception(v)
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(v)})
+        return response
     except Exception as e:
         logger.exception(e)
         response['statusCode'] = 500

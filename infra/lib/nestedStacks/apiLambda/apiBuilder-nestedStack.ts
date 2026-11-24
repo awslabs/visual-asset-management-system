@@ -187,9 +187,8 @@ export class ApiBuilderNestedStack extends NestedStack {
         );
 
         const commentServiceRoutes = [
-            "/comments/assets/{assetId}",
-            "/comments/assets/{assetId}/assetVersionId/{assetVersionId}",
-            "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+            "/comments/database/{databaseId}/assets/{assetId}",
+            "/comments/database/{databaseId}/assets/{assetId}/{commentId}",
         ];
         for (let i = 0; i < commentServiceRoutes.length; i++) {
             attachFunctionToApi(this, commentService, {
@@ -200,8 +199,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         }
 
         attachFunctionToApi(this, commentService, {
-            routePath:
-                "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+            routePath: "/comments/database/{databaseId}/assets/{assetId}/{commentId}",
             method: apigateway.HttpMethod.DELETE,
             registry: registry,
         });
@@ -216,8 +214,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             storageResources.encryption.kmsKey
         );
         attachFunctionToApi(this, addCommentFunction, {
-            routePath:
-                "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+            routePath: "/comments/database/{databaseId}/assets/{assetId}",
             method: apigateway.HttpMethod.POST,
             registry: registry,
         });
@@ -232,8 +229,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             storageResources.encryption.kmsKey
         );
         attachFunctionToApi(this, editCommentFunction, {
-            routePath:
-                "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+            routePath: "/comments/database/{databaseId}/assets/{assetId}/{commentId}",
             method: apigateway.HttpMethod.PUT,
             registry: registry,
         });

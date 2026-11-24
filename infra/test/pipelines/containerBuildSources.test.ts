@@ -887,8 +887,8 @@ describe("the container images that clone an upstream repository pin its revisio
             // MoGe, utils3d
             "image to 3d blenderagent=2",
             "image to 3d hunyuan3d=1",
-            // SAM 3D Objects, and the DINOv2 checkout torch.hub loads its encoder from
-            "image to 3d sam3d=2",
+            // SAM 3D Objects, pytorch3d, gsplat, MoGe, utils3d, and the DINOv2 checkout torch.hub loads its encoder from
+            "image to 3d sam3d=6",
             // Stable3DGen, StableNormal, DINOv2
             "image to 3d stable3dgen=3",
             // Step1X-3D, nvdiffrast, pytorch3d

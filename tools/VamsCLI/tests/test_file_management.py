@@ -1217,8 +1217,9 @@ class TestFileOperationCommands:
         """Test archive command help."""
         result = cli_runner.invoke(cli, ['file', 'archive', '--help'])
         assert result.exit_code == 0
-        assert 'Archive a file or files under a prefix (soft delete)' in result.output
+        assert 'Archive a file or every file in a folder (soft delete)' in result.output
         assert '--prefix' in result.output
+        assert 'Treat the path as a folder' in result.output
     
     def test_archive_prefix(self, cli_runner, file_command_mocks):
         """Test archiving files under a prefix."""
@@ -1246,8 +1247,9 @@ class TestFileOperationCommands:
         """Test delete command help."""
         result = cli_runner.invoke(cli, ['file', 'delete', '--help'])
         assert result.exit_code == 0
-        assert 'Permanently delete a file or files under a prefix' in result.output
+        assert 'Permanently delete a file or every file in a folder' in result.output
         assert '--confirm' in result.output
+        assert 'Treat the path as a folder' in result.output
     
     def test_delete_requires_confirmation(self, cli_runner, file_command_mocks):
         """Test that delete requires confirmation."""

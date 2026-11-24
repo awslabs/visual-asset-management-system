@@ -210,7 +210,7 @@ class TestFileOperationCopiesKeepContentHeaders:
                 {"versionId": "v1", "isLatest": False, "isArchived": False},
             ],
         })
-        monkeypatch.setattr(af, "delete_assetAuxiliary_files", lambda prefix: None)
+        monkeypatch.setattr(af, "delete_assetAuxiliary_files", lambda prefix, keep=None: None)
 
         result = af.revert_file_version("db1", "a1", REL_PATH, "v1", {"tokens": ["alice"]})
 

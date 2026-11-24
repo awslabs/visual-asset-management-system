@@ -412,15 +412,15 @@ describe("SSM integration surface", () => {
                 )
             ).toEqual([]);
         }
-        // 76 registry parameters (ResourceNamesBuilder, including the audit log queries table) + the
-        // three late-bound ones here (the workflow role ARN, the import function and the copy engine
-        // function) + the deploy-time values (the OpenSearch endpoint and two index names, the web
-        // URL and, with Amazon Location Service, the map key ARN), plus one reindexer name per
-        // enabled search engine.
+        // 78 registry parameters (ResourceNamesBuilder, including the audit log queries table and the
+        // two legacy comment and subscription table names) + the three late-bound ones here (the
+        // workflow role ARN, the import function and the copy engine function) + the deploy-time
+        // values (the OpenSearch endpoint and two index names, the web URL and, with Amazon Location
+        // Service, the map key ARN), plus one reindexer name per enabled search engine.
         const searchOffCount = searchOff ? 1 : 0;
         const deployTimeValues = locationOff ? 4 : 5;
-        expect(names.length).toBeGreaterThanOrEqual(79 + deployTimeValues - searchOffCount);
-        expect(names.length).toBeLessThanOrEqual(81 + deployTimeValues - searchOffCount);
+        expect(names.length).toBeGreaterThanOrEqual(81 + deployTimeValues - searchOffCount);
+        expect(names.length).toBeLessThanOrEqual(83 + deployTimeValues - searchOffCount);
     });
 
     test.each(ALL_TEMPLATES)("%s binds the workflow role ARN parameter to the role", (name) => {
