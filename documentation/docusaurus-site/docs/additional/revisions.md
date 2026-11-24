@@ -84,6 +84,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Permanent asset deletion removes every upload and comment record** — Permanent deletion no longer leaves upload and comment records behind for an asset with many of them, and no longer deletes the upload records of an asset with the same ID in another database. (issue #1687)
 -   **permissionsSetup reports a failed step** — `apply_template.py` prints `Status: Incomplete` and exits 1 when a step fails or a `vamscli` call does not finish within 60 seconds, instead of printing `Status: Complete` and exiting 0. (issue #1687)
 -   **Isaac Sim connector keeps a handed-over sign-in** — A Cognito sign-in handed over from the CLI profile is renewed once with the CLI's refresh token when its access token expires, instead of reporting "Not authenticated". (issue #1687)
+-   **GR00T default instance types** — The GR00T fine-tuning pipeline's default `instanceTypes` no longer include `g5.12xlarge`, whose 24 GB A10G GPU runs out of memory at step 0 on the default fine-tune; the defaults are `g6e.4xlarge` and `g6e.12xlarge` (48 GB L40S). Configuration validation and the ConfigBuilder warn when the list names a `g4dn`, `g5`, `g6`, `gr6` or `p3` type, and an existing `config.json` keeps `g5.12xlarge` until you remove it, as the [update guide](../deployment/update-the-solution.md#v268-and-later-gr00t-default-instance-types) describes. (issue #1836)
 
 **Other changes:**
 

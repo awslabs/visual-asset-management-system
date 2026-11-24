@@ -94,7 +94,7 @@ const GR00T_DEFAULT = {
         gr00tN1_5_3B: {
             enabled: false,
             autoRegisterWithVAMS: true,
-            instanceTypes: ["g6e.4xlarge", "g6e.12xlarge", "g5.12xlarge"],
+            instanceTypes: ["g6e.4xlarge", "g6e.12xlarge"],
             maxVCpus: 192,
         },
     },

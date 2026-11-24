@@ -903,6 +903,13 @@ From v2.6.8, the Isaac Lab training and evaluation pipeline saves only the run's
 -   **New runs need no action.** A run started after the update writes the shorter file.
 -   **Files from earlier runs keep their content.** The update does not change files already in your asset buckets. To bring them in line, delete the `train-config.json` and `evaluate-config.json` files of runs made before the update, or replace each with a copy that keeps only the run's settings. VAMS does not need these files to run or evaluate a policy: from v2.7.0 an evaluation reads a training run's `train-config.json` only to add a note when the two runs used different physics engines, and a missing file only leaves that note out.
 
+### v2.6.8 and later: GR00T default instance types
+
+From v2.6.8, the default `instanceTypes` of the GR00T fine-tuning pipeline are `g6e.4xlarge` and `g6e.12xlarge`, without `g5.12xlarge`. A fine-tune job reserves one GPU, and on the 24 GB A10G of a `g5.12xlarge` the default fine-tune runs out of GPU memory at step 0.
+
+-   **A `config.json` that copied the earlier default keeps `g5.12xlarge`** in `app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes`, and `cdk synth` prints a warning that names it. The deployment still succeeds. Remove the type to stop jobs landing there. See [NVIDIA Gr00t Fine-Tuning](../pipelines/nvidia-gr00t-finetune.md).
+-   **A deployment that sets no `instanceTypes`, or copies the new shipped file or a template, gets the two `g6e` types.** Its AWS Batch compute environment changes its instance types on the next deploy.
+
 ## Breaking changes checklist
 
 Use this checklist to determine if additional actions are needed after updating.
