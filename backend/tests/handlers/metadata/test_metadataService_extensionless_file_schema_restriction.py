@@ -432,7 +432,7 @@ class TestTheReadPathReportsTheSchemasThatApply:
 
     def test_an_extensionless_file_lists_only_unrestricted_metadata_fields(self):
         with _Harness():
-            response = metadataService.get_file_metadata("db1", "asset1", README, "metadata", {}, CLAIMS)
+            response, _ = metadataService.get_file_metadata("db1", "asset1", README, "metadata", {}, CLAIMS)
 
         fields = _schema_rows(response)
         assert EVERY_FILE_NUMBER in fields, (
@@ -443,7 +443,7 @@ class TestTheReadPathReportsTheSchemasThatApply:
 
     def test_a_glb_file_still_lists_the_glb_required_field(self):
         with _Harness():
-            response = metadataService.get_file_metadata("db1", "asset1", GLB_FILE, "metadata", {}, CLAIMS)
+            response, _ = metadataService.get_file_metadata("db1", "asset1", GLB_FILE, "metadata", {}, CLAIMS)
 
         fields = _schema_rows(response)
         assert GLB_REQUIRED in fields, sorted(fields)
@@ -451,7 +451,7 @@ class TestTheReadPathReportsTheSchemasThatApply:
 
     def test_an_extensionless_file_lists_only_unrestricted_attribute_fields(self):
         with _Harness():
-            response = metadataService.get_file_metadata("db1", "asset1", README, "attribute", {}, CLAIMS)
+            response, _ = metadataService.get_file_metadata("db1", "asset1", README, "attribute", {}, CLAIMS)
 
         fields = _schema_rows(response)
         assert EVERY_FILE_ATTR in fields, sorted(fields)
@@ -461,7 +461,7 @@ class TestTheReadPathReportsTheSchemasThatApply:
         """`restrictMetadataOutsideSchemas` is reported true when any schema applies; README still
         meets the GLOBAL one, so the editor still enforces schema-only keys there."""
         with _Harness(restrict_outside_schemas=True):
-            response = metadataService.get_file_metadata("db1", "asset1", README, "metadata", {}, CLAIMS)
+            response, _ = metadataService.get_file_metadata("db1", "asset1", README, "metadata", {}, CLAIMS)
 
         assert response.restrictMetadataOutsideSchemas is True
 
@@ -474,7 +474,7 @@ class TestTheReadPathReportsTheSchemasThatApply:
                              MagicMock(return_value=True)), \
                 patch.object(metadataService, "get_asset_metadata_version",
                              MagicMock(return_value=snapshot)):
-            response = metadataService.get_file_metadata(
+            response, _ = metadataService.get_file_metadata(
                 "db1", "asset1", README, "metadata", {"assetVersionId": "v1"}, CLAIMS)
 
         fields = _schema_rows(response)

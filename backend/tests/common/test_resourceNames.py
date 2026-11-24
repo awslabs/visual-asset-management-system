@@ -223,6 +223,10 @@ CANONICAL_KEYS_TS = (
 # stack reads at its own deploy time (integration/), so no handler mirrors them.
 TOOLING_ONLY_PREFIXES = ("lambdaFunctions/", "integration/")
 
+# The deploy-time values (OpenSearch endpoint and index names, web URL, map key ARN): mirrored by
+# common/deployTimeValues.py, not ResourceKeys (tests/common/test_deployTimeValues.py compares them).
+DEPLOY_TIME_PREFIXES = ("openSearch/", "web/", "location/")
+
 # Deprecated tables whose only consumer is a migration script. Named one by one rather than by
 # the dynamoTables/legacy/ prefix: a legacy key added upstream must be classified deliberately,
 # not excused for sitting under that prefix.
@@ -272,6 +276,10 @@ def _is_tooling_only(key):
     return key.startswith(TOOLING_ONLY_PREFIXES) or key in TOOLING_ONLY_LEGACY_KEYS
 
 
+def _is_mirrored_elsewhere(key):
+    return _is_tooling_only(key) or key.startswith(DEPLOY_TIME_PREFIXES)
+
+
 def _mirror_keys(rn):
     """Every ResourceParamKey declared on ResourceKeys."""
     return [v for v in vars(rn.ResourceKeys).values() if isinstance(v, rn.ResourceParamKey)]
@@ -313,7 +321,7 @@ class TestConstantsCompleteness:
         # report success, so floor both sides before comparing them.
         assert len(canonical) > 50
         assert len(mirrored) > 50
-        assert mirrored == {key for key in canonical if not _is_tooling_only(key)}
+        assert mirrored == {key for key in canonical if not _is_mirrored_elsewhere(key)}
 
     def test_omitted_keys_are_tooling_only_and_still_published(self, rn):
         canonical = _canonical_param_keys()
@@ -322,8 +330,10 @@ class TestConstantsCompleteness:
         assert TOOLING_ONLY_LEGACY_KEYS <= canonical
         assert MIRRORED_LEGACY_KEYS <= canonical
         # Every prefix-based exclusion must still cover a live key, or it excuses nothing.
-        for prefix in TOOLING_ONLY_PREFIXES:
+        for prefix in TOOLING_ONLY_PREFIXES + DEPLOY_TIME_PREFIXES:
             assert any(key.startswith(prefix) for key in canonical)
+        assert not {key for key in canonical if key.startswith(DEPLOY_TIME_PREFIXES)} & {
+            k.param_key for k in _mirror_keys(rn)}
         assert omitted
         assert omitted < canonical
         assert not omitted & {k.param_key for k in _mirror_keys(rn)}

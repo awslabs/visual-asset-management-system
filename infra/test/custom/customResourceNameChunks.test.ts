@@ -101,16 +101,38 @@ describe("a fork's custom resource name", () => {
         expectRootTemplateWithinLimits(s);
     });
 
-    test("every chunk, the core ones included, waits for the custom stack and storage", () => {
+    test("every chunk, the core ones included, waits for the custom stack, storage and the stacks the deploy-time core values come from", () => {
         const all = expectChunksInRootStack(s);
-        const unhashed = (ids: string[]) => ids.map((id) => id.replace(/[0-9A-F]{8}$/, ""));
+        const unhashed = (ids: string[]) => ids.map((id) => id.replace(/[0-9A-F]{8}$/, "")).sort();
         for (const chunk of all) {
-            expect(unhashed(dependsOnOf(chunk))).toEqual([
-                "CustomBuilderNestedStackCustomBuilderNestedStackResource",
-                "StorageResourcesBuilderNestedStackStorageResourcesBuilderNestedStackResource",
-            ]);
+            expect(unhashed(dependsOnOf(chunk))).toEqual(
+                [
+                    "ApiBuilder2",
+                    "CustomBuilder",
+                    "LocationService",
+                    "SearchBuilder",
+                    "StaticWeb",
+                    "StorageResourcesBuilder",
+                ].map((id) => `${id}NestedStack${id}NestedStackResource`)
+            );
             expect(dependsOnOf(chunk)).toEqual(stacksReadByChunks(all));
         }
         expect(dependencyCycleIn(s.templates[rootStackKey(s)])).toEqual([]);
+        // The core chunks before the fork's carry the late core names (the deploy-time OpenSearch,
+        // web, map key and copy engine values); the fork's chunk keeps only its own name.
+        const forkChunk = all.find((c) => FORK_KEY in c.parsed.m)!;
+        expect(Object.keys(forkChunk.parsed.m)).toEqual([FORK_KEY]);
+        expect(all.map((c) => Object.keys(c.parsed.m).length)).toEqual([
+            13, 13, 13, 13, 10, 9, 13, 1,
+        ]);
+        // No nested stack waits for a chunk.
+        const chunkIds = new Set(all.map((c) => c.logicalId));
+        const root = s.templates[rootStackKey(s)];
+        const waiting = Object.entries<any>(root.Resources)
+            .filter(([, r]) => r.Type === "AWS::CloudFormation::Stack")
+            .filter(([, r]) =>
+                ([] as string[]).concat(r.DependsOn ?? []).some((d) => chunkIds.has(d))
+            );
+        expect(waiting).toEqual([]);
     });
 });

@@ -609,6 +609,19 @@ sys.modules['common.ssmParameters'] = _ssmp_module
 _ssmp_spec.loader.exec_module(_ssmp_module)
 sys.modules['common'].ssmParameters = _ssmp_module
 
+# deployTimeValues resolves the OpenSearch, web URL and map key values from the resource names, and
+# reads the parameters that held them before through ssmParameters when the names do not carry them
+# yet. It builds no client, so the REAL module loads with no AWS access; loaded after both modules it
+# imports.
+_dtv_spec = _importlib_util.spec_from_file_location(
+    'common.deployTimeValues',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'deployTimeValues.py')
+)
+_dtv_module = _importlib_util.module_from_spec(_dtv_spec)
+sys.modules['common.deployTimeValues'] = _dtv_module
+_dtv_spec.loader.exec_module(_dtv_module)
+sys.modules['common'].deployTimeValues = _dtv_module
+
 # uploadStatus (an upload's asynchronously ingested files) likewise takes its table as an argument, so
 # the REAL module is loaded and bound the same way.
 _us_spec = _importlib_util.spec_from_file_location(

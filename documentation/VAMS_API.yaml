@@ -129,7 +129,7 @@ paths:
                                         description: "Amazon Location Service map style descriptor URL with embedded API key; empty when Location Services is not enabled"
                                     webDeployedUrl:
                                         type: string
-                                        description: "Deployed web application URL; empty when not configured"
+                                        description: "Deployed web application URL; empty when the deployment has no web distribution (neither CloudFront nor an Application Load Balancer)"
                                 required:
                                     - featuresEnabled
                                     - locationServiceApiUrl
@@ -6151,7 +6151,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                     $ref: "#/components/schemas/id_regex"
               - name: "filePath"
                 in: "query"
-                description: "Relative file path (must not end with / for folders)."
+                description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. The exception is a file whose listed path starts with the asset ID as a folder (/{assetId}/...) or with the asset's location (assetLocation.Key): that listed path is read as another file's path, so name such a file by its full key. Must not end with / (a folder)."
                 required: true
                 schema:
                     type: string
@@ -20239,7 +20239,7 @@ components:
             properties:
                 filePath:
                     type: string
-                    description: "Relative file path (must not end with / for folders)"
+                    description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. The exception is a file whose listed path starts with the asset ID as a folder (/{assetId}/...) or with the asset's location (assetLocation.Key): that listed path is read as another file's path, so name such a file by its full key. Must not end with / (a folder)."
                 type:
                     type: string
                     enum: [metadata, attribute]
@@ -20271,7 +20271,7 @@ components:
             properties:
                 filePath:
                     type: string
-                    description: "Relative file path (must not end with / for folders)"
+                    description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. The exception is a file whose listed path starts with the asset ID as a folder (/{assetId}/...) or with the asset's location (assetLocation.Key): that listed path is read as another file's path, so name such a file by its full key. Must not end with / (a folder)."
                 type:
                     type: string
                     enum: [metadata, attribute]
@@ -20306,7 +20306,7 @@ components:
             properties:
                 filePath:
                     type: string
-                    description: "Relative file path (must not end with / for folders)"
+                    description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. The exception is a file whose listed path starts with the asset ID as a folder (/{assetId}/...) or with the asset's location (assetLocation.Key): that listed path is read as another file's path, so name such a file by its full key. Must not end with / (a folder)."
                 type:
                     type: string
                     enum: [metadata, attribute]

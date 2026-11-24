@@ -137,6 +137,13 @@ class ResourceParamKeys:
     INTEGRATION_ORCHESTRATION_EVENT_SOURCE_PREFIX = "integration/orchestrationEventSourcePrefix"
     INTEGRATION_WORKFLOW_EXECUTION_ROLE_ARN = "integration/workflowExecutionRoleArn"
 
+    # Deploy-time values, each published only when its feature is deployed
+    OPENSEARCH_ENDPOINT = "openSearch/endpoint"
+    OPENSEARCH_ASSET_INDEX_NAME = "openSearch/assetIndexName"
+    OPENSEARCH_FILE_INDEX_NAME = "openSearch/fileIndexName"
+    WEB_DEPLOYED_URL = "web/deployedUrl"
+    LOCATION_API_KEY_ARN = "location/apiKeyArn"
+
 
 class SsmResourceLookup:
     """Resolves VAMS resource names from the deployment's SSM parameter prefix.
