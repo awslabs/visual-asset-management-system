@@ -130,7 +130,6 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
                         c.app.webUi.allowUnsafeEvalFeatures = true;
                         const miris = c.app.addons.useMirisStreaming;
                         miris.enabled = true;
-                        miris.viewerKey = "synth-only-viewer-key-000000";
                         miris.apiKeySecretArn =
                             "arn:aws:secretsmanager:us-east-1:123456789012:secret:synth-only-miris-AbCdEf";
                         miris.upload.enabled = true;

@@ -14,10 +14,10 @@ import type {
 
 /**
  * Miris stream recorded on one asset file, as returned by `GET /addon/miris/asset-status`.
- * `state` is `notStreamed`, `invalidUuid`, `notBound`, `unknown`, `processing`, or the Miris
- * processing state (`preview`, `streamable`, `error`, `failed`, ...). `stale` is true when a file
- * in the stream's dependency manifest has changed or is missing, false when none has, and null
- * when the file records no manifest or the check could not run.
+ * `state` is `notStreamed`, `invalidUuid`, `notBound`, `unknown`, or the Miris processing state
+ * (`preview`, `streamable`, `error`, `failed`, ...). `stale` is true when a file in the stream's
+ * dependency manifest has changed or is missing, false when none has, and null when the file
+ * records no manifest or the check could not run.
  */
 export interface MirisStreamStatus {
     filePath: string;
