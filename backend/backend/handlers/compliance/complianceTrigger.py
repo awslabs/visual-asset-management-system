@@ -128,7 +128,7 @@ from common.fileAttribution import (
     binding_of,
     read_asset_row,
 )
-from common.indexerEvents import s3_records_from_indexer_message
+from common.indexerEvents import s3_records_from_indexer_message, stamped_bucket_id
 from common.resourceNames import ResourceKeys, get_table_name
 from common.s3 import region_routing_s3_client
 from common.s3MetadataKeys import (
@@ -1077,7 +1077,8 @@ def _evaluate_file_record(s3_record, message, decided, batch=None):
     change_time = parse_event_time(s3_record.get("eventTime"))
     bucket = (s3_info.get("bucket") or {}).get("name") or message.get("ASSET_BUCKET_NAME", "")
 
-    resolved = _file_event_target(s3_record, bucket, object_key, batch=batch)
+    resolved = _file_event_target(s3_record, bucket, object_key, batch=batch,
+                                  registration_bucket_id=stamped_bucket_id(s3_record, message))
     if resolved is None:
         return
     database_id, asset_id, asset_row, target = resolved
@@ -1218,7 +1219,7 @@ def file_event_completion_stamp(asset_row):
     return latest_attribute, latest_instant
 
 
-def _file_event_target(s3_record, bucket, object_key, batch=None):
+def _file_event_target(s3_record, bucket, object_key, batch=None, registration_bucket_id=""):
     """`(database_id, asset_id, asset row, evaluation target)` for the live asset that holds the
     object a file event names, or None (logged) when no live asset holds it, several do, or its
     database or binding does not evaluate it.
@@ -1228,13 +1229,14 @@ def _file_event_target(s3_record, bucket, object_key, batch=None):
     before the index is ready the first folder under a registered prefix, each with the bucket and
     containment checks. The object's own metadata is not read for it, so a file event of a database
     that evaluates nothing costs no bucket read. Event keys arrive form-encoded; the decoded key is
-    attributed."""
+    attributed. `registration_bucket_id` is the message's `ASSET_BUCKET_ID` stamp; an owner in
+    another registration is not used."""
     batch = batch if batch is not None else TriggerBatch()
     key = urllib.parse.unquote_plus(object_key or "")
     attribution = attribute_object(
         bucket, key, asset_table=batch.asset_index(), buckets_table=store.s3_asset_buckets_table,
         binding=binding_of(s3_record), asset_table_name=store.asset_table_name,
-        get_row=batch.asset_row)
+        get_row=batch.asset_row, registration_bucket_id=registration_bucket_id)
     if attribution.status == AMBIGUOUS:
         logger.info("Several live assets hold the event's object; skipping compliance evaluation")
         return None

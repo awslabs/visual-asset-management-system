@@ -317,6 +317,13 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **CDK** An asset bucket registration keeps its ID when its `baseAssetsPrefix` is written with or without the trailing `/`, deployments with many registrations no longer re-create IDs, and a registration removed from the configuration is marked retired instead of staying active: its assets still resolve, and it is no longer the default bucket, matched by bucket sync or offered for a new database ([#1889](https://github.com/awslabs/visual-asset-management-system/issues/1889))
+    -   Note: a deployment that already holds two registrations for one bucket and prefix keeps both. The one its assets reference answers lookups and the deployment logs the other; nothing is deleted.
+-   **Backend** Workflow template bodies and run data go to the one bucket registration flagged as the VAMS default, and two flagged registrations of one bucket under different prefixes now stop with an error instead of silently using the stale prefix ([#1890](https://github.com/awslabs/visual-asset-management-system/issues/1890))
+-   **Backend** Bucket sync, the search and vector indexers, the fileUpload trigger dispatcher, the compliance trigger, the reindex walks and large-file uploads identify a bucket registration by its ID instead of by bucket name and prefix ([#1891](https://github.com/awslabs/visual-asset-management-system/issues/1891))
+
+    -   Note: the workflow execution detail's `renderedConfigLocation` adds `bucketId` and `relativeKey` beside `bucket` and `key`, in the API, the CLI and the MCP server.
+
 -   **Pipelines** The `train-config.json` and `evaluate-config.json` an Isaac Lab run uploads beside its outputs keep only the run's settings (`jobName`, `trainingConfig`, `customEnvironmentS3Uri` and `stageAssetFiles`) and the recorded `isaacLabVersion` and `gpuDriverVersion`. The workflow's callback fields and the input, output and metadata locations are left out. ([#1835](https://github.com/awslabs/visual-asset-management-system/pull/1835))
 -   **Backend** An asset that bucket sync creates for a new folder written directly to S3 goes to the one database assigned to the bucket, or else to the bucket's default sync database, instead of an arbitrary database when several databases share the bucket ([#1207](https://github.com/awslabs/visual-asset-management-system/issues/1207))
 -   **Backend** Creating an asset with a `bucketExistingKey` that names a folder without a folder-marker object, such as a folder written with `aws s3 sync`, imports that folder instead of failing ([#366](https://github.com/awslabs/visual-asset-management-system/issues/366))

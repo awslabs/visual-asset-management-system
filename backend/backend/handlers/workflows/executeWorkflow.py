@@ -2241,9 +2241,10 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
                      output_location_type=OUTPUT_LOCATION_TYPE_ASSET, output_extension="/",
                      filtered_inputs_by_composite=None, metadata_source_assets=None,
                      metadata_source_database_id="", metadata_source_databases=None,
-                     run_prefix="", system_slot_keys=None, system_execution_context=""):
+                     run_prefix="", system_slot_keys=None, system_execution_context="", run_bucket_id=""):
     """Build the first-pipeline manifest, start the Step Functions execution, and persist all V2
-    records.
+    records. run_bucket_id is the run bucket's registration (bucketId), recorded on each
+    pipeline-execution row beside the bucket name.
 
     system_execution_context is the serialized server-only context of a system-pipeline launch ("" for
     every other run). When set it is added to pipeline 1's manifest and to the main execution row, and
@@ -2545,7 +2546,8 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
                 metadata_source_databases=metadata_source_databases,
                 filtered_inputs_by_composite=filtered_inputs_by_composite,
                 step_metadata_gates=step_metadata_gates,
-                system_execution_context=system_execution_context)
+                system_execution_context=system_execution_context,
+                run_bucket_id=run_bucket_id)
         except Exception:
             logger.exception(
                 f"Failed persisting execution records for {execution_id}; stopping the started execution "
@@ -2811,7 +2813,7 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
                                metadata_source_assets=None, metadata_source_database_id="",
                                metadata_source_databases=None, filtered_inputs_by_composite=None,
                                step_metadata_gates=None, run_prefix="",
-                               system_execution_context=""):
+                               system_execution_context="", run_bucket_id=""):
     """Write the main execution row, per-input workflow-input rows, the workflow configuration row,
     one PipelineExecutions row + config-snapshot per pipeline, and the output index rows.
 
@@ -2972,7 +2974,8 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
                 wait_for_callback=_pipeline_wait_for_callback(record),
                 pipeline_resource_arn=_pipeline_resource_arn(record),
                 from_pipeline_execution_id=prev_id,
-                orchestration_bus_event_prefix=event_prefix)
+                orchestration_bus_event_prefix=event_prefix,
+                s3_asset_bucket_id=run_bucket_id, s3_asset_bucket_base_prefix=run_prefix)
             # First pipeline starts immediately; the rest stay NEW until the interim lambda advances it.
             # Its start date is stamped here for the same reason: the interim lambda stamps a step as it
             # advances INTO it, which never happens for step 1, so it would otherwise report no duration.
@@ -3311,6 +3314,7 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
     try:
         run_bucket_row = _default_run_bucket()
         run_bucket = run_bucket_row["bucketName"]
+        run_bucket_id = run_bucket_row.get("bucketId") or ""
         run_prefix = er.normalize_base_prefix(run_bucket_row.get("baseAssetsPrefix"))
     except DefaultBucketNotFoundError as de:
         logger.exception(f"Default run bucket not resolved: {de}")
@@ -3365,7 +3369,7 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
             workflow=workflow, pipeline_records=pipeline_records, resolved_configs=resolved_configs,
             selected_inputs=selected_inputs, asset_records=asset_records, output_asset=output_asset,
             output_database_id=output_database_id, output_asset_id=output_asset_id, run_bucket=run_bucket,
-            run_prefix=run_prefix,
+            run_prefix=run_prefix, run_bucket_id=run_bucket_id,
             metadata_envelope=metadata_envelope, trigger_type_stored=trigger_type_stored,
             execution_group_id=request_model.executionGroupId, executing_user=executing_user,
             executing_request_context=_executing_request_context(event),

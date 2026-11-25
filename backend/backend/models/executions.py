@@ -123,6 +123,10 @@ class PipelineExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
         "", alias="pipelineDatabaseId:pipelineId")
     endStatePipeline: str = "false"
     S3AssetPipelineBucket: Optional[str] = ""
+    # The run bucket's registration (bucketId) and the area VAMS owns in it; absent on a row recorded
+    # before they were captured.
+    S3AssetPipelineBucketId: Optional[str] = ""
+    S3AssetPipelineBucketBasePrefix: Optional[str] = ""
     S3AssetPipelineBucketInputMetadataFilePrefix: Optional[str] = ""
     S3AssetPipelineBucketInputConfigurationFilePrefix: Optional[str] = ""
     S3AssetPipelineBucketOutputFilesPrefix: Optional[str] = ""

@@ -1964,7 +1964,8 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
     `inputMetadata` (asset/file rows) and `inputDatabaseMetadata` (database rows) carry `metadata` and
     `attributes`; `expanded` true marks context, not an input file. `metadataSourceDatabases` lists
     every database read. `renderedConfig` is the PRE-system-tag copy (`renderedConfigTruncated`);
-    `renderedConfigLocation` (NOT only on truncation) holds the FULLY substituted body.
+    `renderedConfigLocation` (NOT only on truncation) holds the FULLY substituted body; its `bucketId`
+    names the run bucket's registration.
 
     A SKIPPED execution never ran (`skip` says why). include_sub_executions=True adds each step's
     `subExecutions` (state machines, Batch and Deadline Cloud jobs: status, error, `stages`; `caught`
