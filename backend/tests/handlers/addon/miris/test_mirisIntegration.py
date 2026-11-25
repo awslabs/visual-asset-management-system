@@ -15,7 +15,7 @@ import requests
 from backend.backend.handlers.addon.miris import mirisIntegration
 from backend.backend.handlers.addon.miris.mirisIntegration import MirisIntegrationError
 
-from .conftest import VIEWER_KEY_SECRET_ARN, FakeLambdaContext, rest_event
+from .conftest import FakeLambdaContext, rest_event
 
 pytestmark = pytest.mark.unit
 
@@ -23,12 +23,13 @@ KEY_ID = "3f2b8c1e-9a4d-4e7f-8b6a-1c2d3e4f5a6b"
 ASSET_UUID = "8d65af7c-5412-404b-a494-fbd2cdb62442"
 RESPONSE_BODY = "miris-response-body-must-not-surface"
 VIEWER_KEY_MATERIAL = "minted-viewer-key-material-do-not-log"
-VIEWER_KEY = "static-viewer-key-do-not-log"
 EXPIRES_AT = datetime(2026, 10, 15, 19, 4, 28, tzinfo=timezone.utc)
 VAMS_ASSET_ID = "asset-1"
 VAMS_DATABASE_ID = "db-1"
 BINDING_TAG = f"vams-asset-{VAMS_ASSET_ID}"
 DATABASE_TAG = f"vams-database-{VAMS_DATABASE_ID}"
+# The real session getter, which the `miris_api` fixture replaces.
+_REAL_GET_SESSION = mirisIntegration._get_session
 
 
 def _created(key_id=KEY_ID, key=VIEWER_KEY_MATERIAL):
@@ -180,46 +181,6 @@ class TestIntegrationKey:
         assert miris_api.calls[0]["headers"]["Miris-API-Key"] == miris_api.integration_key
 
 
-class TestStaticViewerKey:
-    """The deployment-wide viewer key of static mode is read from its own secret, which VAMS fills
-    at deploy time, and cached apart from the Integration Key."""
-
-    @pytest.fixture
-    def secrets(self, miris_api, monkeypatch):
-        monkeypatch.setattr(mirisIntegration, "MIRIS_VIEWER_KEY_SECRET_ARN", VIEWER_KEY_SECRET_ARN)
-        miris_api.secrets[VIEWER_KEY_SECRET_ARN] = f" {VIEWER_KEY}\n"
-        return miris_api.secrets
-
-    def test_the_key_is_read_from_its_secret_trimmed_and_cached(self, miris_api, secrets):
-        assert mirisIntegration.load_static_viewer_key() == VIEWER_KEY
-        assert mirisIntegration.load_static_viewer_key() == VIEWER_KEY
-        miris_api.secretsmanager.get_secret_value.assert_called_once_with(SecretId=VIEWER_KEY_SECRET_ARN)
-
-    def test_it_is_cached_apart_from_the_integration_key(self, miris_api, secrets):
-        miris_api.responses.append(204)
-        mirisIntegration.load_static_viewer_key()
-        mirisIntegration.delete_viewer_key(KEY_ID)
-        assert miris_api.calls[0]["headers"]["Miris-API-Key"] == miris_api.integration_key
-        assert [c.kwargs["SecretId"] for c in miris_api.secretsmanager.get_secret_value.call_args_list] == [
-            VIEWER_KEY_SECRET_ARN, miris_api.secret_arn]
-
-    def test_an_unset_secret_arn_raises_without_a_read(self, miris_api, monkeypatch):
-        monkeypatch.setattr(mirisIntegration, "MIRIS_VIEWER_KEY_SECRET_ARN", "")
-        with pytest.raises(MirisIntegrationError, match="MIRIS_VIEWER_KEY_SECRET_ARN"):
-            mirisIntegration.load_static_viewer_key()
-        miris_api.secretsmanager.get_secret_value.assert_not_called()
-
-    @pytest.mark.parametrize("value, error", [("  ", "empty"), (RuntimeError(VIEWER_KEY), "RuntimeError")])
-    def test_an_empty_or_unreadable_secret_raises_without_the_key(self, miris_api, secrets, value, error):
-        if isinstance(value, Exception):
-            miris_api.secretsmanager.get_secret_value.side_effect = value
-        else:
-            secrets[VIEWER_KEY_SECRET_ARN] = value
-        with pytest.raises(MirisIntegrationError, match=error) as raised:
-            mirisIntegration.load_static_viewer_key()
-        assert VIEWER_KEY not in str(raised.value)
-
-
 class TestConfiguration:
     @pytest.mark.parametrize("setting", ["MIRIS_API_BASE_URL", "MIRIS_API_KEY_SECRET_ARN"])
     def test_a_missing_setting_raises_without_a_request(self, miris_api, monkeypatch, setting):
@@ -237,7 +198,7 @@ class TestNoSecretInLogs:
         miris_api.responses.extend([
             404, (401, RESPONSE_BODY), 204, (500, RESPONSE_BODY),
             (200, _created()), (200, {"id": KEY_ID}), (500, RESPONSE_BODY),
-            (500, RESPONSE_BODY), requests.ConnectionError(f"{RESPONSE_BODY} {VIEWER_KEY}"),
+            (500, RESPONSE_BODY), requests.ConnectionError(f"{RESPONSE_BODY} {VIEWER_KEY_MATERIAL}"),
         ])
         mirisIntegration.delete_viewer_key(KEY_ID)
         mirisIntegration.delete_viewer_key(KEY_ID)
@@ -248,13 +209,13 @@ class TestNoSecretInLogs:
             mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n")
         for _ in range(2):
             with pytest.raises(MirisIntegrationError):
-                mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY)
+                mirisIntegration.get_asset(ASSET_UUID)
 
         # Control: the recorder captured lines, so an empty log is not what passes.
         assert any(KEY_ID in line for line in log_recorder.lines)
         assert any("401" in line for line in log_recorder.lines)
         for text in (log_recorder.text(), caplog.text):
-            for secret in (miris_api.integration_key, VIEWER_KEY_MATERIAL, VIEWER_KEY, RESPONSE_BODY):
+            for secret in (miris_api.integration_key, VIEWER_KEY_MATERIAL, RESPONSE_BODY):
                 assert secret not in text
 
 
@@ -400,45 +361,6 @@ class TestBinding:
         assert not mirisIntegration.is_bound_to_asset(tags, VAMS_DATABASE_ID, VAMS_ASSET_ID)
 
 
-class TestGetViewerAssetState:
-    def test_sends_one_get_with_only_the_viewer_key_header(self, miris_api):
-        miris_api.responses.append((200, {"id": ASSET_UUID, "state": "streamable"}))
-
-        assert mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY) == "streamable"
-
-        [call] = miris_api.calls
-        assert (call["method"], call["url"]) == ("GET", f"{miris_api.base_url}/viewer/v1/asset/{ASSET_UUID}")
-        assert call["headers"]["Miris-Viewer-Key"] == VIEWER_KEY
-        assert "Miris-API-Key" not in call["headers"]
-        assert call["allow_redirects"] is False
-        miris_api.secretsmanager.get_secret_value.assert_not_called()
-
-    def test_404_returns_none(self, miris_api):
-        miris_api.responses.append(404)
-        assert mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY) is None
-
-    @pytest.mark.parametrize("status", [400, 401, 500])
-    def test_other_statuses_raise_without_a_retry(self, miris_api, status):
-        miris_api.responses.append((status, RESPONSE_BODY))
-        with pytest.raises(MirisIntegrationError) as raised:
-            mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY)
-        _assert_status_error(raised, status)
-        assert len(miris_api.calls) == 1
-
-    def test_a_response_without_a_string_state_raises(self, miris_api):
-        miris_api.responses.append((200, RESPONSE_BODY))
-        with pytest.raises(MirisIntegrationError, match="no state") as raised:
-            mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY)
-        assert RESPONSE_BODY not in str(raised.value)
-
-    @pytest.mark.parametrize("asset, viewer_key, message", [
-        (ASSET_UUID, "", "viewer key"), (ASSET_UUID, None, "viewer key"), ("../x", VIEWER_KEY, "not a UUID")])
-    def test_bad_input_raises_without_a_request(self, miris_api, asset, viewer_key, message):
-        with pytest.raises(MirisIntegrationError, match=message):
-            mirisIntegration.get_viewer_asset_state(asset, viewer_key)
-        assert miris_api.calls == []
-
-
 class TestRequestDeadline:
     @pytest.mark.parametrize("context, seconds", [
         (FakeLambdaContext(remaining_ms=300000), mirisIntegration._REQUEST_BUDGET_SECONDS),
@@ -533,8 +455,9 @@ class TestRequestDeadline:
 class TestRedirects:
     @pytest.mark.parametrize("call", [
         lambda: mirisIntegration.get_asset(ASSET_UUID),
-        lambda: mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY),
-    ], ids=["integration", "viewer"])
+        lambda: mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n"),
+        lambda: mirisIntegration.delete_viewer_key(KEY_ID),
+    ], ids=["get", "create", "delete"])
     def test_a_redirect_raises_and_nothing_is_sent_onward(self, miris_api, call):
         miris_api.responses.append((302, RESPONSE_BODY))
         with pytest.raises(MirisIntegrationError) as raised:
@@ -542,7 +465,7 @@ class TestRedirects:
         _assert_status_error(raised, 302)
         assert len(miris_api.calls) == 1
 
-    def test_the_real_session_does_not_follow_a_redirect(self, monkeypatch):
+    def test_the_real_session_does_not_follow_a_redirect(self, miris_api, monkeypatch):
         sent = []
 
         def fake_send(self, request, **kwargs):
@@ -556,8 +479,8 @@ class TestRedirects:
 
         monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", fake_send)
         monkeypatch.setattr(mirisIntegration, "_session", None)
-        monkeypatch.setattr(mirisIntegration, "MIRIS_API_BASE_URL", "https://miris.example.test")
+        monkeypatch.setattr(mirisIntegration, "_get_session", _REAL_GET_SESSION)
 
         with pytest.raises(MirisIntegrationError):
-            mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY)
-        assert sent == [f"https://miris.example.test/viewer/v1/asset/{ASSET_UUID}"]
+            mirisIntegration.get_asset(ASSET_UUID)
+        assert sent == [f"{miris_api.base_url}/v1/asset/{ASSET_UUID}"]

@@ -89,12 +89,9 @@ const KEY = {
 };
 
 describe("mintMirisViewerKey", () => {
-    it.each([
-        ["a per-view key", KEY],
-        ["the static key, which has no expiry", { ...KEY, expiresAt: null }],
-    ])("returns %s from the add-on viewer key route", async (_label, response) => {
-        mockPost.mockResolvedValue(response);
-        expect(await mintMirisViewerKey(ARGS)).toEqual([true, response]);
+    it("returns the minted key from the add-on viewer key route", async () => {
+        mockPost.mockResolvedValue(KEY);
+        expect(await mintMirisViewerKey(ARGS)).toEqual([true, KEY]);
         expect(mockPost).toHaveBeenCalledWith("addon/miris/viewer-key", { body: ARGS });
     });
 

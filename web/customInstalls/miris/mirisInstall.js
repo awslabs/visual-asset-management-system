@@ -25,7 +25,7 @@ const wasmSourceDirs = [
 ];
 
 // Matches `new URL("<name>.wasm", import.meta.url)` in the emitted chunks.
-const WASM_URL_PATTERN = /new URL\(\s*["']([^"'/]+\.wasm)["']\s*,\s*import\.meta\.url\s*\)/g;
+const WASM_URL_PATTERN = /new URL\(\s*["']([^"'/\\]+\.wasm)["']\s*,\s*import\.meta\.url\s*\)/g;
 
 // Function to cleanup previous builds
 const previousCleanUp = async () => {
@@ -110,7 +110,7 @@ const verifyWasmFiles = async () => {
     }
     const missing = [...referenced].filter(
         // A WebAssembly file name read from the bundle this install has just built; WASM_URL_PATTERN
-        // admits no "/", so the name cannot leave destinationDir.
+        // admits no "/" or backslash, so the name cannot leave destinationDir.
         // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
         (name) => !fs.existsSync(path.join(destinationDir, name))
     );

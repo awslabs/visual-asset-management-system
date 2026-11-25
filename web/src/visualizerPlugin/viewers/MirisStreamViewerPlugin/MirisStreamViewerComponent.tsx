@@ -336,8 +336,8 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                     return;
                 }
 
-                // 4. Viewer key for this file: the deployment's key in static mode, or one minted
-                // for this asset in per-view mode. Held in memory for this open only.
+                // 4. Viewer key minted for this file's Miris asset. Held in memory for this open
+                // only.
                 const keyResult = await mintMirisViewerKey({ databaseId, assetId, filePath });
                 if (cancelled) return;
                 if (keyResult[0] !== true) {

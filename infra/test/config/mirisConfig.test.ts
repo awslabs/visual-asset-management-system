@@ -29,7 +29,6 @@ jest.mock("fs", () => {
 });
 
 const SECRET_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-miris-api-key-AbCdEf";
-const VIEWER_KEY = "test-placeholder-viewer-key-000000";
 
 const TEMPLATES = {
     commercial: { template: commercialTemplate, region: "us-east-1" },
@@ -49,8 +48,6 @@ const UPLOAD_DEFAULTS = {
 };
 const DEFAULTS = {
     enabled: false,
-    viewerKeyMode: "perView",
-    viewerKey: "",
     viewerKeyTtlMinutes: 15,
     apiKeySecretArn: "",
     mirisApiBaseUrl: "https://app.miris.com",
@@ -92,23 +89,16 @@ function builderRules(mutate: Mutate, prefix: string, template: TemplateName = "
         .filter((id) => id.startsWith(prefix));
 }
 
-function enableStatic(c: any) {
+function enableMiris(c: any) {
     c.app.webUi.allowUnsafeEvalFeatures = true;
     Object.assign(c.app.addons.useMirisStreaming, {
         enabled: true,
-        viewerKeyMode: "static",
-        viewerKey: VIEWER_KEY,
         apiKeySecretArn: SECRET_ARN,
     });
 }
 
-function enablePerView(c: any) {
-    enableStatic(c);
-    Object.assign(c.app.addons.useMirisStreaming, { viewerKeyMode: "perView", viewerKey: "" });
-}
-
 function enableUpload(c: any) {
-    enableStatic(c);
+    enableMiris(c);
     c.app.useGlobalVpc.enabled = true;
     c.app.addons.useMirisStreaming.upload.enabled = true;
 }
@@ -183,27 +173,8 @@ describe("defaults", () => {
         ["viewerKeyTtlMinutes", null, 15],
         ["mirisApiBaseUrl", undefined, "https://app.miris.com"],
     ])("an enabled add-on with %s = %p gets %p", (field, value, expected) => {
-        const config = resolve(set(enablePerView, field, value))();
+        const config = resolve(set(enableMiris, field, value))();
         expect((config.app.addons.useMirisStreaming as any)[field]).toBe(expected);
-    });
-
-    test("an enabled add-on with no mode is perView: no viewer key is needed and a set one is ignored with a warning", () => {
-        const withoutKey = resolve(
-            set(set(enablePerView, "viewerKeyMode", undefined), "viewerKey", undefined)
-        )();
-        expect(withoutKey.app.addons.useMirisStreaming.viewerKeyMode).toBe("perView");
-        expect(mirisWarnings()).toEqual([]);
-
-        const withKey = set(set(enableStatic, "viewerKeyMode", undefined), "viewerKey", VIEWER_KEY);
-        expect(resolve(withKey)().app.addons.useMirisStreaming.viewerKeyMode).toBe("perView");
-        expect(mirisWarnings()).toEqual([
-            expect.stringContaining('viewerKey is ignored when viewerKeyMode is "perView"'),
-        ]);
-        const config = makeDefaultConfig("commercial");
-        withKey(config);
-        expect(evaluateRules(config).map((rule) => rule.id)).toContain(
-            "miris-perview-viewerkey-ignored-warn"
-        );
     });
 
     test("the schema extension list matches the schema file and the ConfigBuilder", () => {
@@ -218,8 +189,6 @@ describe("defaults", () => {
         const mutate: Mutate = (c) => {
             c.app.addons.useMirisStreaming = {
                 enabled: false,
-                viewerKeyMode: "dynamic",
-                viewerKey: "short",
                 viewerKeyTtlMinutes: 0,
                 apiKeySecretArn: "not-an-arn",
                 mirisApiBaseUrl: "http://169.254.169.254",
@@ -239,11 +208,10 @@ describe("defaults", () => {
 
 /** Enables what a field under useMirisStreaming needs, then sets it. */
 const setField = (field: string, value: unknown) =>
-    set(field.startsWith("upload.") ? enableUpload : enableStatic, field, value);
+    set(field.startsWith("upload.") ? enableUpload : enableMiris, field, value);
 
 /** [field under useMirisStreaming, accepted values] */
 const ACCEPTED_FIELDS: [string, unknown[]][] = [
-    ["viewerKey", ["short-key"]],
     ["viewerKeyTtlMinutes", [1, 60]],
     ["apiKeySecretArn", [SECRET_ARN.replace("us-east-1", "us-west-2")]],
     ["upload.taskTimeoutSeconds", [1, 5_000_000_000]],
@@ -252,13 +220,11 @@ const ACCEPTED_FIELDS: [string, unknown[]][] = [
 ];
 
 const ACCEPTED: [string, Mutate, string, TemplateName?][] = [
-    ["static mode", enableStatic, "miris-"],
-    ["perView mode", enablePerView, "miris-"],
+    ["the add-on", enableMiris, "miris-"],
     ["a restricted template with the add-on off", restrictedDeployable, "miris-", "govcloud"],
-    ["the add-on alone, without the global VPC", enableStatic, "vpc-required-"],
+    ["the add-on alone, without the global VPC", enableMiris, "vpc-required-"],
     ["upload", enableUpload, "miris-"],
     ["upload with the global VPC", enableUpload, "vpc-"],
-    ["upload in perView mode", both(enableUpload, enablePerView), "miris-"],
     ...ACCEPTED_FIELDS.flatMap(([field, values]) =>
         values.map((v): [string, Mutate, string] => [
             `${field} = ${JSON.stringify(v)}`,
@@ -276,7 +242,6 @@ test.each(ACCEPTED)("accepts %s", (_, mutate, prefix, template = "commercial") =
 
 /** [ConfigBuilder rule, field under useMirisStreaming, rejected values, message fragment] */
 const REJECTED_FIELDS: [string, string, unknown[], string][] = [
-    ["miris-viewerkeymode", "viewerKeyMode", ["dynamic", "perview", "Static"], '"perView"'],
     ["miris-viewerkey-ttl", "viewerKeyTtlMinutes", [0, 61, 15.5, "15", true], "from 1 to 60"],
     ["miris-secret-required", "apiKeySecretArn", ["", "UNDEFINED"], "requires apiKeySecretArn"],
     [
@@ -294,8 +259,6 @@ const REJECTED_FIELDS: [string, string, unknown[], string][] = [
         ],
         "complete ARN of a Secrets Manager secret",
     ],
-    ["miris-viewerkey-required", "viewerKey", ["", "UNDEFINED", "   "], "requires viewerKey"],
-    ["miris-viewerkey-whitespace", "viewerKey", [" key", "key\n"], "trailing whitespace"],
     ["miris-baseurl-required", "mirisApiBaseUrl", ["", "UNDEFINED"], "requires mirisApiBaseUrl"],
     ["miris-baseurl-whitespace", "mirisApiBaseUrl", [" https://app.miris.com"], "whitespace"],
     ["miris-baseurl-url", "mirisApiBaseUrl", ["app.miris.com"], "must be a valid URL"],
@@ -328,7 +291,7 @@ const REJECTED: [string, Mutate, string, string, TemplateName?][] = [
     ...(["govcloud", "eusovereign"] as const).map(
         (t): [string, Mutate, string, string, TemplateName] => [
             `the add-on in ${t}`,
-            both(restrictedDeployable, enableStatic),
+            both(restrictedDeployable, enableMiris),
             "while deploying to the 'aws-",
             "miris-commercial-partition-only",
             t,
@@ -336,25 +299,19 @@ const REJECTED: [string, Mutate, string, string, TemplateName?][] = [
     ),
     [
         "the add-on without unsafe-eval",
-        both(enableStatic, (c) => (c.app.webUi.allowUnsafeEvalFeatures = false)),
+        both(enableMiris, (c) => (c.app.webUi.allowUnsafeEvalFeatures = false)),
         "requires app.webUi.allowUnsafeEvalFeatures",
         "miris-unsafe-eval",
     ],
     [
         "the add-on with every Lambda function in the VPC",
-        both(enableStatic, (c) => {
+        both(enableMiris, (c) => {
             c.app.useGlobalVpc.enabled = true;
             c.app.useGlobalVpc.useForAllLambdas = true;
             c.app.openSearch.useServerless.allowPublic = false;
         }),
         "cannot be combined with app.useGlobalVpc.useForAllLambdas",
         "miris-use-for-all-lambdas",
-    ],
-    [
-        "static mode with no viewer key",
-        set(setField("viewerKey", ""), "viewerKeyMode", "static"),
-        '"static" requires viewerKey',
-        "miris-viewerkey-required",
     ],
     [
         "upload without the add-on",
@@ -393,12 +350,6 @@ test.each(REJECTED)("rejects %s", (_, mutate, fragment, rule, template = "commer
 });
 
 test.each([
-    [
-        "a viewer key in perView mode",
-        set(enablePerView, "viewerKey", VIEWER_KEY),
-        'viewerKey is ignored when viewerKeyMode is "perView"',
-        "miris-perview-viewerkey-ignored-warn",
-    ],
     [
         "an armed upload trigger without registration",
         set(

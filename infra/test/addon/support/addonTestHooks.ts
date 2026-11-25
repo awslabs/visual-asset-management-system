@@ -35,13 +35,11 @@ export function enableRouteContributingAddons(c: any): void {
     // The AMI recipe routes exist only with amiBuilds on.
     c.app.addons.useEdhWorkstations.amiBuilds.enabled = true;
     // The Miris add-on registers GET /addon/miris/asset-status and POST /addon/miris/viewer-key
-    // and ships disabled. perView mode builds every resource the add-on can hold.
+    // and ships disabled.
     const miris = c.app.addons?.useMirisStreaming;
     if (miris) {
         c.app.webUi.allowUnsafeEvalFeatures = true;
         miris.enabled = true;
-        miris.viewerKeyMode = "perView";
-        miris.viewerKey = "";
         miris.apiKeySecretArn =
             "arn:aws:secretsmanager:us-east-1:123456789012:secret:synth-only-miris-key-AbCdEf";
     }

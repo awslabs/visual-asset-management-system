@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """POST /addon/miris/viewer-key: a key is returned only after both authorization tiers and the
-binding check pass, for the Miris asset recorded on the file. perView mints and records a key;
-static returns the deployment key. No key material reaches a log, audit entry, row or error."""
+binding check pass, for the Miris asset recorded on the file. Each key is minted for that asset
+and recorded. No key material reaches a log, audit entry, row or error."""
 
 import importlib
 import json
@@ -31,8 +31,6 @@ from .conftest import (
     enforcer as _enforcer,
     metadata_table as _metadata_table,
     rest_event,
-    static_viewer_key,
-    VIEWER_KEY_SECRET_ARN,
 )
 
 pytestmark = pytest.mark.unit
@@ -42,12 +40,10 @@ KEY_ID = "3f2b8c1e-9a4d-4e7f-8b6a-1c2d3e4f5a6b"
 VIEWER_KEY_MATERIAL = "minted-viewer-key-material-do-not-log"
 MIRIS_ERROR_BODY = "miris-error-body-must-not-surface"
 ROUTE_PATH = "/addon/miris/viewer-key"
-STATIC_VIEWER_KEY = "static-deployment-viewer-key-do-not-log-9e1d"
 FIXED_NOW = datetime(2026, 10, 15, 18, 49, 28, 734000, tzinfo=timezone.utc)
 FIXED_EPOCH_SECONDS = 1792090168.5
 ASSET_TAG = f"vams-asset-{ASSET_ID}"
 DATABASE_TAG = f"vams-database-{DATABASE_ID}"
-MODES = ["static", "perView"]
 
 _AS_USER = claims_after_normalizing({"tokens": [USER_ID], "roles": []})
 _AS_NOBODY = claims_after_normalizing({"tokens": [], "roles": []})
@@ -85,13 +81,10 @@ _UNSET = object()
 
 
 def _invoke(event, miris_api, metadata_table=None, asset_table=None, key_table=_UNSET,
-            enforcer=None, audit=None, ttl_minutes="15", context=None, mode="perView",
-            static_key=STATIC_VIEWER_KEY, claims=_AS_USER):
+            enforcer=None, audit=None, ttl_minutes="15", context=None, claims=_AS_USER):
     with patch.object(mintViewerKey, "asset_file_metadata_table", metadata_table or _streamed()), \
          patch.object(mintViewerKey, "asset_table", asset_table or _asset_table()), \
          patch.object(mintViewerKey, "miris_viewer_key_table", MagicMock() if key_table is _UNSET else key_table), \
-         patch.object(mintViewerKey, "miris_viewer_key_mode", mode), \
-         static_viewer_key(static_key), \
          patch.object(mintViewerKey, "CasbinEnforcer", return_value=enforcer or _enforcer()), \
          patch.object(mintViewerKey, "request_to_claims", side_effect=claims), \
          patch.object(mintViewerKey, "log_auth_other", audit or MagicMock()), \
@@ -110,7 +103,7 @@ def _no_store(response):
     return "no-store" in [d.strip() for d in response["headers"]["Cache-Control"].split(",")]
 
 
-class TestPerViewMint:
+class TestMint:
     def test_mints_records_and_audits_one_key_scoped_to_the_files_asset(self, miris_api):
         miris_api.responses.extend([BOUND, CREATED])
         key_table, audit, event = MagicMock(), MagicMock(), _event()
@@ -176,57 +169,13 @@ class TestPerViewMint:
             mirisIntegration.viewer_key_name(DATABASE_ID, "a" * 255 + "b", 1))
 
 
-class TestStaticMode:
-    def test_a_bound_asset_returns_the_deployment_key_without_minting(self, miris_api):
-        miris_api.responses.append(BOUND)
-        key_table, audit, event = MagicMock(), MagicMock(), _event()
-
-        # The static key needs no TTL setting.
-        response, body = _invoke(event, miris_api, key_table=key_table, audit=audit, mode="static", ttl_minutes="")
-
-        assert response["statusCode"] == 200
-        assert _no_store(response)
-        assert body == {"filePath": "/scene.usd", "mirisAssetUuid": STORED_UUID,
-                        "viewerKey": STATIC_VIEWER_KEY, "expiresAt": None}
-        assert [(c["method"], c["url"]) for c in miris_api.calls] == [
-            ("GET", f"{miris_api.base_url}/v1/asset/{STORED_UUID}")]
-        assert STATIC_VIEWER_KEY not in json.dumps(miris_api.calls[0]["headers"])
-        key_table.put_item.assert_not_called()
-        assert audit.call_args.args == (event, "mirisStaticViewerKeyIssue", {
-            "userId": USER_ID, "databaseId": DATABASE_ID, "assetId": ASSET_ID,
-            "filePath": "/scene.usd", "mirisAssetUuid": STORED_UUID})
-
-
-    def test_the_key_is_read_from_its_secret_after_the_binding_check(self, miris_api):
-        miris_api.responses.append(BOUND)
-        _, body = _invoke(_event(), miris_api, mode="static")
-        assert body["viewerKey"] == STATIC_VIEWER_KEY
-        assert [c.kwargs["SecretId"] for c in miris_api.secretsmanager.get_secret_value.call_args_list] == [
-            miris_api.secret_arn, VIEWER_KEY_SECRET_ARN]
-
-    def test_an_unreadable_key_secret_is_502_without_a_key(self, miris_api):
-        def read(SecretId):
-            if SecretId == VIEWER_KEY_SECRET_ARN:
-                raise RuntimeError(STATIC_VIEWER_KEY)
-            return {"SecretString": miris_api.integration_key}
-
-        miris_api.secretsmanager.get_secret_value.side_effect = read
-        miris_api.responses.append(BOUND)
-        audit = MagicMock()
-        response, body = _invoke(_event(), miris_api, mode="static", audit=audit)
-        assert response["statusCode"] == 502
-        assert "viewerKey" not in body and STATIC_VIEWER_KEY not in response["body"]
-        audit.assert_not_called()
-
-
-@pytest.mark.parametrize("mode", MODES)
 class TestNoKeyIsReturned:
-    """Each refusal is the same in both modes: no key is returned, minted, recorded or audited."""
+    """On each refusal no key is returned, minted, recorded or audited."""
 
     @staticmethod
     def _assert_no_key(response, miris_api, key_table=None, audit=None):
         assert "viewerKey" not in json.loads(response["body"])
-        assert STATIC_VIEWER_KEY not in response["body"]
+        assert VIEWER_KEY_MATERIAL not in response["body"]
         assert MIRIS_ERROR_BODY not in response["body"]
         assert _methods(miris_api, "POST") == []
         if key_table is not None:
@@ -234,28 +183,28 @@ class TestNoKeyIsReturned:
         if audit is not None:
             audit.assert_not_called()
 
-    def test_tier1_denial_is_403_before_any_read(self, miris_api, mode):
+    def test_tier1_denial_is_403_before_any_read(self, miris_api):
         asset_table, metadata_table = _asset_table(), _streamed()
         response, _ = _invoke(_event(), miris_api, asset_table=asset_table, metadata_table=metadata_table,
-                              enforcer=_enforcer(api=False), mode=mode)
+                              enforcer=_enforcer(api=False))
         assert response["statusCode"] == 403
         asset_table.get_item.assert_not_called()
         metadata_table.get_item.assert_not_called()
         assert miris_api.calls == []
 
-    def test_tier2_denial_is_403_before_any_metadata_read(self, miris_api, mode):
+    def test_tier2_denial_is_403_before_any_metadata_read(self, miris_api):
         metadata_table, audit = _streamed(), MagicMock()
         response, _ = _invoke(_event(), miris_api, metadata_table=metadata_table,
-                              enforcer=_enforcer(entity=False), audit=audit, mode=mode)
+                              enforcer=_enforcer(entity=False), audit=audit)
         assert response["statusCode"] == 403
         metadata_table.get_item.assert_not_called()
         assert miris_api.calls == []
         self._assert_no_key(response, miris_api, audit=audit)
 
-    def test_tier2_is_checked_as_a_read_of_the_asset(self, miris_api, mode):
+    def test_tier2_is_checked_as_a_read_of_the_asset(self, miris_api):
         miris_api.responses.extend([BOUND, CREATED])
         enforcer = _enforcer()
-        _invoke(_event(), miris_api, enforcer=enforcer, mode=mode)
+        _invoke(_event(), miris_api, enforcer=enforcer)
         asset_arg, action = enforcer.enforce.call_args.args
         assert action == "GET"
         assert (asset_arg["object__type"], asset_arg["databaseId"], asset_arg["assetId"]) == (
@@ -266,8 +215,8 @@ class TestNoKeyIsReturned:
         (_streamed(uuid="  "), 404, "notStreamed"),
         (_streamed(uuid="not-a-uuid"), 400, "invalidUuid"),
     ], ids=["no-stream", "blank-uuid", "invalid-uuid"])
-    def test_a_file_without_a_usable_stream_returns_no_key(self, miris_api, mode, metadata_table, status, state):
-        response, body = _invoke(_event(), miris_api, metadata_table=metadata_table, mode=mode)
+    def test_a_file_without_a_usable_stream_returns_no_key(self, miris_api, metadata_table, status, state):
+        response, body = _invoke(_event(), miris_api, metadata_table=metadata_table)
         assert (response["statusCode"], body["state"]) == (status, state)
         assert miris_api.calls == []
 
@@ -276,10 +225,10 @@ class TestNoKeyIsReturned:
         _asset_read(tags=("vams", ASSET_TAG, "vams-database-db-2")),
         404,
     ], ids=["database-tag-missing", "same-asset-id-other-database", "missing-miris-asset"])
-    def test_an_unbound_asset_is_403_not_bound(self, miris_api, mode, outcome):
+    def test_an_unbound_asset_is_403_not_bound(self, miris_api, outcome):
         miris_api.responses.append(outcome)
         key_table, audit = MagicMock(), MagicMock()
-        response, body = _invoke(_event(), miris_api, key_table=key_table, audit=audit, mode=mode)
+        response, body = _invoke(_event(), miris_api, key_table=key_table, audit=audit)
         assert (response["statusCode"], body["state"]) == (403, "notBound")
         assert ASSET_TAG in body["message"] and DATABASE_TAG in body["message"]
         self._assert_no_key(response, miris_api, key_table, audit)
@@ -288,27 +237,27 @@ class TestNoKeyIsReturned:
         (500, MIRIS_ERROR_BODY), (302, MIRIS_ERROR_BODY), (200, {"tags": [ASSET_TAG, DATABASE_TAG]}),
         requests.ConnectionError(MIRIS_ERROR_BODY),
     ], ids=["500", "redirect", "no-state", "transport"])
-    def test_an_unreadable_binding_is_502(self, miris_api, mode, outcome):
+    def test_an_unreadable_binding_is_502(self, miris_api, outcome):
         miris_api.responses.append(outcome)
         key_table = MagicMock()
-        response, _ = _invoke(_event(), miris_api, key_table=key_table, mode=mode)
+        response, _ = _invoke(_event(), miris_api, key_table=key_table)
         assert response["statusCode"] == 502
         assert len(miris_api.calls) == 1
         self._assert_no_key(response, miris_api, key_table)
 
-    def test_too_little_time_left_is_504_without_a_miris_call(self, miris_api, mode):
+    def test_too_little_time_left_is_504_without_a_miris_call(self, miris_api):
         key_table = MagicMock()
-        response, _ = _invoke(_event(), miris_api, key_table=key_table, mode=mode,
+        response, _ = _invoke(_event(), miris_api, key_table=key_table,
                               context=FakeLambdaContext(remaining_ms=2000))
         assert response["statusCode"] == 504
         assert miris_api.calls == []
         self._assert_no_key(response, miris_api, key_table)
 
     @pytest.mark.parametrize("missing", ["MIRIS_API_KEY_SECRET_ARN", "MIRIS_API_BASE_URL"])
-    def test_a_missing_integration_setting_is_503_before_any_read(self, miris_api, monkeypatch, mode, missing):
+    def test_a_missing_integration_setting_is_503_before_any_read(self, miris_api, monkeypatch, missing):
         monkeypatch.setattr(mirisIntegration, missing, "")
         asset_table = _asset_table()
-        response, _ = _invoke(_event(), miris_api, asset_table=asset_table, mode=mode)
+        response, _ = _invoke(_event(), miris_api, asset_table=asset_table)
         assert response["statusCode"] == 503
         asset_table.get_item.assert_not_called()
         assert miris_api.calls == []
@@ -379,27 +328,24 @@ def quarantine_block():
         yield table
 
 
-@pytest.mark.parametrize("mode", MODES)
 class TestAssetDistributionRule:
     """The rule the core file routes apply before serving content: the asset is distributable and,
     while the quarantine block is on, not quarantined. Checked after both authorization tiers and
     before the file's stream metadata or Miris is read."""
 
-    def test_an_asset_that_is_not_distributable_returns_no_key(self, miris_api, mode):
+    def test_an_asset_that_is_not_distributable_returns_no_key(self, miris_api):
         metadata_table, key_table, audit = _streamed(), MagicMock(), MagicMock()
         response, body = _invoke(_event(), miris_api, asset_table=_asset_table(distributable=False),
-                                 metadata_table=metadata_table, key_table=key_table, audit=audit,
-                                 mode=mode)
+                                 metadata_table=metadata_table, key_table=key_table, audit=audit)
         assert (response["statusCode"], body) == (400, {"message": "Asset not distributable"})
         metadata_table.get_item.assert_not_called()
         assert miris_api.calls == []
         key_table.put_item.assert_not_called()
         audit.assert_not_called()
 
-    def test_a_quarantined_asset_returns_the_quarantine_refusal(self, miris_api, mode, quarantine_block):
+    def test_a_quarantined_asset_returns_the_quarantine_refusal(self, miris_api, quarantine_block):
         metadata_table, key_table = _streamed(), MagicMock()
-        response, _ = _invoke(_event(), miris_api, metadata_table=metadata_table, key_table=key_table,
-                              mode=mode)
+        response, _ = _invoke(_event(), miris_api, metadata_table=metadata_table, key_table=key_table)
         assert_is_the_quarantine_refusal(response)
         quarantine_block.get_item.assert_called_once_with(
             Key={"databaseId": DATABASE_ID, "assetId": ASSET_ID})
@@ -407,45 +353,32 @@ class TestAssetDistributionRule:
         assert miris_api.calls == []
         key_table.put_item.assert_not_called()
 
-    def test_a_granted_exception_returns_a_key(self, miris_api, mode, quarantine_block):
+    def test_a_granted_exception_returns_a_key(self, miris_api, quarantine_block):
         quarantine_block.get_item.return_value = _compliance_table(exception_granted=True).get_item.return_value
         miris_api.responses.extend([BOUND, CREATED])
-        response, body = _invoke(_event(), miris_api, mode=mode)
+        response, body = _invoke(_event(), miris_api)
         assert response["statusCode"] == 200
         assert body["viewerKey"]
 
-    def test_a_denied_caller_gets_the_denial_before_the_quarantine_is_read(self, miris_api, mode,
+    def test_a_denied_caller_gets_the_denial_before_the_quarantine_is_read(self, miris_api,
                                                                          quarantine_block):
-        response, _ = _invoke(_event(), miris_api, enforcer=_enforcer(entity=False), mode=mode)
+        response, _ = _invoke(_event(), miris_api, enforcer=_enforcer(entity=False))
         assert response["statusCode"] == 403
         quarantine_block.get_item.assert_not_called()
         assert miris_api.calls == []
 
-    def test_with_the_block_off_no_compliance_state_is_read(self, miris_api, mode):
+    def test_with_the_block_off_no_compliance_state_is_read(self, miris_api):
         guard = importlib.import_module(mintViewerKey.check_quarantine_block.__module__)
         table = _compliance_table()
         miris_api.responses.extend([BOUND, CREATED])
         with patch.object(guard, "quarantine_blocks_download", False), \
              patch.object(guard, "compliance_asset_state_table", table):
-            response, _ = _invoke(_event(), miris_api, mode=mode)
+            response, _ = _invoke(_event(), miris_api)
         assert response["statusCode"] == 200
         table.get_item.assert_not_called()
 
 
 class TestNotConfigured:
-    @pytest.mark.parametrize("mode, static_key, key_table", [
-        ("static", "", MagicMock()), ("perView", STATIC_VIEWER_KEY, None), ("", STATIC_VIEWER_KEY, MagicMock()),
-        ("per-view", STATIC_VIEWER_KEY, MagicMock()),
-    ], ids=["static-without-key", "perView-without-table", "empty-mode", "unknown-mode"])
-    def test_a_mode_missing_its_settings_is_503(self, miris_api, mode, static_key, key_table):
-        asset_table = _asset_table()
-        response, _ = _invoke(_event(), miris_api, asset_table=asset_table, key_table=key_table,
-                              mode=mode, static_key=static_key)
-        assert response["statusCode"] == 503
-        assert STATIC_VIEWER_KEY not in response["body"]
-        asset_table.get_item.assert_not_called()
-        assert miris_api.calls == []
-
     def test_tier1_is_checked_before_the_configuration(self, miris_api, monkeypatch):
         monkeypatch.setattr(mirisIntegration, "MIRIS_API_KEY_SECRET_ARN", "")
         response, _ = _invoke(_event(), miris_api, enforcer=_enforcer(api=False))
@@ -473,7 +406,7 @@ def clock(monkeypatch, miris_api):
     return state
 
 
-class TestPerViewFailures:
+class TestMintFailures:
     @pytest.mark.parametrize("outcomes", [
         [(500, MIRIS_ERROR_BODY)],
         [(200, {"id": KEY_ID}), 204],
@@ -560,35 +493,33 @@ def test_no_path_logs_a_key_or_a_secret(miris_api, log_recorder, caplog):
     caplog.set_level(logging.DEBUG)
     failing_table = MagicMock()
     failing_table.put_item.side_effect = RuntimeError(f"boom {VIEWER_KEY_MATERIAL}")
-    failing_audit = MagicMock(side_effect=RuntimeError(f"boom {STATIC_VIEWER_KEY}"))
+    failing_audit = MagicMock(side_effect=RuntimeError(f"boom {VIEWER_KEY_MATERIAL}"))
     miris_api.responses.extend([
-        BOUND, CREATED,                                       # perView success
+        BOUND, CREATED,                                       # success
         BOUND, CREATED, (503, MIRIS_ERROR_BODY),              # put fails, cleanup delete fails
         BOUND, (500, MIRIS_ERROR_BODY),                       # create fails
-        BOUND,                                                # static success
-        _asset_read(tags=("vams",)),                          # static not bound
-        BOUND,                                                # static, then the audit write fails
+        _asset_read(tags=("vams",)),                          # not bound
+        BOUND, CREATED,                                       # the audit write fails
     ])
     statuses = [
         _invoke(_event(), miris_api)[0]["statusCode"],
         _invoke(_event(), miris_api, key_table=failing_table)[0]["statusCode"],
         _invoke(_event(), miris_api)[0]["statusCode"],
-        _invoke(_event(), miris_api, mode="static")[0]["statusCode"],
-        _invoke(_event(), miris_api, mode="static")[0]["statusCode"],
-        _invoke(_event(), miris_api, mode="static", audit=failing_audit)[0]["statusCode"],
+        _invoke(_event(), miris_api)[0]["statusCode"],
+        _invoke(_event(), miris_api, audit=failing_audit)[0]["statusCode"],
     ]
-    assert statuses == [200, 500, 502, 200, 403, 500]
+    assert statuses == [200, 500, 502, 403, 500]
 
     # Control: the paths were logged, so an empty log is not what passes.
     text = log_recorder.text()
     assert KEY_ID in text and "HTTP 500" in text and "RuntimeError" in text
     for logged in (text, caplog.text):
-        for secret in (VIEWER_KEY_MATERIAL, STATIC_VIEWER_KEY, miris_api.integration_key, MIRIS_ERROR_BODY, "boom"):
+        for secret in (VIEWER_KEY_MATERIAL, miris_api.integration_key, MIRIS_ERROR_BODY, "boom"):
             assert secret not in logged
 
 
-def _load_handler_copy(monkeypatch, mode):
-    """A private copy of the handler module, imported with `MIRIS_VIEWER_KEY_MODE` set to `mode`."""
+def _load_handler_copy(monkeypatch):
+    """A private copy of the handler module, imported with its own viewer key table name."""
     import importlib.util
     import types
 
@@ -600,7 +531,6 @@ def _load_handler_copy(monkeypatch, mode):
         setattr(stand_in, attribute, MagicMock())
         monkeypatch.setitem(sys.modules, module_name, stand_in)
     sys.modules["customLogging.auditLogging"].audited_handler = lambda handler: handler
-    monkeypatch.setenv("MIRIS_VIEWER_KEY_MODE", mode)
     monkeypatch.setenv("MIRIS_VIEWER_KEY_STORAGE_TABLE_NAME", "probe-viewer-key-table")
     name = f"{mintViewerKey.__package__}._mint_viewer_key_load_probe"
     spec = importlib.util.spec_from_file_location(name, mintViewerKey.__file__)
@@ -609,8 +539,7 @@ def _load_handler_copy(monkeypatch, mode):
     return module
 
 
-@pytest.mark.parametrize("mode, table_name", [("perView", "probe-viewer-key-table"), ("static", None)])
-def test_the_key_table_is_resolved_in_per_view_mode_only(monkeypatch, mode, table_name):
-    module = _load_handler_copy(monkeypatch, mode)
-    assert module.miris_viewer_key_table_name == table_name
-    assert (module.miris_viewer_key_table.name if table_name else module.miris_viewer_key_table) == table_name
+def test_the_key_table_is_resolved_at_module_load(monkeypatch):
+    module = _load_handler_copy(monkeypatch)
+    assert module.miris_viewer_key_table_name == "probe-viewer-key-table"
+    assert module.miris_viewer_key_table.name == "probe-viewer-key-table"

@@ -4,9 +4,8 @@
  */
 
 /**
- * The Miris add-on nested stack has no unsuppressed AwsSolutions finding with the deployment CMK, in
- * perView mode, which builds every resource but the static viewer key's secret, and in static mode,
- * which builds that secret. It is built under a parent stack that
+ * The Miris add-on nested stack has no unsuppressed AwsSolutions finding with the deployment CMK. It
+ * is built under a parent stack that
  * supplies its storage, with the Nag pack and framework suppressions applied as the app applies them;
  * AwsSolutions-L1 is left to the core stack.
  */
@@ -32,15 +31,13 @@ const AUDIT_LOG_GROUPS = (
     "authOther authChanges actions errors"
 ).split(" ");
 
-/** Builds the add-on stack in `viewerKeyMode` under the Nag pack; returns what the checks need. */
-function synthesizeUnderNag(viewerKeyMode: "perView" | "static") {
+/** Builds the add-on stack under the Nag pack; returns what the checks need. */
+function synthesizeUnderNag() {
     const config = createMockConfig();
     config.app.useKmsCmkEncryption.enabled = true;
     config.app.webUi.allowUnsafeEvalFeatures = true;
     Object.assign(config.app.addons.useMirisStreaming, {
         enabled: true,
-        viewerKeyMode,
-        viewerKey: viewerKeyMode === "static" ? "test-placeholder-viewer-key-000000" : "",
         apiKeySecretArn: "arn:aws:secretsmanager:us-east-1:123456789012:secret:miris-AbCdEf",
     });
     Service.SetConfig(config);
@@ -118,8 +115,8 @@ function synthesizeUnderNag(viewerKeyMode: "perView" | "static") {
     return { paths, root, applied, errors };
 }
 
-test("the perView add-on stack has no unsuppressed AwsSolutions error", () => {
-    const { paths, root, applied, errors } = synthesizeUnderNag("perView");
+test("the add-on stack has no unsuppressed AwsSolutions error", () => {
+    const { paths, root, applied, errors } = synthesizeUnderNag();
 
     // Control: every resource the stack can hold was built and walked, or "no errors" is vacuous.
     for (const id of [
@@ -141,14 +138,5 @@ test("the perView add-on stack has no unsuppressed AwsSolutions error", () => {
     expect(applied.some((info) => info.includes("AwsSolutions-SQS3"))).toBe(true);
     expect(applied.some((info) => info.includes("AwsSolutions-IAM4"))).toBe(true);
     expect(applied.some((info) => info.includes("/pipelines/miris-upload/manifests/*"))).toBe(true);
-    expect(errors).toEqual([]);
-});
-
-test("the static add-on stack, with its viewer key secret, has no unsuppressed AwsSolutions error", () => {
-    const { paths, root, applied, errors } = synthesizeUnderNag("static");
-    for (const id of ["MirisViewerKeySecret", "MirisViewerKeySecretPopulate"]) {
-        expect(paths).toContain(`${root}/${id}`);
-    }
-    expect(applied.some((info) => info.includes("AwsSolutions-SMG4"))).toBe(true);
     expect(errors).toEqual([]);
 });

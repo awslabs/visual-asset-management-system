@@ -739,7 +739,7 @@ os.environ.setdefault("ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME", "assetFil
 # Vector search + workflow coordination tables
 os.environ["VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME"] = "vectorEmbeddingsStorageTable"
 os.environ["WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME"] = "workflowExecutionLocksStorageTable"
-# Miris add-on per-view viewer key table (mintViewerKey resolves it at module load in perView mode)
+# Miris add-on viewer key table (mintViewerKey resolves it at module load)
 os.environ["MIRIS_VIEWER_KEY_STORAGE_TABLE_NAME"] = "mirisViewerKeyTable"
 
 

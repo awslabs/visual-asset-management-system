@@ -6,9 +6,6 @@ Integration API calls authenticate with the Miris Integration Key, a plain-strin
 secret named by `MIRIS_API_KEY_SECRET_ARN`, and go to the Miris API at `MIRIS_API_BASE_URL`. The
 key is cached per container for `_SECRET_CACHE_TTL_SECONDS`, so a rotated key is picked up within
 that window; a 401 or 403 drops the cached key and retries the call once with a freshly read one.
-`get_viewer_asset_state` instead reads the viewer API with a viewer key the caller passes. In static
-mode that is the deployment-wide viewer key, which `load_static_viewer_key` reads from the secret
-named by `MIRIS_VIEWER_KEY_SECRET_ARN` (filled at deploy time) and caches the same way.
 
 Every call accepts an optional `deadline` (see `request_deadline`), which is a best-effort bound:
 a call is not started once less than `_MIN_CALL_SECONDS` remain before it, its connect and read
@@ -79,7 +76,6 @@ _CLEANUP_MARGIN_SECONDS = 0.5
 _SECRET_CACHE_TTL_SECONDS = 3600
 
 _API_KEY_HEADER = "Miris-API-Key"
-_VIEWER_KEY_HEADER = "Miris-Viewer-Key"
 
 
 # Longest viewer key name `viewer_key_name` produces.
@@ -100,8 +96,6 @@ _secret_cache: Dict[str, Tuple[str, float]] = {}
 # `MirisIntegrationError`, so a Lambda that imports this module without calling it needs neither.
 MIRIS_API_KEY_SECRET_ARN = os.environ.get("MIRIS_API_KEY_SECRET_ARN", "").strip()
 MIRIS_API_BASE_URL = os.environ.get("MIRIS_API_BASE_URL", "").strip().rstrip("/")
-# The deployment-wide viewer key's secret, set in static mode only.
-MIRIS_VIEWER_KEY_SECRET_ARN = os.environ.get("MIRIS_VIEWER_KEY_SECRET_ARN", "").strip()
 
 
 def integration_configured() -> bool:
@@ -327,13 +321,6 @@ def _load_api_key(deadline: Optional[float] = None) -> str:
     return _load_secret(MIRIS_API_KEY_SECRET_ARN, "Miris Integration Key", deadline)
 
 
-def load_static_viewer_key(deadline: Optional[float] = None) -> str:
-    """Return the deployment-wide viewer key of static mode."""
-    if not MIRIS_VIEWER_KEY_SECRET_ARN:
-        raise MirisIntegrationError("MIRIS_VIEWER_KEY_SECRET_ARN is not configured")
-    return _load_secret(MIRIS_VIEWER_KEY_SECRET_ARN, "Miris viewer key", deadline)
-
-
 def _invalidate_api_key_cache() -> None:
     """Drop the cached Integration Key so the next call re-reads Secrets Manager."""
     _secret_cache.pop(MIRIS_API_KEY_SECRET_ARN, None)
@@ -500,32 +487,3 @@ def get_asset(miris_asset_uuid: str, deadline: Optional[float] = None) -> Option
     return MirisAsset(state=state, tags=tuple(tag for tag in tags if isinstance(tag, str)))
 
 
-def get_viewer_asset_state(miris_asset_uuid: str, viewer_key: Optional[str],
-                           deadline: Optional[float] = None) -> Optional[str]:
-    """Read one asset's `state` from the viewer API with `viewer_key`, or None on a 404.
-
-    The viewer API reports no tags. The key is sent in a header, never the query string. Raises
-    `MirisIntegrationError` for an ID that is not a UUID or a missing viewer key or base URL
-    (without calling Miris), for any other non-2xx status (a 400 included, which the status route
-    reports as processing), for a transport failure, and for a response without a string `state`.
-    """
-    if not _is_uuid(miris_asset_uuid):
-        raise MirisIntegrationError("Miris asset ID is not a UUID")
-    if not viewer_key:
-        raise MirisIntegrationError("No Miris viewer key is configured")
-    if not MIRIS_API_BASE_URL:
-        raise MirisIntegrationError("MIRIS_API_BASE_URL is not configured")
-    response = _send(
-        "GET",
-        f"{MIRIS_API_BASE_URL}/viewer/v1/asset/{miris_asset_uuid}",
-        {_VIEWER_KEY_HEADER: viewer_key, "Accept": "application/json"},
-        deadline,
-    )
-    if response.status_code == 404:
-        return None
-    if response.status_code != 200:
-        raise MirisIntegrationError(
-            f"Miris viewer asset read returned HTTP {response.status_code}",
-            status_code=response.status_code,
-        )
-    return _response_state(response, "Miris viewer asset read")

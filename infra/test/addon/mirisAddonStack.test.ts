@@ -4,17 +4,13 @@
  */
 
 /**
- * The Miris Spatial Streaming add-on, synthesized from the commercial template three ways: off, in
- * static mode with the upload pipeline (shared with mirisUploadVpcPlacement), and in perView mode
- * with the deployment CMK and no upload pipeline.
+ * The Miris Spatial Streaming add-on, synthesized from the commercial template three ways: off, with
+ * the upload pipeline (shared with mirisUploadVpcPlacement), and with the deployment CMK and no upload
+ * pipeline.
  */
 
 import { Resource, SynthResult, synthTemplate } from "../support/templateSynth";
-import {
-    MIRIS_TEST_SECRET_ARN as SECRET_ARN,
-    MIRIS_TEST_VIEWER_KEY as PLACEHOLDER_VIEWER_KEY,
-    mirisStaticWithUpload,
-} from "./mirisUploadHarness";
+import { MIRIS_TEST_SECRET_ARN as SECRET_ARN, mirisWithUpload } from "./mirisUploadHarness";
 
 const STATUS_ROUTE = "/addon/miris/asset-status";
 const VIEWER_KEY_ROUTE = "/addon/miris/viewer-key";
@@ -30,12 +26,11 @@ const WRITE_ACTION = /^dynamodb:(PutItem|UpdateItem|DeleteItem|BatchWriteItem|\*
 const VIEWER_KEY_TABLE = "MirisViewerKeyStorageTable";
 const METRICS_NAMESPACE = expect.stringMatching(/^VAMS\/[A-Za-z0-9-]+\/Miris$/);
 
-function perViewWithKms(c: any) {
+function withKms(c: any) {
     c.app.webUi.allowUnsafeEvalFeatures = true;
     c.app.useKmsCmkEncryption.enabled = true;
     Object.assign(c.app.addons.useMirisStreaming, {
         enabled: true,
-        viewerKeyMode: "perView",
         viewerKeyTtlMinutes: 7,
         apiKeySecretArn: SECRET_ARN,
     });
@@ -104,11 +99,9 @@ function expectExactSecretGrant(statements: any[], resources: unknown[] = [SECRE
     expect(granted).toEqual(expect.arrayContaining(resources));
 }
 
-/** The secret VAMS creates for the static viewer key. */
-const viewerKeySecrets = (synth: SynthResult): Resource[] =>
-    synth.where("AWS::SecretsManager::Secret", (r) =>
-        r.logicalId.startsWith("MirisViewerKeySecret")
-    );
+/** Secrets Manager secrets the add-on's stacks create. */
+const mirisSecrets = (synth: SynthResult): Resource[] =>
+    synth.where("AWS::SecretsManager::Secret", (r) => /Miris/.test(r.logicalId));
 
 const viewerKeyTables = (synth: SynthResult): Resource[] =>
     synth.where("AWS::DynamoDB::Table", (r) =>
@@ -189,13 +182,13 @@ describe("Miris add-on disabled (stock commercial template)", () => {
     });
 });
 
-describe("Miris add-on in static mode with the upload pipeline", () => {
+describe("Miris add-on with the upload pipeline", () => {
     let synth: SynthResult;
 
     beforeAll(() => {
         synth = synthTemplate("commercial", {
-            mutate: mirisStaticWithUpload,
-            mutateKey: "miris-static-upload",
+            mutate: mirisWithUpload,
+            mutateKey: "miris-with-upload",
         });
     });
 
@@ -211,11 +204,8 @@ describe("Miris add-on in static mode with the upload pipeline", () => {
         expect(recordsFeature(synth, "CLOUDFRONTDEPLOY")).toBe(true);
     });
 
-    test("the status and viewer key Lambdas carry the viewer key settings", () => {
-        const [secret] = viewerKeySecrets(synth);
+    test("the status and viewer key Lambdas carry the Miris settings", () => {
         const shared = {
-            MIRIS_VIEWER_KEY_MODE: "static",
-            MIRIS_VIEWER_KEY_SECRET_ARN: { Ref: secret.logicalId },
             MIRIS_API_KEY_SECRET_ARN: SECRET_ARN,
             MIRIS_API_BASE_URL: "https://app.miris.com",
             MIRIS_METRICS_NAMESPACE: METRICS_NAMESPACE,
@@ -266,7 +256,7 @@ describe("Miris add-on in static mode with the upload pipeline", () => {
         }
     });
 
-    test("alarms watch Miris auth failures and the upload's end-rule queue; static mode has no cleanup queue", () => {
+    test("alarms watch Miris auth failures, the upload's end-rule queue and the viewer key cleanup queue", () => {
         expectAuthFailureAlarm(synth);
         expect(
             mirisAlarms(synth)
@@ -275,16 +265,15 @@ describe("Miris add-on in static mode with the upload pipeline", () => {
         ).toEqual([
             expect.stringMatching(/-mirisAuthFailures$/),
             expect.stringMatching(/-mirisUploadEndRuleDLQ$/),
+            expect.stringMatching(/-mirisViewerKeyCleanupDLQ$/),
         ]);
     });
 
     test.each([STATUS_HANDLER, MINT_HANDLER])(
-        "%s reads exactly the two secrets and writes no DynamoDB data",
+        "%s reads exactly the Integration Key secret and the file's records",
         (handler) => {
             const statements = functionStatements(synth, handler);
-            const [secret] = viewerKeySecrets(synth);
-            expectExactSecretGrant(statements, [SECRET_ARN, { Ref: secret.logicalId }]);
-            expect(writes(statements)).toEqual([]);
+            expectExactSecretGrant(statements, [SECRET_ARN]);
             const reads = JSON.stringify(
                 statements.filter((s) => actionsOf(s).includes("dynamodb:GetItem"))
             );
@@ -348,30 +337,10 @@ describe("Miris add-on in static mode with the upload pipeline", () => {
         expect(actions).toEqual([]);
     });
 
-    test("the viewer key is in a secret filled at deploy time, and in no template or environment", () => {
-        const secrets = viewerKeySecrets(synth);
-        expect(secrets).toHaveLength(1);
-        expect(secrets[0].properties.SecretString).toBeUndefined();
-        const populate = synth.where(
-            "AWS::CloudFormation::CustomResource",
-            (r) =>
-                JSON.stringify(r.properties.SecretArn ?? "") ===
-                JSON.stringify({ Ref: secrets[0].logicalId })
-        );
-        expect(populate).toHaveLength(1);
-        // Control: the placeholder is a value the synth would carry if it leaked.
-        expect(PLACEHOLDER_VIEWER_KEY.length).toBeGreaterThan(8);
-        expect(synth.grep(PLACEHOLDER_VIEWER_KEY)).toEqual([]);
-    });
-
-    test("no viewer key table or cleanup resource is deployed, and no output holds the key", () => {
-        expect(viewerKeyTables(synth)).toEqual([]);
-        expect(viewerKeyParams(synth)).toEqual([]);
-        expect(synth.grep("MirisViewerKeyCleanup")).toEqual([]);
-        const outputs = Object.values(synth.templates).map((t: any) =>
-            JSON.stringify(t.Outputs ?? {})
-        );
-        expect(outputs.filter((o) => o.includes(PLACEHOLDER_VIEWER_KEY))).toEqual([]);
+    test("the add-on creates no secret of its own", () => {
+        expect(mirisSecrets(synth)).toEqual([]);
+        // Control: the detector reads secrets the core stacks create.
+        expect(synth.ofType("AWS::SecretsManager::Secret").length).toBeGreaterThan(0);
     });
 
     test("the basic read-only role is seeded with both routes", () => {
@@ -412,18 +381,14 @@ describe("Miris add-on in static mode with the upload pipeline", () => {
     });
 });
 
-describe("Miris add-on in perView mode with the deployment CMK", () => {
+describe("Miris add-on with the deployment CMK and no upload pipeline", () => {
     let synth: SynthResult;
 
     beforeAll(() => {
         synth = synthTemplate("commercial", {
-            mutate: perViewWithKms,
-            mutateKey: "miris-addon-perview-kms",
+            mutate: withKms,
+            mutateKey: "miris-addon-kms",
         });
-    });
-
-    test("perView mode creates no viewer key secret", () => {
-        expect(viewerKeySecrets(synth)).toEqual([]);
     });
 
     test("with upload off, no upload pipeline is built and MIRIS_UPLOAD is not recorded", () => {
@@ -438,12 +403,8 @@ describe("Miris add-on in perView mode with the deployment CMK", () => {
             MIRIS_API_BASE_URL: "https://app.miris.com",
             MIRIS_METRICS_NAMESPACE: METRICS_NAMESPACE,
         };
-        expect(mirisEnvironment(onlyFunction(synth, STATUS_HANDLER))).toEqual({
-            MIRIS_VIEWER_KEY_MODE: "perView",
-            ...shared,
-        });
+        expect(mirisEnvironment(onlyFunction(synth, STATUS_HANDLER))).toEqual(shared);
         expect(mirisEnvironment(onlyFunction(synth, MINT_HANDLER))).toEqual({
-            MIRIS_VIEWER_KEY_MODE: "perView",
             MIRIS_VIEWER_KEY_TTL_MINUTES: "7",
             ...shared,
         });

@@ -17,8 +17,6 @@ function enableMiris(c: any, mirisApiBaseUrl = "https://app.miris.com") {
     c.app.webUi.allowUnsafeEvalFeatures = true;
     const miris = c.app.addons.useMirisStreaming;
     miris.enabled = true;
-    miris.viewerKeyMode = "static";
-    miris.viewerKey = "test-placeholder-viewer-key-000000";
     miris.apiKeySecretArn = SECRET_ARN;
     miris.mirisApiBaseUrl = mirisApiBaseUrl;
 }

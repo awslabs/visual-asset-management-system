@@ -26,7 +26,6 @@ from .conftest import (
     enforcer as _enforcer,
     metadata_table as _metadata_table,
     rest_event,
-    static_viewer_key,
 )
 
 pytestmark = pytest.mark.unit
@@ -119,15 +118,13 @@ def _stored_manifest(data=MANIFEST, manifest_id=MANIFEST_ID):
     return {(getAssetStatus.auxiliary_bucket_name, key): data}
 
 
-def _invoke(miris_api, s3, metadata_table=None, mode="perView", root_key=ROOT_KEY, buckets_table=None,
+def _bound(state="streamable"):
+    return (200, {"id": STORED_UUID, "state": state, "tags": [BINDING_TAG, DATABASE_TAG]})
+
+
+def _invoke(miris_api, s3, metadata_table=None, root_key=ROOT_KEY, buckets_table=None,
             context=None, binding_answer=None):
-    binding = {"id": STORED_UUID, "state": "streamable", "tags": [BINDING_TAG, DATABASE_TAG]}
-    if binding_answer is not None:
-        miris_api.responses.append(binding_answer)
-    elif mode == "static":
-        miris_api.responses.extend([(200, {**binding, "state": "preview"}), (200, {"state": "streamable"})])
-    else:
-        miris_api.responses.append((200, binding))
+    miris_api.responses.append(binding_answer if binding_answer is not None else _bound())
     event = rest_event("GET", ROUTE_PATH, query={"databaseId": DATABASE_ID, "assetId": ASSET_ID,
                                                  "filePath": "/scene.usda"})
     with patch.object(getAssetStatus, "asset_file_metadata_table", metadata_table or _with_manifest()), \
@@ -135,9 +132,7 @@ def _invoke(miris_api, s3, metadata_table=None, mode="perView", root_key=ROOT_KE
          patch.object(getAssetStatus, "buckets_table", buckets_table or _buckets_table()), \
          patch.object(getAssetStatus, "s3", s3), \
          patch.object(getAssetStatus, "CasbinEnforcer", return_value=_enforcer()), \
-         patch.object(getAssetStatus, "request_to_claims", side_effect=_AS_USER), \
-         static_viewer_key("viewer-key" if mode == "static" else ""), \
-         patch.object(getAssetStatus, "miris_viewer_key_mode", mode):
+         patch.object(getAssetStatus, "request_to_claims", side_effect=_AS_USER):
         response = getAssetStatus.lambda_handler(event, context or FakeLambdaContext())
     assert response["statusCode"] == 200
     return json.loads(response["body"])
@@ -177,11 +172,11 @@ class TestStale:
         assert _invoke(miris_api, s3, root_key=root_key)["stale"] is False
         assert s3.list_calls[0]["Prefix"] == ROOT_KEY
 
-    @pytest.mark.parametrize("mode", ["static", "perView"])
-    def test_staleness_is_reported_in_both_modes(self, miris_api, mode):
+    @pytest.mark.parametrize("miris_state", ["preview", "streamable", "failed"])
+    def test_staleness_is_reported_with_any_miris_state(self, miris_api, miris_state):
         s3 = FakeS3(objects=_stored_manifest(), pages=_listing({**TREE, "scene.usda": "e-new"}))
-        body = _invoke(miris_api, s3, mode=mode)
-        assert (body["state"], body["stale"]) == ("streamable", True)
+        body = _invoke(miris_api, s3, binding_answer=_bound(state=miris_state))
+        assert (body["state"], body["stale"]) == (miris_state, True)
 
 
 class TestUnknown:

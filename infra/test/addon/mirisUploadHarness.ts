@@ -22,8 +22,6 @@ import { PipelineHarness, makePipelineHarness } from "../support/pipelineConstru
 export const MIRIS_TEST_SECRET_ARN =
     "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-miris-api-key-AbCdEf";
 
-export const MIRIS_TEST_VIEWER_KEY = "test-placeholder-viewer-key-000000";
-
 export const EXTERNAL_BUCKET_ARN = "arn:aws:s3:::ext-vams-assets";
 
 export interface MirisUploadHarnessOptions {
@@ -46,7 +44,6 @@ export const makeMirisUploadHarness = (
     const h = makePipelineHarness(id, (c) => {
         c.app.webUi.allowUnsafeEvalFeatures = true;
         c.app.addons.useMirisStreaming.enabled = true;
-        c.app.addons.useMirisStreaming.viewerKey = MIRIS_TEST_VIEWER_KEY;
         c.app.addons.useMirisStreaming.apiKeySecretArn = MIRIS_TEST_SECRET_ARN;
         c.app.addons.useMirisStreaming.upload.enabled = true;
         c.app.addons.useMirisStreaming.upload.autoRegisterWithVAMS = false;
@@ -92,15 +89,13 @@ export const makeMirisUploadHarness = (
 };
 
 /**
- * Full-app mutation: the add-on in static mode with its upload pipeline and no other pipeline, shared
+ * Full-app mutation: the add-on with its upload pipeline and no other pipeline, shared
  * by the add-on and VPC placement suites so the synth cache builds it once.
  */
-export function mirisStaticWithUpload(c: any) {
+export function mirisWithUpload(c: any) {
     c.app.webUi.allowUnsafeEvalFeatures = true;
     Object.assign(c.app.addons.useMirisStreaming, {
         enabled: true,
-        viewerKeyMode: "static",
-        viewerKey: MIRIS_TEST_VIEWER_KEY,
         viewerKeyTtlMinutes: 7,
         apiKeySecretArn: MIRIS_TEST_SECRET_ARN,
     });

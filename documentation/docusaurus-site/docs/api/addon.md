@@ -1235,7 +1235,7 @@ Terminates one of the caller's container jobs on the backend the query names. Th
 
 ## Miris Spatial Streaming add-on
 
-The Miris Spatial Streaming add-on serves the two routes the Miris viewer plugin calls for a USD file: the stream status and a viewer key. Both are deployed only when `app.addons.useMirisStreaming.enabled` is `true`; the VAMS CLI and MCP server do not call them. See [Miris Spatial Streaming](../developer/addon/miris-spatial-streaming/overview.md) for the viewer, viewer key modes, and configuration.
+The Miris Spatial Streaming add-on serves the two routes the Miris viewer plugin calls for a USD file: the stream status and a viewer key. Both are deployed only when `app.addons.useMirisStreaming.enabled` is `true`; the VAMS CLI and MCP server do not call them. See [Miris Spatial Streaming](../developer/addon/miris-spatial-streaming/overview.md) for the viewer, viewer keys, and configuration.
 
 Both routes read the Miris asset UUID server side from the file's `miris_asset_uuid` metadata, so a caller reaches only a stream the file itself references. Before any call that depends on the UUID, they read the Miris asset with the Miris Integration Key and require its binding tags, `vams-asset-{assetId}` and `vams-database-{databaseId}`; a missing asset or tag is `notBound`. Both routes take the same fields, as query parameters on the status route and as a JSON body on the viewer key route:
 
@@ -1263,49 +1263,45 @@ Returns the stream metadata recorded on the file and the stream's state. The sta
 
 #### States
 
-| `state`       | Meaning                                                                                                                                                                 |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `notStreamed` | `miris_asset_uuid` is absent or empty. Miris is not called.                                                                                                             |
-| `invalidUuid` | `miris_asset_uuid` is not a UUID. Miris is not called.                                                                                                                  |
-| `notBound`    | The Miris asset is missing, Miris reports it `deleted`, or it lacks a binding tag.                                                                                      |
-| `unknown`     | The state could not be established: the add-on is not configured for its viewer key mode, or Miris was unreachable, timed out, or returned an error or no usable state. |
-| `processing`  | `static` mode only: the Miris viewer API answered `400`.                                                                                                                |
-| Miris state   | The processing state Miris reports, such as `preview`, `streamable`, `error`, or `failed`.                                                                              |
+| `state`       | Meaning                                                                                                                                         |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `notStreamed` | `miris_asset_uuid` is absent or empty. Miris is not called.                                                                                     |
+| `invalidUuid` | `miris_asset_uuid` is not a UUID. Miris is not called.                                                                                          |
+| `notBound`    | The Miris asset is missing, Miris reports it `deleted`, or it lacks a binding tag.                                                              |
+| `unknown`     | The state could not be established: the add-on is not configured, or Miris was unreachable, timed out, or returned an error or no usable state. |
+| Miris state   | The processing state Miris reports, such as `preview`, `streamable`, `error`, or `failed`.                                                      |
 
 Errors: `400` for invalid query parameters or an asset that does not exist, `403` when Tier 1 or Tier 2 authorization is denied, and `500` for an unexpected error.
 
 ### POST `/addon/miris/viewer-key`
 
-Returns a viewer key that can stream the file's Miris asset once both authorization tiers, the asset distribution rule of the core download routes, and the binding check pass. What is returned follows the deployment's `viewerKeyMode`:
-
--   **`static`**: the deployment-wide viewer key, with `expiresAt` `null`. Nothing is created or stored. Each delivery writes a `mirisStaticViewerKeyIssue` audit record. A caller who passes the checks for one bound asset receives a key that streams every Miris asset it allows, so scope it in Miris with tags and an expiry, or use `perView` mode (see [Static mode](../developer/addon/miris-spatial-streaming/how-it-works.md#static-mode)).
--   **`perView`**: a new key for the one Miris asset that expires `viewerKeyTtlMinutes` minutes after it is minted. Its key ID is recorded in the add-on's viewer key table, and a cleanup function deletes the key from Miris after it expires. Each mint writes a `mirisViewerKeyMint` audit record.
+Returns a viewer key that can stream the file's Miris asset once both authorization tiers, the asset distribution rule of the core download routes, and the binding check pass. The key is minted for the one Miris asset and expires `viewerKeyTtlMinutes` minutes later. Its key ID is recorded in the add-on's viewer key table, and a cleanup function deletes the key from Miris after it expires. Each mint writes a `mirisViewerKeyMint` audit record.
 
 The key material is never stored, logged, or audited. Responses carry `Cache-Control: no-cache, no-store`.
 
 #### Response fields (200)
 
-| Field            | Type           | Description                                                                 |
-| ---------------- | -------------- | --------------------------------------------------------------------------- |
-| `filePath`       | string         | The normalized asset-relative path.                                         |
-| `mirisAssetUuid` | string         | The Miris asset the key can stream.                                         |
-| `viewerKey`      | string         | The viewer key material.                                                    |
-| `expiresAt`      | string or null | The key's expiry, RFC 3339 UTC, in `perView` mode; `null` in `static` mode. |
+| Field            | Type   | Description                         |
+| ---------------- | ------ | ----------------------------------- |
+| `filePath`       | string | The normalized asset-relative path. |
+| `mirisAssetUuid` | string | The Miris asset the key can stream. |
+| `viewerKey`      | string | The viewer key material.            |
+| `expiresAt`      | string | The key's expiry, RFC 3339 UTC.     |
 
 #### Errors (body: `message`, and `state` when the error concerns the file's stream)
 
-| HTTP  | `state`       | Cause                                                                                                                |
-| ----- | ------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `400` | `invalidUuid` | `miris_asset_uuid` is not a UUID.                                                                                    |
-| `400` | --            | Invalid request body, or the asset does not exist.                                                                   |
-| `400` | --            | `Asset not distributable`, or `Asset is quarantined and cannot be downloaded` while the quarantine block is on.      |
-| `403` | `notBound`    | The Miris asset is missing or lacks a binding tag. The message names both tags.                                      |
-| `403` | --            | Tier 1 or Tier 2 authorization denied.                                                                               |
-| `404` | `notStreamed` | The file records no Miris stream.                                                                                    |
-| `500` | --            | A minted key could not be recorded (VAMS attempts to delete it from Miris), or the key lifetime is invalid.          |
-| `502` | --            | Miris could not be reached, or did not create the key.                                                               |
-| `503` | --            | The viewer key mode, the Integration Key secret, the Miris API base URL, or the static viewer key is not configured. |
-| `504` | --            | The request deadline passed before Miris answered.                                                                   |
+| HTTP  | `state`       | Cause                                                                                                           |
+| ----- | ------------- | --------------------------------------------------------------------------------------------------------------- |
+| `400` | `invalidUuid` | `miris_asset_uuid` is not a UUID.                                                                               |
+| `400` | --            | Invalid request body, or the asset does not exist.                                                              |
+| `400` | --            | `Asset not distributable`, or `Asset is quarantined and cannot be downloaded` while the quarantine block is on. |
+| `403` | `notBound`    | The Miris asset is missing or lacks a binding tag. The message names both tags.                                 |
+| `403` | --            | Tier 1 or Tier 2 authorization denied.                                                                          |
+| `404` | `notStreamed` | The file records no Miris stream.                                                                               |
+| `500` | --            | A minted key could not be recorded (VAMS attempts to delete it from Miris), or the key lifetime is invalid.     |
+| `502` | --            | Miris could not be reached, or did not create the key.                                                          |
+| `503` | --            | The Integration Key secret or the Miris API base URL is not configured.                                         |
+| `504` | --            | The request deadline passed before Miris answered.                                                              |
 
 ### Authorization
 

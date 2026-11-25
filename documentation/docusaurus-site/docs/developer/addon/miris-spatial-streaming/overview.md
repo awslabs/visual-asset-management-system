@@ -15,7 +15,7 @@ A USD asset is uploaded to Miris, on demand or, when the upload trigger is on, a
 The add-on is off by default. It deploys only to the commercial `aws` partition and requires `app.webUi.allowUnsafeEvalFeatures` (see [Requirements and limitations](#requirements-and-limitations)).
 :::
 
-The add-on's pages cover the rest: [Enable the Miris Spatial Streaming Add-on](./enable.md) sets it up, [How the Miris Add-on Works](./how-it-works.md) describes the viewer, the viewer key modes and the stream metadata, [Miris Upload Pipeline](./upload-pipeline.md) describes the upload pipeline, [Miris Add-on Resources](./resources.md) lists the AWS resources it adds and how to monitor them, [Miris Add-on Security and Networking](./security-and-networking.md) covers permissions, the data sent to Miris, the web origin and the network paths, and [Uninstall the Miris Add-on](./uninstall.md) removes what it leaves behind.
+The add-on's pages cover the rest: [Enable the Miris Spatial Streaming Add-on](./enable.md) sets it up, [How the Miris Add-on Works](./how-it-works.md) describes the viewer, its viewer keys and the stream metadata, [Miris Upload Pipeline](./upload-pipeline.md) describes the upload pipeline, [Miris Add-on Resources](./resources.md) lists the AWS resources it adds and how to monitor them, [Miris Add-on Security and Networking](./security-and-networking.md) covers permissions, the data sent to Miris, the web origin and the network paths, and [Uninstall the Miris Add-on](./uninstall.md) removes what it leaves behind.
 
 ---
 

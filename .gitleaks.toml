@@ -225,13 +225,15 @@ regexes = [
     '''["]Kq3ZtR8mWv2NpXc7LbYd5HsJf9GaUe4E["]''',  # pragma: allowlist secret
     '''["]Pz7XwQ2rTn5VbMc8LkJh3GdFs6AyUe9R["]''',  # pragma: allowlist secret
 
-    # KEY_A and KEY_B in backend/tests/handlers/addon/miris/test_mirisViewerKeyCleanup.py: hand-built
-    # UUIDs standing in for Miris viewer key IDs, which name a key and authorize nothing. One entry per
-    # value, anchored on both quotes.
+    # KEY_A and KEY_B in backend/tests/handlers/addon/miris/test_mirisViewerKeyCleanup.py (KEY_A also as
+    # KEY_ID in test_mirisIntegration.py and test_mirisMintViewerKey.py): hand-built UUIDs standing in
+    # for Miris viewer key IDs, which name a key and authorize nothing. One entry per value, anchored
+    # on both quotes.
     '''["]3f2b8c1e\-9a4d\-4e7f\-8b6a\-1c2d3e4f5a6b["]''',  # pragma: allowlist secret
     '''["]0a1b2c3d\-4e5f\-4a6b\-8c7d\-9e0f1a2b3c4d["]''',  # pragma: allowlist secret
 
-    # STATIC_KEY in web/src/visualizerPlugin/viewers/MirisStreamViewerPlugin/MirisStreamViewerComponent.test.tsx:
-    # a hand-built stub of the static viewer key the mocked route returns. Anchored on both quotes.
+    # STATIC_KEY of web/src/visualizerPlugin/viewers/MirisStreamViewerPlugin/MirisStreamViewerComponent.test.tsx
+    # as it stands in the file's history (the tree now uses a plain word): a hand-built stub of a viewer
+    # key the mocked route returned. Anchored on both quotes.
     '''["]key\-1234567890abcdef["]''',  # pragma: allowlist secret
 ]

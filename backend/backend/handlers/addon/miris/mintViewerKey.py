@@ -11,14 +11,10 @@ Before any key is returned, the Miris asset is read with the Miris Integration K
 both tags `vams-asset-{assetId}` and `vams-database-{databaseId}` that bind it to this VAMS asset.
 A Miris asset without both tags, or one Miris reports as missing (404), is `notBound`.
 
-What is returned follows `MIRIS_VIEWER_KEY_MODE`:
-
-  - static: the deployment-wide viewer key, read from the secret named by
-    `MIRIS_VIEWER_KEY_SECRET_ARN`. No key is created and nothing is recorded; `expiresAt` is null.
-  - perView: a key created with the Miris Integration Key, with no tags and the one asset ID,
-    that expires `MIRIS_VIEWER_KEY_TTL_MINUTES` minutes after it is minted. Each key is recorded
-    in the add-on's viewer key table under its Miris key ID, with a `ttl` one hour after its
-    expiry; the viewer key cleanup Lambda deletes the key from Miris when TTL removes the row.
+The key is created with the Miris Integration Key, with no tags and the one asset ID, and expires
+`MIRIS_VIEWER_KEY_TTL_MINUTES` minutes after it is minted. Each key is recorded in the add-on's viewer
+key table under its Miris key ID, with a `ttl` one hour after its expiry; the viewer key cleanup
+Lambda deletes the key from Miris when TTL removes the row.
 
 The key material is returned to the caller only, and is never stored, logged or audited.
 
@@ -27,7 +23,7 @@ Response body (200, `Cache-Control: no-cache, no-store`):
     filePath         the normalized asset-relative path, e.g. "/scene.usd"
     mirisAssetUuid   the Miris asset the key can stream
     viewerKey        the viewer key material
-    expiresAt        the key's expiry, RFC 3339 UTC (perView), or null (static)
+    expiresAt        the key's expiry, RFC 3339 UTC
 
 Errors:
 
@@ -37,8 +33,7 @@ Errors:
     404  the file records no Miris stream (`state: notStreamed`)
     500  the key could not be recorded (the minted key is deleted from Miris), or misconfiguration
     502  Miris could not be read or did not create the key
-    503  the viewer key mode, the Integration Key secret, the Miris API base URL or, in static mode,
-         the deployment viewer key is not configured
+    503  the Integration Key secret or the Miris API base URL is not configured
     504  the request deadline passed before Miris answered
 
 Authorization is two-tier:
@@ -83,8 +78,6 @@ from models.addon.miris import (
     STATE_INVALID_UUID,
     STATE_NOT_BOUND,
     STATE_NOT_STREAMED,
-    VIEWER_KEY_MODE_PER_VIEW,
-    VIEWER_KEY_MODE_STATIC,
     MirisViewerKeyRequestModel,
     MirisViewerKeyResponseModel,
 )
@@ -112,13 +105,7 @@ claims_and_roles = {}
 try:
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
-    miris_viewer_key_mode = os.environ.get("MIRIS_VIEWER_KEY_MODE", VIEWER_KEY_MODE_STATIC).strip()
-    # The key table records per-view keys only, so it is resolved in perView mode only.
-    miris_viewer_key_table_name = (
-        get_table_name(AddonResourceKeys.MIRIS_VIEWER_KEY_STORAGE_TABLE)
-        if miris_viewer_key_mode == VIEWER_KEY_MODE_PER_VIEW
-        else None
-    )
+    miris_viewer_key_table_name = get_table_name(AddonResourceKeys.MIRIS_VIEWER_KEY_STORAGE_TABLE)
     # Validated per request, so a bad value fails the mint rather than the import.
     viewer_key_ttl_minutes_setting = os.environ.get("MIRIS_VIEWER_KEY_TTL_MINUTES", "")
 except Exception:
@@ -127,9 +114,7 @@ except Exception:
 
 asset_table = dynamodb.Table(asset_storage_table_name)
 asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name)
-miris_viewer_key_table = (
-    key_table_dynamodb.Table(miris_viewer_key_table_name) if miris_viewer_key_table_name else None
-)
+miris_viewer_key_table = key_table_dynamodb.Table(miris_viewer_key_table_name)
 
 # Rows outlive the key by this long, so TTL never removes a row for a key that is still valid.
 _ROW_TTL_GRACE_SECONDS = 3600
@@ -194,12 +179,8 @@ def _viewer_key_ttl_minutes() -> int:
 
 
 def _configured() -> bool:
-    """True when the viewer key mode and every setting it needs are present."""
-    if not mirisIntegration.integration_configured():
-        return False
-    if miris_viewer_key_mode == VIEWER_KEY_MODE_STATIC:
-        return bool(mirisIntegration.MIRIS_VIEWER_KEY_SECRET_ARN)
-    return miris_viewer_key_mode == VIEWER_KEY_MODE_PER_VIEW and miris_viewer_key_table is not None
+    """True when the Integration Key secret and the Miris API base URL are present."""
+    return mirisIntegration.integration_configured()
 
 
 def _not_configured_response(event):
@@ -220,7 +201,7 @@ def _deadline_response(event):
 
 def _handle_post(event, context):
     if not _configured():
-        logger.error("The Miris viewer key mode or a setting it needs is not configured")
+        logger.error("The Miris Integration Key secret or API base URL is not configured")
         return _not_configured_response(event)
 
     body = _request_body(event)
@@ -264,21 +245,17 @@ def _handle_post(event, context):
             event=event,
         )
 
-    ttl_minutes = None
-    if miris_viewer_key_mode == VIEWER_KEY_MODE_PER_VIEW:
-        try:
-            ttl_minutes = _viewer_key_ttl_minutes()
-        except ValueError:
-            logger.error("MIRIS_VIEWER_KEY_TTL_MINUTES is not a whole number of minutes from 1 to 60")
-            return internal_error(event=event)
+    try:
+        ttl_minutes = _viewer_key_ttl_minutes()
+    except ValueError:
+        logger.error("MIRIS_VIEWER_KEY_TTL_MINUTES is not a whole number of minutes from 1 to 60")
+        return internal_error(event=event)
 
     deadline = mirisIntegration.request_deadline(context, event)
     unbound = _binding_failure(miris_asset_uuid, database_id, asset_id, deadline, event)
     if unbound is not None:
         return unbound
 
-    if miris_viewer_key_mode == VIEWER_KEY_MODE_STATIC:
-        return _static_key(event, deadline, database_id, asset_id, file_path, miris_asset_uuid)
     return _mint_key(event, context, deadline, ttl_minutes, database_id, asset_id, file_path,
                      miris_asset_uuid)
 
@@ -333,44 +310,9 @@ def _binding_failure(miris_asset_uuid, database_id, asset_id, deadline, event):
     )
 
 
-def _static_key(event, deadline, database_id, asset_id, file_path, miris_asset_uuid):
-    """Return the deployment-wide viewer key for a bound asset (static mode)."""
-    try:
-        viewer_key = mirisIntegration.load_static_viewer_key(deadline)
-    except mirisIntegration.MirisDeadlineExceeded:
-        logger.error("Request deadline passed before the viewer key secret was read")
-        return _deadline_response(event)
-    except mirisIntegration.MirisIntegrationError as e:
-        logger.error(f"Could not read the static viewer key: {e}")
-        return general_error(
-            status_code=502,
-            body={"message": "The deployment viewer key could not be read"},
-            event=event,
-        )
-
-    log_auth_other(
-        event,
-        "mirisStaticViewerKeyIssue",
-        {
-            "userId": claims_and_roles["tokens"][0],
-            "databaseId": database_id,
-            "assetId": asset_id,
-            "filePath": file_path,
-            "mirisAssetUuid": miris_asset_uuid,
-        },
-    )
-    response = MirisViewerKeyResponseModel(
-        filePath=file_path,
-        mirisAssetUuid=miris_asset_uuid,
-        viewerKey=viewer_key,
-        expiresAt=None,
-    )
-    return success(body=response.dict())
-
-
 def _mint_key(event, context, deadline, ttl_minutes, database_id, asset_id, file_path,
               miris_asset_uuid):
-    """Create, record and return a per-view viewer key for a bound asset (perView mode)."""
+    """Create, record and return a viewer key for a bound asset."""
     now = datetime.now(timezone.utc).replace(microsecond=0)
     expires_at = now + timedelta(minutes=ttl_minutes)
     name = mirisIntegration.viewer_key_name(database_id, asset_id, int(time.time() * 1000))

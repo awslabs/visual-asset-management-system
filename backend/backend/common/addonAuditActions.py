@@ -158,8 +158,7 @@ ADDON_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
     **route_entries(API_EDH_CONTAINERS_JOB, {
         DELETE: spec("edhContainerJobCancel", "containerJob", legacy_type=_PROXY),
     }),
-    # Miris Spatial Streaming: a viewer key authorizes streaming one Miris asset. perView mode mints a
-    # key (the route's action); static mode returns the deployment's key (a secondary action).
+    # Miris Spatial Streaming: a viewer key authorizes streaming one Miris asset; the route mints one.
     **route_entries(API_ADDON_MIRIS_ASSET_STATUS, {GET: read("mirisAssetStatusGet", "file")}),
     **route_entries(API_ADDON_MIRIS_VIEWER_KEY, {
         POST: spec("mirisViewerKeyMint", "file", group=GROUP_AUTH_OTHER, legacy_type="mirisViewerKeyMint"),
@@ -174,7 +173,6 @@ ADDON_AUDIT_SECONDARY_ACTIONS: Tuple[AuditSpec, ...] = (
     spec("edhProxy", "system", legacy_type="edhProxy"),
     spec("edhSessionApiKeyCreate", "apiKey", group=GROUP_AUTH_CHANGES, legacy_type="edhSessionApiKeyCreate"),
     spec("edhSessionApiKeyRevoke", "apiKey", group=GROUP_AUTH_CHANGES, legacy_type="edhSessionApiKeyRevoke"),
-    spec("mirisStaticViewerKeyIssue", "file", group=GROUP_AUTH_OTHER, legacy_type="mirisStaticViewerKeyIssue"),
 )
 
 ADDON_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (

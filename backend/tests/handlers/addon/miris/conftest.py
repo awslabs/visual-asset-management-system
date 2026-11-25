@@ -9,7 +9,7 @@ import os
 import sys
 import types
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -37,7 +37,6 @@ from backend.backend.handlers.addon.miris import (  # noqa: E402
 
 INTEGRATION_KEY = "test-integration-key-do-not-log-7f3a9c"
 SECRET_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-miris-api-key-AbCdEf"
-VIEWER_KEY_SECRET_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-miris-viewer-key-GhIjKl"
 BASE_URL = "https://miris.example.test"
 DATABASE_ID = "db-1"
 ASSET_ID = "asset-1"
@@ -167,14 +166,6 @@ def miris_api(monkeypatch):
         responses=responses,
     )
     mirisIntegration._clear_secret_cache()
-
-
-def static_viewer_key(value):
-    """Point the client at the static viewer key's secret and store `value` in it; an empty
-    `value` leaves the secret unset. Use with the `miris_api` fixture active."""
-    mirisIntegration._get_secretsmanager_client().secrets[VIEWER_KEY_SECRET_ARN] = value
-    return patch.object(mirisIntegration, "MIRIS_VIEWER_KEY_SECRET_ARN",
-                        VIEWER_KEY_SECRET_ARN if value else "")
 
 
 class FakeLambdaContext:

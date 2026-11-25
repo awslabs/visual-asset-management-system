@@ -505,8 +505,6 @@
             },
             "useMirisStreaming": {
                 "enabled": false,
-                "viewerKeyMode": "perView",
-                "viewerKey": "",
                 "viewerKeyTtlMinutes": 15,
                 "apiKeySecretArn": "",
                 "mirisApiBaseUrl": "https://app.miris.com",

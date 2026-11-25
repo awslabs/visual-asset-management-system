@@ -39,14 +39,8 @@ STATE_INVALID_UUID = "invalidUuid"
 # tags that bind it to the VAMS asset.
 STATE_NOT_BOUND = "notBound"
 STATE_UNKNOWN = "unknown"
-# The viewer API answered 400 (static mode only).
-STATE_PROCESSING = "processing"
 # A Miris processing state reported for an asset Miris has deleted; reported as `notBound`.
 MIRIS_STATE_DELETED = "deleted"
-
-# How the deployment delivers viewer keys (`MIRIS_VIEWER_KEY_MODE`).
-VIEWER_KEY_MODE_STATIC = "static"
-VIEWER_KEY_MODE_PER_VIEW = "perView"
 
 
 class MirisFileRequestModel(BaseModel, extra="ignore"):
@@ -130,14 +124,9 @@ class MirisAssetStatusResponseModel(BaseModel, extra="ignore"):
 
 
 class MirisViewerKeyResponseModel(BaseModel, extra="ignore"):
-    """A viewer key that can stream the file's Miris asset.
-
-    In per-view mode the key streams only that asset and ``expiresAt`` is its expiry. In static
-    mode it is the deployment-wide viewer key, which has no expiry VAMS reports, so ``expiresAt``
-    is null.
-    """
+    """A viewer key that streams only the file's Miris asset, until ``expiresAt``."""
 
     filePath: str
     mirisAssetUuid: str
     viewerKey: str
-    expiresAt: Optional[str] = None
+    expiresAt: str

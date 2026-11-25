@@ -35,8 +35,6 @@ export const MIRIS_STREAM_SCHEMA_EXTENSIONS: readonly string[] = [
  */
 const MIRIS_STREAMING_DEFAULTS: Omit<ConfigMirisStreaming, "upload"> = {
     enabled: false,
-    viewerKeyMode: "perView",
-    viewerKey: "",
     viewerKeyTtlMinutes: 15,
     apiKeySecretArn: "",
     mirisApiBaseUrl: "https://app.miris.com",
@@ -59,9 +57,6 @@ const MIRIS_UPLOAD_DEFAULTS: ConfigMirisStreaming["upload"] = {
 // value.
 // ============================================================================================
 
-/** Viewer key modes accepted by `app.addons.useMirisStreaming.viewerKeyMode`. */
-const MIRIS_VIEWER_KEY_MODES: readonly string[] = ["static", "perView"];
-
 /**
  * A complete Secrets Manager secret ARN in the commercial partition, the only one the Miris add-on
  * deploys to, including the six-character suffix Secrets Manager appends to the secret name. IAM
@@ -74,8 +69,6 @@ const MIRIS_SECRET_ARN_PATTERN =
 /** `app.addons.useMirisStreaming`. */
 export interface ConfigMirisStreaming {
     enabled: boolean;
-    viewerKeyMode: "static" | "perView";
-    viewerKey: string;
     viewerKeyTtlMinutes: number;
     apiKeySecretArn: string;
     mirisApiBaseUrl: string;
@@ -226,14 +219,6 @@ export function validateMirisStreamingConfig(config: Config): void {
             );
         }
 
-        if (!MIRIS_VIEWER_KEY_MODES.includes(miris.viewerKeyMode)) {
-            throw new Error(
-                "Configuration Error: addons.useMirisStreaming.viewerKeyMode must be one of " +
-                    `${MIRIS_VIEWER_KEY_MODES.map((mode) => `"${mode}"`).join(", ")}; got ` +
-                    `${JSON.stringify(miris.viewerKeyMode)}.`
-            );
-        }
-
         const viewerKeyTtlMinutes: unknown = miris.viewerKeyTtlMinutes;
         if (
             typeof viewerKeyTtlMinutes !== "number" ||
@@ -272,13 +257,13 @@ export function validateMirisStreamingConfig(config: Config): void {
             "addons.useMirisStreaming.mirisApiBaseUrl"
         );
 
-        // The Integration Key is read in both viewer key modes: the viewer key endpoint checks the
-        // Miris asset's tags with it before returning a key, and perView mode also mints keys with it.
+        // The viewer key endpoint checks the Miris asset's tags with the Integration Key before it
+        // mints a key with it.
         if (isUnsetConfigString(miris.apiKeySecretArn)) {
             throw new Error(
                 "Configuration Error: addons.useMirisStreaming requires apiKeySecretArn, the Secrets " +
                     "Manager ARN of the Miris Integration Key. The viewer key endpoint uses it to " +
-                    "check that a Miris asset is bound to the VAMS asset in both viewer key modes."
+                    "check that a Miris asset is bound to the VAMS asset and to mint viewer keys."
             );
         }
         if (!MIRIS_SECRET_ARN_PATTERN.test(String(miris.apiKeySecretArn))) {
@@ -289,26 +274,6 @@ export function validateMirisStreamingConfig(config: Config): void {
                     "in the commercial partition " +
                     "(arn:aws:secretsmanager:<region>:<account>:secret:<name>-AbCdEf); got " +
                     `"${miris.apiKeySecretArn}".`
-            );
-        }
-
-        if (miris.viewerKeyMode === "static") {
-            if (isUnsetConfigString(miris.viewerKey) || String(miris.viewerKey).trim() === "") {
-                throw new Error(
-                    'Configuration Error: addons.useMirisStreaming.viewerKeyMode "static" requires ' +
-                        "viewerKey. Generate one in the Miris Portal or with `miris viewerkey create`."
-                );
-            }
-            if (String(miris.viewerKey) !== String(miris.viewerKey).trim()) {
-                throw new Error(
-                    "Configuration Error: addons.useMirisStreaming.viewerKey has leading or trailing " +
-                        "whitespace. Remove it; a Miris viewer key contains none."
-                );
-            }
-        } else if (!isUnsetConfigString(miris.viewerKey)) {
-            console.warn(
-                "Configuration Warning: addons.useMirisStreaming.viewerKey is ignored when " +
-                    'viewerKeyMode is "perView". Remove it from config.json.'
             );
         }
     }

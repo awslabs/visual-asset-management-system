@@ -9,7 +9,6 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
-import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as path from "path";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
@@ -58,38 +57,6 @@ function mirisIntegrationEnvironment(config: Config.Config): Record<string, stri
     };
 }
 
-/**
- * The viewer key settings the status and viewer key handlers read. The deployment viewer key's
- * secret is set in static mode only; perView mode has none.
- */
-function mirisViewerKeyEnvironment(
-    config: Config.Config,
-    viewerKeySecret: secretsmanager.ISecret | undefined
-): Record<string, string> {
-    const miris = config.app.addons.useMirisStreaming;
-    return {
-        MIRIS_VIEWER_KEY_MODE: miris.viewerKeyMode,
-        ...(viewerKeySecret ? { MIRIS_VIEWER_KEY_SECRET_ARN: viewerKeySecret.secretArn } : {}),
-        ...mirisIntegrationEnvironment(config),
-    };
-}
-
-/** Read access to exactly the static viewer key's secret, when there is one. */
-function grantViewerKeySecretRead(
-    fun: lambda.Function,
-    viewerKeySecret: secretsmanager.ISecret | undefined
-): void {
-    if (viewerKeySecret) {
-        fun.addToRolePolicy(
-            new iam.PolicyStatement({
-                effect: iam.Effect.ALLOW,
-                actions: ["secretsmanager:GetSecretValue"],
-                resources: [viewerKeySecret.secretArn],
-            })
-        );
-    }
-}
-
 function lambdaVpcProps(
     config: Config.Config,
     vpc: ec2.IVpc,
@@ -109,8 +76,7 @@ export function buildGetMirisAssetStatusFunction(
     storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[],
-    viewerKeySecret?: secretsmanager.ISecret
+    subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "getAssetStatus";
     const fun = new lambda.Function(scope, "MirisGetAssetStatusFunction", {
@@ -121,9 +87,8 @@ export function buildGetMirisAssetStatusFunction(
         timeout: Duration.seconds(30),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         ...lambdaVpcProps(config, vpc, subnets),
-        environment: mirisViewerKeyEnvironment(config, viewerKeySecret),
+        environment: mirisIntegrationEnvironment(config),
     });
-    grantViewerKeySecretRead(fun, viewerKeySecret);
 
     // Read-only: the asset record for Tier-2 authorization, and the Miris stream keys
     // stored as file metadata on the viewed file.
@@ -182,8 +147,8 @@ export function buildGetMirisAssetStatusFunction(
 }
 
 /**
- * Backs POST /addon/miris/viewer-key: the deployment viewer key in static mode, or a viewer key
- * minted for one asset file in perView mode, whose key ID is recorded in `viewerKeyTable`.
+ * Backs POST /addon/miris/viewer-key: a viewer key minted for one asset file, whose key ID is
+ * recorded in `viewerKeyTable`.
  */
 export function buildMintMirisViewerKeyFunction(
     scope: Construct,
@@ -192,16 +157,8 @@ export function buildMintMirisViewerKeyFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
-    viewerKeyTable: dynamodb.ITable | undefined,
-    viewerKeySecret?: secretsmanager.ISecret
+    viewerKeyTable: dynamodb.ITable
 ): lambda.Function {
-    const perView = config.app.addons.useMirisStreaming.viewerKeyMode === "perView";
-    if (perView && !viewerKeyTable) {
-        throw new Error(
-            'buildMintMirisViewerKeyFunction requires the viewer key table in "perView" mode.'
-        );
-    }
-
     const name = "mintViewerKey";
     const fun = new lambda.Function(scope, "MirisMintViewerKeyFunction", {
         code: lambda.Code.fromAsset(BACKEND_CODE_PATH),
@@ -212,7 +169,7 @@ export function buildMintMirisViewerKeyFunction(
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         ...lambdaVpcProps(config, vpc, subnets),
         environment: {
-            ...mirisViewerKeyEnvironment(config, viewerKeySecret),
+            ...mirisIntegrationEnvironment(config),
             MIRIS_VIEWER_KEY_TTL_MINUTES: String(
                 config.app.addons.useMirisStreaming.viewerKeyTtlMinutes
             ),
@@ -222,10 +179,9 @@ export function buildMintMirisViewerKeyFunction(
         },
     });
 
-    // The Miris Integration Key, which authorizes the asset tag read and, in perView mode, the
-    // viewer key creates (and the delete of a key whose table row could not be written).
+    // The Miris Integration Key, which authorizes the asset tag read, the viewer key creates and the
+    // delete of a key whose table row could not be written.
     fun.addToRolePolicy(mirisIntegrationKeyReadStatement(config));
-    grantViewerKeySecretRead(fun, viewerKeySecret);
 
     // Read-only: the asset record for Tier-2 authorization, and the Miris stream keys
     // stored as file metadata on the file.
@@ -237,9 +193,7 @@ export function buildMintMirisViewerKeyFunction(
     }
 
     // Put-only: one row per minted key. The table has no index.
-    if (perView && viewerKeyTable) {
-        viewerKeyTable.grant(fun, "dynamodb:PutItem");
-    }
+    viewerKeyTable.grant(fun, "dynamodb:PutItem");
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);

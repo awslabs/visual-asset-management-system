@@ -14,7 +14,7 @@
  */
 
 import type { ConfigShape, FieldMeta, Rule } from "../types";
-import { g, isAbsent, isBlank, isUnset, isValidUrl, PARTITION_DNS_SUFFIXES } from "../ruleHelpers";
+import { g, isAbsent, isUnset, isValidUrl, PARTITION_DNS_SUFFIXES } from "../ruleHelpers";
 import type { VpcRequiringFeature } from "../ruleHelpers";
 
 /** The deployment Region is in the commercial partition (an unset Region counts as commercial). */
@@ -49,9 +49,6 @@ function isPrivateEndpointHost(endpoint: string): boolean {
         /^(fc|fd)[0-9a-f]{2}:/.test(host)
     );
 }
-
-/** Viewer key modes accepted by `app.addons.useMirisStreaming.viewerKeyMode` (mirisStreamingConfig.ts: `MIRIS_VIEWER_KEY_MODES`). */
-const MIRIS_VIEWER_KEY_MODES = ["static", "perView"];
 
 /**
  * A complete commercial-partition Secrets Manager secret ARN, suffix included (mirisStreamingConfig.ts:
@@ -90,16 +87,7 @@ function isPositiveInteger(value: unknown): boolean {
     return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
-/** The Miris add-on is enabled in static viewer key mode. An absent mode is filled with "perView". */
-function mirisStatic(cfg: ConfigShape): boolean {
-    return (
-        !!g(cfg, "app.addons.useMirisStreaming.enabled") &&
-        g(cfg, "app.addons.useMirisStreaming.viewerKeyMode") === "static"
-    );
-}
-
 const miris = (c: ConfigShape) => !!g(c, "app.addons.useMirisStreaming.enabled");
-const mirisPerView = (c: ConfigShape) => miris(c) && !mirisStatic(c);
 const mirisUpload = (c: ConfigShape) =>
     miris(c) && !!g(c, "app.addons.useMirisStreaming.upload.enabled");
 
@@ -113,8 +101,6 @@ export const MIRIS_JSON_ONLY_PATHS: readonly string[] = ["app.addons.useMirisStr
 export const MIRIS_DEFAULTS: ConfigShape = {
     useMirisStreaming: {
         enabled: false,
-        viewerKeyMode: "perView",
-        viewerKey: "",
         viewerKeyTtlMinutes: 15,
         apiKeySecretArn: "",
         mirisApiBaseUrl: "https://app.miris.com",
@@ -139,36 +125,14 @@ export const MIRIS_FIELDS: FieldMeta[] = [
         help: "Streams 3D assets uploaded to Miris in the VAMS viewer. Requires allowUnsafeEvalFeatures. Commercial partition only.",
     },
     {
-        path: "app.addons.useMirisStreaming.viewerKeyMode",
-        label: "Miris viewer key mode",
-        input: "select",
-        section: "addons",
-        advanced: true,
-        options: [
-            { value: "perView", label: "Per view (a short-lived key minted per viewer open)" },
-            { value: "static", label: "Static (one deployment-wide viewer key)" },
-        ],
-        help: "perView (the default) mints a short-lived viewer key scoped to the one Miris asset each time an authorized user opens the viewer, and stores no viewer key. static returns the configured viewer key to an authorized viewer; VAMS stores that key in a Secrets Manager secret it fills at deploy time.",
-        visibleWhen: miris,
-    },
-    {
-        path: "app.addons.useMirisStreaming.viewerKey",
-        label: "Miris viewer key",
-        input: "text",
-        section: "addons",
-        advanced: true,
-        help: "Required in static mode; ignored in perView mode. A viewer key authorizes streaming only and is meant to reach the browser, so scope it with tags and an expiry when you create it. Miris shows it only once.",
-        visibleWhen: mirisStatic,
-    },
-    {
         path: "app.addons.useMirisStreaming.viewerKeyTtlMinutes",
-        label: "Miris per-view key lifetime (minutes)",
+        label: "Miris viewer key lifetime (minutes)",
         input: "number",
         section: "addons",
         advanced: true,
         min: 1,
         help: "Whole number from 1 to 60. How long a minted viewer key can start new streams; a stream already open keeps playing after its key expires.",
-        visibleWhen: mirisPerView,
+        visibleWhen: miris,
     },
     {
         path: "app.addons.useMirisStreaming.apiKeySecretArn",
@@ -178,7 +142,7 @@ export const MIRIS_FIELDS: FieldMeta[] = [
         advanced: true,
         placeholder:
             "arn:aws:secretsmanager:us-east-1:123456789012:secret:miris-integration-key-AbCdEf",
-        help: "Required in both modes. Complete Secrets Manager ARN, including the six-character suffix, of the secret holding the Miris Integration Key. It checks that a Miris asset is bound to the VAMS asset before a viewer key is returned, mints per-view keys, and is read by the Miris upload pipeline.",
+        help: "Required. Complete Secrets Manager ARN, including the six-character suffix, of the secret holding the Miris Integration Key. It checks that a Miris asset is bound to the VAMS asset before a viewer key is returned, mints per-view keys, and is read by the Miris upload pipeline.",
         visibleWhen: miris,
     },
     {
@@ -374,17 +338,6 @@ export const MIRIS_RULES: Rule[] = [
             "Miris Spatial Streaming cannot be combined with app.useGlobalVpc.useForAllLambdas: that setting places the add-on's Lambda functions in the VPC's isolated subnets, which have no route to the Miris API.",
     },
     {
-        id: "miris-viewerkeymode",
-        severity: "error",
-        fieldPaths: ["app.addons.useMirisStreaming.viewerKeyMode"],
-        appliesWhen: (c) => {
-            if (!g(c, "app.addons.useMirisStreaming.enabled")) return false;
-            const mode = g(c, "app.addons.useMirisStreaming.viewerKeyMode");
-            return !isAbsent(mode) && !MIRIS_VIEWER_KEY_MODES.includes(mode);
-        },
-        message: 'addons.useMirisStreaming.viewerKeyMode must be "static" or "perView".',
-    },
-    {
         id: "miris-viewerkey-ttl",
         severity: "error",
         fieldPaths: ["app.addons.useMirisStreaming.viewerKeyTtlMinutes"],
@@ -472,7 +425,7 @@ export const MIRIS_RULES: Rule[] = [
             !!g(c, "app.addons.useMirisStreaming.enabled") &&
             isUnset(g(c, "app.addons.useMirisStreaming.apiKeySecretArn")),
         message:
-            "Miris Spatial Streaming requires apiKeySecretArn, the Secrets Manager ARN of the Miris Integration Key, in both viewer key modes.",
+            "Miris Spatial Streaming requires apiKeySecretArn, the Secrets Manager ARN of the Miris Integration Key.",
     },
     {
         id: "miris-secret-arn-format",
@@ -485,40 +438,6 @@ export const MIRIS_RULES: Rule[] = [
         },
         message:
             "addons.useMirisStreaming.apiKeySecretArn must be the complete ARN of a Secrets Manager secret, including the six-character suffix Secrets Manager appends to the secret name, in the commercial partition (arn:aws:secretsmanager:<region>:<account>:secret:<name>-AbCdEf).",
-    },
-    {
-        id: "miris-viewerkey-required",
-        severity: "error",
-        fieldPaths: ["app.addons.useMirisStreaming.viewerKey"],
-        appliesWhen: (c) =>
-            mirisStatic(c) && isBlank(g(c, "app.addons.useMirisStreaming.viewerKey")),
-        message:
-            'addons.useMirisStreaming.viewerKeyMode "static" requires viewerKey. Generate one in the Miris Portal or with `miris viewerkey create`.',
-    },
-    {
-        id: "miris-viewerkey-whitespace",
-        severity: "error",
-        fieldPaths: ["app.addons.useMirisStreaming.viewerKey"],
-        appliesWhen: (c) => {
-            if (!mirisStatic(c)) return false;
-            const key = g(c, "app.addons.useMirisStreaming.viewerKey");
-            return !isBlank(key) && hasSurroundingWhitespace(key);
-        },
-        message:
-            "addons.useMirisStreaming.viewerKey has leading or trailing whitespace. Remove it; a Miris viewer key contains none.",
-    },
-    {
-        id: "miris-perview-viewerkey-ignored-warn",
-        severity: "warning",
-        fieldPaths: ["app.addons.useMirisStreaming.viewerKey"],
-        // mirisStreamingConfig.ts: "viewerKey is ignored when"
-        appliesWhen: (c) =>
-            !!g(c, "app.addons.useMirisStreaming.enabled") &&
-            (isAbsent(g(c, "app.addons.useMirisStreaming.viewerKeyMode")) ||
-                g(c, "app.addons.useMirisStreaming.viewerKeyMode") === "perView") &&
-            !isUnset(g(c, "app.addons.useMirisStreaming.viewerKey")),
-        message:
-            'addons.useMirisStreaming.viewerKey is ignored when viewerKeyMode is "perView". Remove it from config.json.',
     },
     // ----- Imported VPC (mirisStreamingConfig.ts: "an imported VPC must name private subnets") -----
     {

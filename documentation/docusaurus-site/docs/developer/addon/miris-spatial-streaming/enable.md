@@ -6,7 +6,7 @@ sidebar_label: Enable
 
 ## Configuration
 
-Enable the add-on by setting `app.addons.useMirisStreaming.enabled` to `true`, with `app.webUi.allowUnsafeEvalFeatures` set to `true`, and the ARN of the secret that holds the Miris Integration Key. The default `perView` mode needs no viewer key; `static` mode also needs `viewerKey`. The [Configuration Reference](../../../deployment/configuration-reference.md#miris-spatial-streaming-appaddonsusemirisstreaming) lists every field, default, and validation rule.
+Enable the add-on by setting `app.addons.useMirisStreaming.enabled` to `true`, with `app.webUi.allowUnsafeEvalFeatures` set to `true`, and the ARN of the secret that holds the Miris Integration Key. No viewer key is configured: the add-on mints one for each viewer open (see [Viewer keys](./how-it-works.md#viewer-keys)). The [Configuration Reference](../../../deployment/configuration-reference.md#miris-spatial-streaming-appaddonsusemirisstreaming) lists every field, default, and validation rule.
 
 ```json
 {
@@ -49,8 +49,3 @@ The viewer renders with the Miris web SDK (`@miris-inc/components`, `@miris-inc/
 The SDK renders only with WebGPU. Before it requests a viewer key, the viewer asks the browser for a WebGPU adapter, as the SDK does; a browser that grants none shows "Miris streaming needs WebGPU" and no key is requested. The viewer loads the SDK only after it has a viewer key. It waits 60 seconds for the SDK to load and 60 seconds for the first frame, counting the first-frame wait only while the browser tab is visible.
 
 With the add-on enabled, the Content Security Policy gains `https://*.miris.com` and `wss://*.miris.com` in `connect-src` and `blob:` in `script-src`. The SDK also needs `'unsafe-eval'`, which only `app.webUi.allowUnsafeEvalFeatures` adds. See [Security Architecture](../../../architecture/security.md#conditional-csp-sources).
-
-## Switching modes
-
--   **To `perView`**: set `viewerKeyMode` to `"perView"`, remove `viewerKey`, and deploy. Then revoke the old static viewer key in the Miris Portal or with `miris viewerkey revoke`, because a browser that received it can stream with it until it expires.
--   **Back to `static`**: set `viewerKeyMode` to `"static"` and `viewerKey`, and deploy. The cleanup function and its queue are removed; the viewer key table is retained. Keys minted before the switch expire within `viewerKeyTtlMinutes` and stay in the Miris workspace until deleted there.

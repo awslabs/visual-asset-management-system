@@ -10,7 +10,7 @@
  */
 
 import { SynthResult, synthTemplate } from "../support/templateSynth";
-import { mirisStaticWithUpload } from "./mirisUploadHarness";
+import { mirisWithUpload } from "./mirisUploadHarness";
 
 /** The logical IDs the root template's add-on nested stack resource lists in its DependsOn. */
 function addonStackDependsOn(synth: SynthResult): string[] {
@@ -29,8 +29,8 @@ describe("the Miris upload pipeline runs Fargate in private subnets", () => {
 
     beforeAll(() => {
         synth = synthTemplate("commercial", {
-            mutate: mirisStaticWithUpload,
-            mutateKey: "miris-static-upload",
+            mutate: mirisWithUpload,
+            mutateKey: "miris-with-upload",
         });
     });
 

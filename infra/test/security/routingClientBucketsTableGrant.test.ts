@@ -25,7 +25,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { synthTemplate, SynthResult, Resource } from "../support/templateSynth";
-import { MIRIS_TEST_SECRET_ARN, MIRIS_TEST_VIEWER_KEY } from "../addon/mirisUploadHarness";
+import { MIRIS_TEST_SECRET_ARN } from "../addon/mirisUploadHarness";
 
 const RATCHET = path.join(
     __dirname,
@@ -74,8 +74,6 @@ const synth = (): SynthResult =>
             c.app.webUi.allowUnsafeEvalFeatures = true;
             Object.assign(c.app.addons.useMirisStreaming, {
                 enabled: true,
-                viewerKeyMode: "static",
-                viewerKey: MIRIS_TEST_VIEWER_KEY,
                 apiKeySecretArn: MIRIS_TEST_SECRET_ARN,
             });
         },

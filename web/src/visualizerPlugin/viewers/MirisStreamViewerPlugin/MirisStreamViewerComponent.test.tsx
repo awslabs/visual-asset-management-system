@@ -94,14 +94,14 @@ const NOT_STREAMED = status({
     state: "notStreamed",
 });
 
-const STATIC_KEY = "key-1234567890abcdef";
-const staticKey = (overrides: Record<string, unknown> = {}) => [
+const VIEWER_KEY = "minted-viewer-key";
+const mintedKey = (overrides: Record<string, unknown> = {}) => [
     true,
     {
         filePath: "/asset-1/folder/scene.usd",
         mirisAssetUuid: VALID_UUID,
-        viewerKey: STATIC_KEY,
-        expiresAt: null,
+        viewerKey: VIEWER_KEY,
+        expiresAt: "2026-10-15T19:04:28Z",
         ...overrides,
     },
 ];
@@ -110,7 +110,7 @@ beforeEach(() => {
     jest.clearAllMocks();
     mockAppCacheGet.mockReturnValue({ featuresEnabled: [] });
     mockGetMirisStreamStatus.mockResolvedValue(status());
-    mockMintMirisViewerKey.mockResolvedValue(staticKey());
+    mockMintMirisViewerKey.mockResolvedValue(mintedKey());
     mockCan.mockReturnValue(false);
     mockFindRunningMirisUpload.mockResolvedValue([true, null]);
     mockGetMirisUploadRun.mockResolvedValue([true, { finished: false }]);
@@ -192,7 +192,7 @@ describe("MirisStreamViewerComponent", () => {
             expect(mockGetMirisStreamStatus).toHaveBeenCalledWith(request);
             expect(mockMintMirisViewerKey).toHaveBeenCalledTimes(1);
             expect(mockMintMirisViewerKey).toHaveBeenCalledWith(request);
-            expect(scene).toHaveAttribute("viewer-key", STATIC_KEY);
+            expect(scene).toHaveAttribute("viewer-key", VIEWER_KEY);
             expect(scene).toHaveAttribute("camera-fit", "contain");
             expect(scene.querySelectorAll("miris-camera")).toHaveLength(1);
             expect(scene.querySelectorAll("miris-stream")).toHaveLength(1);
@@ -982,8 +982,8 @@ describe("MirisStreamViewerComponent", () => {
             await waitFor(() => expect(mockMintMirisViewerKey).toHaveBeenCalledTimes(1));
             expect(mockLoadMirisStream).not.toHaveBeenCalled();
             expect(sceneElement()).toBeNull();
-            await act(async () => key.resolve(staticKey()));
-            expect(await waitForScene()).toHaveAttribute("viewer-key", STATIC_KEY);
+            await act(async () => key.resolve(mintedKey()));
+            expect(await waitForScene()).toHaveAttribute("viewer-key", VIEWER_KEY);
             expect(mockLoadMirisStream).toHaveBeenCalledTimes(1);
         });
 
@@ -997,7 +997,7 @@ describe("MirisStreamViewerComponent", () => {
             expect(localSet).not.toHaveBeenCalled();
             expect(mockAppCacheSet).not.toHaveBeenCalled();
             for (const spy of logSpies) {
-                expect(JSON.stringify(spy.mock.calls)).not.toContain(STATIC_KEY);
+                expect(JSON.stringify(spy.mock.calls)).not.toContain(VIEWER_KEY);
             }
             localSet.mockRestore();
             logSpies.forEach((spy) => spy.mockRestore());
@@ -1006,7 +1006,7 @@ describe("MirisStreamViewerComponent", () => {
         it.each([
             ["a 502", [false, "bad gateway", 502, undefined]],
             ["an unknown status", [false, "no response", undefined, undefined]],
-            ["a different asset UUID", staticKey({ mirisAssetUuid: "other-uuid" })],
+            ["a different asset UUID", mintedKey({ mirisAssetUuid: "other-uuid" })],
         ])("shows a retryable error on %s", async (_label, result) => {
             mockMintMirisViewerKey.mockResolvedValue(result);
             renderViewer();
@@ -1022,7 +1022,7 @@ describe("MirisStreamViewerComponent", () => {
             const view = renderViewer();
             await waitFor(() => expect(mockMintMirisViewerKey).toHaveBeenCalledTimes(1));
             view.unmount();
-            await act(async () => key.resolve(staticKey()));
+            await act(async () => key.resolve(mintedKey()));
             expect(sceneElement()).toBeNull();
             expect(mockLoadMirisStream).not.toHaveBeenCalled();
         });
@@ -1048,8 +1048,8 @@ describe("MirisStreamViewerComponent", () => {
 
         it("mounts a new scene element when the viewer key changes", async () => {
             mockMintMirisViewerKey
-                .mockResolvedValueOnce(staticKey({ viewerKey: "first-key" }))
-                .mockResolvedValueOnce(staticKey({ viewerKey: "second-key" }));
+                .mockResolvedValueOnce(mintedKey({ viewerKey: "first-key" }))
+                .mockResolvedValueOnce(mintedKey({ viewerKey: "second-key" }));
             jest.useFakeTimers();
             renderViewer();
             const first = await waitForScene();

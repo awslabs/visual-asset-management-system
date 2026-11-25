@@ -31,14 +31,13 @@ export interface MirisStreamStatus {
 
 /**
  * Miris viewer key for one asset file, as returned by `POST /addon/miris/viewer-key`. The key
- * streams `mirisAssetUuid`. `expiresAt` is when a per-view key stops authorizing new streams,
- * and null for the deployment's static viewer key.
+ * streams only `mirisAssetUuid`, and `expiresAt` is when it stops authorizing new streams.
  */
 export interface MirisViewerKey {
     filePath: string;
     mirisAssetUuid: string;
     viewerKey: string;
-    expiresAt: string | null;
+    expiresAt: string;
 }
 
 /** `state` reported for a request the deployment's AWS WAF web ACL blocked. */
@@ -135,10 +134,9 @@ export const getMirisStreamStatus = async ({
 };
 
 /**
- * Get a viewer key for a file: the deployment's viewer key in static mode, or a key minted for
- * this one Miris asset in per-view mode. The server reads the Miris asset UUID from the file's
- * metadata, so the caller supplies only the file path. The key is returned to the caller only;
- * do not cache or persist it.
+ * Get a viewer key minted for the file's one Miris asset. The server reads the Miris asset UUID
+ * from the file's metadata, so the caller supplies only the file path. The key is returned to the
+ * caller only; do not cache or persist it.
  *
  * Returns [true, MirisViewerKey] on success, or [false, errorMessage, status, state] on failure,
  * where `status` is the HTTP status when the request reached the API (400 for an asset that is not

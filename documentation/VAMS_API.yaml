@@ -10018,7 +10018,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /addon/miris/viewer-key:
         post:
             summary: "Get a Miris viewer key that can stream an asset file's Miris asset."
-            description: "Returns a viewer key for the Miris asset recorded in the file's `miris_asset_uuid` metadata, after the asset distribution rule of the core download routes (distributable, and not quarantined while `app.compliance.quarantineBlocksDownload` is on) and the binding tag check the status route makes. In `static` mode it is the deployment-wide viewer key and `expiresAt` is null. In `perView` mode VAMS creates a key for the one Miris asset that expires after `viewerKeyTtlMinutes` and records its key ID in the add-on's viewer key table. The key material is never stored, logged, or audited; each delivery writes an `AUTHOTHER` audit record (`mirisStaticViewerKeyIssue` or `mirisViewerKeyMint`). Responses carry `Cache-Control: no-cache, no-store`. Enforces Tier 1 `POST` on the route and Tier 2 `GET` on the asset. Deployed only when `app.addons.useMirisStreaming.enabled` is true."
+            description: "Returns a viewer key for the Miris asset recorded in the file's `miris_asset_uuid` metadata, after the asset distribution rule of the core download routes (distributable, and not quarantined while `app.compliance.quarantineBlocksDownload` is on) and the binding tag check the status route makes. VAMS creates a key for the one Miris asset that expires after `viewerKeyTtlMinutes` and records its key ID in the add-on's viewer key table. The key material is never stored, logged, or audited; each mint writes an `AUTHOTHER` audit record (`mirisViewerKeyMint`). Responses carry `Cache-Control: no-cache, no-store`. Enforces Tier 1 `POST` on the route and Tier 2 `GET` on the asset. Deployed only when `app.addons.useMirisStreaming.enabled` is true."
             requestBody:
                 required: true
                 content:
@@ -16314,7 +16314,7 @@ components:
                     description: "`miris_display_name`; null when absent."
                 state:
                     type: string
-                    description: "`notStreamed` (no UUID), `invalidUuid` (not a UUID), `notBound` (the Miris asset is missing, Miris reports it `deleted`, or it lacks a binding tag), `unknown` (the state could not be established), `processing` (`static` mode only: the Miris viewer API answered 400), or the processing state Miris reports, such as `preview`, `streamable`, `error`, or `failed`."
+                    description: "`notStreamed` (no UUID), `invalidUuid` (not a UUID), `notBound` (the Miris asset is missing, Miris reports it `deleted`, or it lacks a binding tag), `unknown` (the state could not be established), or the processing state Miris reports, such as `preview`, `streamable`, `error`, or `failed`."
                 stale:
                     type: boolean
                     nullable: true
@@ -16336,12 +16336,12 @@ components:
                 expiresAt:
                     type: string
                     format: date-time
-                    nullable: true
-                    description: "The key's expiry in `perView` mode; null in `static` mode."
+                    description: "The key's expiry."
             required:
                 - filePath
                 - mirisAssetUuid
                 - viewerKey
+                - expiresAt
         requestBlockedError:
             type: object
             description: "The body of the 403 API Gateway returns when the deployment's AWS WAF web ACL blocks a request at the stage (the WAF_FILTERED gateway response)."
