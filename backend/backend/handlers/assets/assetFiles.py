@@ -2064,15 +2064,18 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
     deleted_count = 0
     db_asset_key = f"{databaseId}:{assetId}"
 
-    # Normalize file paths: the table stores fileKey with leading slash
+    # A row's fileKey is the relativeKey its asset version was created with: without a leading
+    # slash for a version built from the current files (list_s3_files_with_versions), and as the
+    # caller wrote it for a version built from a file list. Paths are compared without the slash,
+    # and each row is deleted by the key it is stored under.
     normalized_paths = set()
     for fp in file_paths:
         fp_clean = fp.strip()
         if fp_clean.endswith('/'):
             continue
-        if not fp_clean.startswith('/'):
-            fp_clean = '/' + fp_clean
-        normalized_paths.add(fp_clean)
+        fp_clean = fp_clean.lstrip('/')
+        if fp_clean:
+            normalized_paths.add(fp_clean)
 
     if not normalized_paths:
         return 0
@@ -2087,7 +2090,7 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
         while True:
             response = asset_version_files_table.query(**query_kwargs)
             for item in response.get('Items', []):
-                if item.get('fileKey', '') in normalized_paths:
+                if str(item.get('fileKey', '')).lstrip('/') in normalized_paths:
                     records_to_delete.append(item)
 
             if 'LastEvaluatedKey' in response:
@@ -2095,20 +2098,22 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
             else:
                 break
 
-        # Batch delete the matching records
+        # Batch delete the matching records; the count is the rows written once the batch flushed
         with asset_version_files_table.batch_writer() as batch:
             for item in records_to_delete:
                 batch.delete_item(Key={
                     'databaseId:assetId:assetVersionId': item['databaseId:assetId:assetVersionId'],
                     'fileKey': item['fileKey']
                 })
-                deleted_count += 1
+        deleted_count = len(records_to_delete)
 
         if deleted_count > 0:
             logger.info(f"Deleted {deleted_count} version snapshot records for {len(normalized_paths)} file(s) in {db_asset_key}")
 
     except Exception as e:
-        logger.warning(f"Error cleaning up version records for {db_asset_key}: {e}")
+        # The files are already gone from Amazon S3, so the delete stands; rows left here are listed
+        # in the asset's versions until they are removed.
+        logger.exception(f"Error deleting version snapshot records for {len(normalized_paths)} file(s) in {db_asset_key}: {e}")
 
     return deleted_count
 

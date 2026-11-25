@@ -207,6 +207,15 @@ export function buildAssetFiles(
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
+    // A file delete removes the deleted files' version snapshot rows with a batch write
+    // (assetFiles.delete_file_version_records); the role writes nothing else to this table.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:BatchWriteItem"],
+            resources: [storageResources.dynamo.assetFileVersionsStorageTable.tableArn],
+        })
+    );
     storageResources.dynamo.assetVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetFileVersionHistoryStorageTable.grantReadWriteData(fun);
