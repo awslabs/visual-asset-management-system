@@ -134,7 +134,7 @@ POST /database/{databaseId}/assets/{assetId}/createVersion
 | `files`          | array   | No       | Explicit list of files and their S3 versions to include. Required unless `useLatestFiles` is `true`. |
 | `versionAlias`   | string  | No       | Human-readable version alias (up to 64 characters).                                                  |
 
-Provide either `useLatestFiles` set to `true` or a non-empty `files` list; the two are mutually exclusive. Each entry in `files` is an object with `relativeKey`, `versionId` (S3 version ID), and an optional `isArchived` flag. A `relativeKey` is the file's path in the asset, with or without a leading `/` (`/models/a.glb` and `models/a.glb` name the same file). The version stores it without the slash, so its file list shows `models/a.glb`, and two entries that name the same file are refused as duplicates.
+Provide either `useLatestFiles` set to `true` or a non-empty `files` list; the two are mutually exclusive. Each entry in `files` is an object with `relativeKey`, `versionId` (S3 version ID), and an optional `isArchived` flag. A `relativeKey` is the file's path in the asset, with or without a leading `/` (`/models/a.glb` and `models/a.glb` name the same file). The version stores it without the slash, so its file list shows `models/a.glb`. A request whose `files` name the same file twice (with and without the slash) or name a path made only of `/` answers `400`.
 
 ### Request body example
 
