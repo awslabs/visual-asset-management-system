@@ -84,6 +84,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Known Outstanding Issues
 
+-   **Web** A single-file asset's own point cloud file opened in the Potree viewer from search results shows no point cloud; open it from the asset's file manager or file page instead. Fixed in 2.7.0. ([#1951](https://github.com/awslabs/visual-asset-management-system/issues/1951))
 -   **Backend** An asset permanent delete can report success while Amazon S3 keeps the asset's files (for example, when a bucket policy denies the delete or the objects are locked): the asset's records are removed and the files stay in the bucket. Fixed in 2.7.0. ([#1768](https://github.com/awslabs/visual-asset-management-system/issues/1768))
 -   **Backend** Deleting a file of an asset stored in a folder also deletes the viewer data of the same asset's files under a folder named like that file: deleting `p/scan.e57` removes the viewer data of the files under `p/scan.e57/`. Fixed in 2.7.0. ([#1870](https://github.com/awslabs/visual-asset-management-system/issues/1870))
 -   **Backend** Comments and subscriptions are stored by asset ID alone. Two assets with the same asset ID in different databases share their comments and subscription, and permanently deleting one of them deletes the other's comments and subscription. Fixed in 2.7.0. ([#1860](https://github.com/awslabs/visual-asset-management-system/issues/1860))
