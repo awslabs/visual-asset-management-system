@@ -109,6 +109,9 @@ const verifyWasmFiles = async () => {
         throw new Error("No WebAssembly references found in the bundle");
     }
     const missing = [...referenced].filter(
+        // A WebAssembly file name read from the bundle this install has just built; WASM_URL_PATTERN
+        // admits no "/", so the name cannot leave destinationDir.
+        // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
         (name) => !fs.existsSync(path.join(destinationDir, name))
     );
     if (missing.length > 0) {

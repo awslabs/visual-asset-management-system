@@ -21,6 +21,9 @@ const DEFAULT_CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
  */
 function resolveConfigPath(value) {
     const name = typeof value === "string" && value.trim() !== "" ? value.trim() : "config.json";
+    // The deployer's own VAMS_CONFIG_PATH, resolved on their machine as CDK resolves -c configFile;
+    // the install script never reads request input.
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
     return path.isAbsolute(name) ? name : path.join(CONFIG_DIR, name);
 }
 
