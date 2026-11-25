@@ -874,7 +874,7 @@ vamscli edh admin instances stale --json-output
 
 ### edh admin instances stop
 
-Stop any user's workstation session. The owner can start it again with `edh workstation start`. With session bootstrap enabled, the session's VAMS API key is revoked at once. A session EDH no longer lists is refused with HTTP 409; `deactivate` reclaims its record.
+Stop any user's workstation session. The owner can start it again with `edh workstation start`. With session bootstrap enabled, the session's VAMS API key is revoked; VAMS briefly caches API key authorization, so the key can keep working for up to about 45 seconds. A session EDH no longer lists is refused with HTTP 409; `deactivate` reclaims its record.
 
 ```bash
 vamscli edh admin instances stop SESSION_ID [OPTIONS]
@@ -890,7 +890,7 @@ vamscli edh admin instances stop 3f9a1c2e-0b7d-4e6f-9a21-5c8d7e6f4b30
 
 ### edh admin instances deactivate
 
-Force-deactivate any user's workstation session. Irreversible; `--confirm` is required. EDH deletes the desktop and its AWS CloudFormation stack; the session's VAMS API key, if any, is revoked at once. A session EDH no longer lists is marked `DELETED` without an EDH call. `SESSION_ID` may be the session's `bootstrapId`, before or after EDH assigned the session id, and is how a launch that never received one is addressed; a `CREATING` launch EDH does not list whose record changed less than 15 minutes ago is refused with HTTP 409.
+Force-deactivate any user's workstation session. Irreversible; `--confirm` is required. EDH deletes the desktop and its AWS CloudFormation stack; the session's VAMS API key, if any, is revoked, and can keep working for up to about 45 seconds because VAMS briefly caches API key authorization. A session EDH no longer lists is marked `DELETED` without an EDH call. `SESSION_ID` may be the session's `bootstrapId`, before or after EDH assigned the session id, and is how a launch that never received one is addressed; a `CREATING` launch EDH does not list whose record changed less than 15 minutes ago is refused with HTTP 409.
 
 ```bash
 vamscli edh admin instances deactivate SESSION_ID --confirm [OPTIONS]
