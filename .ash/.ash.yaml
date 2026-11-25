@@ -121,19 +121,14 @@ global_settings:
           reason: example execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1374
-          line_end: 1374
+          line_start: 1384
+          line_end: 1384
           reason: example execution identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1571
-          line_end: 1571
+          line_start: 1581
+          line_end: 1581
           reason: example pipeline execution identifier in a response example, not a secret
-        - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
-          path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 1599
-          line_end: 1599
-          reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
           line_start: 1609
@@ -141,8 +136,13 @@ global_settings:
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/workflows.md
-          line_start: 2229
-          line_end: 2229
+          line_start: 1619
+          line_end: 1619
+          reason: example log identifier in a response example, not a secret
+        - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
+          path: documentation/docusaurus-site/docs/api/workflows.md
+          line_start: 2239
+          line_end: 2239
           reason: example log identifier in a response example, not a secret
         - rule_id: SECRET-BASIC-AUTH-CREDENTIALS
           path: documentation/docusaurus-site/docs/cli/troubleshooting/network-config.md
