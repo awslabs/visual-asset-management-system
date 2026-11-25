@@ -492,13 +492,13 @@ POST /roles
 
 #### Request body
 
-| Field              | Type    | Required | Description                                                    |
-| ------------------ | ------- | -------- | -------------------------------------------------------------- |
-| `roleName`         | string  | Yes      | Unique role name                                               |
-| `description`      | string  | Yes      | Role description                                               |
-| `source`           | string  | No       | Role source (e.g. `INTERNAL_SYSTEM`)                           |
-| `sourceIdentifier` | string  | No       | Identifier associated with the source                          |
-| `mfaRequired`      | boolean | No       | When `true`, the role's constraints apply only to MFA sessions |
+| Field              | Type    | Required | Description                                                                                                                                                   |
+| ------------------ | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `roleName`         | string  | Yes      | Unique role name: 1-256 characters of letters, digits, spaces, `-`, `.`, and `_` (`^[a-zA-Z0-9\-._\s]{1,256}$`, checked after surrounding spaces are removed) |
+| `description`      | string  | Yes      | Role description                                                                                                                                              |
+| `source`           | string  | No       | Role source (e.g. `INTERNAL_SYSTEM`)                                                                                                                          |
+| `sourceIdentifier` | string  | No       | Identifier associated with the source                                                                                                                         |
+| `mfaRequired`      | boolean | No       | When `true`, the role's constraints apply only to MFA sessions                                                                                                |
 
 #### Request body example
 
