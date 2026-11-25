@@ -82,6 +82,7 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import {
     getPreviewFileExtension,
     isPreviewExtensionAllowed,
+    parseAllowedExtensions,
 } from "../../utils/fileExtensionValidation";
 import { usePageTitle } from "../../hooks/usePageTitle";
 
@@ -1211,30 +1212,27 @@ export const AssetFileInfo = ({
         <Container>
             <SpaceBetween direction="vertical" size="l">
                 {/* Display warning about file extension restrictions if they exist */}
-                {assetDetailState.restrictFileUploadsToExtensions &&
-                    assetDetailState.restrictFileUploadsToExtensions.trim() !== "" &&
-                    assetDetailState.restrictFileUploadsToExtensions.toLowerCase() !== ".all" && (
-                        <Alert header="File Upload Restrictions" type="warning">
-                            <SpaceBetween direction="vertical" size="xs">
-                                <div>
-                                    This database has file upload restrictions in place. Only files
-                                    with the following extensions are allowed:
-                                </div>
-                                <div style={{ marginTop: "8px" }}>
-                                    <strong>
-                                        {assetDetailState.restrictFileUploadsToExtensions}
-                                    </strong>
-                                </div>
-                                <div style={{ fontSize: "0.9em", marginTop: "8px" }}>
-                                    <em>
-                                        Note: Preview files (containing {PREVIEW_FILE_PATTERN} in
-                                        the filename) are exempt from these restrictions, but must
-                                        still be one of {previewFileFormatsStr}.
-                                    </em>
-                                </div>
-                            </SpaceBetween>
-                        </Alert>
-                    )}
+                {parseAllowedExtensions(assetDetailState.restrictFileUploadsToExtensions) !==
+                    null && (
+                    <Alert header="File Upload Restrictions" type="warning">
+                        <SpaceBetween direction="vertical" size="xs">
+                            <div>
+                                This database has file upload restrictions in place. Only files with
+                                the following extensions are allowed:
+                            </div>
+                            <div style={{ marginTop: "8px" }}>
+                                <strong>{assetDetailState.restrictFileUploadsToExtensions}</strong>
+                            </div>
+                            <div style={{ fontSize: "0.9em", marginTop: "8px" }}>
+                                <em>
+                                    Note: Preview files (containing {PREVIEW_FILE_PATTERN} in the
+                                    filename) are exempt from these restrictions, but must still be
+                                    one of {previewFileFormatsStr}.
+                                </em>
+                            </div>
+                        </SpaceBetween>
+                    </Alert>
+                )}
 
                 <Alert header="Preview File Information" type="info">
                     <p>

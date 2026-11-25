@@ -164,6 +164,11 @@ regexes = [
     # the vendored PlayCanvas bundle (history only). Each is anchored on the surrounding code so it
     # matches the identifier, not a value assigned to it.
     '''s3_key = s3_bucket_prefix ''',
+    # `legacy_temp_s3_key` is a Python variable in backend/handlers/assets/uploadFile.py
+    # (`abort_staged_multipart_upload`, #1928) whose value is assigned to the local `key`; the rule reads
+    # the variable name as the secret. Anchored at both ends of the rule's match, so only that exact
+    # assignment is skipped and any other value assigned to `key` is still reported.
+    '''^key = legacy_temp_s3_key$''',
     '''tagKey:'COSMOS3_(GUIDANCE|NEGATIVE_PROMPT)[']''',
     '''(t|e)\._sortKey(Forward|Shadow),i=e\._sortKey(Forward|Shadow);''',
     '''this\._keys0,r=this\._indices0;''',

@@ -125,19 +125,17 @@ The following file extensions are blocked by the VAMS upload API for security re
 
 `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`
 
-Additionally, the following MIME types are blocked:
-
-`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/x-php`, `application/javascript`, `application/x-powershell`, `application/vbscript`
+A list of blocked MIME types (`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/x-php`, `application/javascript`, `application/x-powershell`, `application/vbscript` and others) is checked against the content type Amazon S3 reports for a stored file: when an upload completes, when a workflow output is ingested, when the large object copy engine copies a file into its asset, and when a file is downloaded, streamed, exported or zipped. The MIME type list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
 
 :::info
-These restrictions apply only to the upload API. Files placed directly into Amazon S3 buckets bypass these checks.
+The extension check applies only to the VAMS API. Files placed directly into Amazon S3 buckets bypass it at upload, and the extension and MIME type checks still apply when such a file is downloaded, streamed, exported or zipped.
 :::
 
 ### How do I connect VAMS to my existing authentication system?
 
 VAMS offers two paths. Federating an Amazon Cognito user pool with your identity provider is the lighter one and is the recommended starting point; bringing your own OAuth 2.0 provider without Amazon Cognito is the fallback for deployments that cannot use a Cognito user pool at all.
 
-**Amazon Cognito federation (SAML or OIDC).** VAMS keeps the Amazon Cognito user pool and adds your IdP as a federated provider, so Cognito-managed session tokens and the native username/password sign-in remain available:
+**Amazon Cognito federation (SAML or OIDC).** VAMS keeps the Amazon Cognito user pool and adds your IdP as a federated provider, so Amazon Cognito still issues the session tokens. The web login page then shows only a **Login with \{displayName\}** button that sends users to your IdP, with no username and password form. Native user pool accounts, including the initial administrator, keep their passwords and sign in with VamsCLI (`vamscli auth login -u <username>`, the sign-in VamsMCP and the connectors also use) instead of the web application:
 
 1. Keep `app.authProvider.useCognito.enabled: true`.
 2. Set `app.authProvider.useCognito.useSaml: true` **or** `useOidc: true` (they are mutually exclusive).

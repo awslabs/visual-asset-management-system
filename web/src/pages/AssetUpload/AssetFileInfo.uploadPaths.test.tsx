@@ -162,3 +162,19 @@ describe("Create Asset, Select Files step", () => {
         expect(screen.queryByText("/scene.usda")).toBeNull();
     });
 });
+
+describe("Create Asset, upload restrictions banner", () => {
+    it("shows the banner for a list that restricts uploads", () => {
+        mount(".pdf,.x_t");
+        expect(screen.getByText("File Upload Restrictions")).toBeTruthy();
+        expect(screen.getByText(".pdf,.x_t")).toBeTruthy();
+    });
+
+    it.each([".pdf,.all", " .all", ".ALL", ""])(
+        "shows no banner when the list %p lifts the restriction, as the upload pre-check does",
+        (value) => {
+            mount(value);
+            expect(screen.queryByText("File Upload Restrictions")).toBeNull();
+        }
+    );
+});

@@ -2008,7 +2008,7 @@ paths:
                     type: "boolean"
         put:
             summary: "Update an asset's editable fields."
-            description: "Update an asset's editable fields (assetName, description, isDistributable, tags). Omitted fields and fields sent as null remain unchanged, so at least one field must carry a non-null value; an empty tags array clears the tag list, subject to the required tag types in scope."
+            description: "Update an asset's editable fields (assetName, description, isDistributable, tags). Omitted fields and fields sent as null remain unchanged, so at least one field must carry a non-null value; an empty tags array clears the tag list, subject to the required tag types in scope. A change to assetName or tags is also authorized against the asset as it will be stored: the caller needs GET on the stored asset and GET and PUT on the changed one, or the request answers 403 and changes nothing."
             requestBody:
                 required: true
                 content:
@@ -2029,7 +2029,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update asset.
+                    description: Not authorized to update asset, or to give it the new name or tags.
                     content:
                         application/json:
                             schema:
@@ -8220,7 +8220,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/initializeUploadResponse"
                 "400":
-                    description: "Invalid parameters, or the request is over a per-request limit: more than 1000 files, more than 1500 total parts, or an estimated presigned-URL response over 5 MiB, which is refused with 'Upload request too large; split the files across several requests'. Long keys of non-ASCII characters can reach the response limit below 1500 parts. A missing asset also answers 400."
+                    description: "Invalid parameters, or the request is over a per-request limit: more than 1000 files, more than 1500 total parts, or an estimated presigned-URL response over 5 MiB, which is refused with 'Upload request too large; split the files across several requests'. Long keys of non-ASCII characters can reach the response limit below 1500 parts. A file whose key (its asset's location followed by its relativeKey) is over the upload bound, 998 bytes of UTF-8 in a bucket registered at its root and the length of the bucket's base prefix less than that otherwise, is refused with 'VAMS General Error: File key is too long to upload: a file key, including its asset location, may be at most N bytes', where N is the bound for the asset's bucket; no multipart upload is created for any file in the request. A missing asset also answers 400."
                     content:
                         application/json:
                             schema:
@@ -8581,9 +8581,19 @@ Several triggers of one type are supported: address each with its own key ('<typ
             responses:
                 "200":
                     description: >
-                        OK. A single abort carries a warnings array when a registered sub-process
-                        could not be stopped; the sub-process is then left running and the warning names
-                        it by its registered id or the final segment of its registered ARN, never the
+                        OK. A single abort's message is "Execution aborted" when this call stopped a
+                        running execution, also when another writer (the Step Functions status change
+                        for this call's own stop, for example) recorded ABORTED first. An execution
+                        that was not running (already SUCCEEDED, FAILED, ABORTED or TIMED_OUT, or that
+                        finished on its own as SUCCEEDED, FAILED or TIMED_OUT while the abort ran) keeps
+                        its status and answers "Execution was not running (status <status>), so it was
+                        not aborted."; <status> is "unknown" when the record is gone. When the abort
+                        still sent a stop request to a sub-process of a pipeline that did not finish on
+                        its own (the remedy for a sub-process registered after an earlier abort), the
+                        message continues "The sub-processes of its pipelines that did not finish on
+                        their own were sent a stop request." A single abort carries a warnings array when a registered
+                        sub-process could not be stopped; the sub-process is then left running and the
+                        warning names it by its registered id or the final segment of its registered ARN, never the
                         ARN. It additionally carries a notAbortable array when a registered sub-process is
                         of a type VAMS cannot stop — one {resourceType, label, stageName, locator} entry
                         per registered locator, where locator is the registered id or the final segment
@@ -9449,7 +9459,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         post:
             summary: "Create a new API key for any user (administrative)."
-            description: "Create an API key bound to the userId supplied in the request body. The key acts as that user and carries that user's roles, so access to this route is equivalent to full administrative access and is reserved for administrator roles; regular users create their own keys through /auth/user/api-keys. The plaintext API key is returned exactly once in the response and cannot be retrieved again. Refuses a caller that authenticates with a temporary session key (403). Refuses an apiKeyName that starts with the reserved temporary session key prefix temporary-session- (400)."
+            description: "Create an API key bound to the userId supplied in the request body. The key acts as that user and carries that user's roles, so access to this route is equivalent to full administrative access and is reserved for administrator roles; regular users create their own keys through /auth/user/api-keys. The plaintext API key is returned exactly once in the response and cannot be retrieved again. Refuses a caller that authenticates with an API key (403); create keys signed in through the identity provider. Refuses a caller that authenticates with a temporary session key (403). Refuses an apiKeyName that starts with the reserved temporary session key prefix temporary-session- (400)."
             requestBody:
                 required: true
                 content:
@@ -9488,7 +9498,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create API keys.
+                    description: "Not authorized to create API keys, or the caller authenticated with an API key (`API keys cannot be created with an API key. Sign in through your identity provider to create one.`)."
                     content:
                         application/json:
                             schema:
@@ -9541,7 +9551,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         put:
             summary: "Update an API key (administrative)."
-            description: "Update the description, expiration date, and/or active status of any user's API key. The key name and userId cannot be changed. At least one field must be provided. Administrative route, reserved for administrator roles; regular users update their own keys through /auth/user/api-keys/{apiKeyId}. Refuses a caller that authenticates with a temporary session key (403)."
+            description: "Update the description, expiration date, and/or active status of any user's API key. The key name and userId cannot be changed. At least one field must be provided. Administrative route, reserved for administrator roles; regular users update their own keys through /auth/user/api-keys/{apiKeyId}. Refuses an expiresAt change from a caller that authenticates with an API key (403), before the key is read. Refuses a caller that authenticates with a temporary session key (403)."
             parameters:
                 - name: apiKeyId
                   in: path
@@ -9581,7 +9591,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update this API key.
+                    description: "Not authorized to update this API key, or the caller authenticated with an API key and the body carries expiresAt (`An API key's expiration cannot be changed with an API key. Sign in through your identity provider to change it.`)."
                     content:
                         application/json:
                             schema:
@@ -9692,7 +9702,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         post:
             summary: "Create a new self-service API key for the current user."
-            description: "Create an API key tied to the requesting user. The key always acts as the authenticated caller (no userId field). An expiration date is required and may be at most 365 days from creation; after the window elapses a new key must be created (rotation). The plaintext API key is returned exactly once. Refuses a caller that authenticates with a temporary session key (403). Refuses an apiKeyName that starts with the reserved temporary session key prefix temporary-session- (400)."
+            description: "Create an API key tied to the requesting user. The key always acts as the authenticated caller (no userId field). An expiration date is required and may be at most 365 days from creation; after the window elapses a new key must be created (rotation). The plaintext API key is returned exactly once. Refuses a caller that authenticates with an API key (403); create keys signed in through the identity provider. Refuses a caller that authenticates with a temporary session key (403). Refuses an apiKeyName that starts with the reserved temporary session key prefix temporary-session- (400)."
             requestBody:
                 required: true
                 content:
@@ -9728,7 +9738,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create API keys.
+                    description: "Not authorized to create API keys, or the caller authenticated with an API key (`API keys cannot be created with an API key. Sign in through your identity provider to create one.`)."
                     content:
                         application/json:
                             schema:
@@ -9781,7 +9791,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         put:
             summary: "Update one of the current user's own API keys."
-            description: "Update the description, expiration date, and/or active status of an API key owned by the requesting user. The expiration cannot be cleared and cannot be set beyond 365 days from the key's original creation date; after that window a new key must be created (rotation). Refuses a caller that authenticates with a temporary session key (403)."
+            description: "Update the description, expiration date, and/or active status of an API key owned by the requesting user. The expiration cannot be cleared and cannot be set beyond 365 days from the key's original creation date; after that window a new key must be created (rotation). Refuses an expiresAt change from a caller that authenticates with an API key (403), before the key is read. Refuses a caller that authenticates with a temporary session key (403)."
             parameters:
                 - name: apiKeyId
                   in: path
@@ -9821,7 +9831,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update API keys.
+                    description: "Not authorized to update API keys, or the caller authenticated with an API key and the body carries expiresAt (`An API key's expiration cannot be changed with an API key. Sign in through your identity provider to change it.`)."
                     content:
                         application/json:
                             schema:
@@ -14173,7 +14183,7 @@ components:
                 restrictFileUploadsToExtensions:
                     type: string
                     default: ""
-                    description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). '.all' or an empty string allows all extensions."
+                    description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). An extension can contain letters, digits, '_' and further dots ('.x_t', '.tar.gz'); a file is allowed when its name ends with one, case-insensitively. '.all' or an empty string allows all extensions."
                 assetCount:
                     type: integer
                     readOnly: true
@@ -14207,7 +14217,7 @@ components:
                     description: "Whether user and API metadata writes may add only keys defined in schemas. Keys already stored on a record pass; pipeline write-backs are not restricted (optional)"
                 restrictFileUploadsToExtensions:
                     type: string
-                    description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). '.all' or an empty string allows all extensions (optional)"
+                    description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). An extension can contain letters, digits, '_' and further dots ('.x_t', '.tar.gz'); a file is allowed when its name ends with one, case-insensitively. '.all' or an empty string allows all extensions (optional)"
             example:
                 description: "Updated 3d models used in training programs"
                 restrictMetadataOutsideSchemas: true
@@ -18850,7 +18860,9 @@ components:
             type: object
             properties:
                 relativeKey:
-                    $ref: '#/components/schemas/filename_pattern'
+                    allOf:
+                        - $ref: '#/components/schemas/filename_pattern'
+                    description: "Path of the file in the asset. The file's key, the asset's location followed by this path, may be at most 998 bytes of UTF-8 in a bucket registered at its root, and the length of the bucket's base prefix less than that otherwise: the upload is staged under a longer key that must fit the 1,024-byte Amazon S3 limit. A longer key is refused with 400 'VAMS General Error: File key is too long to upload: a file key, including its asset location, may be at most N bytes', where N is the bound for the asset's bucket."
                 file_size:
                     type: integer
                     minimum: 0

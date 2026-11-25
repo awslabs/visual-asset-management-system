@@ -189,7 +189,7 @@ A rule that is broken fails the import of `common/constants.py`, so every backen
 
 ### Upload deny lists
 
-The add-on and custom lanes can block more file types on upload, download, streaming and workflow output; they cannot unblock one. `common/constants.py` appends each lane's entries to the core `UNALLOWED_FILE_EXTENSION_LIST` and `UNALLOWED_MIME_LIST`. In `backend/backend/custom/customConstants.py`:
+The add-on and custom lanes can block more file types on upload, download, streaming and workflow output; they cannot unblock one. An added MIME type is matched against the content type Amazon S3 reports for a stored object. That includes an upload's staged object, which is checked when the upload completes and which VAMS creates as `application/octet-stream`, so adding `application/octet-stream` refuses every upload through VAMS (see [Blocked File Types](../architecture/security.md#blocked-file-types)). `common/constants.py` appends each lane's entries to the core `UNALLOWED_FILE_EXTENSION_LIST` and `UNALLOWED_MIME_LIST`. In `backend/backend/custom/customConstants.py`:
 
 ```python
 CUSTOM_UNALLOWED_FILE_EXTENSIONS = [".xyz"]
