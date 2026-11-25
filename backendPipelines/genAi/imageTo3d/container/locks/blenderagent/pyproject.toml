@@ -60,6 +60,14 @@ required-version = "==0.13.8"
 # younger than that when it was built).
 exclude-newer = "2026-11-23T22:10:30Z"
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+# A dependency the image never needs, left out:
+#   litellm-enterprise: litellm[proxy] names it, under BerriAI's proprietary Enterprise License. LiteLLM 1.100.0
+#   imports it only inside a try that catches ImportError or Exception (36 imports in 15 modules), and the bridge
+#   uses none of its features (single key, no database, no SSO, no guardrails). The Dockerfile checks at build time
+#   that it is absent and that the proxy server module imports without it.
+override-dependencies = [
+    "litellm-enterprise ; sys_platform == 'never'",
+]
 
 # The versions the image installed when it was built from development, one line per installed package. Kept equal
 # to frozen-set.txt by locks/tools/sync_constraints.py. Moving a version means re-freezing a build and
@@ -128,7 +136,6 @@ constraint-dependencies = [
     "kiwisolver==1.5.1",
     "lazy-loader==0.6",
     "litellm==1.100.0",
-    "litellm-enterprise==0.1.62",
     "litellm-proxy-extras==0.4.91",
     "llvmlite==0.50.0",
     "manifold3d==3.5.5",

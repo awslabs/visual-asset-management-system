@@ -5,6 +5,8 @@
 # PR merged. pyproject.toml's constraint-dependencies are these lines, so no later resolution can move them. The
 # packages built from source and kaolin's wheel are in out-of-lock.json; the prebuilt flash-attn wheel is listed by
 # its version.
+# Moved on purpose since: smplx 0.1.28 left out (pyproject.toml override-dependencies); upstream's requirements.txt
+# names it, and no SAM 3D code imports it.
 absl-py==2.5.1
 accelerate==1.15.0
 addict==2.4.0
@@ -374,7 +376,6 @@ simplejson==3.19.2
 six==1.17.0
 smdebug-rulesconfig==1.0.1
 smmap==5.0.3
-smplx==0.1.28
 soundfile==0.14.0
 soupsieve==2.10
 soxr==1.1.0

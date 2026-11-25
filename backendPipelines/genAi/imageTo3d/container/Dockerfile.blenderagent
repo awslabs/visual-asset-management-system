@@ -104,12 +104,15 @@ RUN pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/blendera
 # The shared pipeline dependencies, the bridge from the agent's Responses API to Bedrock (LiteLLM, the OpenAI client
 # the adapter uses to check it, boto3) and torch with the packages MoGe-2 imports. torch is the CUDA 12.8 build from
 # the PyTorch index (the lock pins 2.7.1+cu128 and the hashes are that file's); every other package comes from the
-# default index.
+# default index. litellm-enterprise, which litellm[proxy] names, is left out of the lock (locks/blenderagent/
+# pyproject.toml): the check below proves it is absent and that the proxy server the bridge runs imports without it.
 RUN pip install --no-cache-dir --require-hashes --no-deps \
     --extra-index-url https://download.pytorch.org/whl/cu128 \
     -r /opt/locks/blenderagent/requirements.lock && \
     python -c "import torch; assert torch.version.cuda.startswith('12.8'), torch.version.cuda" && \
-    litellm --version
+    litellm --version && \
+    python -c "import importlib.util as u; assert u.find_spec('litellm_enterprise') is None; \
+import litellm.proxy.proxy_server; print('LiteLLM proxy server imports without litellm_enterprise')"
 
 # Blender, unpacked to /opt/blender and put on PATH. The primary download host is tried first and two
 # public mirrors after it, because the primary has refused automated clients before. Whichever host

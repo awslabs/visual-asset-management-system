@@ -382,7 +382,6 @@ constraints = [
     { name = "six", specifier = "==1.17.0" },
     { name = "smdebug-rulesconfig", specifier = "==1.0.1" },
     { name = "smmap", specifier = "==5.0.3" },
-    { name = "smplx", specifier = "==0.1.28" },
     { name = "soundfile", specifier = "==0.14.0" },
     { name = "soupsieve", specifier = "==2.10" },
     { name = "soxr", specifier = "==1.1.0" },
@@ -456,6 +455,7 @@ constraints = [
 ]
 overrides = [
     { name = "nvidia-pyindex", marker = "sys_platform == 'never'" },
+    { name = "smplx", marker = "sys_platform == 'never'" },
     { name = "xatlas", specifier = "==0.0.11" },
 ]
 
@@ -2267,7 +2267,6 @@ dependencies = [
     { name = "seaborn" },
     { name = "sentence-transformers" },
     { name = "simplejson" },
-    { name = "smplx" },
     { name = "spconv-cu121" },
     { name = "tensorboard" },
     { name = "timm" },
@@ -2417,7 +2416,6 @@ requires-dist = [
     { name = "seaborn", specifier = "==0.13.2" },
     { name = "sentence-transformers", specifier = "==2.6.1" },
     { name = "simplejson", specifier = "==3.19.2" },
-    { name = "smplx", specifier = "==0.1.28" },
     { name = "spconv-cu121", specifier = "==2.3.8" },
     { name = "tensorboard", specifier = "==2.16.2" },
     { name = "timm", specifier = "==0.9.16" },
@@ -5298,19 +5296,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/1f/ea/49c993d6dfdd7338c9b1000a0f36817ed7ec84577ae2e52f890d1a4ff909/smmap-5.0.3.tar.gz", hash = "sha256:4d9debb8b99007ae47165abc08670bd74cb74b5227dda7f643eccc4e9eb5642c", size = 22506, upload-time = "2026-03-09T03:43:26.1Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/d4/59e74daffcb57a07668852eeeb6035af9f32cbfd7a1d2511f17d2fe6a738/smmap-5.0.3-py3-none-any.whl", hash = "sha256:c106e05d5a61449cf6ba9a1e650227ecfb141590d2a98412103ff35d89fc7b2f", size = 24390, upload-time = "2026-03-09T03:43:24.361Z" },
-]
-
-[[package]]
-name = "smplx"
-version = "0.1.28"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-    { name = "torch" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/69/eb/51da17b291fb1221317a1ff65a301fb2cf9c6c0dd87a0caec4cbcd06c1da/smplx-0.1.28.tar.gz", hash = "sha256:c3a1e2c3069cdf7a4b34fd250c2484c8bb1a4fd9c14490da9359af5fbc64fbe6", size = 28500, upload-time = "2021-05-26T12:14:10.194Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c9/33/bd37416aec828e7465652d9e2525fe52de0a29a581f1519cc51a74485091/smplx-0.1.28-py3-none-any.whl", hash = "sha256:e8ff3d278a015c097dc86d44a38475da4ac170042943c84c08eee433629406a7", size = 29903, upload-time = "2021-05-26T12:14:08.641Z" },
 ]
 
 [[package]]

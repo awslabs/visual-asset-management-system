@@ -329,7 +329,7 @@ ENV PYTHONPATH="/opt/sam3d:${PYTHONPATH}"
 #   - decord 0.6.0, bitsandbytes 0.43.0 and bpy 4.3.0 are reported "not supported on this platform": their wheels'
 #     dist-info WHEEL files carry no tag pip check can match (decord's names cp36; bitsandbytes' puts its tag after a
 #     blank line), although pip installed each file by its file name's tags, which match.
-#   - SAM 3D's own requirements name nvidia-pyindex, which the lock leaves out (locks/sam3d/pyproject.toml).
+#   - SAM 3D's own requirements name nvidia-pyindex and smplx, which the lock leaves out (locks/sam3d/pyproject.toml).
 # Any other unmet requirement fails the build.
 RUN set -eu; \
     python /opt/locks/tools/check_installed_set.py --dir /opt/locks/sam3d --gpl "$ENABLE_GPL_MESH_REPAIR"; \
@@ -337,7 +337,7 @@ RUN set -eu; \
     unexpected=$(grep -v -E \
         -e '^sam3d-objects 0\.0\.1 has requirement (pymeshfix==0\.17\.0, but you have pymeshfix 0\.18\.1|xatlas==0\.0\.9, but you have xatlas 0\.0\.11)\.$' \
         -e '^(decord 0\.6\.0|bitsandbytes 0\.43\.0|bpy 4\.3\.0) is not supported on this platform$' \
-        -e '^sam3d-objects 0\.0\.1 requires nvidia-pyindex, which is not installed\.$' \
+        -e '^sam3d-objects 0\.0\.1 requires (nvidia-pyindex|smplx), which is not installed\.$' \
         /tmp/pip-check.txt || true); \
     cat /tmp/pip-check.txt; \
     rm -f /tmp/pip-check.txt; \

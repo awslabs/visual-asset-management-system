@@ -97,8 +97,8 @@ const CONVERTED: ConvertedImage[] = [
     {
         // SAM 3D: a conda environment (conda-explicit.txt) and the CUDA 12.1 torch stack from its own explicit index. The git
         // requirements are built from pinned clones, kaolin is NVIDIA's wheel by its SHA-256 (PyPI does not carry it), the
-        // flash-attn wheel is locked by URL, pymeshfix is the GPL group's, and nvidia-pyindex is left out (out-of-lock.json,
-        // pyproject.toml).
+        // flash-attn wheel is locked by URL, pymeshfix is the GPL group's, and nvidia-pyindex and smplx are left out
+        // (out-of-lock.json, pyproject.toml).
         model: "sam3d",
         dockerfile: "Dockerfile.sam3d",
         upstreamFiles: [
@@ -111,7 +111,7 @@ const CONVERTED: ConvertedImage[] = [
             /^MoGe @ git\+https:\/\/github\.com\/microsoft\/MoGe\.git@[0-9a-f]{40}$/,
             /^gsplat @ git\+https:\/\/github\.com\/nerfstudio-project\/gsplat\.git@[0-9a-f]{40}$/,
             /^pytorch3d @ git\+https:\/\/github\.com\/facebookresearch\/pytorch3d\.git@[0-9a-f]{40}$/,
-            /^(kaolin|flash_attn|pymeshfix|nvidia-pyindex)==/,
+            /^(kaolin|flash_attn|pymeshfix|nvidia-pyindex|smplx)==/,
         ],
         torchIndex: { name: "pytorch-cu121", url: "https://download.pytorch.org/whl/cu121" },
     },
@@ -466,6 +466,82 @@ describe("the Stable3DGen image's pillow and gradio", () => {
         expect(dockerText.indexOf("Stable3DGen job modules import")).toBeGreaterThan(codeCopy);
     });
 });
+
+/**
+ * Packages an image's inputs name but the image never runs, left out because their licences do not fit an
+ * optional pipeline image VAMS builds for its users: litellm-enterprise (BerriAI Enterprise License, named by
+ * litellm[proxy]) and smplx (MPI non-commercial research licence, named by SAM 3D's requirements.txt). The override
+ * keeps a re-lock from bringing either back, and the build proves the image works without it.
+ */
+const LEFT_OUT: { model: string; dockerfile: string; pkg: string; buildCheck: string[] }[] = [
+    {
+        model: "blenderagent",
+        dockerfile: "Dockerfile.blenderagent",
+        pkg: "litellm-enterprise",
+        buildCheck: [
+            "find_spec('litellm_enterprise') is None",
+            "import litellm.proxy.proxy_server",
+        ],
+    },
+    {
+        model: "sam3d",
+        dockerfile: "Dockerfile.sam3d",
+        pkg: "smplx",
+        buildCheck: [
+            "^sam3d-objects 0\\.0\\.1 requires (nvidia-pyindex|smplx), which is not installed\\.$",
+            "import inference",
+        ],
+    },
+];
+
+describe.each(LEFT_OUT)(
+    "the $model image without $pkg",
+    ({ model, dockerfile, pkg, buildCheck }) => {
+        const dir = path.join(CONTAINER_DIR, "locks", model);
+        const read = (name: string) => fs.readFileSync(path.join(dir, name), "utf-8");
+
+        it("leaves it out of the lock through an override", () => {
+            expect(
+                tomlArray(read("pyproject.toml"), "override-dependencies").filter(
+                    (o) => normalize(o.split(/[\s;=<>!~[]/)[0]) === pkg
+                )
+            ).toEqual([`${pkg} ; sys_platform == 'never'`]);
+        });
+
+        it("has no line for it in the frozen set, the constraints, any export or uv.lock", () => {
+            expect(frozenPins(read("frozen-set.txt")).has(pkg)).toBe(false);
+            const constraints = tomlArray(
+                read("pyproject.toml"),
+                "constraint-dependencies",
+                read("pyproject.toml").indexOf("# BEGIN frozen-set constraints")
+            );
+            expect(constraints.filter((c) => normalize(c.split("==")[0]) === pkg)).toEqual([]);
+            for (const file of [
+                "requirements-build.lock",
+                "requirements.lock",
+                "requirements-gpl.lock",
+            ]) {
+                expect([file, exportPins(read(file)).some((p) => p.name === pkg)]).toEqual([
+                    file,
+                    false,
+                ]);
+            }
+            expect(read("uv.lock")).not.toMatch(new RegExp(`^name = "${pkg}"$`, "m"));
+        });
+
+        it("proves at build time that the image runs without it", () => {
+            const steps = instructions(
+                fs.readFileSync(path.join(CONTAINER_DIR, dockerfile), "utf-8")
+            );
+            for (const needle of buildCheck) {
+                expect([needle, steps.some((s) => /^RUN /.test(s) && s.includes(needle))]).toEqual([
+                    needle,
+                    true,
+                ]);
+            }
+        });
+    }
+);
 
 describe("the shared requirement files", () => {
     const root = path.join(__dirname, "..", "..", "..");

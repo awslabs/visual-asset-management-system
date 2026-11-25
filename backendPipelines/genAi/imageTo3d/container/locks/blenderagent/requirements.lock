@@ -218,9 +218,6 @@ litellm==1.100.0 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
     --hash=sha256:0b7ec93013e18535481cd811b776ee95c6b957b3a9fb44dc53f7c459e7e60e38 \
     --hash=sha256:8224c8eed9cab3319a88e6665d1275ad8faf21d353b1b22223a6d6115a302ea2 \
     --hash=sha256:ece94e817a453a5b3a9517c03547c428d501cea719edb728c1b260e53f78ea35
-litellm-enterprise==0.1.62 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-    --hash=sha256:2ce78366557335de557ee72ad86c92b2b062b0e07e31dff2139576feda849489 \
-    --hash=sha256:337697160896d52079290ffe8051c3dee450653d271cb29723af6db8546eb7d9
 litellm-proxy-extras==0.4.91 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
     --hash=sha256:5cac5f06f9addd023b5c99a05c2c4c5147eaf799d8f00567e3ee8f04e4595c0b \
     --hash=sha256:d19fe53591b0bbd48aff24cb1a166b0c68ff2491469ceec88eaa83c6a364562d
