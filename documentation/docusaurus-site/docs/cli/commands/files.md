@@ -35,7 +35,7 @@ vamscli file upload [FILES_OR_DIRECTORY] [OPTIONS]
 | `-a`, `--asset`      | TEXT    | Yes         | Asset ID                                                                                                                                              |
 | `--directory`        | PATH    | No          | Directory to upload (mutually exclusive with file arguments)                                                                                          |
 | `--asset-preview`    | FLAG    | No          | Upload as the asset preview (single file only; not valid with a directory; `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp` or `.bmp`, at most 5 MiB) |
-| `--asset-location`   | TEXT    | No          | Base asset location (default: `/`)                                                                                                                    |
+| `--asset-location`   | TEXT    | No          | Folder path in the asset to upload into, with a leading `/` (default: `/`)                                                                            |
 | `--recursive`        | FLAG    | No          | Include subdirectories when uploading a directory                                                                                                     |
 | `--parallel-uploads` | INTEGER | No          | Maximum parallel part uploads (default: 10)                                                                                                           |
 | `--retry-attempts`   | INTEGER | No          | Retry attempts per part (default: 3)                                                                                                                  |
