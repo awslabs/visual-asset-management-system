@@ -50,8 +50,9 @@ jest.mock("../../../utils/authTokenUtils", () => ({
     getDualAuthorizationHeader: jest.fn(() => Promise.resolve("Bearer t")),
 }));
 
+// The file is named by its full key, as the host gives it (#1855)
 const PREVIEW_URL =
-    "https://api.example/api/database/db1/assets/asset1/auxiliaryPreviewAssets/stream/cloud.las/preview/PotreeViewer/metadata.json";
+    "https://api.example/api/database/db1/assets/asset1/auxiliaryPreviewAssets/stream/asset1/cloud.las/preview/PotreeViewer/metadata.json";
 const PIPELINE_HINT = /Please run the Point Cloud Potree Viewer Pipeline/;
 const MISSING = "Potree Viewer Auxiliary Preview files not currently available";
 
@@ -116,7 +117,43 @@ describe("Potree viewer load failure", () => {
         await waitFor(() => expect(mockLoadPointCloud).toHaveBeenCalled());
         expect(mockLoadPointCloud.mock.calls[0][0]).toBe(
             "https://api.example/api/database/db1/assets/asset1/auxiliaryPreviewAssets/stream/" +
-                "scans%20%232/50%25%20cloud%3F.las/preview/PotreeViewer/metadata.json"
+                "asset1/scans%20%232/50%25%20cloud%3F.las/preview/PotreeViewer/metadata.json"
+        );
+    });
+
+    it("keeps the leading slash of a path in the asset from search results (D1)", async () => {
+        respond(404, { message: "File not found" });
+        render(
+            <PotreeViewerComponent
+                {...({
+                    assetId: "asset1",
+                    databaseId: "db1",
+                    assetKey: "/asset1/cloud.las",
+                } as any)}
+            />
+        );
+        await waitFor(() => expect(mockLoadPointCloud).toHaveBeenCalled());
+        expect(mockLoadPointCloud.mock.calls[0][0]).toBe(
+            "https://api.example/api/database/db1/assets/asset1/auxiliaryPreviewAssets/stream/" +
+                "/asset1/cloud.las/preview/PotreeViewer/metadata.json"
+        );
+    });
+
+    it.each([
+        ["a bucket with a base prefix", "vams/asset1/scans/cloud.las"],
+        ["an asset on an existing folder", "custom/path/cloud.las"],
+        ["a subfolder named like the asset", "asset1/asset1/cloud.las"],
+    ])("sends the full key of %s as the host gives it", async (_case, assetKey) => {
+        respond(404, { message: "File not found" });
+        render(
+            <PotreeViewerComponent
+                {...({ assetId: "asset1", databaseId: "db1", assetKey } as any)}
+            />
+        );
+        await waitFor(() => expect(mockLoadPointCloud).toHaveBeenCalled());
+        expect(mockLoadPointCloud.mock.calls[0][0]).toBe(
+            "https://api.example/api/database/db1/assets/asset1/auxiliaryPreviewAssets/stream/" +
+                `${assetKey}/preview/PotreeViewer/metadata.json`
         );
     });
 

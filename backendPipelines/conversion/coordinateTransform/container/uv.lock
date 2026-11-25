@@ -15,13 +15,7 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-boto3 = "2026-11-18T20:24:23Z"
-botocore = "2026-11-18T20:24:18Z"
 cloudpickle = "2026-11-19T10:27:18Z"
-configargparse = "2026-11-18T02:53:08Z"
-janus = "2026-11-16T23:04:45Z"
-narwhals = "2026-11-18T15:30:43Z"
-platformdirs = "2026-11-18T20:03:32Z"
 
 [[package]]
 name = "addict"

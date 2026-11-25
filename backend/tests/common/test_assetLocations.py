@@ -329,6 +329,41 @@ class TestObjectKeyFor:
     def test_object_key_for_inverts_relative_path_in(self, location, key):
         assert al.object_key_for(location, al.relative_path_in(location, key)) == key
 
+    @pytest.mark.parametrize("location,key", [
+        (FILE_LOCATION, FILE_LOCATION),
+        (FILE_LOCATION, "projects/model.glb/sub/x.obj"),
+        (FILE_LOCATION, "projects/model.glb.previewFile.png"),
+        (FILE_LOCATION, "projects/model.glb/model.glb"),
+        (FILE_LOCATION, "projects/model.glb/model.glb.previewFile.png"),
+        # A companion entry whose path spells one of the location's own keys
+        (FILE_LOCATION, "projects/model.glb/projects/model.glb/x.obj"),
+        (FILE_LOCATION, "projects/model.glb/projects/model.glb"),
+        (FOLDER_LOCATION, "projects/building-a/sub/m.glb"),
+        (FOLDER_LOCATION, "projects/building-a/projects/building-a/m.glb"),
+        (FOLDER_LOCATION, FOLDER_LOCATION),
+    ])
+    def test_object_key_for_path_inverts_relative_path_in_for_every_held_key(self, location, key):
+        """The path-only reading (#1855): every key a location holds is named by its own path, so a path
+        that spells another key of the location is that companion entry, not the key it spells."""
+        assert al.object_key_for_path(location, al.relative_path_in(location, key)) == key
+
+    @pytest.mark.parametrize("location,path,expected", [
+        (FILE_LOCATION, "/projects/model.glb/x.obj", "projects/model.glb/projects/model.glb/x.obj"),
+        (FILE_LOCATION, "/projects/model.glb", "projects/model.glb/projects/model.glb"),
+        (FILE_LOCATION, "/model.glb", FILE_LOCATION),
+        (FILE_LOCATION, "/model.glb.previewFile.png", "projects/model.glb.previewFile.png"),
+        (FILE_LOCATION, "/sub/x.obj", "projects/model.glb/sub/x.obj"),
+        (FOLDER_LOCATION, "/projects/building-a/m.glb", "projects/building-a/projects/building-a/m.glb"),
+        (FOLDER_LOCATION, "/sub/m.glb", "projects/building-a/sub/m.glb"),
+    ])
+    def test_object_key_for_path_never_takes_a_path_as_a_key(self, location, path, expected):
+        assert al.object_key_for_path(location, path) == expected
+
+    def test_object_key_for_path_names_nothing_for_the_whole_single_file_asset_or_no_location(self):
+        assert al.object_key_for_path(FILE_LOCATION, "/") is None
+        assert al.object_key_for_path("", "/model.glb") is None
+        assert al.object_key_for_path(None, "/model.glb") is None
+
 
 @pytest.mark.unit
 class TestListingPrefixes:

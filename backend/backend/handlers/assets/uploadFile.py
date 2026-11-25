@@ -31,6 +31,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
     VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+    VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY,
     replace_metadata_copy_args,
 )
 from common.s3PathPatterns import (
@@ -57,7 +58,16 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, log_action, log_file_upload
 from botocore.exceptions import ClientError
-from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields, bucket_region_for_name
+from common.s3 import (
+    validateS3AssetExtensionsAndContentType,
+    validateUnallowedFileExtensionAndContentType,
+    list_all_objects,
+    is_object_version_archived,
+    region_routing_s3_client,
+    bucket_region_fields,
+    bucket_region_for_name,
+    copy_s3_object_repeat_safe,
+)
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
@@ -91,7 +101,6 @@ s3_config = Config(
 )
 
 s3 = region_routing_s3_client()
-s3_resource = region_routing_s3_resource()
 lambda_client = boto3.client('lambda', config=s3_config)
 dynamodb = boto3.resource('dynamodb', config=s3_config)
 dynamodb_client = boto3.client('dynamodb', config=s3_config)
@@ -717,6 +726,11 @@ def send_subscription_email(database_id, asset_id):
 def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id, asset_id, extra_metadata=None, source_head=None):
     """Copy an object from one S3 location to another with replaced metadata
 
+    The copy is the final write of an upload or a workflow output, so it must not be written twice:
+    Amazon S3 can store the new version and still answer a retryable error. The metadata carries a
+    fresh write token (VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY), counted in the 2 KB limit, and
+    common.s3.copy_s3_object_repeat_safe() retries only after checking that no attempt landed.
+
     Args:
         source_bucket: Source S3 bucket name
         source_key: Source S3 object key
@@ -731,19 +745,15 @@ def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id
         True if successful, False otherwise
     """
     try:
-        # Use s3_resource.copy with ExtraArgs for metadata replacement
-        # This handles large files with managed transfer
-        copy_source = {
-            'Bucket': source_bucket,
-            'Key': source_key
-        }
-
         metadata = {
             DATABASE_ID_METADATA_KEY: database_id,
             ASSET_ID_METADATA_KEY: asset_id
         }
         if extra_metadata:
             metadata.update(extra_metadata)
+        # One token per copy (never the upload id: one upload completes several files).
+        write_token = uuid.uuid4().hex
+        metadata[VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY] = write_token
 
         # The final object keeps the content headers of the object it is copied from
         if source_head is None:
@@ -756,11 +766,11 @@ def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id
             'ACL': 'bucket-owner-full-control'
         }
 
-        s3_resource.meta.client.copy(
-            CopySource=copy_source,
-            Bucket=dest_bucket,
-            Key=dest_key,
-            ExtraArgs=extra_args
+        copy_s3_object_repeat_safe(
+            source_bucket, source_key, dest_bucket, dest_key,
+            extra_args=extra_args,
+            write_token=write_token,
+            source_size=source_head.get('ContentLength'),
         )
         return True
     except Exception as e:

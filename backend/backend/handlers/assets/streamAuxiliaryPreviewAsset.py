@@ -13,8 +13,11 @@ from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import asset_authorization_object
 from common.validators import validate, exceeds_s3_object_key_limit
-from common.assetLocations import LOCATION_BUCKET_ATTRIBUTE, is_folder_location, normalize_location, object_key_for
+from common.assetLocations import (
+    LOCATION_BUCKET_ATTRIBUTE, contains, normalize_location, object_key_for, object_key_for_path,
+)
 from common.fileAttribution import nested_locations_of_asset
+from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -90,63 +93,72 @@ def viewer_data_of_nested_asset(asset_object, database_id: str, aux_key: str) ->
     return bool(nested) and not nested.keep_aux(database_id, aux_key)
 
 
-def resolve_aux_preview_key(database_id: str, location_key: str, file_path: str) -> str:
-    """The auxiliary-bucket key of a preview path ``{relative file path}/preview/...`` in one asset.
+NOT_PART_OF_ASSET = "Requested file is not part of this asset"
 
-    Auxiliary data lives at ``{databaseId}/{file key}/preview/...``. A folder location joins the path under
-    ``{databaseId}/{location}``. A single-file location maps the file part through ``object_key_for``, so
-    ``/{file name}/preview/...`` reads the object's data at ``{databaseId}/{key}/preview/...`` and a
-    companion entry's path reads that entry's data; the file part ends at the first ``/preview/`` that
-    follows a non-empty path. A path that already carries ``{databaseId}/{key}/`` is used as given.
+
+def _is_full_key(location: str, path: str) -> bool:
+    """Whether a request path starts with a key the location holds by its own name: the file's full S3 key.
+
+    A folder location holds every key that starts with it. A single-file location ``K`` is named by ``K/...``
+    (the object's data and its companion entries) and ``K.previewFile.{ext}`` (its own previews)."""
+    if location.endswith("/"):
+        return path.startswith(location)
+    return path.startswith(location + "/") or path.startswith(location + PREVIEW_FILE_PATTERN)
+
+
+def resolve_aux_preview_key(database_id: str, location_key: str, file_path: str) -> str:
+    """The auxiliary-bucket key of a viewer data path ``{file}/preview/...`` in one asset.
+
+    A file's viewer data lives at ``{databaseId}/{file key}/preview/...``. The file part names a file the
+    asset's location holds. A leading ``/`` marks the file's path in the asset, the rule the download route
+    uses (``common.downloadEligibility.resolve_asset_file_key``); a path without one is read in this order:
+
+    - the file's full S3 key (the ``key`` the file list returns, the form the web viewers send): a path that
+      starts with the location key (a folder ``{location}...``; a single file ``K/...`` or
+      ``K.previewFile.{ext}...``) is used as given under ``{databaseId}/``;
+    - the auxiliary key itself, ``{databaseId}/{location}...``, used as given;
+    - any other path is the file's path in the asset.
+
+    A path in the asset is read only as a path (``object_key_for_path``): a folder location joins it under
+    ``{databaseId}/{location}``; a single-file location maps it by the file's name chain, so
+    ``/{file name}/preview/...`` reads the object's data and a companion entry's path reads that entry's data.
+    So ``/{location}x/preview/...`` is the file ``{location}{location}x`` of a subfolder named like the
+    location, never ``{location}x``. In a single-file location the file part ends at the first ``/preview/``
+    after the location key (full key) or after a non-empty path (path in the asset). The result is always
+    under ``{databaseId}/`` plus a key the location holds; a path that names none is refused with a fixed
+    message that echoes no input.
     """
-    if not location_key or is_folder_location(location_key):
-        return resolve_asset_file_path(f"{database_id}/{location_key}", file_path)
     location = normalize_location(location_key)
     db = (database_id or "").strip("/")
-    stripped = (file_path or "").lstrip("/")
-    if stripped.startswith(f"{db}/{location}/"):
+    raw = file_path or ""
+    in_asset = raw.startswith("/")
+    stripped = raw.lstrip("/")
+    if not location:
+        raise VAMSGeneralErrorResponse(NOT_PART_OF_ASSET)
+    full_key = not in_asset and _is_full_key(location, stripped)
+    auxiliary_key = not in_asset and not full_key and stripped.startswith(
+        f"{db}/{location}" if location.endswith("/") else f"{db}/{location}/")
+    if location.endswith("/"):
+        if full_key:
+            return f"{db}/{stripped}"
+        if auxiliary_key:
+            return stripped
+        return f"{db}/{location}{stripped}"
+    if auxiliary_key:
         return stripped
     path = "/" + stripped
-    start = 1
+    # A full key's file part is at least the location key, which may itself hold a "/preview/" segment
+    start = len(location) + 1 if full_key else 1
     while True:
         index = path.find(AUX_PREVIEW_SEGMENT, start)
         if index == -1:
-            raise VAMSGeneralErrorResponse("Requested file is not part of this asset")
-        object_key = object_key_for(location, path[:index])
-        if object_key is not None:
+            raise VAMSGeneralErrorResponse(NOT_PART_OF_ASSET)
+        resolve = object_key_for if full_key else object_key_for_path
+        object_key = resolve(location, path[:index])
+        if object_key is not None and contains(location, object_key):
             return f"{db}/{object_key}{path[index:]}"
         start = index + 1
 
-
-def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
-    """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-    
-    Args:
-        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-        
-    Returns:
-        The properly resolved S3 key without duplication
-    """
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-    
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-    
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
 
 def handle_head_request(event, claims_and_roles):
     """Handle HEAD requests to check file availability and permissions

@@ -10,6 +10,7 @@ import { VeerumViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
 import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
+import { auxiliaryPreviewStreamUrl, POTREE_VIEWER_METADATA } from "../../core/viewerData";
 import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 import {
     apiRefusalMessage,
@@ -257,21 +258,15 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             // All other file types - use PointCloudModel with Potree metadata path
                             // This allows the plugin viewer system to control supported file types
                             // and makes it easier to add new point cloud formats later
-                            // Pass only the asset-relative path (not the databaseId or the leading
-                            // assetId). The stream endpoint prepends {databaseId}/{assetLocationKey}
-                            // to resolve the database-scoped per-file aux preview location. If
-                            // fileKey is the full, assetId-prefixed key, strip that leading segment.
-                            let relativeFileKey = fileKey;
-                            if (relativeFileKey.startsWith(assetId + "/")) {
-                                relativeFileKey = relativeFileKey.slice(assetId.length + 1);
-                            }
-                            const potreeFileKey =
-                                relativeFileKey + "/preview/PotreeViewer/metadata.json";
-                            const assetUrl = `${
-                                config.api
-                            }database/${databaseId}/assets/${encodeURIComponent(
-                                assetId
-                            )}/auxiliaryPreviewAssets/stream/${potreeFileKey}`;
+                            // The file's key as the host gives it; the API decides which file
+                            // it names.
+                            const assetUrl = auxiliaryPreviewStreamUrl(
+                                config.api,
+                                databaseId,
+                                assetId,
+                                fileKey,
+                                POTREE_VIEWER_METADATA
+                            );
 
                             console.log(`VEERUM Viewer: Validating point cloud URL ${assetUrl}`);
 

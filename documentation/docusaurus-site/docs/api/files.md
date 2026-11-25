@@ -824,11 +824,18 @@ Returns file metadata without the file body.
 
 **Request Parameters:**
 
-| Parameter    | Location | Type   | Required | Description                                         |
-| ------------ | -------- | ------ | -------- | --------------------------------------------------- |
-| `databaseId` | path     | string | Yes      | Database identifier.                                |
-| `assetId`    | path     | string | Yes      | Asset identifier.                                   |
-| `{proxy+}`   | path     | string | Yes      | The relative file path within the auxiliary bucket. |
+| Parameter    | Location | Type   | Required | Description                                                    |
+| ------------ | -------- | ------ | -------- | -------------------------------------------------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier.                                           |
+| `assetId`    | path     | string | Yes      | Asset identifier.                                              |
+| `{proxy+}`   | path     | string | Yes      | The viewer data path `{file}/preview/{data path}` (see below). |
+
+A file's viewer data lives in its own `preview/` folder, so the path is the file, then `/preview/`, then the data path a pipeline wrote (for example `scans/site.laz/preview/PotreeViewer/metadata.json`). The file part names a file the asset holds in either form, for folder and single-file assets:
+
+-   its path in the asset with its leading `/`, the file list's `relativePath` (`/scans/site.laz`, so the request path has two slashes after `stream`);
+-   its full S3 key, the `key` the file list returns (`vams/a1/scans/site.laz` for an asset in a bucket registered under the base prefix `vams/`), the form the web viewers send for a file the list showed.
+
+A leading `/` marks the path in the asset: `/a1/cloud.laz` in an asset stored at `a1/` is the file `a1/a1/cloud.laz` of a subfolder named like the asset, never `a1/cloud.laz`. A path without a leading `/` that starts with the asset's location key is read as the full key, and any other path as the path in the asset. URL-encode each segment and keep the slashes, so a viewer that reads the files beside `metadata.json` can resolve them. A path that names no file of this asset is refused with `400` and a `message` that contains `Requested file is not part of this asset`, and the data of another asset nested in this asset's folder answers `404`.
 
 **Response:**
 
@@ -836,12 +843,12 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                  |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | The asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). |
-| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable.                           |
-| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                                              |
-| `500`  | Internal server error.                                                                                                                                                       |
+| Status | Description                                                                                                                                                                                                                                                                                  |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | The path names no file of this asset (a `message` that contains `Requested file is not part of this asset`); or the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). |
+| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable.                                                                                                                                           |
+| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                                                                                                                                                              |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                       |
 
 ---
 
