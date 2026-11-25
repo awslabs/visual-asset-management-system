@@ -1997,6 +1997,24 @@ def find_newest_preview_file_for_base(bucket: str, base_key: str) -> Optional[st
         logger.warning(f"Error finding preview files for {base_key}: {e}")
     return select_newest_preview_file(candidates)
 
+def collapse_version_entries(items: List[Dict]) -> List[Dict]:
+    """The rows of an asset version's files, one per file, keyed by the path without its leading slash.
+
+    A version a file list created before #1795 can name one file both as '/a.txt' and 'a.txt' (D1),
+    and can hold a '/' row that names no file. The row stored without the slash wins, the first
+    one read otherwise, and a row that names no file is left out.
+    """
+    chosen: Dict[str, Dict] = {}
+    for item in items:
+        stored_key = str(item.get('fileKey') or '')
+        relative_key = stored_key.lstrip('/')
+        if not relative_key:
+            continue
+        if relative_key not in chosen or not stored_key.startswith('/'):
+            chosen[relative_key] = item
+    return list(chosen.values())
+
+
 def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, relativeFileKey: Optional[str]) -> Optional[Dict]:
     """Get file versions for a specific asset version using the databaseIdAssetIdVersionIdIndex GSI
 
@@ -2042,9 +2060,9 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, 
 
         # Reconstruct the file versions structure. Every reader of these entries compares them with a
         # path without its leading slash, so the key is handed out in that form whatever form it is
-        # stored in (#1795).
+        # stored in (#1795), once per file.
         files = []
-        for item in items:
+        for item in collapse_version_entries(items):
             file_info = {
                 'relativeKey': str(item.get('fileKey') or '').lstrip('/'),
                 'versionId': item.get('versionId'),
@@ -3533,16 +3551,17 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
             version_id_to_asset_versions = {}
             pk_prefix = f"{databaseId}:{assetId}:"
 
+            # One record per asset version: a version created before #1795 can hold this file both
+            # with and without the leading slash (D1), and the row without it wins, as in the
+            # current-version check above.
+            record_by_asset_version = {}
             for record in all_version_file_records:
                 # Compared without the leading slash an entry stored before #1795 can carry
-                record_file_key = str(record.get('fileKey') or '').lstrip('/')
+                stored_file_key = str(record.get('fileKey') or '')
+                record_file_key = stored_file_key.lstrip('/')
 
                 # Only include records that match this file's relative path
                 if record_file_key != relative_path_for_lookup:
-                    continue
-
-                s3_version_id = record.get('versionId')
-                if not s3_version_id:
                     continue
 
                 # Extract assetVersionId from the PK field: "databaseId:assetId:assetVersionId"
@@ -3554,6 +3573,14 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
 
                 # Skip archived asset versions
                 if asset_version_id in archived_version_ids:
+                    continue
+
+                if asset_version_id not in record_by_asset_version or not stored_file_key.startswith('/'):
+                    record_by_asset_version[asset_version_id] = record
+
+            for asset_version_id, record in record_by_asset_version.items():
+                s3_version_id = record.get('versionId')
+                if not s3_version_id:
                     continue
 
                 if s3_version_id not in version_id_to_asset_versions:
