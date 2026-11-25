@@ -80,7 +80,8 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 
 Comment and subscription cover the comments and subscriptions APIs:
 
--   `comment list|get|add|update|delete` -- `list` takes `-v/--asset-version-id` to switch from the asset-wide route to the version-scoped one; `get`, `add`, `update` and `delete` address a comment by asset, asset version and comment ID
+-   `comment list|get|add|update|delete` -- every command takes `-d/--database-id` and `-a/--asset-id` (two databases may hold assets with the same asset ID). `list` takes `-v/--asset-version-id` as a query filter; `add` sends the version in the body and reports the `commentId` the API generates; `get`, `update` and `delete` address a comment by its own `-c/--comment-id`
+-   `subscription create|update|delete|unsubscribe|check` -- each takes a required `-d/--database-id`, sent as `databaseId` in the body
 -   `subscription list|create|update|delete|unsubscribe|check` -- `delete` removes the whole subscription (and, for an asset, its notification topic); `unsubscribe` removes one subscriber and is a different route
 
 Comment and subscription cover the comments and subscriptions APIs:
