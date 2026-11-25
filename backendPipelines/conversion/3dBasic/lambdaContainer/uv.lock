@@ -16,7 +16,6 @@ exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
 aws-lambda-powertools = "2026-11-19T12:13:18Z"
-numpy = "2026-11-16T21:30:10Z"
 
 [[package]]
 name = "3dbasic-lambda-pipeline"

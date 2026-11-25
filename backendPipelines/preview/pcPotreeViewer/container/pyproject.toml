@@ -16,8 +16,3 @@ dependencies = [
 package = false
 required-version = "==0.13.8"
 exclude-newer = "7 days"
-
-# The packages named below were uploaded less than seven days before this lock; they are the versions
-# the image already ships, so the cutoff is lifted for them. Remove each entry once its release is older
-# than seven days: boto3 after 2026-11-25, botocore after 2026-11-25.
-exclude-newer-package = { boto3 = "2026-11-18T20:24:23Z", botocore = "2026-11-18T20:24:18Z" }

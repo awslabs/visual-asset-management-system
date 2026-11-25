@@ -12,11 +12,6 @@ supported-markers = [
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
-[options.exclude-newer-package]
-boto3 = "2026-11-17T00:00:00Z"
-botocore = "2026-11-17T00:00:00Z"
-s3transfer = "2026-11-17T00:00:00Z"
-
 [[package]]
 name = "boto3"
 version = "1.44.4"

@@ -14,7 +14,4 @@ dependencies = [
 package = false
 required-version = "==0.13.8"
 exclude-newer = "7 days"
-# These pins were published inside the seven-day window when the image was locked; the cutoff is lifted for
-# them only so the image keeps its reviewed versions. Remove the entry once the release is older than 7 days.
-exclude-newer-package = { boto3 = "2026-11-17T00:00:00Z", botocore = "2026-11-17T00:00:00Z", s3transfer = "2026-11-17T00:00:00Z" }
 environments = ["sys_platform == 'linux'"]
