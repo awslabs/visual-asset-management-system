@@ -796,6 +796,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   **Pipelines** The Image to 3D SAM 3D image builds again. Its build resolved upstream's open Python requirements on build day, and after upstream releases of 2026-11-22 pip's resolver gave up (`ResolutionTooDeep`) before installing anything. The image now installs a locked set (see Chores). ([#1726](https://github.com/awslabs/visual-asset-management-system/issues/1726))
 -   **CI** The Python dependency audit now checks every pinned package of every lock. pip-audit left out a pin whose environment marker is false on the job's Python (for example `typing-extensions` under `python_full_version < '3.13'`, or a `sys_platform == 'win32'` pin) without a finding or a warning; the audit removes the markers from the copy it reads and fails, naming the file, line and package, when a pin is missing from pip-audit's report ([#1910](https://github.com/awslabs/visual-asset-management-system/issues/1910))
+-   **Web/Backend** The Potree point cloud viewer loads the viewer data of a file outside an `{assetId}/` folder: in a bucket registered under a base prefix, in an asset created on an existing folder or from one S3 object, and in a single-file asset converted to its folder. The viewers send the file's full key, and the auxiliary preview stream reads it as the file stream route does ([#1855](https://github.com/awslabs/visual-asset-management-system/issues/1855))
+    -   Note: the auxiliary preview stream path accepts a file's full S3 key as well as its path in the asset; a path that starts with the asset's location key is read as the full key. The licensed VEERUM viewer's point cloud loading gets the same fix.
 
 ### Chores
 
