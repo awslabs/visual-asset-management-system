@@ -657,11 +657,13 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
         if not items:
             return None
 
-        # Reconstruct the file versions structure
+        # Reconstruct the file versions structure. The key is handed out without its leading slash,
+        # the form new entries are stored in, so an entry a file list stored with the slash before
+        # #1795 reads the same way: in the version detail, a revert's skipped files and every lookup.
         files = []
         for item in items:
             file_info = {
-                'relativeKey': item.get('fileKey'),
+                'relativeKey': str(item.get('fileKey') or '').lstrip('/'),
                 'versionId': item.get('versionId'),
                 'size': item.get('size'),
                 'lastModified': item.get('lastModified'),

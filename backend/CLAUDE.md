@@ -530,9 +530,11 @@ backend/
     (`folder/file.txt`). `assetVersions.save_asset_file_versions` strips it whatever form the
     caller sent, and `CreateAssetVersionRequestModel` refuses `/a.txt` and `a.txt` together as
     duplicates. Entries a version built from a file list stored before #1795 can still carry
-    the slash and are not migrated, so every reader compares with the slash stripped on both
-    sides (`str(fileKey).lstrip('/')`), a sort-key lookup tries the unslashed form first and
-    the slashed form on a miss, and a delete uses the key the row is stored under.
+    the slash and are not migrated, so every reader hands the key out and compares it with the
+    slash stripped on both sides (`str(fileKey).lstrip('/')`; the three `get_asset_file_versions`
+    helpers in `assetVersions.py`, `assetFiles.py` and `assetExportService.py` do it for their
+    callers), a sort-key lookup tries the unslashed form first and the slashed form on a miss,
+    and a delete uses the key the row is stored under.
 
 14. **NEVER read only the first page of an S3 or DynamoDB listing when the full set is
     needed.** S3 `list_object_versions` / `list_objects_v2` and DynamoDB queries cap a

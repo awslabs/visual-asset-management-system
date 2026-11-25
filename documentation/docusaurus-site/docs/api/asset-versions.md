@@ -97,7 +97,7 @@ GET /database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}
 
 ### Response
 
-Returns a single version object with full details including file listings.
+Returns a single version object with full details including file listings. Each file's `relativeKey` is its path in the asset without a leading `/` (`models/a.glb`), whichever form the version was created with.
 
 ### Error responses
 
