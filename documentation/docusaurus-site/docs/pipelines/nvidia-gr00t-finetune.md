@@ -21,16 +21,16 @@ VAMS supports the **GR00T-N1.5-3B** model from NVIDIA's Isaac GR00T project. Thi
 
 ### Approximate Run Times
 
-| Phase                        | Duration (g6e.4xlarge / 1 GPU) | Duration (g6e.12xlarge / 4 GPU) | Notes                                                  |
-| ---------------------------- | ------------------------------ | ------------------------------- | ------------------------------------------------------ |
-| Cold start (instance launch) | 5-10 min                       | 5-10 min                        | Skipped if `useWarmInstances` is enabled               |
-| Container image pull         | 5-8 min                        | 5-8 min                         | Cached after first pull on instance                    |
-| Model sync (EFS cached)      | 1-5 min                        | 1-5 min                         | First run: 10+ min for model download from HuggingFace |
-| Dataset download from S3     | 1-10 min                       | 1-10 min                        | Depends on dataset size                                |
-| Training (6000 steps)        | 60-120 min                     | 20-40 min                       | Varies with batch size, LoRA vs full, dataset size     |
-| Checkpoint upload to S3      | 1-5 min                        | 1-5 min                         | Depends on checkpoint size                             |
-| **Total (cached, LoRA)**     | **~80-150 min**                | **~35-70 min**                  | LoRA fine-tuning (`loraRank` above 0)                  |
-| **Total (cached, full)**     | **~120-200 min**               | **~50-90 min**                  | Full fine-tuning (all components)                      |
+| Phase                        | Duration (g6e.4xlarge, 1 GPU) | Notes                                                  |
+| ---------------------------- | ----------------------------- | ------------------------------------------------------ |
+| Cold start (instance launch) | 5-10 min                      | Skipped if `useWarmInstances` is enabled               |
+| Container image pull         | 5-8 min                       | Cached after first pull on instance                    |
+| Model sync (EFS cached)      | 1-5 min                       | First run: 10+ min for model download from HuggingFace |
+| Dataset download from S3     | 1-10 min                      | Depends on dataset size                                |
+| Training (6000 steps)        | 60-120 min                    | Varies with batch size, LoRA vs full, dataset size     |
+| Checkpoint upload to S3      | 1-5 min                       | Depends on checkpoint size                             |
+| **Total (cached, LoRA)**     | **~80-150 min**               | LoRA fine-tuning (`loraRank` above 0)                  |
+| **Total (cached, full)**     | **~120-200 min**              | Full fine-tuning (all components)                      |
 
 :::tip[GPU Selection]
 The default fine-tune template does not use LoRA (`loraRank` 0): it trains the projector and the diffusion model (`tuneProjector`, `tuneDiffusionModel`) and needs a GPU with more than 24 GB of memory. Each AWS Batch job reserves one GPU. VAMS has run the default fine-tune on the 48 GB NVIDIA L40S of `g6e.4xlarge` at batch size 4. On the 24 GB NVIDIA A10G of `g5.12xlarge` it runs out of GPU memory at step 0, even at batch size 2. If a run on a 48 GB GPU runs out of memory, lower `batchSize`. Deployment configuration validation warns when `instanceTypes` names a type whose GPU has 24 GB or less (the `g4dn`, `g5`, `g6`, `gr6` and `p3` families).
@@ -115,7 +115,7 @@ graph LR
 
     The template body takes precedence over asset metadata because it is what the operator supplies on the execute screen, while the metadata keys are a standing default saved on the asset. A field left blank in the template falls through to the metadata value. The `gr00t_config.json` file is merged last, inside the container, so it overrides both.
 
-4. **Fine-Tuning (AWS Batch on GPU Instances)** -- The container loads the base model from Amazon EFS, resolves the user-provided dataset (in LeRobot v2.1 format) from the asset, and runs fine-tuning using the gr00t training framework. Supports single-GPU and multi-GPU (torchrun) execution, LoRA and full fine-tuning, and configurable training hyperparameters.
+4. **Fine-Tuning (AWS Batch on GPU Instances)** -- The container loads the base model from Amazon EFS, resolves the user-provided dataset (in LeRobot v2.1 format) from the asset, and runs fine-tuning using the gr00t training framework. Runs on the one GPU the job reserves, with LoRA or full fine-tuning and configurable training hyperparameters.
 
 5. **Output Upload** -- Training checkpoints are uploaded to the asset S3 bucket in a structured folder: `gr00tOutput_N1.5-3B_trainingjob_{TIMESTAMP}_{JOBID}/`. All intermediate checkpoints (e.g., `checkpoint-2000/`, `checkpoint-4000/`, `checkpoint-6000/`) are included.
 
@@ -412,27 +412,27 @@ Place a `gr00t_config.json` file in the asset root to override all training para
 
 All training parameters can be set via `gr00t_config.json` (Priority 1), the template configuration body (Priority 2), or asset metadata (Priority 3). If not specified anywhere, built-in defaults are used.
 
-| Parameter            | Default                | Asset Metadata Key           | Description                                                                                                                                                         |
-| -------------------- | ---------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `datasetPath`        | `dataset`              | `GROOT_DATASET_PATH`         | Path to the dataset folder within the asset                                                                                                                         |
-| `dataConfig`         | `so100_dualcam`        | `GROOT_DATA_CONFIG`          | Data config name for modality mapping. Options: `so100_dualcam`, `fourier_gr1_arms_only`, `fourier_gr1_arms_waist`, `agibot_genie1_dualcam`, `oxe_droid_single_cam` |
-| `baseModelPath`      | `nvidia/GR00T-N1.5-3B` | `GROOT_BASE_MODEL_PATH`      | HuggingFace model to fine-tune. Can point to a previously fine-tuned checkpoint                                                                                     |
-| `maxSteps`           | `6000`                 | `GROOT_MAX_STEPS`            | Total training steps                                                                                                                                                |
-| `batchSize`          | `32`                   | `GROOT_BATCH_SIZE`           | Batch size per GPU                                                                                                                                                  |
-| `learningRate`       | `1e-4`                 | `GROOT_LEARNING_RATE`        | Learning rate                                                                                                                                                       |
-| `weightDecay`        | `1e-5`                 | `GROOT_WEIGHT_DECAY`         | Weight decay for regularization                                                                                                                                     |
-| `warmupRatio`        | `0.05`                 | `GROOT_WARMUP_RATIO`         | Fraction of training steps for warmup                                                                                                                               |
-| `saveSteps`          | `2000`                 | `GROOT_SAVE_STEPS`           | Save checkpoint every N steps                                                                                                                                       |
-| `numGpus`            | `1`                    | `GROOT_NUM_GPUS`             | Number of GPUs for training. Use 1 for LoRA, 4+ for full fine-tuning                                                                                                |
-| `loraRank`           | `0` (disabled)         | `GROOT_LORA_RANK`            | LoRA rank. Set > 0 to enable LoRA fine-tuning (e.g., 32 or 64)                                                                                                      |
-| `loraAlpha`          | `16`                   | `GROOT_LORA_ALPHA`           | LoRA alpha scaling factor                                                                                                                                           |
-| `loraDropout`        | `0.1`                  | `GROOT_LORA_DROPOUT`         | LoRA dropout rate                                                                                                                                                   |
-| `tuneLlm`            | `false`                | `GROOT_TUNE_LLM`             | Fine-tune the LLM backbone                                                                                                                                          |
-| `tuneVisual`         | `false`                | `GROOT_TUNE_VISUAL`          | Fine-tune the vision tower                                                                                                                                          |
-| `tuneProjector`      | `true`                 | `GROOT_TUNE_PROJECTOR`       | Fine-tune the action head projector                                                                                                                                 |
-| `tuneDiffusionModel` | `true`                 | `GROOT_TUNE_DIFFUSION_MODEL` | Fine-tune the action head diffusion model (DiT)                                                                                                                     |
-| `embodimentTag`      | `new_embodiment`       | `GROOT_EMBODIMENT_TAG`       | Embodiment type tag for the dataset                                                                                                                                 |
-| `videoBackend`       | `torchvision_av`       | `GROOT_VIDEO_BACKEND`        | Video loading backend                                                                                                                                               |
+| Parameter            | Default                | Asset Metadata Key           | Description                                                                                                                                                                                   |
+| -------------------- | ---------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `datasetPath`        | `dataset`              | `GROOT_DATASET_PATH`         | Path to the dataset folder within the asset                                                                                                                                                   |
+| `dataConfig`         | `so100_dualcam`        | `GROOT_DATA_CONFIG`          | Data config name for modality mapping. Options: `so100_dualcam`, `fourier_gr1_arms_only`, `fourier_gr1_arms_waist`, `agibot_genie1_dualcam`, `oxe_droid_single_cam`                           |
+| `baseModelPath`      | `nvidia/GR00T-N1.5-3B` | `GROOT_BASE_MODEL_PATH`      | HuggingFace model to fine-tune. Can point to a previously fine-tuned checkpoint                                                                                                               |
+| `maxSteps`           | `6000`                 | `GROOT_MAX_STEPS`            | Total training steps                                                                                                                                                                          |
+| `batchSize`          | `32`                   | `GROOT_BATCH_SIZE`           | Batch size per GPU                                                                                                                                                                            |
+| `learningRate`       | `1e-4`                 | `GROOT_LEARNING_RATE`        | Learning rate                                                                                                                                                                                 |
+| `weightDecay`        | `1e-5`                 | `GROOT_WEIGHT_DECAY`         | Weight decay for regularization                                                                                                                                                               |
+| `warmupRatio`        | `0.05`                 | `GROOT_WARMUP_RATIO`         | Fraction of training steps for warmup                                                                                                                                                         |
+| `saveSteps`          | `2000`                 | `GROOT_SAVE_STEPS`           | Save checkpoint every N steps                                                                                                                                                                 |
+| `numGpus`            | `1`                    | `GROOT_NUM_GPUS`             | Number of training processes. Keep `1`: each job reserves one GPU, and a value above 1 does not reserve more ([#1840](https://github.com/awslabs/visual-asset-management-system/issues/1840)) |
+| `loraRank`           | `0` (disabled)         | `GROOT_LORA_RANK`            | LoRA rank. Set > 0 to enable LoRA fine-tuning (e.g., 32 or 64)                                                                                                                                |
+| `loraAlpha`          | `16`                   | `GROOT_LORA_ALPHA`           | LoRA alpha scaling factor                                                                                                                                                                     |
+| `loraDropout`        | `0.1`                  | `GROOT_LORA_DROPOUT`         | LoRA dropout rate                                                                                                                                                                             |
+| `tuneLlm`            | `false`                | `GROOT_TUNE_LLM`             | Fine-tune the LLM backbone                                                                                                                                                                    |
+| `tuneVisual`         | `false`                | `GROOT_TUNE_VISUAL`          | Fine-tune the vision tower                                                                                                                                                                    |
+| `tuneProjector`      | `true`                 | `GROOT_TUNE_PROJECTOR`       | Fine-tune the action head projector                                                                                                                                                           |
+| `tuneDiffusionModel` | `true`                 | `GROOT_TUNE_DIFFUSION_MODEL` | Fine-tune the action head diffusion model (DiT)                                                                                                                                               |
+| `embodimentTag`      | `new_embodiment`       | `GROOT_EMBODIMENT_TAG`       | Embodiment type tag for the dataset                                                                                                                                                           |
+| `videoBackend`       | `torchvision_av`       | `GROOT_VIDEO_BACKEND`        | Video loading backend                                                                                                                                                                         |
 
 ### Model Invalidation
 
@@ -461,7 +461,7 @@ LoRA (Low-Rank Adaptation) fine-tunes a small number of additional parameters wh
 
 ### Full Fine-Tuning
 
-Full fine-tuning updates all selected model components. This requires more GPU memory and benefits from multi-GPU instances.
+Full fine-tuning updates all selected model components and needs more GPU memory than LoRA. It runs on the one GPU the job reserves. VAMS has not measured a fine-tune of every component on one 48 GB GPU; if the run runs out of GPU memory, lower `batchSize`.
 
 **Recommended settings:**
 
@@ -472,7 +472,7 @@ Full fine-tuning updates all selected model components. This requires more GPU m
     "tuneVisual": true,
     "tuneProjector": true,
     "tuneDiffusionModel": true,
-    "numGpus": 4,
+    "numGpus": 1,
     "batchSize": 8
 }
 ```
