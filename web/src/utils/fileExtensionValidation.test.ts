@@ -25,6 +25,10 @@ import {
     formatValidationErrors,
     getPreviewFileExtension,
     isPreviewExtensionAllowed,
+    extensionViolation,
+    fileNameHasExtension,
+    isFileAllowed,
+    parseAllowedExtensions,
 } from "./fileExtensionValidation";
 
 const item = (name: string) => ({ name } as FileUploadTableItem);
@@ -152,5 +156,66 @@ describe("formatValidationErrors", () => {
 
     it("returns an empty string for a valid selection", () => {
         expect(formatValidationErrors(validateFiles([item("smoke.glb")], ".glb"))).toBe("");
+    });
+});
+
+// The pre-check applies the API's rule (issue #371 IF-044): an entry may hold "_" and several
+// parts, and a name matches an entry it ends with, after at least one non-dot character.
+describe("the database restriction matches the whole extension", () => {
+    const allowed = parseAllowedExtensions(".x_t,.tar.gz");
+
+    it.each(["part.x_t", "PART.X_T", "archive.tar.gz", "ARCHIVE.TAR.GZ", "dir/scan.v2.tar.gz"])(
+        "allows %s",
+        (name) => {
+            expect(isFileAllowed(name, allowed)).toBe(true);
+            expect(extensionViolation(name, allowed)).toBeNull();
+        }
+    );
+
+    it.each([
+        "archive.gz",
+        "archive.tgz",
+        "archivetar.gz",
+        "part.xt",
+        "README",
+        "file.",
+        ".x_t",
+        "..x_t",
+    ])("refuses %s", (name) => {
+        expect(isFileAllowed(name, allowed)).toBe(false);
+        expect(extensionViolation(name, allowed)).not.toBeNull();
+    });
+
+    it("keeps matching the last suffix for a single-part entry", () => {
+        expect(isFileAllowed("archive.tar.gz", parseAllowedExtensions(".gz"))).toBe(true);
+        expect(isFileAllowed(".hidden.pdf", parseAllowedExtensions(".pdf"))).toBe(true);
+        expect(isFileAllowed("a..pdf", parseAllowedExtensions(".pdf"))).toBe(true);
+    });
+
+    it.each(["pdf", "..", ".tar."])("an entry %s matches no file", (entry) => {
+        for (const name of ["x.pdf", "x..", "x.tar."]) {
+            expect(fileNameHasExtension(name, entry)).toBe(false);
+        }
+    });
+
+    it("reports the last suffix of a refused file", () => {
+        expect(extensionViolation("archive.gz", allowed)).toEqual({
+            isPreviewFile: false,
+            extension: ".gz",
+        });
+    });
+
+    it.each(["", "  ", ".all", ".ALL", ".glb,.all"])("%p applies no restriction", (value) => {
+        expect(parseAllowedExtensions(value)).toBeNull();
+        expect(isFileAllowed("README", parseAllowedExtensions(value))).toBe(true);
+    });
+
+    it("validateFiles lists only the refused files", () => {
+        const result = validateFiles(
+            [item("part.x_t"), item("archive.tar.gz"), item("archive.gz")],
+            ".x_t,.tar.gz"
+        );
+        expect(result.isValid).toBe(false);
+        expect(result.invalidFiles.map((f) => f.fileName)).toEqual(["archive.gz"]);
     });
 });

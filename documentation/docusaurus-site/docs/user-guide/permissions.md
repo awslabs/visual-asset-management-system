@@ -203,6 +203,7 @@ If you receive a 403 Forbidden error or cannot see expected data, check both aut
     - Does the user's role have a constraint on the correct object type (for example, `asset`, `database`)? For an object type the deployment registered itself, even an administrator needs a constraint on that type.
     - Does the criteria match the specific resource? Check `databaseId`, `assetName`, or other filter fields.
     - For an archived asset or a deleted database's record, does the criteria also match its stored id `<databaseId>#deleted`? An archived record must pass on both its stored id and its database id (see [Permissions Model: Archived records](../concepts/permissions-model.md#archived-records)).
+    - For an asset rename or tag change, does the criteria also match the asset under its new name or tags? The update needs `GET` on the asset as stored and `GET` and `PUT` on the asset as it will be stored, so a role with asset `PUT` but no asset `GET` cannot rename or retag an asset (see [Permissions Model](../concepts/permissions-model.md)).
     - Is there a **deny** constraint that overrides the allow?
 
 3. **Check role assignment:**

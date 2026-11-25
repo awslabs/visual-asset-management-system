@@ -329,10 +329,23 @@ Work through the checks in order:
     vamscli role user create -u user@example.com --role-name viewer
     ```
 
-For an expired key, update the expiration (admin keys) or create a replacement.
+For an expired key, update the expiration (admin keys) or create a replacement, from a profile signed in through your identity provider (see [API Key Commands Refused When Signed In With a Key](#api-key-commands-refused-when-signed-in-with-a-key)).
 
 ```bash
 vamscli api-key update --api-key-id UUID --expires-at 2028-12-31T23:59:59Z
+```
+
+### API Key Commands Refused When Signed In With a Key
+
+**Symptoms:** `api-key create`, `api-key user create`, or an `update` with `--expires-at` fails with `Permission Denied: Access forbidden. API keys cannot be created with an API key. Sign in through your identity provider to create one.` or `Permission Denied: Access forbidden. An API key's expiration cannot be changed with an API key. Sign in through your identity provider to change it.`
+
+**Cause:** The profile is signed in with an API key. A request authenticated with an API key cannot create keys or change an expiration, whatever the user's roles grant, so a leaked key cannot renew itself.
+
+**Resolution:** Sign in through your identity provider and run the command again: `vamscli auth login -u <user>` on an Amazon Cognito deployment, or `vamscli auth login --user-id <user> --token-override-stdin` with a token from the external OAuth identity provider. Listing, getting, deleting, and updating only `--description` or `--is-active` still work with a key.
+
+```bash
+vamscli auth login -u user@example.com
+vamscli api-key user create --name "My Script v2" --description "Rotated key" --expires-at 2027-06-30T23:59:59Z
 ```
 
 ### Capturing the Key Value in Scripts

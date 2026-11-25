@@ -1710,6 +1710,35 @@ class TestFileExtensionValidation:
         
         # Should handle spaces in extension list
         validate_file_extensions(files, ".glb, .gltf, .obj")
+
+    @pytest.mark.parametrize("relative_key", [
+        "part.x_t", "PART.X_T", "archive.tar.gz", "ARCHIVE.TAR.GZ", "dir/scan.v2.tar.gz",
+    ])
+    def test_validate_extensions_underscore_and_multi_part(self, relative_key):
+        """A multi-part (.tar.gz) or underscore (.x_t) entry matches as the API does (#371)."""
+        from vamscli.utils.file_processor import validate_file_extensions
+        validate_file_extensions([FileInfo(f"/tmp/{relative_key}", relative_key, 1024)], ".x_t,.tar.gz")
+
+    @pytest.mark.parametrize("relative_key", [
+        "archive.gz", "archive.tgz", "part.xt", "README", "file.", ".x_t", "..x_t",
+    ])
+    def test_validate_extensions_refuses_a_partial_or_missing_extension(self, relative_key):
+        from vamscli.utils.file_processor import validate_file_extensions
+        with pytest.raises(InvalidFileError, match="do not meet the restriction"):
+            validate_file_extensions([FileInfo(f"/tmp/{relative_key}", relative_key, 1024)], ".x_t,.tar.gz")
+
+    def test_validate_extensions_checks_the_name_the_file_is_stored_under(self):
+        """The API checks the relative key, not the local file name."""
+        from vamscli.utils.file_processor import validate_file_extensions
+        validate_file_extensions([FileInfo("/tmp/upload.bin", "model.glb", 1024)], ".glb")
+        with pytest.raises(InvalidFileError, match="model.bin"):
+            validate_file_extensions([FileInfo("/tmp/model.glb", "model.bin", 1024)], ".glb")
+
+    @pytest.mark.parametrize("entry", ["pdf", "..", ".tar."])
+    def test_an_entry_that_names_no_extension_matches_nothing(self, entry):
+        from vamscli.utils.file_processor import file_name_has_extension
+        for name in ("x.pdf", "x..", "x.tar."):
+            assert file_name_has_extension(name, entry) is False
     
     def test_upload_with_extension_restrictions(self, cli_runner, file_command_mocks):
         """Test upload command with database extension restrictions."""

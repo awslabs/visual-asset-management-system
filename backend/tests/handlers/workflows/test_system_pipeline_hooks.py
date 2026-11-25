@@ -480,7 +480,8 @@ def _abort(table, rows, stop_confirmed=True):
     with patch.object(le.dynamodb, "Table",
                       side_effect=lambda name: table if name == le.workflow_execution_database_v2
                       else MagicMock()), \
-            patch(f"{ES}.get_execution_main_row", side_effect=lambda eid: dict(by_id[eid])), \
+            patch(f"{ES}.get_execution_main_row",
+                  side_effect=lambda eid, consistent_read=False: dict(by_id[eid])), \
             patch(f"{ES}.authorize_abort", return_value=(True, "")), \
             patch(f"{ES}.get_pipeline_execution_rows", return_value=[]), \
             patch.object(le.sfn, "stop_execution", **stop), \

@@ -156,14 +156,24 @@ class TestTheRealApiKeyServiceHoldsTheEdhSessionKey:
         audit.assert_not_called()
 
     def test_an_api_key_that_is_not_a_session_key_is_not_refused(self, monkeypatch):
-        # Control for the refusals above: the same request from an ordinary key creates the key.
-        records = {SESSION_KEY_ID: _record(SESSION_KEY_ID, "ci-deploy")}
+        # Control for the refusals above: the same update from an ordinary key is made. (No API key may
+        # create a key at all, issue #433, so the control is an update an ordinary key may still make.)
+        records = {SESSION_KEY_ID: _record(SESSION_KEY_ID, "ci-deploy"), TARGET_KEY_ID: _record(TARGET_KEY_ID, "ci")}
         table, _audit = _real_service(monkeypatch, records)
-        method, path, body = KEY_WRITES[0]
+        # The suite binds a mock to the update-expression helper at import; the update needs its real shape.
+
+        def to_update_expr(fields):
+            keys = list(fields)
+            names = {"#f%d" % n: key for n, key in enumerate(keys)}
+            values = {":v%d" % n: fields[key] for n, key in enumerate(keys)}
+            return names, values, "SET " + ", ".join("#f%d = :v%d" % (n, n) for n in range(len(keys)))
+
+        monkeypatch.setattr(apiKeyService, "to_update_expr", to_update_expr)
+        method, path, body = KEY_WRITES[2]
         event = _gateway_event(method, path, body, **{"vams:authMethod": "apiKey", "vams:apiKeyId": SESSION_KEY_ID})
         response = apiKeyService.lambda_handler(event, {})
         assert response["statusCode"] == 200
-        table.put_item.assert_called_once()
+        table.update_item.assert_called_once()
 
     @pytest.mark.parametrize("name", SESSION_KEY_NAMES, ids=SESSION_KEY_NAME_IDS)
     def test_a_signed_in_user_cannot_create_a_key_under_a_session_key_name(self, monkeypatch, name):

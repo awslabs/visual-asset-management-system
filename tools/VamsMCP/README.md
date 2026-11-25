@@ -690,6 +690,10 @@ execution's group membership rather than selecting a group to re-run. It reads
 each input file at the version the original launch pinned (a `versionId` someone
 chose) and every other file at its current version; an execution recorded before
 versions were pinned re-runs every file on its current version.
+`abort_execution` answers `message` "Execution aborted" only when it stopped the
+run; an execution that was not running answers a `message` that says so and
+names its status (`SUCCEEDED`, `FAILED`, `ABORTED` or `TIMED_OUT`, or `unknown`
+when the record is gone).
 `abort_execution` returns `warnings` and `notAbortable` beside `message` when a
 registered sub-process could not be stopped: each `notAbortable` entry
 (`resourceType`, `label`, `stageName`, `locator`) is compute of a type VAMS has no
@@ -768,7 +772,12 @@ the host's conversation log and telemetry. Keep both create tools out of
 `autoApprove`, and relay the value to the user once rather than repeating it.
 `create_api_key` (administrative) mints a key acting as ANY `user_id`;
 `create_user_api_key` (self-service) always binds the key to the authenticated
-user and requires an expiry within 365 days. `update_*_api_key` with
+user and requires an expiry within 365 days. A session whose `vamscli` profile is
+signed in with an API key cannot create keys or change an expiry: both create
+tools, and `update_*_api_key` with `expires_at`, are refused with `403` (the
+message says to sign in through the identity provider), while the reads, the
+deletes and `update_*_api_key` with only `description` or `is_active` work. A
+remote MCP session, signed in with OAuth, is unaffected. `update_*_api_key` with
 `is_active=False` is the reversible revoke: the key stops authenticating until it
 is re-enabled, and nothing is destroyed. VAMS briefly caches API key authorization
 in both directions (the API Gateway authorizer cache for 30 seconds and the

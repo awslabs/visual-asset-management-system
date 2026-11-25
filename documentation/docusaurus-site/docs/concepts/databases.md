@@ -84,12 +84,13 @@ The restriction applies to user and API metadata writes. It refuses a key that i
 
 ### File upload extension restrictions
 
-The `restrictFileUploadsToExtensions` field allows administrators to limit which file types can be uploaded through the web interface and CLI. This restriction:
+The `restrictFileUploadsToExtensions` field allows administrators to limit which file types can be uploaded through the VAMS API. This restriction:
 
--   Applies to uploads via the VAMS web application and VAMS CLI.
+-   Applies to every upload through the VAMS API (the web application, VamsCLI, other API clients, ingest-asset and workflow outputs).
 -   Does **not** apply to files placed directly into the Amazon S3 bucket.
 -   Uses a comma-separated format: `.jpg,.png,.pdf`.
--   Supports the special value `.all` to explicitly allow all extensions.
+-   Accepts entries that start with a dot and contain letters, digits, `_` and further dots, such as `.x_t` or `.tar.gz`. A file matches an entry when its name ends with the entry, compared case-insensitively, and the part of the name before the entry holds a character other than a dot. See [File type restrictions](files-and-versions.md#file-type-restrictions).
+-   Supports the special value `.all`: when `.all` is in the list, all extensions are allowed and the rest of the list is ignored.
 -   Operates in addition to the system-wide blocked file extensions list (e.g., `.exe`, `.dll`, `.bat` are always blocked).
 
 :::tip[Combining restrictions]

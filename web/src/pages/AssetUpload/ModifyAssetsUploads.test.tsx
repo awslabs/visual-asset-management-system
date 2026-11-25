@@ -9,7 +9,7 @@
  * name under it, and files at existing paths are marked from the list-files API (advisory only).
  */
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import ModifyAssetsUploadsPage from "./ModifyAssetsUploads";
 
@@ -213,6 +213,23 @@ describe("Add Files page", () => {
         await waitFor(() => expect(screen.getByText("File upload restrictions")).toBeTruthy());
         expect(screen.getByText(".usda,.png")).toBeTruthy();
     });
+
+    it.each([".pdf,.all", " .all"])(
+        "shows no restrictions notice when the list %p lifts the restriction, as the upload pre-check does",
+        async (value) => {
+            const { fetchDatabase } = jest.requireMock("../../services/APIService");
+            fetchDatabase.mockResolvedValueOnce({
+                databaseId: "db1",
+                restrictFileUploadsToExtensions: value,
+            });
+            mount();
+            await waitFor(() => expect(fetchDatabase).toHaveBeenCalled());
+            await act(async () => {
+                await Promise.resolve();
+            });
+            expect(screen.queryByText("File upload restrictions")).toBeNull();
+        }
+    );
 
     it("names the asset, database and destination under the page header, with Cancel beside Finalize and Upload", async () => {
         mount({ folder: "/scene/" });
