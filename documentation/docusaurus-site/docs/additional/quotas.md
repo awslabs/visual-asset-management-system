@@ -336,7 +336,7 @@ endpoint rather than the detail response.
 
 ### Blocked MIME Types
 
-The following MIME types are refused when Amazon S3 reports one as a stored object's content type: when a workflow output is ingested, and when a file is downloaded, streamed, exported or added to a zip download. An upload through VAMS is stored as `application/octet-stream`, so this list does not apply to uploaded files; the blocked extension list does.
+The following MIME types are refused when Amazon S3 reports one as a stored object's content type: when an upload completes, when a workflow output is ingested, when the large object copy engine copies a file into its asset, and when a file is downloaded, streamed, exported or added to a zip download. This list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
 
 | MIME Type                                          | Description                  |
 | -------------------------------------------------- | ---------------------------- |

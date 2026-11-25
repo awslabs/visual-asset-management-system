@@ -610,7 +610,7 @@ A request accepts at most 1,000 files and 1,500 total parts across all files, an
 | `500`  | Internal server error.                                                                                                                                   |
 
 :::info[Blocked File Types]
-For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. The destination file name of a move, rename or copy gets the same extension check. The blocked MIME type list does not apply to an upload, which is stored as `application/octet-stream`; see [Blocked File Types](../architecture/security.md#blocked-file-types).
+For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. The destination file name of a move, rename or copy gets the same extension check. The blocked MIME type list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
 :::
 
 :::info[Single-file assets]

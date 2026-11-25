@@ -195,7 +195,7 @@ To limit the exposure:
 
 ### File Extension Upload Restrictions
 
-The blocked extension list is enforced only on files written through the VAMS API: uploads, and the destination file name of a move, rename or copy. Files added directly to the Amazon S3 asset bucket bypass it when they are written. The blocked MIME type list does not apply to uploads, which VAMS stores as `application/octet-stream`; both lists are checked against a stored file's name and content type when it is downloaded, streamed, exported or zipped (see [Blocked File Types](../architecture/security.md#blocked-file-types)). The following file extensions are blocked on upload:
+The blocked extension list is enforced only on files written through the VAMS API: uploads, and the destination file name of a move, rename or copy. Files added directly to the Amazon S3 asset bucket bypass it when they are written. The blocked MIME type list does not refuse an upload (see [Blocked File Types](../architecture/security.md#blocked-file-types)). Both lists are checked against a stored file's name and content type when it is downloaded, streamed, exported or zipped. The following file extensions are blocked on upload:
 
 | Extension              | Description                  |
 | ---------------------- | ---------------------------- |
