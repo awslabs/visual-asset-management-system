@@ -24,7 +24,7 @@ The user ID specified during API key creation must already have at least one VAM
 :::
 
 :::note[An API key cannot create or extend keys]
-A request authenticated with an API key cannot create an API key or change a key's expiration date, whatever its user's roles grant; VAMS answers `403`. Create, rotate and extend keys while signed in through your identity provider (Amazon Cognito, or the external OAuth identity provider): in the web app, or from a CLI or MCP session signed in as your user rather than with a key. A key can still list, deactivate and delete keys, so a script can revoke its own key.
+A request authenticated with an API key cannot create an API key or change a key's expiration date, whatever its user's roles grant; VAMS answers `403`. Create, rotate and extend keys while signed in through your identity provider (Amazon Cognito, or the external OAuth identity provider): in the web app, or from a CLI or MCP session signed in as your user rather than with a key. A key can still list keys, change a description, deactivate, reactivate and delete keys, so a script can revoke its own key; a reactivated key still stops working at its stored expiration date.
 :::
 
 ### Admin and self-service modes
