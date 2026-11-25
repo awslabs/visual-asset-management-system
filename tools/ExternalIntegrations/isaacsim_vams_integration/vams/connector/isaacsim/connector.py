@@ -253,10 +253,17 @@ def _files_under(root: str) -> FrozenSet[str]:
 
 
 def _download_error(file_key: str, failed_downloads: List[Dict[str, Any]]) -> Optional[str]:
-    """The error a download report gives for ``file_key``, or None if it gives none."""
-    key = file_key.lstrip("/")
+    """The error a download report gives for ``file_key``, or None if it gives none.
+
+    Keys are compared with a leading ``/`` added when missing and nothing else changed: ``//x`` (a key with an
+    empty segment after the asset's folder) is another file than ``/x``, and a recursive download that keeps
+    ``/x`` reports ``//x`` as not downloaded (#1977), which must not fail the open of ``/x``."""
+    def _path(value: str) -> str:
+        return value if value.startswith("/") else "/" + value
+
+    key = _path(file_key)
     for entry in failed_downloads or []:
-        if isinstance(entry, dict) and str(entry.get("relative_key") or "").lstrip("/") == key:
+        if isinstance(entry, dict) and _path(str(entry.get("relative_key") or "")) == key:
             return entry.get("error") or None
     return None
 
