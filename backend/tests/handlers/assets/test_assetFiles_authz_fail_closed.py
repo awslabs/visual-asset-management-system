@@ -768,8 +768,8 @@ class TestFileInfoSnapshotLookupKey:
         [
             ("/model.glb", "model.glb"),
             ("model.glb", "model.glb"),
-            # '//model.glb' is no longer an accepted spelling: the request models refuse a second
-            # leading slash (#1943)
+            # '//model.glb' is not a spelling of this file: exactly one leading '/' marks a path in the
+            # asset, so it names the key 'a1//model.glb' (#1943)
             (f"{_ASSET}/model.glb", "model.glb"),
             # A leading slash marks a path in the asset: the subfolder named like the asset (#1943)
             (f"/{_ASSET}/model.glb", f"{_ASSET}/model.glb"),

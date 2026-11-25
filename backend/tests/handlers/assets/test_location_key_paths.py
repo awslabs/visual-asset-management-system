@@ -50,7 +50,10 @@ SUB_FILE = "A1/A1/cloud.las"
 PREFIXED_LOCATION = "vams/B1/"
 PREFIXED_ROOT = "vams/B1/x.las"
 PREFIXED_SUB = "vams/B1/vams/B1/x.las"
-KEYS = (ROOT_FILE, SUB_FILE, "A1/A1/other.las", PREFIXED_ROOT, PREFIXED_SUB)
+# A key with an empty segment right after the location, which uploads before 2.7.0 could write; it is
+# listed at '//cloud.las'
+EMPTY_SEGMENT_FILE = "A1//cloud.las"
+KEYS = (ROOT_FILE, SUB_FILE, "A1/A1/other.las", PREFIXED_ROOT, PREFIXED_SUB, EMPTY_SEGMENT_FILE)
 
 
 def _live(client, key):
@@ -435,51 +438,50 @@ class TestWorkflowOutputWriteBack:
         assert po._refused_write_back_reasons(result) == {"bad.las": po.NESTED_PATH_REFUSAL}
 
 
-DOUBLE_SLASH_VALUES = ["//cloud.las", "///A1/cloud.las", "//A1/"]
-
-
-def _model_refuses(model_class, **fields):
-    from pydantic import ValidationError
-    with pytest.raises(ValidationError) as e:
-        model_class(**fields)
-    return str(e.value)
-
-
 @pytest.mark.unit
-class TestARepeatedLeadingSlashIsRefused:
-    """L2 (#1943): a value that starts with two or more '/' is refused with a fixed 400 on every file route,
-    instead of being read as the path after the slashes. One leading '/' marks a path in the asset; a second
-    would name a key with an empty segment, which VAMS never writes. The refusal names the field, never the
-    value."""
+class TestAnEmptySegmentKeyIsReachableByItsListedPath:
+    """L4 (#1943): exactly one leading '/' marks a path in the asset, so the listed path '//cloud.las' of the
+    key 'A1//cloud.las' (an empty segment right after the location) names that key on every route, and the
+    root file 'A1/cloud.las' keeps its versions. One leading slash names what it named before."""
 
-    @pytest.mark.parametrize("value", DOUBLE_SLASH_VALUES)
-    @pytest.mark.parametrize("model_name,field,extra", [
-        ("FileInfoRequestModel", "filePath", {}),
-        ("ArchiveFileRequestModel", "filePath", {}),
-        ("UnarchiveFileRequestModel", "filePath", {}),
-        ("DeleteFileRequestModel", "filePath", {}),
-        ("SetPrimaryFileRequestModel", "filePath", {"primaryType": ""}),
-        ("RevertFileVersionRequestModel", "filePath", {}),
-        ("CreateFolderRequestModel", "relativeKey", {}),
-        ("MoveFileRequestModel", "sourcePath", {"destinationPath": "/b.las"}),
-        ("CopyFileRequestModel", "destinationPath", {"sourcePath": "/a.las"}),
-    ])
-    def test_the_file_operation_models_refuse_it(self, model_name, field, extra, value):
-        import models.assetsV3 as m
-        if field == "relativeKey" and not value.endswith("/"):
-            value += "/"
-        message = _model_refuses(getattr(m, model_name), **{field: value, **extra})
-        assert "Cannot start with more than one '/'" in message
-        assert "cloud.las" not in message
+    def test_file_info_names_the_empty_segment_key(self, af):
+        assert af.resolve_asset_file_path(LOCATION, "//cloud.las") == EMPTY_SEGMENT_FILE
+        assert af.get_file_info("db1", "A1", "//cloud.las", False, CLAIMS).relativePath == "//cloud.las"
+        assert af.get_file_info("db1", "A1", "/cloud.las", False, CLAIMS).relativePath == "/cloud.las"
 
-    @pytest.mark.parametrize("value", DOUBLE_SLASH_VALUES)
-    def test_upload_and_download_refuse_it(self, value):
+    def test_delete_removes_the_empty_segment_key_only(self, af):
+        af.delete_file("db1", "A1", "//cloud.las", False, True, CLAIMS)
+        assert _versions(af.test_client, EMPTY_SEGMENT_FILE) == []
+        assert _live(af.test_client, ROOT_FILE) and len(_versions(af.test_client, ROOT_FILE)) == 1
+        assert af.metadata_deleted == ["//cloud.las"]
+
+    def test_move_moves_the_empty_segment_key_only(self, af):
+        af.move_file("db1", "A1", "//cloud.las", "/moved.las", CLAIMS)
+        assert _live(af.test_client, "A1/moved.las") and not _live(af.test_client, EMPTY_SEGMENT_FILE)
+        assert _live(af.test_client, ROOT_FILE) and len(_versions(af.test_client, ROOT_FILE)) == 1
+        assert af.metadata_copied == [("//cloud.las", "/moved.las")]
+
+    @pytest.mark.parametrize("value,expected", [("//cloud.las", EMPTY_SEGMENT_FILE), ("/cloud.las", ROOT_FILE),
+                                                (EMPTY_SEGMENT_FILE, EMPTY_SEGMENT_FILE), (ROOT_FILE, ROOT_FILE)])
+    def test_download_names_the_key_the_path_names(self, value, expected):
         import models.assetsV3 as m
-        assert "more than one '/'" in _model_refuses(m.UploadFileModel, relativeKey=value + "x", file_size=1)
-        assert "more than one '/'" in _model_refuses(
-            m.DownloadAssetRequestModel, downloadType="assetFile", key=value)
-        assert "more than one '/'" in _model_refuses(
-            m.DownloadAssetRequestModel, downloadType="assetFile", keys=["/ok.las", value])
+        from common.downloadEligibility import resolve_asset_file_key
+        assert m.DownloadAssetRequestModel(downloadType="assetFile", key=value).key == value
+        assert m.DownloadAssetRequestModel(downloadType="assetFile", keys=[value]).keys
+        assert resolve_asset_file_key(LOCATION, value) == expected
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD"])
+    @pytest.mark.parametrize("proxy,expected", [("//cloud.las", EMPTY_SEGMENT_FILE), ("/cloud.las", ROOT_FILE)])
+    def test_the_stream_reads_the_key_the_path_names(self, stream, method, proxy, expected):
+        m, s3 = stream
+        _stream(m, proxy, method=method)
+        reader = s3.get_object if method == "GET" else s3.head_object
+        assert reader.call_args.kwargs["Key"] == expected
+
+    def test_an_upload_stages_the_key_the_path_names(self):
+        with _initialize_upload_env(_upload_asset(assetLocation={"Key": LOCATION})) as (uf, mock_s3):
+            uf.initialize_upload(_request("assetFile", "//cloud.las"), CLAIMS)
+        assert mock_s3.create_multipart_upload.call_args.kwargs["Key"].endswith("/" + EMPTY_SEGMENT_FILE)
 
     @pytest.mark.parametrize("model_name,extra", [
         ("GetFileMetadataRequestModel", {}),
@@ -489,30 +491,20 @@ class TestARepeatedLeadingSlashIsRefused:
             {"metadataKey": "k", "metadataValue": "v", "metadataValueType": "string"}]}),
         ("DeleteFileMetadataRequestModel", {"metadataKeys": ["k"]}),
     ])
-    def test_the_file_metadata_models_refuse_it(self, model_name, extra):
+    def test_the_file_metadata_models_accept_the_listed_path(self, model_name, extra):
         import models.metadata as md
-        message = _model_refuses(getattr(md, model_name), filePath="//cloud.las", type="metadata", **extra)
-        assert "Cannot start with more than one '/'" in message
-        assert "cloud.las" not in message
+        assert getattr(md, model_name)(filePath="//cloud.las", type="metadata", **extra).filePath == "//cloud.las"
 
-    def test_a_workflow_input_refuses_it(self):
+    def test_a_workflow_input_names_the_key_the_path_names(self):
         from models.executions import ExecuteInputFileModel
-        message = _model_refuses(ExecuteInputFileModel, databaseId="db1", assetId="A1",
-                                 relativeFileKey="//cloud.las")
-        assert "more than one '/'" in message
+        item = ExecuteInputFileModel(databaseId="db1", assetId="A1", relativeFileKey="//cloud.las")
+        assert ewv2._input_key(LOCATION, item.relativeFileKey) == EMPTY_SEGMENT_FILE
+        assert ewv2._input_key(LOCATION, "/cloud.las") == ROOT_FILE
 
-    @pytest.mark.parametrize("method", ["GET", "HEAD"])
-    def test_the_stream_route_refuses_it_before_any_lookup(self, stream, method):
-        m, s3 = stream
-        response = _stream(m, "//cloud.las", method=method)
-        assert response["statusCode"] == 400
-        assert "cloud.las" not in response.get("body", "")
-        m.get_asset_details.assert_not_called()
-        s3.get_object.assert_not_called()
-        s3.head_object.assert_not_called()
-
-    @pytest.mark.parametrize("value", ["/cloud.las", "/A1/cloud.las", "A1/cloud.las", "/A1/"])
-    def test_control_one_leading_slash_or_none_is_accepted(self, value):
-        import models.assetsV3 as m
-        assert m.FileInfoRequestModel(filePath=value).filePath == value
-        assert m.DownloadAssetRequestModel(downloadType="assetFile", key=value).key == value
+    def test_a_version_record_path_names_the_key(self):
+        from models.assetsV3 import AssetFileVersionItemModel
+        client = MagicMock()
+        with patch.object(av, "s3_client", client), patch.object(av, "is_file_archived", return_value=False):
+            assert av.validate_s3_files_exist("bkt", LOCATION, [
+                AssetFileVersionItemModel(relativeKey="//cloud.las", versionId="v1")]) == []
+        assert client.head_object.call_args.kwargs["Key"] == EMPTY_SEGMENT_FILE

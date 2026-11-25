@@ -4578,7 +4578,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/createFolder:
         post:
             summary: "Create a folder in S3 for the specified asset"
-            description: "Creates a folder (zero-byte object with trailing slash) in S3 for the specified asset. relativeKey is the folder's path in the asset with a leading / and a trailing / (/models/v2/). A value with a leading / is always a path in the asset, so / followed by the asset's location key names a subfolder of that name; a value without one is the folder's full S3 key when it is one of the asset's keys, else a path in the asset. A value with a .. segment, or one that starts with //, is refused."
+            description: "Creates a folder (zero-byte object with trailing slash) in S3 for the specified asset. relativeKey is the folder's path in the asset with a leading / and a trailing / (/models/v2/). A value with a leading / is always a path in the asset, so / followed by the asset's location key names a subfolder of that name; a value without one is the folder's full S3 key when it is one of the asset's keys, else a path in the asset. Exactly one leading / is the marker. A value with a .. segment is refused."
             requestBody:
                 required: true
                 content:

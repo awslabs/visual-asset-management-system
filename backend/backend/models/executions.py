@@ -465,10 +465,6 @@ class ExecuteInputFileModel(BaseModel, extra='ignore'):
         if key is not None:
             if not key.startswith("/"):
                 raise ValueError("relativeFileKey must be asset-relative and begin with '/'")
-            # One leading '/' marks the path in the asset; a second would name a key with an empty
-            # segment, which the file routes refuse too
-            if key.startswith("//"):
-                raise ValueError("relativeFileKey must not begin with more than one '/'")
             if ".." in key:
                 raise ValueError("relativeFileKey must not contain '..'")
             # A backslash is a legal S3 key character, so it survives into the key rather than being

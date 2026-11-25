@@ -3585,7 +3585,9 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
         metadata['previewFile'] = ""
     
     # The path relative to the asset's base key, whatever that base key is
-    metadata['relativePath'] = '/' + relative_path_for_lookup
+    # The path the file list shows the file at, which names this key again: a key with an empty segment
+    # right after the location ('{location}/x') is '//x', never the '/x' of another file (#1943)
+    metadata['relativePath'] = relative_path_in(base_key, full_key) or '/' + relative_path_for_lookup
     
     # Return response model
     return FileInfoResponseModel(**metadata)

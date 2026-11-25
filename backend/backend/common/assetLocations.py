@@ -269,7 +269,10 @@ def object_key_for_request(location: Optional[str], value: Optional[str]) -> Opt
     a file's metadata or a workflow input:
 
     - a value with a leading ``/`` is the file's path in the asset (``object_key_for_path``), never a full key,
-      so ``/{location}x`` is the file ``{location}{location}x`` of a subfolder named like the location;
+      so ``/{location}x`` is the file ``{location}{location}x`` of a subfolder named like the location. Exactly
+      one leading ``/`` is the marker, so a value that starts with ``//`` names a key with an empty segment
+      right after the location (``//x`` in ``A1/`` is ``A1//x``, the path ``relative_path_in`` lists that key
+      at); uploads before 2.7.0 could write such keys, so every listed path names its own key;
     - a value without one is the file's full S3 key when the location holds it (``contains``), the ``key`` the
       file list returns; any other value is the file's path in the asset.
 
@@ -314,11 +317,16 @@ def object_key_for_path(location: Optional[str], relative_path: Optional[str]) -
     its chain, and any other path names ``{file key}/{path}``. Unlike ``object_key_for``, a path that spells
     one of the location's own keys (``/{file key}/x``) is not taken as that key: it is the companion entry
     ``{file key}/{file key}/x``. ``/`` names a single-file asset as a whole and resolves to None.
+    Exactly one leading ``/`` is dropped, so ``//x`` is the path of the key with an empty segment right after
+    the location (``{folder}/x``, ``{file key}//x``), as ``relative_path_in`` lists it. ``object_key_for``
+    drops every leading ``/`` before it calls this, as it always did.
     """
     loc = normalize_location(location)
     if not loc:
         return None
-    relative = (relative_path or "").lstrip("/")
+    relative = relative_path or ""
+    if relative.startswith("/"):
+        relative = relative[1:]
     if loc.endswith("/"):
         return loc + relative
     if not relative:

@@ -845,7 +845,7 @@ class GetFileMetadataRequestModel(BaseModel, extra='ignore'):
     @root_validator
     def validate_fields(cls, values):
         """Validate file path"""
-        from common.validators import validate, starts_with_repeated_slash, repeated_leading_slash_message
+        from common.validators import validate
 
         # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a
         # path without one is the file's full key when the asset holds it (metadataService.file_record_path).
@@ -863,9 +863,6 @@ class GetFileMetadataRequestModel(BaseModel, extra='ignore'):
         if not valid:
             logger.error(message)
             raise ValueError(message)
-        # A second leading slash would name a key with an empty segment (the file routes' rule)
-        if starts_with_repeated_slash(file_path):
-            raise ValueError(repeated_leading_slash_message('filePath'))
         
         # Validate that filePath is not a folder (doesn't end with /)
         if values.get('filePath', '').endswith('/'):
@@ -883,7 +880,7 @@ class CreateFileMetadataRequestModel(BaseModel, extra='ignore'):
     @root_validator
     def validate_fields(cls, values):
         """Validate file path and attribute type constraints"""
-        from common.validators import validate, starts_with_repeated_slash, repeated_leading_slash_message
+        from common.validators import validate
         
         # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a
         # path without one is the file's full key when the asset holds it (metadataService.file_record_path).
@@ -901,9 +898,6 @@ class CreateFileMetadataRequestModel(BaseModel, extra='ignore'):
         if not valid:
             logger.error(message)
             raise ValueError(message)
-        # A second leading slash would name a key with an empty segment (the file routes' rule)
-        if starts_with_repeated_slash(file_path):
-            raise ValueError(repeated_leading_slash_message('filePath'))
         
         # Validate that filePath is not a folder (doesn't end with /)
         if values.get('filePath', '').endswith('/'):
@@ -939,7 +933,7 @@ class UpdateFileMetadataRequestModel(BaseModel, extra='ignore'):
     @root_validator
     def validate_fields(cls, values):
         """Validate file path and attribute type constraints"""
-        from common.validators import validate, starts_with_repeated_slash, repeated_leading_slash_message
+        from common.validators import validate
         
         # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a
         # path without one is the file's full key when the asset holds it (metadataService.file_record_path).
@@ -957,9 +951,6 @@ class UpdateFileMetadataRequestModel(BaseModel, extra='ignore'):
         if not valid:
             logger.error(message)
             raise ValueError(message)
-        # A second leading slash would name a key with an empty segment (the file routes' rule)
-        if starts_with_repeated_slash(file_path):
-            raise ValueError(repeated_leading_slash_message('filePath'))
         
         # Validate that filePath is not a folder (doesn't end with /)
         if values.get('filePath', '').endswith('/'):
@@ -992,7 +983,7 @@ class DeleteFileMetadataRequestModel(BaseModel, extra='ignore'):
     @root_validator
     def validate_fields(cls, values):
         """Validate file path"""
-        from common.validators import validate, starts_with_repeated_slash, repeated_leading_slash_message
+        from common.validators import validate
         
         # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a
         # path without one is the file's full key when the asset holds it (metadataService.file_record_path).
@@ -1010,9 +1001,6 @@ class DeleteFileMetadataRequestModel(BaseModel, extra='ignore'):
         if not valid:
             logger.error(message)
             raise ValueError(message)
-        # A second leading slash would name a key with an empty segment (the file routes' rule)
-        if starts_with_repeated_slash(file_path):
-            raise ValueError(repeated_leading_slash_message('filePath'))
         
         # Validate that filePath is not a folder (doesn't end with /)
         if values.get('filePath', '').endswith('/'):

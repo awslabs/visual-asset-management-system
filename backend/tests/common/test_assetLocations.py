@@ -476,6 +476,30 @@ class TestObjectKeyForRequest:
     def test_a_single_file_with_a_preview_segment_or_at_the_bucket_root(self, location, value, expected):
         assert al.object_key_for_request(location, value) == expected
 
+    @pytest.mark.parametrize("location,value,expected", [
+        # Exactly one leading '/' is the marker: '//x' is the path of the key with an empty segment (L4)
+        ("A1/", "//cloud.las", "A1//cloud.las"),
+        ("A1/", "///cloud.las", "A1///cloud.las"),
+        ("A1/", "//", "A1//"),
+        ("vams/B/", "//x.las", "vams/B//x.las"),
+        (FILE_LOCATION, "//x.obj", "projects/model.glb//x.obj"),
+        (FILE_LOCATION, "/model.glb", FILE_LOCATION),
+        ("A1/", "/cloud.las", "A1/cloud.las"),
+    ])
+    def test_one_leading_slash_is_the_marker(self, location, value, expected):
+        assert al.object_key_for_request(location, value) == expected
+        assert al.relative_path_in(location, expected) == value
+
+    @pytest.mark.parametrize("location", REQUEST_LOCATIONS)
+    def test_every_listed_path_names_its_own_key(self, location):
+        """Round trip: the path relative_path_in lists a key at names that key, empty segments included."""
+        keys = [location + "x", location + "/x", location + "//x", location + "sub//x", location + "/sub/x"]
+        for key in keys:
+            path = al.relative_path_in(location, key)
+            if path is not None:
+                assert al.object_key_for_request(location, path) == key, (location, key, path)
+                assert al.object_key_for_path(location, path) == key, (location, key, path)
+
     @pytest.mark.parametrize("location", REQUEST_LOCATIONS)
     @pytest.mark.parametrize("value", ["/../x.las", "../x.las", "sub/../../x.las", "/sub/.."])
     def test_a_parent_segment_names_nothing(self, location, value):
