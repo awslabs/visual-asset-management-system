@@ -17,16 +17,35 @@ export function parseAllowedExtensions(restrictFileUploadsToExtensions?: string)
         return null;
     }
 
-    // No restrictions if ".all"
-    if (restrictFileUploadsToExtensions.trim().toLowerCase() === ".all") {
-        return null;
-    }
-
     // Parse comma-separated extensions and normalize to lowercase
-    return restrictFileUploadsToExtensions
+    const extensions = restrictFileUploadsToExtensions
         .split(",")
         .map((ext) => ext.trim().toLowerCase())
         .filter((ext) => ext.length > 0);
+
+    // No restrictions if ".all" is listed (the API ignores the rest of the list then)
+    return extensions.includes(".all") ? null : extensions;
+}
+
+/**
+ * Whether a file name ends with an allowed extension (lower-case, with its leading dot).
+ *
+ * An extension may have several parts (`.tar.gz`), so the name is matched by its ending, not by
+ * its last suffix. The part of the name before the extension must hold a character other than a
+ * dot: `.pdf` and `..pdf` have no extension. An entry that does not start with a dot or ends with
+ * one matches nothing. Mirrors file_name_has_extension in backend/backend/common/assetUploads.py.
+ */
+export function fileNameHasExtension(fileName: string, extension: string): boolean {
+    const name = (fileName.split("/").pop() ?? "").toLowerCase();
+    if (!extension.startsWith(".") || extension.endsWith(".") || !name.endsWith(extension)) {
+        return false;
+    }
+    return name.slice(0, name.length - extension.length).replace(/\./g, "") !== "";
+}
+
+/** Whether a file name ends with one of the allowed extensions. */
+function hasAllowedExtension(fileName: string, allowedExtensions: string[]): boolean {
+    return allowedExtensions.some((ext) => fileNameHasExtension(fileName, ext));
 }
 
 /**
@@ -83,11 +102,7 @@ export function isFileAllowed(fileName: string, allowedExtensions: string[] | nu
         return true;
     }
 
-    // Get the file extension
-    const fileExt = getFileExtension(fileName);
-
-    // Check if the extension is in the allowed list
-    return allowedExtensions.includes(fileExt);
+    return hasAllowedExtension(fileName, allowedExtensions);
 }
 
 /**
@@ -126,8 +141,9 @@ export function extensionViolation(
             : { isPreviewFile: true, extension: getPreviewFileExtension(fileName) };
     }
     if (allowedExtensions === null) return null;
-    const extension = getFileExtension(fileName);
-    return allowedExtensions.includes(extension) ? null : { isPreviewFile: false, extension };
+    return hasAllowedExtension(fileName, allowedExtensions)
+        ? null
+        : { isPreviewFile: false, extension: getFileExtension(fileName) };
 }
 
 /**

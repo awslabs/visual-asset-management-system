@@ -14074,7 +14074,7 @@ components:
                 restrictFileUploadsToExtensions:
                     type: string
                     default: ""
-                    description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). '.all' or an empty string allows all extensions."
+                    description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). An extension can contain letters, digits, '_' and further dots ('.x_t', '.tar.gz'); a file is allowed when its name ends with one, case-insensitively. '.all' or an empty string allows all extensions."
                 assetCount:
                     type: integer
                     readOnly: true
@@ -14108,7 +14108,7 @@ components:
                     description: "Whether user and API metadata writes may add only keys defined in schemas. Keys already stored on a record pass; pipeline write-backs are not restricted (optional)"
                 restrictFileUploadsToExtensions:
                     type: string
-                    description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). '.all' or an empty string allows all extensions (optional)"
+                    description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). An extension can contain letters, digits, '_' and further dots ('.x_t', '.tar.gz'); a file is allowed when its name ends with one, case-insensitively. '.all' or an empty string allows all extensions (optional)"
             example:
                 description: "Updated 3d models used in training programs"
                 restrictMetadataOutsideSchemas: true

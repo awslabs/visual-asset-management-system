@@ -120,8 +120,8 @@ function validateDatabaseDescriptionLength(description: string) {
         : `Between ${min} and ${max} characters`;
 }
 
-// Validate file extensions format
-function validateFileExtensions(extensions: string): string | null {
+// Validate file extensions format (the same rule as the API's database model)
+export function validateFileExtensions(extensions: string): string | null {
     if (!extensions || extensions.trim() === "") {
         return null; // Empty is valid (means no restrictions)
     }
@@ -143,9 +143,9 @@ function validateFileExtensions(extensions: string): string | null {
         if (ext.length < 2) {
             return "Extensions must have at least one character after the dot";
         }
-        // Only allow alphanumeric characters after the dot
-        if (!/^\.[a-zA-Z0-9]+$/.test(ext)) {
-            return "Extensions can only contain letters and numbers after the dot";
+        // Letters, digits, "_" (.x_t) and "." (a multi-part extension such as .tar.gz)
+        if (!/^\.[\p{L}\p{N}_.]+$/u.test(ext)) {
+            return "Extensions can only contain letters, numbers, underscores and dots after the leading dot";
         }
     }
 

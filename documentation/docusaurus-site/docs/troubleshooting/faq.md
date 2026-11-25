@@ -125,12 +125,10 @@ The following file extensions are blocked by the VAMS upload API for security re
 
 `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`
 
-Additionally, the following MIME types are blocked:
-
-`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/x-php`, `application/javascript`, `application/x-powershell`, `application/vbscript`
+A list of blocked MIME types (`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/x-php`, `application/javascript`, `application/x-powershell`, `application/vbscript` and others) is checked against the content type Amazon S3 reports for a stored file: when an upload completes, when a workflow output is ingested, when the large object copy engine copies a file into its asset, and when a file is downloaded, streamed, exported or zipped. The MIME type list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
 
 :::info
-These restrictions apply only to the upload API. Files placed directly into Amazon S3 buckets bypass these checks.
+The extension check applies only to the VAMS API. Files placed directly into Amazon S3 buckets bypass it at upload, and the extension and MIME type checks still apply when such a file is downloaded, streamed, exported or zipped.
 :::
 
 ### How do I connect VAMS to my existing authentication system?
