@@ -22,6 +22,12 @@ bucket notified through a direct SNS or S3 subscription arrives as an SNS event
 so the file indexer and the compliance trigger read the same records from the same message without
 each re-implementing the envelope walk. The bucket identity stamped on the outer message is the
 caller's to read: it belongs to the message, not to a record.
+
+The stamp also carries `ASSET_BUCKET_ID`, the `bucketId` of the registration the bucket sync function
+serves (absent from a message published by an earlier release). Name and prefix stay for splitting a key
+into its asset folder; a consumer that attributes a file passes the bucketId to
+`fileAttribution.attribute_object(registration_bucket_id=...)`, which refuses an owner in another
+registration. `stamped_bucket_id` reads it from the first envelope level that carries it.
 """
 
 import json
@@ -29,6 +35,32 @@ from typing import Any, List, Optional
 
 # A record that carries an `s3` object is an S3 event record whatever envelope it arrived in.
 S3_RECORD_KEY = "s3"
+
+# The registration stamp bucket sync puts on every message it forwards.
+BUCKET_NAME_STAMP_FIELD = "ASSET_BUCKET_NAME"
+BUCKET_PREFIX_STAMP_FIELD = "ASSET_BUCKET_PREFIX"
+BUCKET_ID_STAMP_FIELD = "ASSET_BUCKET_ID"
+
+
+def stamped_bucket_id(*envelopes: Any) -> str:
+    """The `ASSET_BUCKET_ID` of the first envelope (a dict) that carries a non-empty one, else ''."""
+    for envelope in envelopes:
+        if isinstance(envelope, dict):
+            value = envelope.get(BUCKET_ID_STAMP_FIELD)
+            if isinstance(value, str) and value:
+                return value
+    return ""
+
+
+def carry_bucket_id_stamp(record: Any, *envelopes: Any) -> Any:
+    """Copy the `ASSET_BUCKET_ID` of the innermost envelope that carries one onto an S3 record, as the
+    consumers already copy name and prefix, so the code that attributes the record can read it there.
+    `envelopes` are listed innermost first; a record that already carries one keeps it."""
+    if isinstance(record, dict) and not stamped_bucket_id(record):
+        bucket_id = stamped_bucket_id(*envelopes)
+        if bucket_id:
+            record[BUCKET_ID_STAMP_FIELD] = bucket_id
+    return record
 
 # The SNS envelope an SQS body carries after an SNS -> SQS hop.
 SNS_NOTIFICATION_TYPE = "Notification"

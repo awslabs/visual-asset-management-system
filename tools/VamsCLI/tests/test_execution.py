@@ -455,6 +455,21 @@ class TestExecutionDetails:
             assert result.exit_code == 0
             assert 'Config body: truncated in this response' in result.output
             assert 's3://run-bkt/executions/e1/input/1/config.json' in result.output
+            assert 'Run bucket ID' not in result.output
+
+    def test_details_names_the_run_bucket_registration_when_recorded(self, cli_runner,
+                                                                     generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1',
+                'pipelines': [{'name': 'p1', 'executionStatus': 'SUCCEEDED',
+                               'renderedConfigLocation': {'bucket': 'run-bkt',
+                                                          'key': 'vams/executions/e1/input/1/config.json',
+                                                          'bucketId': 'reg-1',
+                                                          'relativeKey': 'executions/e1/input/1/config.json'}}]})
+            assert result.exit_code == 0
+            assert 's3://run-bkt/vams/executions/e1/input/1/config.json' in result.output
+            assert 'Run bucket ID: reg-1' in result.output
 
     def test_details_omits_the_config_location_when_not_truncated(self, cli_runner,
                                                                   generic_command_mocks):

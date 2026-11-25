@@ -35,6 +35,7 @@ from common.s3MetadataKeys import (
 )
 from common.batchItemFailures import batch_item_identifier, with_batch_item_failures
 from common.fileAttribution import RegistrationUnavailableError, attribute_object, binding_of
+from common.indexerEvents import stamped_bucket_id
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
 from common.workflows import triggerMatching as tm
 from common.workflows import executionLocks as el
@@ -153,7 +154,7 @@ def _head_object_metadata(bucket_name, s3_key, version_id=""):
     return s3_client.head_object(**head_kwargs).get("Metadata", {}) or {}
 
 
-def _resolve_asset_relative_key(bucket_name, s3_key, version_id="", binding=None):
+def _resolve_asset_relative_key(bucket_name, s3_key, version_id="", binding=None, registration_bucket_id=""):
     """Resolve (databaseId, assetId, assetRelativeKey, changeSource, changeWorkflowId) for an uploaded
     S3 object, or None when no asset holds it.
 
@@ -163,7 +164,8 @@ def _resolve_asset_relative_key(bucket_name, s3_key, version_id="", binding=None
     and before the index is ready, the pinned version's stamp and the first folder, under the same
     bucket and boundary checks. The stamp's ids are client-settable on a direct write and survive an
     S3 copy, so they never bind a key outside the named asset's location. The provenance of the write
-    (who wrote it, which workflow) is always read from the pinned version."""
+    (who wrote it, which workflow) is always read from the pinned version. `registration_bucket_id` is
+    the detail's `ASSET_BUCKET_ID`; an owner in another registration is not used."""
     try:
         metadata = _head_object_metadata(bucket_name, s3_key, version_id)
     except Exception as e:
@@ -176,6 +178,7 @@ def _resolve_asset_relative_key(bucket_name, s3_key, version_id="", binding=None
         binding=binding,
         read_stamp=lambda: metadata,
         asset_table_name=asset_storage_table_name,
+        registration_bucket_id=registration_bucket_id,
     )
     if not attribution.attributed:
         logger.info(f"Uploaded object {s3_key} is not in any asset's location in bucket {bucket_name} "
@@ -345,39 +348,49 @@ def _object_version_id(object_info):
 
 
 def _uploaded_objects_by_message(event):
-    """Yield (SQS record or None, [(bucket_name, s3_key, versionId, vamsBinding)]) per message: one per
-    SQS record for an SQS-buffered event, one with no record for a direct EventBridge invocation."""
+    """Yield (SQS record or None, [(bucket_name, s3_key, versionId, vamsBinding, stamped bucketId)]) per
+    message: one per SQS record for an SQS-buffered event, one with no record for a direct EventBridge
+    invocation."""
     if "Records" in event:
         for record in event["Records"]:
-            yield record, list(_iter_uploaded_objects({"Records": [record]}))
+            yield record, list(_iter_stamped_uploaded_objects({"Records": [record]}))
     else:
-        yield None, list(_iter_uploaded_objects(event))
+        yield None, list(_iter_stamped_uploaded_objects(event))
 
 
 def _iter_uploaded_objects(event):
     """Yield (bucket_name, s3_key, versionId, vamsBinding or None) for each uploaded object in the
-    event. Handles the two
-    shapes the orchestration-bus -> SQS buffer delivers: an EventBridge S3 detail (detail.bucket.name
-    + detail.object.key) and a legacy S3-notification Records array, each possibly wrapped in SQS
-    Records / an EventBridge envelope."""
-    def _from_records(records):
+    event (`_iter_stamped_uploaded_objects` without the stamp)."""
+    for bucket_name, s3_key, version_id, binding, _ in _iter_stamped_uploaded_objects(event):
+        yield bucket_name, s3_key, version_id, binding
+
+
+def _iter_stamped_uploaded_objects(event):
+    """Yield (bucket_name, s3_key, versionId, vamsBinding or None, stamped bucketId or '') for each
+    uploaded object in the event. The stamped bucketId is the `ASSET_BUCKET_ID` bucket sync puts on the
+    detail (the registration that forwarded the record), '' on an event from an earlier release. Handles
+    the two shapes the orchestration-bus -> SQS buffer delivers: an EventBridge S3 detail
+    (detail.bucket.name + detail.object.key) and a legacy S3-notification Records array, each possibly
+    wrapped in SQS Records / an EventBridge envelope."""
+    def _from_records(records, stamp=""):
         for rec in records or []:
             s3_info = rec.get("s3", {})
             object_info = s3_info.get("object", {}) or {}
             b = (s3_info.get("bucket", {}) or {}).get("name")
             k = object_info.get("key")
             if b and k:
-                yield b, k, _object_version_id(object_info), binding_of(rec)
+                yield b, k, _object_version_id(object_info), binding_of(rec), stamped_bucket_id(rec) or stamp
 
     def _from_detail(detail):
+        stamp = stamped_bucket_id(detail)
         bucket = ((detail.get("bucket") or {}).get("name")
                   or detail.get("ASSET_BUCKET_NAME") or "")
         object_info = detail.get("object") or {}
         key = object_info.get("key") or detail.get("key") or ""
         if bucket and key:
-            yield bucket, key, _object_version_id(object_info), binding_of(detail)
+            yield bucket, key, _object_version_id(object_info), binding_of(detail), stamp
         # A detail may itself carry an S3-notification Records array.
-        yield from _from_records(detail.get("Records", []))
+        yield from _from_records(detail.get("Records", []), stamp)
 
     def _from_message(message):
         # message is a dict: an EventBridge event (has 'detail'), an SNS Notification envelope
@@ -395,7 +408,7 @@ def _iter_uploaded_objects(event):
             if isinstance(inner, dict):
                 yield from _from_message(inner)
             return
-        yield from _from_records(message.get("Records", []))
+        yield from _from_records(message.get("Records", []), stamped_bucket_id(message))
 
     # SQS-buffered delivery: event.Records[] each carry a JSON body.
     if "Records" in event:
@@ -449,7 +462,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # retried because one registration could not be read launches nothing twice.
             pending = []
             try:
-                for bucket_name, raw_key, version_id, binding in objects:
+                for bucket_name, raw_key, version_id, binding, registration_bucket_id in objects:
                     files_seen += 1
                     s3_key = urllib.parse.unquote_plus(raw_key)
                     if _should_skip_key(s3_key):
@@ -457,7 +470,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     # Per-file isolation: an unexpected failure resolving one file must not drop
                     # trigger dispatch for the rest of the batch (best-effort contract).
                     try:
-                        resolved = _resolve_asset_relative_key(bucket_name, s3_key, version_id, binding)
+                        resolved = _resolve_asset_relative_key(bucket_name, s3_key, version_id, binding,
+                                                               registration_bucket_id)
                     except RegistrationUnavailableError:
                         raise
                     except Exception as e:

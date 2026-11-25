@@ -31,7 +31,6 @@ REVIEWED: Dict[str, tuple] = {
     "handlers/addon/garnetFramework/garnetDataIndexAsset.py": (
         2, "copied into the Garnet record as the module's bucket details hold it; no key is built from it"),
     "handlers/addon/garnetFramework/garnetDataIndexDatabase.py": (2, _OWN_DETAILS + ", copied into the Garnet record"),
-    "handlers/addon/physna/physnaCommon.py": (1, "a sort key choosing among a bucket's registrations"),
     "handlers/assets/assetExportService.py": (1, _OWN_DETAILS),
     "handlers/assets/assetFiles.py": (1, _OWN_DETAILS),
     "handlers/assets/createAsset.py": (1, "passed to prefix_roots_overlap, which normalizes both prefixes"),

@@ -10,6 +10,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.apiRoutes import API_DATABASE
+from common.bucketRegistrations import is_retired
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -54,7 +55,9 @@ def create_database(request_model: CreateDatabaseRequestModel):
             KeyConditionExpression=Key('bucketId').eq(request_model.defaultBucketId)
         )
         
-        if not bucket_response.get('Items') or len(bucket_response['Items']) == 0:
+        # A retired registration (it left the configuration) is not offered for a new database, so it
+        # is refused here as an unknown one.
+        if not bucket_response.get('Items') or all(is_retired(item) for item in bucket_response['Items']):
             raise VAMSGeneralErrorResponse("Bucket ID not found")
         
         # Create database with put_item and conditional expression
