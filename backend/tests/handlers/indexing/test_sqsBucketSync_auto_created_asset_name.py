@@ -159,3 +159,23 @@ class TestADirectWrite:
         m.update_s3_metadata.assert_called_once_with(BUCKET, f"{folder}/f.txt", DATABASE, folder)
         m.logger.error.assert_not_called()
         m.logger.exception.assert_not_called()
+
+
+@pytest.mark.unit
+class TestAFolderTheIdRuleRefuses:
+    """What the external bucket setup page says for a folder whose name breaks the asset ID rule."""
+
+    @pytest.mark.parametrize("folder", ["bad!x", "a", "ends-with-dot.", "x" * 256],
+                             ids=["character", "too-short", "trailing-dot", "too-long"])
+    def test_no_asset_is_created_and_the_file_is_attributed_to_none(self, m, folder):
+        _wire_direct_write(m)
+        create_asset = _real_create(m)
+
+        response = _handle(m, f"{folder}/f.txt")
+
+        assert response["batchItemFailures"] == []
+        assert _created(create_asset) == set()
+        assert _history_files(m) == set()
+        m.update_s3_metadata.assert_not_called()
+        m.logger.error.assert_not_called()
+        assert any("is not valid" in str(c.args[0]) for c in m.logger.info.call_args_list)
