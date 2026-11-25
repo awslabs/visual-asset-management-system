@@ -795,6 +795,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CLI** `vamscli auth login` with `--password-stdin`, `--new-password-stdin` or `--token-override-stdin` no longer loses the piped credential when the CLI and API versions differ: the version mismatch confirmation prompt is skipped while a credential flag reads standard input, so the piped secret reaches the login instead of answering the prompt. ([#1705](https://github.com/awslabs/visual-asset-management-system/issues/1705))
 
 -   **Pipelines** The Image to 3D SAM 3D image builds again. Its build resolved upstream's open Python requirements on build day, and after upstream releases of 2026-11-22 pip's resolver gave up (`ResolutionTooDeep`) before installing anything. The image now installs a locked set (see Chores). ([#1726](https://github.com/awslabs/visual-asset-management-system/issues/1726))
+-   **CI** The Python dependency audit now checks every pinned package of every lock. pip-audit left out a pin whose environment marker is false on the job's Python (for example `typing-extensions` under `python_full_version < '3.13'`, or a `sys_platform == 'win32'` pin) without a finding or a warning; the audit removes the markers from the copy it reads and fails, naming the file, line and package, when a pin is missing from pip-audit's report ([#1910](https://github.com/awslabs/visual-asset-management-system/issues/1910))
 
 ### Chores
 
