@@ -104,7 +104,10 @@ namespace VamsConnector.Handlers
                 
                 // File key may contain slashes, so join remaining segments
                 var fileKeySegments = segments.Skip(5).ToArray();
-                var fileKey = "/" + string.Join("/", fileKeySegments.Select(Uri.UnescapeDataString));
+                // A link names the file by its encoded path in the asset ('%2F%2Fx' for '//x') or, in older
+                // links, by the path without its leading '/'; the leading '/' is added only when missing
+                var joinedKey = string.Join("/", fileKeySegments.Select(Uri.UnescapeDataString));
+                var fileKey = joinedKey.StartsWith("/") ? joinedKey : "/" + joinedKey;
 
                 System.Diagnostics.Debug.WriteLine($"VamsUrlHandler: Parsed - DB: {databaseId}, Asset: {assetId}, File: {fileKey}");
 
