@@ -212,6 +212,19 @@ class TestAnApiKeyCannotChangeAnExpiration:
         assert _looked_up(table) == [OWN_KEY_ID]
 
     @pytest.mark.parametrize("path", [ADMIN_KEY, USER_KEY], ids=SCOPES)
+    def test_resubmitting_the_stored_expiration_is_refused(self, monkeypatch, path):
+        # Any expiresAt in the body counts as a change, the stored value included: telling the two apart
+        # would need the key read first, and the answer would then say whether the key exists.
+        assert RECORDS[OWN_KEY_ID]["expiresAt"] == STORED_EXPIRY
+        response, table, audit = _run(monkeypatch, API_KEY_CALLER, "PUT", path.format(id=OWN_KEY_ID),
+                                      {"expiresAt": STORED_EXPIRY}, api_key_id=OWN_KEY_ID)
+        assert response["statusCode"] == 403
+        assert _message(response) == API_KEY_CALLER_EXPIRATION_REFUSAL
+        table.update_item.assert_not_called()
+        audit.assert_not_called()
+        assert _looked_up(table) == [OWN_KEY_ID]
+
+    @pytest.mark.parametrize("path", [ADMIN_KEY, USER_KEY], ids=SCOPES)
     def test_a_key_that_does_not_exist_gets_the_same_refusal(self, monkeypatch, path):
         response, _table, _audit = _run(monkeypatch, API_KEY_CALLER, "PUT", path.format(id=MISSING_KEY_ID),
                                         {"expiresAt": LATER}, api_key_id=MISSING_KEY_ID)
