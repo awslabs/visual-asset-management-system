@@ -56,6 +56,9 @@ interface FileVersionsTableProps {
     databaseId: string;
     assetId: string;
     filePath: string;
+    // How a file page link names the file: its path in the asset with its leading "/", or the form the
+    // hosting page's own link uses. Defaults to filePath. The API decides what either form names.
+    linkFilePath?: string;
     fileName: string;
     currentVersionId?: string; // For ViewFile context
     onVersionRevert?: () => void; // Refresh callback
@@ -144,6 +147,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     databaseId,
     assetId,
     filePath,
+    linkFilePath,
     fileName,
     currentVersionId,
     onVersionRevert,
@@ -244,17 +248,9 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
         // Find the version to get its isArchived status
         const version = versions.find((v) => v.versionId === versionId);
 
-        // Get the relative path from the file path
-        // The filePath format is typically: assetId/relativePath
-        // We need to extract just the relativePath part
-        const pathParts = filePath.split("/");
-        let relativePath = filePath;
-        if (pathParts.length > 1 && pathParts[0] === assetId) {
-            relativePath = pathParts.slice(1).join("/");
-        }
-
-        // Encode the path for URL
-        const encodedPath = encodeURIComponent(relativePath);
+        // The link names the file as the hosting page does (its path in the asset with its leading
+        // "/", or its key). No path is derived from the key here: the API reads either form (#1943)
+        const encodedPath = encodeURIComponent(linkFilePath || filePath);
 
         // Build URL with version query parameter
         const url = `/databases/${databaseId}/assets/${encodeURIComponent(

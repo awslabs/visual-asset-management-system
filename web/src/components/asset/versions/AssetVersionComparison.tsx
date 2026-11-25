@@ -24,6 +24,7 @@ import FileViewerModal from "../../filemanager/modals/FileViewerModal";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
 import { isFilenameComparableAsVersions } from "../../../visualizerPlugin/core/viewableExtensions";
 import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
+import { versionFilePath } from "./versionFilePath";
 
 // TypeScript interfaces - using imported AssetVersion from AssetVersionManager
 
@@ -160,7 +161,7 @@ const buildVersionCompareFiles = (
     const filename = file.relativeKey.split("/").pop() || file.relativeKey;
     const toFileInfo = (fv: FileVersion): FileInfo => ({
         filename,
-        key: file.relativeKey,
+        key: versionFilePath(file.relativeKey),
         isDirectory: false,
         assetId,
         databaseId,
@@ -510,7 +511,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
         navigate(`/databases/${databaseId}/assets/${encodeURIComponent(assetId)}/file`, {
             state: {
                 filename: file.relativeKey.split("/").pop() || file.relativeKey,
-                key: file.relativeKey,
+                key: versionFilePath(file.relativeKey),
                 isDirectory: false,
                 versionId: file.versionId,
                 size: file.size,
@@ -1364,7 +1365,7 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
         navigate(`/databases/${databaseId}/assets/${encodeURIComponent(String(assetId))}/file`, {
             state: {
                 filename: file.relativeKey.split("/").pop() || file.relativeKey,
-                key: file.relativeKey,
+                key: versionFilePath(file.relativeKey),
                 isDirectory: false,
                 versionId: file.versionId,
                 size: file.size,
