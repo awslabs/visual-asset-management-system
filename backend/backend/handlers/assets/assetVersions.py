@@ -2041,6 +2041,12 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         (None, relative_key) when the file should be skipped."""
         relative_key = file['relativeKey']
         source_version_id = file['versionId']
+        if version_entry_key(relative_key).startswith('/'):
+            # A stored '//x' names '{location}/x', but object_key_for drops every leading slash and would
+            # copy '{location}x' under it. Skipped and reported until the location-key work (PR #1965)
+            # moves this resolution to the one-slash rule; create refuses such a path for the same reason.
+            logger.info(f"Revert of {databaseId}:{assetId} skips an entry whose path starts with two slashes")
+            return None, relative_key
         full_key = object_key_for(prefix, relative_key)
         if not full_key or not nested.keep(full_key):
             return None, relative_key
