@@ -1272,6 +1272,29 @@ class TestExecutionAbort:
             assert 'Left running (VAMS cannot stop these sub-process types): ' \
                    'e2: Mock Slurm job (slurmJob, in MockTrain)' in result.output
 
+    NOT_RUNNING = 'Execution was not running (status SUCCEEDED), so it was not aborted.'
+
+    def test_abort_of_a_finished_run_prints_the_not_running_message(self, cli_runner, generic_command_mocks):
+        """Issue #344: the handler says a finished run was not aborted; the CLI prints that sentence
+        and adds no line of its own claiming the run was aborted."""
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {'message': self.NOT_RUNNING}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1'])
+            assert result.exit_code == 0, result.output
+            assert self.NOT_RUNNING in result.output
+            assert 'Execution aborted' not in result.output
+
+    def test_abort_of_a_finished_run_json_carries_the_not_running_message(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].abort_execution.return_value = {
+                'message': self.NOT_RUNNING, 'warnings': ['Sub-process abort failed']}
+            result = cli_runner.invoke(cli, ['execution', 'abort', 'e1', '--json-output'])
+            assert result.exit_code == 0, result.output
+            payload = json.loads(result.output)
+            assert payload['message'] == self.NOT_RUNNING
+            assert payload['warnings'] == ['Sub-process abort failed']
+
     def test_abort_requires_target(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution'):
             result = cli_runner.invoke(cli, ['execution', 'abort'])
