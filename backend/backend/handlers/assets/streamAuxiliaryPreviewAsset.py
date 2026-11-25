@@ -131,31 +131,36 @@ def handle_head_request(event, claims_and_roles):
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
     
-    # Get asset details and check if it exists
+    # Get asset details; existence and the distributable flag are answered only after authorization,
+    # so a refused caller gets the same 403 for a missing asset as for an existing one. A found
+    # record is checked as an annotated copy; for a missing one the request's ids stand in.
     asset_object = get_asset_details(databaseId, assetId)
-    if not asset_object:
-        message = f"Asset not found in database"
-        logger.error(message)
-        return general_error(body={'message': message}, status_code=404, event=event)
-    
-    asset_object.update({"object__type": "asset"})
-
-    # Check if asset is distributable
-    if not asset_object.get('isDistributable', False):
-        message = "Asset is not currently allowing file distribution"
-        logger.error(message)
-        return general_error(body={'message': message}, status_code=403, event=event)
+    if asset_object:
+        authorization_object = {**asset_object, 'object__type': 'asset'}
+    else:
+        authorization_object = {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
 
     # Check authorization
     operation_allowed_on_asset = False
     if len(claims_and_roles["tokens"]) > 0:
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if casbin_enforcer.enforceAPI(event, "GET"):
-            if casbin_enforcer.enforce(asset_object, "GET"):
+            if casbin_enforcer.enforce(authorization_object, "GET"):
                 operation_allowed_on_asset = True
 
     if not operation_allowed_on_asset:
         return authorization_error()
+
+    if not asset_object:
+        message = f"Asset not found in database"
+        logger.error(message)
+        return general_error(body={'message': message}, status_code=404, event=event)
+
+    # Check if asset is distributable
+    if not asset_object.get('isDistributable', False):
+        message = "Asset is not currently allowing file distribution"
+        logger.error(message)
+        return general_error(body={'message': message}, status_code=403, event=event)
 
     # Get the location of the base asset key
     assetLocationKey = asset_object.get('assetLocation', {}).get("Key")
@@ -304,45 +309,51 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         operation_allowed_on_asset = False
 
-        # Get asset details and check if it exists
+        # Get asset details; existence and the distributable flag are answered only after
+        # authorization, so a refused caller gets the same 403 for a missing asset as for an
+        # existing one. A found record is checked as an annotated copy; for a missing one the
+        # request's ids stand in.
         asset_object = get_asset_details(databaseId, assetId)
-        if not asset_object:
-            message = f"Asset not found in database"
-            logger.error(message)
-            # Create custom headers for streaming response
-            streaming_headers = {
-                'Access-Control-Allow-Headers': 'Range',
-                'Access-Control-Allow-Origin': '*',
-            }
-            error_response = general_error(body={"message": message}, status_code=404, event=event)
-            error_response['headers'].update(streaming_headers)
-            return error_response
-
-        asset_object.update({"object__type": "asset"})
-
-        logger.info(asset_object)
-
-        # Check if asset is distributable
-        if not asset_object.get('isDistributable', False):
-            message = "Asset is not currently allowing file distribution"
-            logger.error(message)
-            streaming_headers = {
-                'Access-Control-Allow-Headers': 'Range',
-                'Access-Control-Allow-Origin': '*',
-            }
-            error_response = general_error(body={"message": message}, status_code=403, event=event)
-            error_response['headers'].update(streaming_headers)
-            return error_response
+        if asset_object:
+            authorization_object = {**asset_object, 'object__type': 'asset'}
+        else:
+            authorization_object = {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
 
         # Check API authorization
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event, http_method):
                 # Check object-level authorization
-                if casbin_enforcer.enforce(asset_object, http_method):
+                if casbin_enforcer.enforce(authorization_object, http_method):
                     operation_allowed_on_asset = True
 
         if operation_allowed_on_asset:
+            if not asset_object:
+                message = f"Asset not found in database"
+                logger.error(message)
+                # Create custom headers for streaming response
+                streaming_headers = {
+                    'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
+                }
+                error_response = general_error(body={"message": message}, status_code=404, event=event)
+                error_response['headers'].update(streaming_headers)
+                return error_response
+
+            logger.info(asset_object)
+
+            # Check if asset is distributable
+            if not asset_object.get('isDistributable', False):
+                message = "Asset is not currently allowing file distribution"
+                logger.error(message)
+                streaming_headers = {
+                    'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
+                }
+                error_response = general_error(body={"message": message}, status_code=403, event=event)
+                error_response['headers'].update(streaming_headers)
+                return error_response
+
             try:
                 # Get the location of the base asset key and normalize the object_key we are passing in
                 # (also ensures security of not fetching asset key files outside of provided asset ID)
