@@ -126,3 +126,27 @@ class TestADirectWrite:
         assert _rejections(m) == []
         logger.error.assert_not_called()
         logger.exception.assert_not_called()
+
+
+@pytest.mark.unit
+class TestAFolderTheIdRuleRefuses:
+    """What the external bucket setup page says for a folder whose name breaks the asset ID rule."""
+
+    @pytest.mark.parametrize("folder", ["bad!x", "a", "ends-with-dot.", "x" * 256],
+                             ids=["character", "too-short", "trailing-dot", "too-long"])
+    def test_no_asset_is_created_and_the_file_is_attributed_to_none(
+            self, folder, monkeypatch, _restore_module_attrs):  # noqa: F811
+        m = _load()
+        _wire_rows(m, [], target_database=DATABASE)
+        m.validate_asset_id = _restore_module_attrs["validate_asset_id"]
+        create_asset = _real_create(m, monkeypatch, _restore_module_attrs)
+        logger = MagicMock()
+        monkeypatch.setattr(m, "logger", logger)
+
+        response = _handle(m, f"{folder}/f.txt")
+
+        assert response["batchItemFailures"] == []
+        assert _created(create_asset) == set()
+        assert _history_rows(m) == [] and _rejections(m) == []
+        logger.error.assert_not_called()
+        assert any("is not valid" in str(c.args[0]) for c in logger.info.call_args_list)
