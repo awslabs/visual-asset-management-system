@@ -194,10 +194,10 @@ The **VAMS Connector** window stays for sign-in, workflows, export and upload. T
 -   **Access**: everything listed and read goes through the VAMS API as you, so you see what your VAMS role allows; a denied item and a missing one both answer "not found". Files download straight from their presigned VAMS URLs.
 -   **How it runs**: the extension starts a storage adapter (`vams/connector/isaacsim/storage_adapter/`) with the VAMS CLI's Python, as its own process listening on `127.0.0.1` only, and registers it with the Content window. The adapter serves the Omniverse Storage API over gRPC and holds no credential: each request carries your own VAMS CLI sign-in, which the extension hands to Isaac Sim for the adapter's exact address only. The adapter exits when Isaac Sim's process ends, however it ends.
 -   **Sign-in expiry**: when VAMS refuses the sign-in, Content window requests fail at once instead of waiting, and the connection reconnects by itself once the CLI profile holds a usable sign-in again, for example after signing in in the **VAMS Connector** window.
--   **Requirements**: `grpcio` and `protobuf` in the VAMS CLI's environment, installed from the connector's hash-locked `requirements-storage.txt` with that environment's `pip`:
+-   **Requirements**: `grpcio` and `protobuf` in the VAMS CLI's environment, installed from the connector's hashed lock `locks/storage/requirements.lock` (exported from `locks/storage/uv.lock`, which the CI dependency audit checks) with that environment's `pip`:
 
     ```bash
-    ~/vamscli-venv/bin/pip install --require-hashes -r /path/to/kit-exts/vams.connector.isaacsim/requirements-storage.txt
+    ~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
     ```
 
     Without them, or on Isaac Sim 5.1, the **VAMS Connector** window works as before and the Isaac Sim log says why the Content window entry was not added.
@@ -317,10 +317,14 @@ isaacsim_vams_integration/
 │           │   ├── proto/             # Storage API protos (NVIDIA, Apache-2.0)
 │           │   └── _proto/            # Generated modules, shipped so nothing is generated at install
 │           └── vams_cli_service.py    # VamsCliService (CLI subprocess wrapper)
+├── locks/
+│   └── storage/                       # grpcio and protobuf for the Content window connection
+│       ├── pyproject.toml
+│       ├── uv.lock
+│       └── requirements.lock          # Hashed uv export the install uses
 ├── README.md
 ├── LICENSE
-├── requirements.txt
-└── requirements-storage.txt           # Hash-locked grpcio and protobuf for the Content window connection
+└── requirements.txt
 ```
 
 | Component          | File                    | Purpose                                                                                                             |

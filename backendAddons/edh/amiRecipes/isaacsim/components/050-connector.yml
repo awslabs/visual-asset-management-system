@@ -25,9 +25,9 @@ phases:
                     - |
                         # The Content window connection runs the connector's storage adapter with the CLI's
                         # Python, which needs grpcio and protobuf beside the CLI. They come from the connector's
-                        # hash-locked requirements-storage.txt (constrained to the CLI's own lock), as wheels.
+                        # hashed uv export locks/storage/requirements.lock (held to the CLI lock's shared pins), as wheels.
                         /opt/vams/vamscli-venv/bin/pip install --no-cache-dir --require-hashes --only-binary :all: \
-                            -r /opt/vams/isaacsim-connector/vams.connector.isaacsim/requirements-storage.txt
+                            -r /opt/vams/isaacsim-connector/vams.connector.isaacsim/locks/storage/requirements.lock
                         /opt/vams/vamscli-venv/bin/pip check
           - name: PointTheExtensionAtTheEdhProfileAndTheCli
             action: ExecuteBash

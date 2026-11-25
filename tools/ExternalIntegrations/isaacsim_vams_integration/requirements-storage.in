@@ -1,6 +1,0 @@
-# The Content window connection (storage adapter) runs in the VAMS CLI virtual environment and needs these two
-# packages beside the CLI. Their versions must be at least those the shipped generated modules were built with
-# (vams/connector/isaacsim/storage_adapter/proto/README.md). Locked with hashes, constrained to the CLI lock:
-#   uv pip compile requirements-storage.in -c ../../VamsCLI/requirements.lock --python-version 3.12 --universal --generate-hashes -o requirements-storage.txt
-grpcio>=1.85.4,<2
-protobuf>=7.35.1,<8

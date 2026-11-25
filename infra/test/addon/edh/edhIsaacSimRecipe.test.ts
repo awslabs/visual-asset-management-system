@@ -388,7 +388,9 @@ describe("the shipped Isaac Sim recipe", () => {
         expect(launcher).toContain("EXT_PARENT=/opt/vams/isaacsim-connector\n");
         // The connector ships the Content window connection off; this image installs its storage
         // dependencies and turns it on, and checks both.
-        expect(connector).toContain("requirements-storage.txt");
+        expect(connector).toContain(
+            "-r /opt/vams/isaacsim-connector/vams.connector.isaacsim/locks/storage/requirements.lock"
+        );
         expect(connector).toContain(
             '.content_window = .*|exts."vams.connector.isaacsim".content_window = true|'
         );

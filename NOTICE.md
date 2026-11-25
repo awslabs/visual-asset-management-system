@@ -888,3 +888,19 @@ This software includes third party software subject to the following copyrights:
 | requests     | >=2.25.0                                     | Apache-2.0                 |
 | PyJWT        | ==2.15.1 (with the `crypto` extra)           | MIT                        |
 | cryptography | >=3.4.0 (required by PyJWT's `crypto` extra) | Apache-2.0 OR BSD-3-Clause |
+
+---
+
+## THIRD PARTY COMPONENTS - TOOLS (ISAAC SIM CONNECTOR)
+
+---
+
+This software includes third party software subject to the following copyrights:
+
+**Isaac Sim Connector Content Window Connection** (`tools/ExternalIntegrations/isaacsim_vams_integration/`)
+
+| Name                                | Version                                          | License      | Notes                                                                                                                           |
+| :---------------------------------- | :----------------------------------------------- | :----------- | :------------------------------------------------------------------------------------------------------------------------------ |
+| NVIDIA Omniverse Storage API protos | `NVIDIA-Omniverse/usd-content-workspace` a52c5d7 | Apache-2.0   | Copied into `storage_adapter/proto/` with their license; the generated modules in `storage_adapter/_proto/` are built from them |
+| grpcio                              | 1.85.4 (`locks/storage/requirements.lock`)       | Apache-2.0   | Installed into the VAMS CLI's environment for the storage adapter                                                               |
+| protobuf                            | 7.36.2 (`locks/storage/requirements.lock`)       | BSD-3-Clause | Installed into the VAMS CLI's environment for the storage adapter                                                               |

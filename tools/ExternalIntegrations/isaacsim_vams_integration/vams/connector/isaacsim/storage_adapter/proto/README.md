@@ -12,7 +12,7 @@ The `.proto` files under `nvidia/` are copied unchanged from NVIDIA's
 
 `../_proto/` holds the Python modules generated from them, so installing the connector needs no code generation. They
 were generated with `grpcio-tools` 1.85.4 (protobuf 7.35.1 generated code), which requires the runtime versions the
-connector's `requirements-storage.txt` pins. To regenerate after changing the protos or the pins, from this directory:
+connector's `locks/storage/requirements.lock` pins. To regenerate after changing the protos or the pins, from this directory:
 
 ```bash
 python -m grpc_tools.protoc -I . --python_out=../_proto --grpc_python_out=../_proto $(find nvidia -name "*.proto" | sort)

@@ -127,6 +127,10 @@ def status_for(error):
     if isinstance(error, Missing) or name in ("AuthenticationError", "PermissionDeniedError", "AssetNotFoundError",
                                                "DatabaseNotFoundError"):
         return grpc.StatusCode.NOT_FOUND
+    # The CLI raises a plain APIError for a 404 or 403 from routes without their own error type, such as a file
+    # listing of an asset that does not exist. Missing and denied answer alike, so no response says which ids exist.
+    if name == "APIError" and ("(404)" in str(error) or "(403)" in str(error)):
+        return grpc.StatusCode.NOT_FOUND
     return grpc.StatusCode.UNAVAILABLE
 
 

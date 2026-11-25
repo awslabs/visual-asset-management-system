@@ -74,6 +74,14 @@ class PermissionDeniedError(Exception):
     pass
 
 
+class APIError(Exception):
+    pass
+
+
+class RouteNotDeployedError(APIError):
+    pass
+
+
 @pytest.mark.parametrize("error,status", [
     (server.Denied(), "UNAUTHENTICATED"),
     (AuthenticationError("Authentication failed: 401 Client Error"), "UNAUTHENTICATED"),
@@ -81,6 +89,10 @@ class PermissionDeniedError(Exception):
     (PermissionDeniedError("denied"), "NOT_FOUND"),
     (AssetNotFoundError("Asset 'x' not found"), "NOT_FOUND"),
     (server.Missing(), "NOT_FOUND"),
+    (APIError("Resource not found (404): Asset not found"), "NOT_FOUND"),
+    (APIError("Access denied (403): Not Authorized"), "NOT_FOUND"),
+    (APIError("Server error (500): boom"), "UNAVAILABLE"),
+    (RouteNotDeployedError("Resource not found (404): route"), "UNAVAILABLE"),
     (RuntimeError("boom"), "UNAVAILABLE"),
 ])
 def test_errors_map_to_generic_statuses(error, status):
