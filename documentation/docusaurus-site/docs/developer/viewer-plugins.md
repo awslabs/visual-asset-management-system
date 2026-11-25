@@ -379,6 +379,24 @@ interface ViewerPluginProps {
 
 `fileInfo` is set only for a single-file selection. It carries the file's `size` and its generated preview key (`previewFile`), when the host listed them, so a viewer can check a size cap before it downloads the file and show the generated preview when it cannot open the file itself (the TIFF/TGA Image Viewer does both). A multi-file selection can span assets. Build each file's URL from its `multiFiles` entry's `assetId` and `databaseId`, and fall back to the top-level pair when the entry carries none.
 
+### File Keys and Viewer Data
+
+`assetKey` and each `multiFileKeys` entry carry the key the host has for the file: the full Amazon S3 key the file list returns (the file manager, the file page) or the file's path in the asset (search results, the asset version views). Send it to the API as given; never strip or add a prefix to guess another form. The file stream route and the auxiliary preview stream both read the full key and the asset-relative path, for assets on a folder and assets created from one object, and decide which file of the asset a path names. A path that starts with the asset's location key is read as the full key.
+
+A viewer that reads data a pipeline wrote for the file, such as the octree of the Point Cloud Potree Viewer pipeline, builds the URL with `auxiliaryPreviewStreamUrl(config.api, databaseId, assetId, fileKey, dataPath)` from `core/viewerData.ts`. It requests `{file key}/preview/{dataPath}` on the auxiliary preview stream, with each segment URL-encoded and the slashes kept, so a loader that resolves sibling files relative to `metadata.json` stays in the file's folder:
+
+```typescript
+import { auxiliaryPreviewStreamUrl, POTREE_VIEWER_METADATA } from "../../core/viewerData";
+
+const url = auxiliaryPreviewStreamUrl(
+    config.api,
+    databaseId,
+    assetId,
+    assetKey,
+    POTREE_VIEWER_METADATA
+);
+```
+
 ### Custom Parameters
 
 Viewers can access custom parameters from their configuration:
