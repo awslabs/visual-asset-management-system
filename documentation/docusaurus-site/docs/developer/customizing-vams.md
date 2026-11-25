@@ -186,7 +186,7 @@ A rule that is broken fails the import of `common/constants.py`, so every backen
 
 ### Upload deny lists
 
-The add-on and custom lanes can block more file types on upload, download, streaming and workflow output; they cannot unblock one. `common/constants.py` appends each lane's entries to the core `UNALLOWED_FILE_EXTENSION_LIST` and `UNALLOWED_MIME_LIST`. In `backend/backend/custom/customConstants.py`:
+The add-on and custom lanes can block more file types on upload, download, streaming and workflow output; they cannot unblock one. An added MIME type is matched against a stored object's content type, so it does not apply to uploads, which VAMS stores as `application/octet-stream`. `common/constants.py` appends each lane's entries to the core `UNALLOWED_FILE_EXTENSION_LIST` and `UNALLOWED_MIME_LIST`. In `backend/backend/custom/customConstants.py`:
 
 ```python
 CUSTOM_UNALLOWED_FILE_EXTENSIONS = [".xyz"]

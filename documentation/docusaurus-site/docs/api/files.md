@@ -602,15 +602,15 @@ A request accepts at most 1,000 files and 1,500 total parts across all files, an
 
 **Error Responses:**
 
-| Status | Description                                                                                                                          |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, asset not found, blocked file extension or MIME type, or a request over a per-request limit described above.     |
-| `403`  | Not authorized to upload files to this asset.                                                                                        |
-| `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60). |
-| `500`  | Internal server error.                                                                                                               |
+| Status | Description                                                                                                                                              |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, asset not found, a blocked file extension or one the database does not allow, or a request over a per-request limit described above. |
+| `403`  | Not authorized to upload files to this asset.                                                                                                            |
+| `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60).                     |
+| `500`  | Internal server error.                                                                                                                                   |
 
 :::info[Blocked File Types]
-For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked. The destination file name of a move, rename or copy gets the same extension check.
+For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. The destination file name of a move, rename or copy gets the same extension check. The blocked MIME type list does not apply to an upload, which is stored as `application/octet-stream`; see [Blocked File Types](../architecture/security.md#blocked-file-types).
 :::
 
 :::info[Single-file assets]

@@ -68,6 +68,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   A file delete removes the deleted file's rows from the asset versions; rows a file delete left before the upgrade stay, so the asset's version listings keep showing those files as permanently deleted, and deleting the file again cannot remove them (`400` `File not found.`). (PR #1913)
     -   Creating an asset with a chosen ID that an asset of another database uses is accepted again (2.6.8 refused it): comments and subscriptions now belong to the database and asset ID, so the two assets no longer share them. (issue #1860)
     -   The ModelOps pipeline processes the file of an asset created from a single Amazon S3 object again (2.6.8 refused it), from the run's own copy of the file, which holds none of the asset's companion files. (issue #1846, PR #1827)
+    -   A database's file extension restriction accepts `_` in an extension (`.x_t`, `.x_b`), which was refused, and a multi-part entry such as `.tar.gz` allows a file whose name ends with it, where only the last suffix (`.gz`) was compared. The web upload page and VamsCLI check the name a file is stored under the same way, so a file named only `.glb` is refused before the upload, as the API already refused it. (issue #371)
 -   New `auditLog` permission object type: a role's access to audit log records is set per audit log group. The seeded `admin` role holds it for every group, and no other role gets it unless an administrator adds a constraint or imports the Audit Reader permission template. (issue #1536)
 -   **Amazon S3 Transfer Acceleration** — Optional, off by default, commercial partition only: presigned upload and download URLs for flagged asset buckets use the accelerate host ([#1610](https://github.com/awslabs/visual-asset-management-system/issues/1610))
 
@@ -282,6 +283,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Archived files with many delete markers** — An archived file with 1,000 or more newer delete markers stays in search as archived. (issue #1790)
 -   **Trigger retries** — A `fileUpload` trigger event whose bucket registration or asset lookup cannot be read for the moment is retried instead of dropped. (issue #1207)
 -   **One version per throttled upload** — A file upload or workflow output that Amazon S3 throttled after it had already stored the file no longer leaves a second, identical file version. A file of up to 1 GiB written by an upload or a workflow carries the system metadata key `vams-copyuploadtoken`, as large outputs and zip archives already do; it is not indexed or shown. (issue #1848)
+-   **Extension restrictions with `_` and multi-part extensions** — A database's file extension restriction accepts `_` in an extension (`.x_t`, `.x_b`) and matches a multi-part extension such as `.tar.gz` by the end of the file name, in the API, the web upload page and database form, and VamsCLI. (issue #371)
 -   **No copy of directly written files** — Bucket sync no longer copies a directly written file onto itself; the object keeps its version, dates, headers, storage class, tags and owner, and each synced version gets the `VAMS:databaseId` and `VAMS:assetId` object tags. (issues #1207, #365)
 -   **Tag switch per bucket** — `tagSyncedObjects` (default on) turns the VAMS object tags off for a bucket registration. (issue #1207)
 -   **Recursive loop detection on** — The bucket-sync functions no longer opt out of AWS Lambda recursive loop detection. (issue #1207)
@@ -660,6 +662,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Remote MCP token forwarding** — The [Remote MCP Server](../mcp/remote-mcp-server.md#token-forwarding) page records that remote mode forwards each request's access token to the VAMS API by design, with the reasons and the controls that keep it safe. (PR #1700)
 -   **PyTorch3D notice** — `NOTICE.md` and the [Notices](notices.md) page name Meta PyTorch3D (BSD-3-Clause), which the Image to 3D pipeline's Step1X-3D image builds from source. (PR #1898)
 -   **File metadata by full key** — The [Metadata API](../api/metadata.md#file-metadata) page and `VAMS_API.yaml` say that a file whose listed path starts with the asset ID as a folder, or with the asset's location, must be named by its full key. (PR #1898)
+-   **Blocked MIME types** — The [security](../architecture/security.md#blocked-file-types), quotas, files and versions, FAQ, known limitations, files API and architecture pages say that the blocked MIME type list is checked against a stored object's content type and does not apply to uploads, which VAMS stores as `application/octet-stream`. (issue #371)
 
 **Other changes:**
 

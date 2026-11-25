@@ -174,8 +174,8 @@ sequenceDiagram
 
 ### Upload Process Details
 
-1. The web application requests a presigned URL from the upload API endpoint, providing file metadata (name, size, content type).
-2. The Lambda handler validates the file against blocked extension and MIME type lists, then generates an Amazon S3 presigned URL.
+1. The web application requests a presigned URL from the upload API endpoint, providing each file's path and size.
+2. The Lambda handler checks each file name against the blocked extension list and the database's extension restriction, then generates an Amazon S3 presigned URL.
 3. The browser uploads the file directly to Amazon S3 using the presigned URL (supporting multipart for large files).
 4. Amazon S3 emits an `ObjectCreated` event to the bucket-specific Amazon SNS topic.
 5. The Amazon SNS topic fans out to an Amazon SQS queue subscribed by the bucket sync Lambda.

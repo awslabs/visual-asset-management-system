@@ -306,8 +306,8 @@ prefix=textures/
 
 File upload restrictions operate at two levels:
 
-1. **System-wide restrictions** -- Certain file extensions (`.exe`, `.dll`, `.bat`, `.jar`, `.cmd`, etc.) and MIME types are always blocked regardless of database settings.
-2. **Database-level restrictions** -- When `restrictFileUploadsToExtensions` is configured on a database, only the specified extensions are permitted for uploads through the web interface and CLI.
+1. **System-wide restrictions** -- Certain file extensions (`.exe`, `.dll`, `.bat`, `.jar`, `.cmd`, etc.) are always blocked on upload, regardless of database settings. A list of blocked MIME types applies to the content type Amazon S3 reports for a stored file; an upload through VAMS is stored as `application/octet-stream`, so for uploaded files only the extension list applies. See [Blocked File Types](../architecture/security.md#blocked-file-types).
+2. **Database-level restrictions** -- When `restrictFileUploadsToExtensions` is configured on a database, only files whose names end with one of the listed extensions can be uploaded. An extension starts with a dot and can contain letters, digits, `_` and further dots, so `.x_t` and a multi-part extension such as `.tar.gz` can be listed; the match is case-insensitive. The web interface and the CLI check the names before the upload starts, and the API refuses the rest.
 
 ## Cross-database file copy with metadata
 
