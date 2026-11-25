@@ -1310,7 +1310,8 @@ def index_ready(asset_table_name: str, read_parameter: Optional[Callable[[str], 
     A read that common.ssmParameters reports unavailable (throttled or timed out, or refused inside
     its back-off window) is not cached: the container keeps the last answer it read, False when it
     has none, and reads again on the next check once the window has passed. So a transient error
-    holds a ready index as not ready for no longer than that window.
+    holds a ready index as not ready for no longer than that window. A `read_parameter` passed in
+    has no such window, so its failures are cached like any other.
 
     The marker is written after the deployment, so it is read uncached with
     common.ssmParameters.read_parameter_value(): one read gives up within
@@ -1326,27 +1327,30 @@ def index_ready(asset_table_name: str, read_parameter: Optional[Callable[[str], 
     name = index_ready_parameter_name()
     ready = False
     if name and asset_table_name:
-        # Imported on first use: only this check reads Parameter Store, and the location rules above
-        # stay free of AWS dependencies for the handlers that import them.
-        from common.ssmParameters import ParameterUnavailableError
+        transient = ()
         try:
             if read_parameter is None:
+                # Imported on first use: only this check reads Parameter Store, and the location
+                # rules above stay free of AWS dependencies for the handlers that import them.
+                from common.ssmParameters import ParameterUnavailableError
                 from common.ssmParameters import read_parameter_value as read_parameter
+                transient = (ParameterUnavailableError,)
             value = read_parameter(name)
             ready = marker_says_complete(value, asset_table_name)
             if not ready:
                 logger.warning(f"Location index marker {name} does not record a completed backfill "
                                f"of {asset_table_name}")
-        except ParameterUnavailableError as e:
-            kept = cached is not None and cached[0]
-            if e.__cause__ is not None:
-                # A refusal inside the back-off window has no cause; common.ssmParameters logs those
-                # once per window.
-                logger.warning(f"Location index marker {name} could not be read ({_error_code_of(e)}); "
-                               + ("the last ready answer is kept" if kept else "the index is treated as not ready"))
-            return kept
         except Exception as e:
             code = _error_code_of(e)
+            if isinstance(e, transient):
+                kept = cached is not None and cached[0]
+                if e.__cause__ is not None:
+                    # A refusal inside the back-off window has no cause; common.ssmParameters logs
+                    # those once per window.
+                    logger.warning(f"Location index marker {name} could not be read ({code}); "
+                                   + ("the last ready answer is kept" if kept
+                                      else "the index is treated as not ready"))
+                return kept
             if code != 'ParameterNotFound':
                 logger.warning(f"Location index marker {name} could not be read ({code}); "
                                "the index is treated as not ready")
