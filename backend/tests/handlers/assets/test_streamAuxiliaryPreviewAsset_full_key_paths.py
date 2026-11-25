@@ -238,7 +238,14 @@ class TestTheRouteByFullKey:
         "../vams/other/x.e57/preview/r/octree.bin",
         "vams/outer/../other/x.e57/preview/r/octree.bin",
         "vams/outer/own.e57/preview/../../other/octree.bin",
-        "vams/outer//own.e57/preview/r/octree.bin",
+        # An empty segment anywhere but right after the location, three slashes, two empty segments (#1977)
+        "vams/outer/sub//own.e57/preview/r/octree.bin",
+        "vams/outer///own.e57/preview/r/octree.bin",
+        "vams/outer//a//own.e57/preview/r/octree.bin",
+        "/sub//own.e57/preview/r/octree.bin",
+        "///own.e57/preview/r/octree.bin",
+        "vams/outer/own.e57/preview//r/octree.bin",
+        "vams/outer/./own.e57/preview/r/octree.bin",
     ])
     @pytest.mark.parametrize("method", ["GET", "HEAD"])
     def test_a_traversal_form_is_refused_before_any_read(self, handler, path, method):
@@ -255,3 +262,67 @@ class TestTheRouteByFullKey:
         response = _call(m, OWN_FULL_KEY, method)
         assert response["statusCode"] == 403
         _no_s3_read(mock_s3)
+
+
+EMPTY_SEGMENT_KEY = "vams/outer//own.e57"
+
+
+@pytest.mark.unit
+class TestAnEmptySegmentRightAfterTheLocation:
+    """#1977: a file whose key has an empty segment right after the asset's location ('{location}/x', path in
+    the asset '//x') has viewer data at '{databaseId}/{location}/x/preview/...'. Exactly that shape is read,
+    by its full key, its path in the asset and its auxiliary key; every resolved key stays in the asset."""
+
+    @pytest.mark.parametrize("location,path,expected", [
+        ("a1/", f"//cloud.laz/{DATA}", f"db1/a1//cloud.laz/{DATA}"),
+        ("a1/", f"a1//cloud.laz/{DATA}", f"db1/a1//cloud.laz/{DATA}"),
+        ("a1/", f"db1/a1//cloud.laz/{DATA}", f"db1/a1//cloud.laz/{DATA}"),
+        ("vams/a1/", f"//scans/cloud.laz/{DATA}", f"db1/vams/a1//scans/cloud.laz/{DATA}"),
+        ("p1/model.laz", f"//x.laz/{DATA}", f"db1/p1/model.laz//x.laz/{DATA}"),
+        ("p1/model.laz", f"p1/model.laz//x.laz/{DATA}", f"db1/p1/model.laz//x.laz/{DATA}"),
+    ], ids=["path", "full-key", "aux-key", "base-prefix-path", "single-file-path", "single-file-full-key"])
+    def test_the_one_empty_segment_shape_is_read(self, location, path, expected):
+        assert _resolve(location, path) == expected
+
+    @pytest.mark.parametrize("location,path,expected", [
+        ("a1/", f"/cloud.laz/{DATA}", f"db1/a1/cloud.laz/{DATA}"),
+        ("a1/", f"a1/cloud.laz/{DATA}", f"db1/a1/cloud.laz/{DATA}"),
+    ])
+    def test_control_one_slash_names_the_other_file(self, location, path, expected):
+        assert _resolve(location, path) == expected
+
+    @pytest.mark.parametrize("location,path", [
+        ("a1/", f"a1/sub//cloud.laz/{DATA}"),
+        ("a1/", f"a2//cloud.laz/{DATA}"),
+        ("p1/model.laz", f"p1//model.laz/{DATA}"),
+        ("a1/", f"db1/a1/sub//cloud.laz/{DATA}"),
+    ], ids=["not-after-location", "other-asset", "inside-the-location-key", "aux-key-not-after-location"])
+    def test_an_empty_segment_elsewhere_is_refused(self, location, path):
+        module = _load()
+        with pytest.raises(module.VAMSGeneralErrorResponse) as refused:
+            module.resolve_aux_preview_key("db1", location, path)
+        assert str(refused.value).endswith("Requested file is not part of this asset")
+
+    @pytest.mark.parametrize("value,valid", [
+        (f"//cloud.laz/{DATA}", True),
+        (f"a1//cloud.laz/{DATA}", True),
+        (f"///cloud.laz/{DATA}", False),
+        (f"a1//b//cloud.laz/{DATA}", False),
+        (f"/sub//cloud.laz/{DATA}", False),
+        (f"//../cloud.laz/{DATA}", False),
+        (f"/cloud.laz/{DATA}", True),
+    ])
+    def test_the_validator_allows_exactly_one_empty_segment(self, value, valid):
+        from common.validators import validate
+        ok, message = validate({"p": {"value": value, "validator": "ASSET_AUXILIARYPREVIEW_PATH"}})
+        assert ok is valid
+        assert "cloud" not in message
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD"])
+    @pytest.mark.parametrize("path", [f"{EMPTY_SEGMENT_KEY}/preview/r/octree.bin", "//own.e57/preview/r/octree.bin"],
+                             ids=["full-key", "path"])
+    def test_the_route_serves_the_files_viewer_data(self, handler, method, path):
+        m, mock_s3 = handler
+        assert _call(m, path, method)["statusCode"] in SERVED
+        called = mock_s3.get_object if method == "GET" else mock_s3.head_object
+        assert called.call_args.kwargs["Key"] == f"db-a/{EMPTY_SEGMENT_KEY}/preview/r/octree.bin"
