@@ -203,6 +203,12 @@ def _shipped_s3():
     return module
 
 
+def _attempt_interval():
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    return now, now
+
+
 @pytest.mark.unit
 class TestUploadFinalCopyIsTheThirdWriter:
     """The final copy of an upload or workflow output stamps the shared key and decides by the shared
@@ -228,7 +234,8 @@ class TestUploadFinalCopyIsTheThirdWriter:
                                             version="null")
         failed = ClientError({"Error": {"Code": "SlowDown"}, "ResponseMetadata": {"HTTPStatusCode": 503}},
                              "CopyObject")
-        assert shipped._landed_version(s3, "b", "a1/x.glb", "upload-tok", failed, None) == (False, None)
+        assert shipped._landed_version(s3, "b", "a1/x.glb", "upload-tok", failed,
+                                       *_attempt_interval()) == (False, None)
 
     def test_the_uploads_own_token_is_its_landing(self, monkeypatch):
         monkeypatch.setenv("AWS_REGION", "us-east-1")
@@ -237,7 +244,8 @@ class TestUploadFinalCopyIsTheThirdWriter:
         s3.head_object.return_value = _head(metadata={TOKEN_KEY: "upload-tok"}, version="v7")
         failed = ClientError({"Error": {"Code": "SlowDown"}, "ResponseMetadata": {"HTTPStatusCode": 503}},
                              "CopyObject")
-        assert shipped._landed_version(s3, "b", "a1/x.glb", "upload-tok", failed, None) == (True, "v7")
+        assert shipped._landed_version(s3, "b", "a1/x.glb", "upload-tok", failed,
+                                       *_attempt_interval()) == (True, "v7")
 
 
 # --------------------------------------------------------------------------------------------- #

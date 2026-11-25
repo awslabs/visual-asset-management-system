@@ -671,8 +671,8 @@ SINGLE_REQUEST_COPY_MAX_BYTES = 8 * 1024 * 1024
 SINGLE_REQUEST_COPY_MAX_ATTEMPTS = 6
 SINGLE_REQUEST_COPY_BACKOFF_BASE = 2
 SINGLE_REQUEST_COPY_MAX_BACKOFF_SECONDS = 20
-# The landed check lists the versions written since the copy started, less this margin for the clock
-# difference between Lambda and Amazon S3, and reads at most this many of them.
+# The landed check lists the versions stamped within this margin of the failed attempt's own interval
+# (for the clock difference between Lambda and Amazon S3), and reads at most this many of them.
 LANDED_CHECK_CLOCK_MARGIN_SECONDS = 2
 LANDED_CHECK_MAX_VERSION_HEADS = 50
 
@@ -735,19 +735,55 @@ def _version_named_by_error(error):
     return version_id if version_id and version_id != 'null' else None
 
 
-def _landed_version(client, bucket: str, key: str, write_token: str, error, since: datetime):
+class _EarlierChecks:
+    """What the earlier landed checks of one copy call saw. Every one ran after its own attempt failed
+    and before the next attempt started, so none of these versions can be a later attempt's write.
+    ``read`` were HEADed and do not carry the token (a version's metadata never changes), so they are
+    never read again; ``listed`` were only listed, and are read last."""
+
+    def __init__(self):
+        self.read = set()
+        self.listed = set()
+
+
+def _seconds_outside(last_modified, attempt_started: datetime, attempt_ended: datetime) -> float:
+    """How far, in seconds, a version's LastModified lies outside the attempt's own interval, 0 when it
+    falls inside. Amazon S3 reports LastModified to the second, so a version stamped ``t`` was written
+    in [t, t + 1 s)."""
+    stamped_from = last_modified
+    stamped_to = last_modified + timedelta(seconds=1)
+    if stamped_to <= attempt_started:
+        return (attempt_started - stamped_to).total_seconds()
+    if stamped_from > attempt_ended:
+        return (stamped_from - attempt_ended).total_seconds()
+    return 0.0
+
+
+def _landed_version(client, bucket: str, key: str, write_token: str, error, attempt_started: datetime,
+                    attempt_ended: datetime, earlier: _EarlierChecks = None):
     """(landed, version_id) after a failed attempt of a copy that stamped ``write_token``.
 
     1. The version the error names: carries the token -> landed; does not exist -> that attempt did
        not land (an attempt writes at most the version its response names); refused or other -> 2.
     2. The current object carries the token -> landed (an unversioned or suspended bucket has no
        other object, and this is the quiet case).
-    3. Versioned bucket only: the key's versions written since ``since`` (less the clock margin),
-       oldest first, up to LANDED_CHECK_MAX_VERSION_HEADS of them; the first with the token -> landed.
+    3. Versioned bucket only: one listing page of the key's versions, narrowed to the ones that can be
+       this attempt's write: LastModified within LANDED_CHECK_CLOCK_MARGIN_SECONDS of the attempt's own
+       interval (``attempt_started`` to ``attempt_ended``, this attempt's, not the call's), and not
+       already read by this check or an earlier one. They are read in the order most likely to hold
+       the attempt's write first, up to LANDED_CHECK_MAX_VERSION_HEADS of them: versions no earlier
+       check saw before versions an earlier check listed (those predate this attempt); then versions
+       stamped inside the attempt's interval before those in the margin, nearest first; then newest
+       first (a key's versions are listed newest first, in write order). Newest first because the
+       writes stamped inside the interval that follow this attempt's are the ones that land before
+       its response arrives, while those before it include every write since the start of the second
+       the attempt began in. The first with the token -> landed.
     Anything else, a refused or failed read included, is not confirmed: the caller copies again, so a
-    token that cannot be found ends with the attempt budget rather than a loop.
+    token that cannot be found ends with the attempt budget rather than a loop. ``earlier`` collects
+    what this check saw, for the next attempt's check.
     """
-    checked = set()
+    earlier = earlier if earlier is not None else _EarlierChecks()
+    checked = set(earlier.read)
     named = _version_named_by_error(error)
     if named:
         checked.add(named)
@@ -755,6 +791,7 @@ def _landed_version(client, bucket: str, key: str, write_token: str, error, sinc
             head = client.head_object(Bucket=bucket, Key=key, VersionId=named)
             if is_own_upload_object(head, write_token):
                 return True, head.get('VersionId') or named
+            earlier.read.add(named)
         except ClientError as e:
             if _error_code(e) in _NOT_FOUND_CODES:
                 return False, None
@@ -776,24 +813,35 @@ def _landed_version(client, bucket: str, key: str, write_token: str, error, sinc
     if not current_version or current_version == 'null':
         return False, None
     checked.add(current_version)
+    earlier.read.add(current_version)
 
     try:
         page = client.list_object_versions(Bucket=bucket, Prefix=key, MaxKeys=S3_VERSIONS_PAGE_SIZE)
     except Exception as e:
         logger.warning(f"Could not list the versions of {key} after a failed copy ({_error_label(e)})")
         return False, None
-    floor = since - timedelta(seconds=LANDED_CHECK_CLOCK_MARGIN_SECONDS)
-    # The prefix also lists longer keys; only this key's entries count. A key's versions are listed
-    # newest first, and the failed attempt wrote before the writers that followed it, so read the
-    # newly written versions oldest first.
-    candidates = [entry for entry in reversed(page.get('Versions') or [])
-                  if entry.get('Key') == key and entry.get('VersionId') not in checked
-                  and not (isinstance(entry.get('LastModified'), datetime) and entry['LastModified'] < floor)]
-    candidates.sort(key=lambda entry: entry['LastModified']
-                    if isinstance(entry.get('LastModified'), datetime) else floor)
-    for entry in candidates[:LANDED_CHECK_MAX_VERSION_HEADS]:
+    margin = LANDED_CHECK_CLOCK_MARGIN_SECONDS
+    ranked = []
+    # The prefix also lists longer keys; only this key's entries count. The page lists them newest
+    # first, so ``position`` is the write order, newest first.
+    own_entries = [entry for entry in (page.get('Versions') or []) if entry.get('Key') == key]
+    for position, entry in enumerate(own_entries):
+        version_id = entry.get('VersionId')
+        if not version_id or version_id in checked:
+            continue
+        last_modified = entry.get('LastModified')
+        if isinstance(last_modified, datetime):
+            outside = _seconds_outside(last_modified, attempt_started, attempt_ended)
+            if outside > margin:
+                continue
+        else:
+            outside = margin
+        ranked.append(((version_id in earlier.listed, outside, position), version_id))
+    earlier.listed.update(entry.get('VersionId') for entry in own_entries if entry.get('VersionId'))
+    ranked.sort(key=lambda item: item[0])
+    for _, version_id in ranked[:LANDED_CHECK_MAX_VERSION_HEADS]:
         try:
-            head = client.head_object(Bucket=bucket, Key=key, VersionId=entry['VersionId'])
+            head = client.head_object(Bucket=bucket, Key=key, VersionId=version_id)
         except ClientError as e:
             if _error_code(e) in _NOT_FOUND_CODES or _error_code(e) in _DELETE_MARKER_CODES:
                 continue
@@ -803,7 +851,11 @@ def _landed_version(client, bucket: str, key: str, write_token: str, error, sinc
             logger.warning(f"Could not read a version of {key} after a failed copy ({_error_label(e)})")
             return False, None
         if is_own_upload_object(head, write_token):
-            return True, entry['VersionId']
+            return True, version_id
+        earlier.read.add(version_id)
+    if len(ranked) > LANDED_CHECK_MAX_VERSION_HEADS:
+        logger.warning(f"Checked {LANDED_CHECK_MAX_VERSION_HEADS} of the {len(ranked)} versions of {key} "
+                       f"written around the failed attempt, none of them its write")
     return False, None
 
 
@@ -861,11 +913,13 @@ def copy_s3_object_repeat_safe(source_bucket: str, source_key: str, dest_bucket:
         def write():
             return write_client.put_object(Bucket=dest_bucket, Key=dest_key, Body=body, **put_args)
 
-    started = datetime.now(timezone.utc)
+    earlier = _EarlierChecks()
     for attempt in range(SINGLE_REQUEST_COPY_MAX_ATTEMPTS):
+        attempt_started = datetime.now(timezone.utc)
         try:
             response = write()
         except Exception as error:
+            attempt_ended = datetime.now(timezone.utc)
             if not is_retryable_write_error(error):
                 raise
             last_attempt = attempt == SINGLE_REQUEST_COPY_MAX_ATTEMPTS - 1
@@ -874,7 +928,7 @@ def copy_s3_object_repeat_safe(source_bucket: str, source_key: str, dest_bucket:
                 # stored version time to show before it is looked for.
                 sleep(single_request_copy_backoff(attempt, rng))
             landed, version_id = _landed_version(read_client, dest_bucket, dest_key, write_token, error,
-                                                 started)
+                                                 attempt_started, attempt_ended, earlier)
             if landed:
                 logger.info(f"Copy to {dest_key} answered {_error_label(error)} on attempt {attempt + 1}, "
                             f"but it landed as version {version_id}, so it is not copied again")

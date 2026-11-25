@@ -25,6 +25,7 @@ import functools
 import importlib.util
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import boto3
@@ -312,7 +313,7 @@ class TestALandedCopyIsNotWrittenTwice:
 
     def test_t1c_slowdown_then_a_burst_of_other_writers(self, s3env):
         # 20 versions of another writer land after the upload's and before the check: the current
-        # object is not the upload's, so the check finds it among the versions written since it began.
+        # object is not the upload's, so the check finds it among the versions stamped around the attempt.
         s3env.fault(answer="503", header=False, burst=20)
         s3env.route_upload_copy()
 
@@ -358,6 +359,180 @@ class TestALandedCopyIsNotWrittenTwice:
         assert fault.sent <= 1
         head = s3env.writer.head_object(Bucket=ASSET, Key=FINAL_KEY)
         assert len(head["Metadata"].get(TOKEN_KEY, "")) == 32
+
+
+class PlannedFault(WriteFault):
+    """A WriteFault whose faulted attempts follow ``plan``: one (store, burst) pair per attempt."""
+
+    def __init__(self, plan, **kwargs):
+        super().__init__(times=len(plan), **kwargs)
+        self.plan = plan
+
+    def __call__(self, request=None, event_name=None, **kwargs):
+        if f"/{ASSET}/" in request.url and self.faulted < len(self.plan):
+            self.store, self.burst = self.plan[self.faulted]
+        return super().__call__(request=request, event_name=event_name, **kwargs)
+
+
+def _other_versions(env, count, tag):
+    for index in range(count):
+        env.writer.put_object(Bucket=ASSET, Key=FINAL_KEY, Body=b"%s %d" % (tag, index),
+                              Metadata={"writer": "other"})
+
+
+def _token_versions(env, token):
+    return [version for version, metadata in env.upload_versions() if metadata.get(TOKEN_KEY) == token]
+
+
+@pytest.mark.unit
+class TestManyOtherWritersAroundTheAttempt:
+    """More versions than the check reads (LANDED_CHECK_MAX_VERSION_HEADS) around the attempt, and a 503
+    that names no version: the attempt's own write is still found, and the check stays bounded."""
+
+    def test_t13_sixty_writes_just_before_the_copy_and_one_after(self, s3env):
+        # Inside the clock margin before the copy, then one writer after it: oldest first from the
+        # margin, the copy's version is the 61st candidate.
+        _other_versions(s3env, 60, b"before")
+        fault = s3env.fault(answer="503", header=False, burst=1)
+        token = "a" * 32
+
+        s3env.helper_copy(token=token)
+
+        assert len(_token_versions(s3env, token)) == 1
+        assert fault.sent <= 1
+
+    def test_t13_through_the_upload_copy(self, s3env):
+        _other_versions(s3env, 60, b"before")
+        s3env.fault(answer="503", header=False, burst=1)
+        s3env.route_upload_copy()
+
+        assert s3env.upload_copy() is True
+
+        assert len(s3env.upload_versions()) == 1
+
+    def test_t14_writes_during_an_earlier_attempt_do_not_hide_the_later_one(self, s3env):
+        # Attempt 1 stores nothing while 55 other writers land; attempt 2 stores, answers 503 without a
+        # version, and one more writer follows. The 55 belong to before attempt 2 and are read last.
+        fault = PlannedFault([(False, 55), (True, 1)], answer="503", header=False, writer=s3env.writer)
+        for client in s3env.clients(REGION):
+            client.meta.events.register_first("before-send.s3.CopyObject", fault)
+            client.meta.events.register_last("before-send", _ResumeMoto())
+        token = "b" * 32
+
+        version_id = s3env.helper_copy(token=token)
+
+        assert _token_versions(s3env, token) == [version_id]
+        assert 2 <= fault.sent <= 2
+
+    def test_t14_with_writers_before_both_attempts(self, s3env):
+        _other_versions(s3env, 40, b"before")
+        fault = PlannedFault([(False, 55), (False, 30), (True, 2)], answer="503", header=False,
+                             writer=s3env.writer)
+        for client in s3env.clients(REGION):
+            client.meta.events.register_first("before-send.s3.CopyObject", fault)
+            client.meta.events.register_last("before-send", _ResumeMoto())
+        token = "c" * 32
+
+        s3env.helper_copy(token=token)
+
+        assert len(_token_versions(s3env, token)) == 1
+        assert fault.sent <= 3
+
+    def test_t15_the_check_stays_bounded_with_many_versions(self, s3env):
+        # 120 other writers land during an attempt that never stores: each check is one listing and at
+        # most the capped number of version reads, plus the named and the current object.
+        fault = PlannedFault([(False, 120)] + [(False, 0)] * 5, answer="503-unavailable", header=False,
+                             writer=s3env.writer)
+        for client in s3env.clients(REGION):
+            client.meta.events.register_first("before-send.s3.CopyObject", fault)
+            client.meta.events.register_last("before-send", _ResumeMoto())
+        reads = Recorder(REGION)
+        s3env.shipped.s3_client_for_region(REGION).meta.events.register_first("before-send.s3.*", reads)
+        attempts = s3env.shipped.SINGLE_REQUEST_COPY_MAX_ATTEMPTS
+        cap = s3env.shipped.LANDED_CHECK_MAX_VERSION_HEADS
+
+        with pytest.raises(ClientError):
+            s3env.helper_copy(token="d" * 32)
+
+        operations = [op for _, op in reads.seen]
+        assert 1 <= operations.count("ListObjectVersions") <= attempts
+        assert operations.count("HeadObject") <= attempts * (cap + 2)
+        assert fault.sent <= attempts
+
+
+def _stamp(base, seconds):
+    return (base + timedelta(seconds=seconds)).replace(microsecond=0)
+
+
+@pytest.mark.unit
+class TestTheCheckReadsTheAttemptsOwnWindow:
+    """The candidates of one check, on a crafted listing (LastModified to the second, as S3 reports it)."""
+
+    def _client(self, entries, own):
+        client = MagicMock()
+        read = []
+
+        def head(Bucket=None, Key=None, VersionId=None):
+            if VersionId is None:
+                return {"VersionId": entries[0]["VersionId"], "Metadata": {}}
+            read.append(VersionId)
+            return {"VersionId": VersionId, "Metadata": {TOKEN_KEY: "e" * 32} if VersionId == own else {}}
+
+        client.head_object.side_effect = head
+        client.list_object_versions.return_value = {"Versions": entries}
+        return client, read
+
+    def test_t16_versions_stamped_outside_the_attempt_are_never_read(self, s3env):
+        started = datetime(2026, 11, 25, 1, 0, 10, 400000, tzinfo=timezone.utc)
+        ended = started.replace(microsecond=700000)
+        late = [{"Key": FINAL_KEY, "VersionId": f"late-{i}", "LastModified": _stamp(started, 9)} for i in range(20)]
+        after = [{"Key": FINAL_KEY, "VersionId": f"after-{i}", "LastModified": _stamp(started, 0)} for i in range(3)]
+        own = {"Key": FINAL_KEY, "VersionId": "own", "LastModified": _stamp(started, 0)}
+        before = [{"Key": FINAL_KEY, "VersionId": f"before-{i}", "LastModified": _stamp(started, 0)}
+                  for i in range(60)]
+        old = [{"Key": FINAL_KEY, "VersionId": f"old-{i}", "LastModified": _stamp(started, -30)} for i in range(70)]
+        sibling = [{"Key": FINAL_KEY + ".previewFile.png", "VersionId": "sibling",
+                    "LastModified": _stamp(started, 0)}]
+        client, read = self._client(late + after + [own] + before + old + sibling, "own")
+        failed = ClientError({"Error": {"Code": "SlowDown"}, "ResponseMetadata": {"HTTPStatusCode": 503}},
+                             "CopyObject")
+
+        assert s3env.shipped._landed_version(client, ASSET, FINAL_KEY, "e" * 32, failed, started,
+                                             ended) == (True, "own")
+
+        outside = {entry["VersionId"] for entry in late + old + sibling}
+        assert not outside & set(read)
+        assert len(read) <= s3env.shipped.LANDED_CHECK_MAX_VERSION_HEADS
+
+    def test_t16_an_earlier_checks_versions_are_read_last(self, s3env):
+        started = datetime(2026, 11, 25, 1, 0, 10, 400000, tzinfo=timezone.utc)
+        own = {"Key": FINAL_KEY, "VersionId": "own", "LastModified": _stamp(started, 0)}
+        seen = [{"Key": FINAL_KEY, "VersionId": f"seen-{i}", "LastModified": _stamp(started, 0)} for i in range(80)]
+        client, read = self._client(seen[:1] + [own] + seen[1:], "own")
+        earlier = s3env.shipped._EarlierChecks()
+        earlier.listed.update(entry["VersionId"] for entry in seen)
+        failed = ClientError({"Error": {"Code": "SlowDown"}, "ResponseMetadata": {"HTTPStatusCode": 503}},
+                             "CopyObject")
+
+        assert s3env.shipped._landed_version(client, ASSET, FINAL_KEY, "e" * 32, failed, started, started,
+                                             earlier) == (True, "own")
+
+        assert read[:1] == ["own"]
+
+    def test_t16_a_version_an_earlier_check_read_is_not_read_again(self, s3env):
+        started = datetime(2026, 11, 25, 1, 0, 10, 400000, tzinfo=timezone.utc)
+        entries = [{"Key": FINAL_KEY, "VersionId": f"v-{i}", "LastModified": _stamp(started, 0)} for i in range(5)]
+        client, read = self._client(entries, "none")
+        earlier = s3env.shipped._EarlierChecks()
+        earlier.read.update({"v-1", "v-2"})
+        failed = ClientError({"Error": {"Code": "SlowDown"}, "ResponseMetadata": {"HTTPStatusCode": 503}},
+                             "CopyObject")
+
+        assert s3env.shipped._landed_version(client, ASSET, FINAL_KEY, "e" * 32, failed, started, started,
+                                             earlier) == (False, None)
+
+        assert not {"v-1", "v-2"} & set(read)
+        assert {"v-3", "v-4"} <= set(read) and {"v-3", "v-4"} <= earlier.read
 
 
 @pytest.mark.unit
