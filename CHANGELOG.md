@@ -79,6 +79,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: rows a file delete left before the update stay, so the asset's version listings keep showing those files as permanently deleted, and deleting the file again cannot remove them (`400` `File not found.`).
 -   **Assets** Uploads of the same file to one asset that complete at the same time each store a version of the file. They shared one staged copy, so most or all of them failed with `Upload ID mismatch.` ([#1928](https://github.com/awslabs/visual-asset-management-system/issues/1928))
     -   Note: each upload is now staged in its own folder under `temp-uploads/`, so a file key uploaded through VAMS can be at most 998 bytes in a bucket registered at its root (1,011 before), less the bucket's base prefix otherwise. A longer key is refused when the upload starts, with a message that names the limit. ([#1928](https://github.com/awslabs/visual-asset-management-system/issues/1928))
+-   **Documentation** The FAQ, API authentication, configuration reference, deployment and getting-started pages and the `oidc-config.ts` comment no longer say the username and password form stays available with Amazon Cognito SAML or OIDC federation: the web login page shows only the federated button, and native user pool accounts, including the initial administrator, sign in with VamsCLI. ([#652](https://github.com/awslabs/visual-asset-management-system/issues/652))
 
 ### Chores
 
