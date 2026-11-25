@@ -7,8 +7,10 @@ import {
     addFiles,
     getRootByPath,
     mergeFiles,
+    getParentFolderPaths,
     normalizeFileManagerPath,
     resolveFileManagerPath,
+    segmentDisplayName,
 } from "./FileManagerUtils";
 import type { FileKey, FileTree } from "../types/FileManagerTypes";
 
@@ -129,7 +131,8 @@ describe("normalizeFileManagerPath", () => {
     it.each([
         ["out/sub/model.glb", "/out/sub/model.glb"],
         ["/out/sub/model.glb", "/out/sub/model.glb"],
-        ["//out//sub///model.glb", "/out/sub/model.glb"],
+        // Repeated slashes are kept: "//x" names the file whose key has an empty segment (#1977)
+        ["//out//sub///model.glb", "//out//sub///model.glb"],
         ["out/sub/", "/out/sub/"],
         ["", "/"],
         ["/", "/"],
@@ -170,10 +173,8 @@ describe("resolveFileManagerPath", () => {
         expect(resolveFileManagerPath(tree(), "model.glb")?.relativePath).toBe("/model.glb");
     });
 
-    it("finds a path written with repeated slashes", () => {
-        expect(resolveFileManagerPath(tree(), "//out//sub/model.glb")?.relativePath).toBe(
-            "/out/sub/model.glb"
-        );
+    it("does not read a path with repeated slashes as another file's path (#1977)", () => {
+        expect(resolveFileManagerPath(tree(), "//out//sub/model.glb")).toBeNull();
     });
 
     it.each(["/out/sub/", "out/sub/", "/out/sub", "out/sub"])("finds a folder from %p", (input) => {
@@ -300,5 +301,73 @@ describe("resolveFileManagerPath with the asset's full key", () => {
         const tree = treeUnder("a1/", ["/x.glb", "/a1/x.glb"]);
         expect(resolveFileManagerPath(tree, "/a1/x.glb")?.keyPrefix).toBe("a1/a1/x.glb");
         expect(resolveFileManagerPath(tree, "/a1/a1/x.glb")?.relativePath).toBe("/a1/x.glb");
+    });
+});
+
+/**
+ * #1977: a key with an empty segment right after the asset's folder ("asset-1//cloud.las") is listed at
+ * "//cloud.las". The tree shows it as its own file, in a folder named "/" as the Amazon S3 console does,
+ * beside "asset-1/cloud.las" at "/cloud.las"; both nodes keep the path that names their own key.
+ */
+describe("a key with an empty segment after the asset's folder", () => {
+    const tree = () =>
+        addFiles(
+            [
+                fileKey("/cloud.las", { versionId: "v-root" }),
+                fileKey("//cloud.las", { versionId: "v-empty" }),
+                fileKey("//sub/deep.las"),
+            ],
+            rootTree()
+        );
+
+    it("is its own file, inside a folder shown as '/'", () => {
+        const root = tree();
+        const folder = getRootByPath(root, "//") as FileTree;
+        expect(folder).toMatchObject({ name: "", displayName: "/", isFolder: true });
+        expect(getRootByPath(root, "//cloud.las")).toMatchObject({
+            relativePath: "//cloud.las",
+            keyPrefix: "asset-1//cloud.las",
+            versionId: "v-empty",
+        });
+        expect(getRootByPath(root, "/cloud.las")).toMatchObject({
+            relativePath: "/cloud.las",
+            keyPrefix: "asset-1/cloud.las",
+            versionId: "v-root",
+        });
+        expect(getRootByPath(root, "//sub/deep.las")?.relativePath).toBe("//sub/deep.las");
+        expect(root.subTree.map((node) => node.displayName).sort()).toEqual(["/", "cloud.las"]);
+    });
+
+    it("keeps its folder marker as the '/' folder", () => {
+        const root = addFiles(
+            [
+                { ...fileKey("//"), fileName: "", key: "asset-1//", isFolder: true },
+                fileKey("//a.las"),
+            ],
+            rootTree()
+        );
+        const folders = root.subTree.filter((node) => node.isFolder);
+        expect(folders).toHaveLength(1);
+        expect(folders[0]).toMatchObject({ relativePath: "//", displayName: "/" });
+    });
+
+    it("is found by its path, and the one-slash path finds the other file", () => {
+        expect(resolveFileManagerPath(tree(), "//cloud.las")?.keyPrefix).toBe("asset-1//cloud.las");
+        expect(resolveFileManagerPath(tree(), "/cloud.las")?.keyPrefix).toBe("asset-1/cloud.las");
+        expect(resolveFileManagerPath(tree(), "asset-1//cloud.las")?.keyPrefix).toBe(
+            "asset-1//cloud.las"
+        );
+    });
+
+    it("has the '/' folder as its parent", () => {
+        expect(getParentFolderPaths("//cloud.las")).toEqual(["/", "//"]);
+        expect(segmentDisplayName("")).toBe("/");
+        expect(segmentDisplayName("sub")).toBe("sub");
+    });
+
+    it("merges an update onto its own node, not the other file's", () => {
+        const merged = mergeFiles([fileKey("//cloud.las", { versionId: "v-empty-2" })], tree());
+        expect(getRootByPath(merged, "//cloud.las")?.versionId).toBe("v-empty-2");
+        expect(getRootByPath(merged, "/cloud.las")?.versionId).toBe("v-root");
     });
 });
