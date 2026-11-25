@@ -121,6 +121,24 @@ describe("Potree viewer load failure", () => {
         );
     });
 
+    it("keeps the leading slash of a path in the asset from search results (D1)", async () => {
+        respond(404, { message: "File not found" });
+        render(
+            <PotreeViewerComponent
+                {...({
+                    assetId: "asset1",
+                    databaseId: "db1",
+                    assetKey: "/asset1/cloud.las",
+                } as any)}
+            />
+        );
+        await waitFor(() => expect(mockLoadPointCloud).toHaveBeenCalled());
+        expect(mockLoadPointCloud.mock.calls[0][0]).toBe(
+            "https://api.example/api/database/db1/assets/asset1/auxiliaryPreviewAssets/stream/" +
+                "/asset1/cloud.las/preview/PotreeViewer/metadata.json"
+        );
+    });
+
     it.each([
         ["a bucket with a base prefix", "vams/asset1/scans/cloud.las"],
         ["an asset on an existing folder", "custom/path/cloud.las"],

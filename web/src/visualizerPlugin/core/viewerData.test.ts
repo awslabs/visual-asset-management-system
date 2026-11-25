@@ -5,8 +5,9 @@
 
 /**
  * The Potree and VEERUM viewers build a file's viewer data URL with `auxiliaryPreviewStreamUrl` (#1855).
- * The file is sent by the key the host gives: the API reads a full key and an asset-relative path alike
- * and decides which file of the asset it names, so the viewer never guesses a relative path. Stripping a
+ * The file is sent by the key the host gives: the API reads a full key and a path in the asset (marked by
+ * its leading `/`, which is kept) and decides which file of the asset it names, so the viewer never
+ * guesses a relative path. Stripping a
  * leading `{assetId}/` missed every asset whose location is not `{assetId}/` (a base prefix, an asset on
  * an existing folder) and named the wrong file in a subfolder named like the asset.
  */
@@ -29,9 +30,23 @@ describe("auxiliaryPreviewStreamUrl", () => {
         expect(metadataUrl(key)).toBe(`${STREAM}${key}/preview/PotreeViewer/metadata.json`);
     });
 
-    it("sends an asset-relative key from a host without the full key, without its leading slash", () => {
+    it("keeps the leading slash of a path in the asset from a host without the full key", () => {
         expect(metadataUrl("/scans/cloud.laz")).toBe(
-            `${STREAM}scans/cloud.laz/preview/PotreeViewer/metadata.json`
+            `${STREAM}/scans/cloud.laz/preview/PotreeViewer/metadata.json`
+        );
+    });
+
+    it("keeps the slash of a path that starts with the asset's location key (D1)", () => {
+        // Search results name the file asset-1/asset-1/cloud.laz by its path /asset-1/cloud.laz; without
+        // the slash the API reads asset-1/cloud.laz as the full key of the file at the asset root.
+        expect(metadataUrl("/asset-1/cloud.laz")).toBe(
+            `${STREAM}/asset-1/cloud.laz/preview/PotreeViewer/metadata.json`
+        );
+    });
+
+    it("sends repeated leading slashes as one", () => {
+        expect(metadataUrl("//scans/cloud.laz")).toBe(
+            `${STREAM}/scans/cloud.laz/preview/PotreeViewer/metadata.json`
         );
     });
 
