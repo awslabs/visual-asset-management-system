@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Document Revision History | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/additional/revisions"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Document Revision History | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="This page tracks the version history of the Visual Asset Management System (VAMS). Each release includes a summary of key changes, new features, and important upgrade notes."><meta data-rh="true" property="og:description" content="This page tracks the version history of the Visual Asset Management System (VAMS). Each release includes a summary of key changes, new features, and important upgrade notes."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.8/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/additional/revisions"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/additional/revisions" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/additional/revisions" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Document Revision History","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.8/additional/revisions"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.8/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.8/assets/js/runtime~main.1225d4ef.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.8/assets/js/runtime~main.8c1a4b5e.js" defer="defer"></script>
 <script src="/visual-asset-management-system/release-2.6.8/assets/js/main.88e94686.js" defer="defer"></script>
 </head>
 <body>
@@ -224,6 +224,11 @@
 </ul>
 </li>
 <li class=""><strong>Concurrent uploads of one file</strong> — Uploads of the same file to one asset that complete at the same time each store a version of the file, instead of most or all failing with <code>Upload ID mismatch.</code>. Each upload is staged in its own folder, so an uploaded file key can be at most 998 bytes at a bucket&#x27;s root (1,011 before). (issue #1928)</li>
+<li class=""><strong>Point cloud viewer data outside an <code>{assetId}/</code> folder</strong> — The Potree viewer loads the octree of a file in a bucket registered under a base prefix, in an asset created on an existing folder, or in the companion folder of an asset created from one S3 object; the auxiliary preview stream reads a file&#x27;s full key as well as its path in the asset. (issue #1855)
+<ul>
+<li class="">Note: A path with a leading <code>/</code> is always the path in the asset; a path without one that starts with the asset&#x27;s location key is the full key. The licensed VEERUM viewer&#x27;s point cloud loading gets the same fix.</li>
+</ul>
+</li>
 </ul>
 <p><strong>Other changes:</strong></p>
 <ul>
@@ -233,6 +238,7 @@
 </ul>
 <p><strong>Known issues:</strong></p>
 <ul>
+<li class="">A single-file asset&#x27;s own file does not appear in file search results, so it cannot be found or opened from search; open it from the asset&#x27;s file manager or file page instead. (issue #1982)</li>
 <li class="">An asset permanent delete can report success while Amazon S3 keeps the asset&#x27;s files (for example, when a bucket policy denies the delete or the objects are locked): the asset&#x27;s records are removed and the files stay in the bucket. Fixed in 2.7.0. (issue #1768)</li>
 <li class="">Deleting a file of an asset stored in a folder also deletes the viewer data of the same asset&#x27;s files under a folder named like that file: deleting <code>p/scan.e57</code> removes the viewer data of the files under <code>p/scan.e57/</code>. Fixed in 2.7.0. (issue #1870)</li>
 <li class="">Comments and subscriptions are stored by asset ID alone. Two assets with the same asset ID in different databases share their comments and subscription, and permanently deleting one of them deletes the other&#x27;s comments and subscription. Fixed in 2.7.0. (issue #1860)
