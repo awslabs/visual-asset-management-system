@@ -158,3 +158,27 @@ class TestInitializeStageChecksTheFilesBeforeCreatingTheAsset:
                                       os.environ["FILE_UPLOAD_LAMBDA_FUNCTION_NAME"]]
         assert (DATABASE_ID, ASSET_ID) in ingest.assets
         assert json.loads(response["body"])["uploadId"].startswith("y")
+
+
+@pytest.mark.unit
+class TestTheDatabaseRestrictionMatchesTheWholeExtension:
+    """Issue #371 IF-044: a multi-part (.tar.gz) or underscore (.x_t) entry, as the upload step."""
+
+    @pytest.mark.parametrize("name", ["part.x_t", "ARCHIVE.TAR.GZ"])
+    def test_a_listed_extension_creates_the_asset(self, ingest, name):
+        ingest.database = {"databaseId": DATABASE_ID, "restrictFileUploadsToExtensions": ".x_t,.tar.gz"}
+
+        response = ingest.run(name)
+
+        assert response["statusCode"] == 200, response["body"]
+        assert (DATABASE_ID, ASSET_ID) in ingest.assets
+
+    @pytest.mark.parametrize("name", ["archive.gz", "README"])
+    def test_another_name_creates_no_asset(self, ingest, name):
+        ingest.database = {"databaseId": DATABASE_ID, "restrictFileUploadsToExtensions": ".x_t,.tar.gz"}
+
+        response = ingest.run(name)
+
+        assert response["statusCode"] == 400, response["body"]
+        assert "Database does not allow this file extension" in _message(response)
+        assert ingest.assets == {}

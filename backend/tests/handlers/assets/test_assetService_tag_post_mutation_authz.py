@@ -14,8 +14,9 @@ asset-level enforce against the post-mutation asset -- with no per-tag `tag`
 objectType authority check. The controls below pin the three ways that second
 enforce can silently do nothing or do too much: a partial post-state object whose
 missing ``databaseId``/``assetName`` breaks every database-scoped ALLOW, an
-ungated post-check that newly gates unrelated edits (including renames), and a
-post-check placed outside the ``len(tokens) > 0`` guard.
+ungated post-check that newly gates unrelated edits, and a post-check placed outside
+the ``len(tokens) > 0`` guard. A rename is re-checked the same way as a tag change
+(#369).
 """
 
 import sys
@@ -286,10 +287,9 @@ class TestPostStateObjectShape:
 class TestUnrelatedEditsStayUngated:
     """FIX-047 controls: the post-check must be scoped to tag changes.
 
-    The regression surface calls for gating the second enforce on
-    ``'tags' in update_data``. These tests pin that decision so the wider
-    behaviour change (re-gating renames and description edits) is deliberate
-    rather than incidental.
+    The second enforce is gated on the tag list or the name actually changing. These
+    tests pin that a description edit and a resubmitted tag list stay ungated, and that
+    a rename is re-checked (#369).
     """
 
     def test_description_only_put_is_not_gated_by_the_tag_change_checks(self):
@@ -329,14 +329,12 @@ class TestUnrelatedEditsStayUngated:
         assert _deny_get_on_restricted_tag({"tags": ["restricted"]}, "PUT") is True
         assert _deny_get_on_restricted_tag({"tags": []}, "GET") is True
 
-    def test_rename_only_put_is_not_re_enforced_post_mutation(self):
-        """Explicit decision: a rename out of an assetName-scoped ALLOW is NOT re-checked.
+    def test_rename_only_put_is_re_enforced_post_mutation(self):
+        """A rename out of an assetName-scoped ALLOW is refused (#369).
 
-        With `assetName starts_with 'PROJ-'` as the only ALLOW, renaming PROJ-1 to
-        OTHER succeeds because only the pre-mutation name is evaluated. If the fix
-        places the post-check after all mutations rather than gating it on tags,
-        this test fails -- which is the signal that the behaviour change was not
-        deliberate.
+        With `assetName starts_with 'PROJ-'` as the only ALLOW, renaming PROJ-1 to OTHER is
+        refused, because the renamed record is evaluated as well. The rename check is gated
+        on the name actually changing, as the tag check is on the tag list.
         """
         record = []
         m = _wire(_load_asset_service(), existing_tags=[], asset_name="PROJ-1")
@@ -346,10 +344,8 @@ class TestUnrelatedEditsStayUngated:
                              _enforcer(_allow_only_proj_asset_names, record)):
             result = _attempt_update(m, {"assetName": "OTHER"}, {"tokens": ["u1"]})
 
-        assert getattr(result, "success", None) is True, (
-            f"a rename out of an assetName-scoped ALLOW is now refused: {result}"
-        )
-        assert _written_attributes(m.asset_table)["assetName"] == "OTHER"
+        m.asset_table.update_item.assert_not_called()
+        _assert_denied(result)
 
     def test_identical_tag_list_resubmission_still_succeeds(self):
         """Control: re-submitting the same tags (what every full-object PUT does)."""
