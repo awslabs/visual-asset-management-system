@@ -61,23 +61,24 @@ class TestProcessExternalUploadPathExtension:
 
     def test_default_slash_inserts_no_segment(self):
         rels = self._run("/")
-        # relativeKey is just the path relative to the pipeline output folder (no extra segment).
-        assert rels[self.PREFIX + "test/pump.glb"] == "test/pump.glb"
-        assert rels[self.PREFIX + "root.glb"] == "root.glb"
+        # relativeKey is just the path relative to the pipeline output folder (no extra segment), sent
+        # with a leading '/' so the upload handler reads it as a path in the asset (#1943).
+        assert rels[self.PREFIX + "test/pump.glb"] == "/test/pump.glb"
+        assert rels[self.PREFIX + "root.glb"] == "/root.glb"
 
     def test_the_folder_form_is_inserted_above_the_filename_not_at_the_path_start(self):
         rels = self._run("/exec-2026/")
         # A nested output keeps its own folders; the extension becomes the file's parent folder.
-        assert rels[self.PREFIX + "test/pump.glb"] == "test/exec-2026/pump.glb"
+        assert rels[self.PREFIX + "test/pump.glb"] == "/test/exec-2026/pump.glb"
         # A root-level output has no folders ahead of it, so the extension is its only one.
-        assert rels[self.PREFIX + "root.glb"] == "exec-2026/root.glb"
+        assert rels[self.PREFIX + "root.glb"] == "/exec-2026/root.glb"
 
     def test_the_non_folder_form_concatenates_onto_the_filename(self):
         """No trailing slash means the value is glued to the filename rather than made a folder —
         the distinction the normalizer now preserves."""
         rels = self._run("exec-2026")
-        assert rels[self.PREFIX + "test/pump.glb"] == "test/exec-2026pump.glb"
-        assert rels[self.PREFIX + "root.glb"] == "exec-2026root.glb"
+        assert rels[self.PREFIX + "test/pump.glb"] == "/test/exec-2026pump.glb"
+        assert rels[self.PREFIX + "root.glb"] == "/exec-2026root.glb"
 
 
 @pytest.mark.unit

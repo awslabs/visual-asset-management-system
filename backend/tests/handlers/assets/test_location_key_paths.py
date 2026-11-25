@@ -37,6 +37,7 @@ from backend.tests.handlers.assets.test_uploadFile_preview_extension_init import
 from backend.tests.handlers.assets.test_large_file_workflow_provenance import _external_request  # noqa: E402
 from backend.tests.handlers.assets.test_streamAsset_range_header_casing import _load, _rest_event, _wire  # noqa: E402
 from backend.tests.handlers.workflows.test_executeWorkflow import ewv2  # noqa: E402
+from backend.tests.handlers.workflows.test_output_metadata_type_key import po  # noqa: E402
 
 BUCKET = "vams-test-assets"
 CLAIMS = {"tokens": ["tester"], "roles": []}
@@ -387,3 +388,48 @@ class TestWorkflowInputs:
     @pytest.mark.parametrize("relative,expected", [("/vams/B1/x.las", PREFIXED_SUB), ("/x.las", PREFIXED_ROOT)])
     def test_a_base_prefixed_asset(self, relative, expected):
         assert ewv2._input_key(PREFIXED_LOCATION, relative) == expected
+
+
+@pytest.mark.unit
+class TestWorkflowOutputWriteBack:
+    """A3: an output a pipeline writes into the subfolder named like the location lands in that subfolder. The
+    output step sends each asset file's path with a leading '/', and the upload handler reads it as a path."""
+
+    @pytest.mark.parametrize("relative,sent", [("A1/out.las", "/A1/out.las"), ("out.las", "/out.las"),
+                                               ("/sub/out.las", "/sub/out.las")])
+    def test_an_asset_file_is_sent_as_its_path_in_the_asset(self, relative, sent):
+        assert po._completion_request_key(relative, "assetFile") == sent
+
+    def test_a_preview_keeps_its_basename(self):
+        assert po._completion_request_key("thumb.png", "assetPreview") == "thumb.png"
+
+    def test_the_completion_lists_each_file_by_its_path(self):
+        ingest = MagicMock(return_value={"Payload": MagicMock(read=MagicMock(return_value=b'{"statusCode": 200, '
+                                                                             b'"body": "{}"}'))})
+        with patch.object(po, "_lambda_file_ingestion", ingest):
+            po.process_external_upload("up-1", "A1", "db1", "assetFile", ["run/out/A1/out.las"], "run/out/",
+                                       {"http": {}})
+        import json
+        files = json.loads(ingest.call_args.args[0]["body"])["files"]
+        assert files == [{"relativeKey": "/A1/out.las", "tempKey": "run/out/A1/out.las"}]
+
+    @pytest.mark.parametrize("location,relative,expected", [
+        (LOCATION, "A1/out.las", "A1/A1/out.las"),
+        (LOCATION, "out.las", "A1/out.las"),
+        (PREFIXED_LOCATION, "vams/B1/out.las", "vams/B1/vams/B1/out.las"),
+        ("p1/model.glb", "model.glb", "p1/model.glb"),
+        ("p1/model.glb", "p1/model.glb/x.obj", "p1/model.glb/p1/model.glb/x.obj"),
+    ])
+    def test_the_destination_check_resolves_as_the_upload_does(self, location, relative, expected):
+        asset = {"assetId": "A1", "assetLocation": {"Key": location}}
+        assert po._destination_key({"relativeFilePath": relative}, asset, "") == expected
+        assert uploadFile.normalize_s3_path(location, po._completion_request_key(relative, "assetFile")) == expected
+
+    def test_the_results_are_read_by_the_outputs_paths(self):
+        result = {"overallSuccess": False, "fileResults": [
+            {"relativeKey": "/A1/out.las", "success": True},
+            {"relativeKey": "/big.e57", "success": True, "ingestionJobId": "job-1"},
+            {"relativeKey": "/bad.las", "success": False, "error": po.NESTED_PATH_REFUSAL}]}
+        assert po._ingestion_outcome(result) == (False, {"A1/out.las", "big.e57"})
+        assert po._pending_ingestion_jobs(result) == {"big.e57": "job-1"}
+        assert po._refused_write_back_reasons(result) == {"bad.las": po.NESTED_PATH_REFUSAL}

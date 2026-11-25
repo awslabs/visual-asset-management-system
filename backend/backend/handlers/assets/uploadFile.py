@@ -1314,7 +1314,9 @@ def start_output_copy_job(file_info: dict, head_response: dict, change_metadata:
         asset_id=file_info["assetId"],
         upload_id=file_info["uploadId"],
         upload_type=file_info["uploadType"],
-        relative_key=file_info["relativeKey"],
+        # The output step keys its outputs, and the job id that makes a repeated start a no-op, by the
+        # path without its leading '/', which it sends on the wire to mark a path in the asset
+        relative_key=file_info["relativeKey"].lstrip("/"),
         change_user_id=file_info.get("changeUserId"),
         scope_id=batch_id,
         workflow_id=file_info.get("workflowId") or "",
