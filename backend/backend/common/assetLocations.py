@@ -31,6 +31,9 @@ from typing import Callable, List, Optional, Tuple
 
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 
+# The segment that starts a file's viewer data in a stream path ``{file}/preview/...``
+VIEWER_DATA_SEGMENT = "/preview/"
+
 
 def normalize_location(key: Optional[str]) -> str:
     """The location key in its stored S3 form: no leading ``/``; empty for no location."""
@@ -234,22 +237,59 @@ class AssetFilePaths:
         """Whether a key is a single-file location's object (the location key itself)."""
         return self.is_single_file and key == self.location
 
+    def names_held_file_data(self, value: Optional[str]) -> bool:
+        """Whether a stream path is ``{file key}/preview/...`` for the full S3 key of a file the location holds.
+
+        A folder location's files are ``{location}{name}``. A single-file location's are its object and the
+        companion entries ``{file key}/...``; its own previews ``{file key}.previewFile.{ext}`` are not read this
+        way, so every viewer data key stays under ``{location}/``. The file part ends at the first ``/preview/`` at
+        or after the end of the location key, so a location key with a ``preview`` folder segment
+        (``scans/preview/site.laz``) is read whole. A folder location's own marker names no file.
+        """
+        loc = self.location
+        raw = value or ""
+        if not loc or not raw.startswith(loc if loc.endswith("/") else loc + "/"):
+            return False
+        index = raw.find(VIEWER_DATA_SEGMENT, len(loc))
+        if index == -1:
+            return False
+        file_key = raw[:index]
+        return contains(loc, file_key) and not (loc.endswith("/") and file_key == loc)
+
     def aux_stream_key_for(self, database_id: Optional[str], value: Optional[str]) -> Optional[str]:
-        """The auxiliary key a stream path names under ``{databaseId}/{location}/`` (relative, or already under
-        it); ``{file key}/preview/...`` names a single-file object's own viewer data."""
+        """The auxiliary key of a viewer data path ``{file}/preview/...`` in this location, or None.
+
+        A file's viewer data is ``{databaseId}/{file key}/preview/...``. A leading ``/`` marks the file's
+        asset-relative path, the rule ``download_key_for`` uses: such a path (one ``/`` dropped) is joined under
+        ``{databaseId}/{location}/`` and never read as a full key or as the auxiliary key, so ``/{location}x`` is
+        the file ``{location}{location}x`` of a subfolder named like the location. A path without one is read in
+        this order:
+
+        - the file's full S3 key (the ``key`` the file list returns, the form the web viewers send), when the
+          path starts with the key of a file the location holds followed by ``/preview/``: used as given under
+          ``{databaseId}/`` (``names_held_file_data``);
+        - the auxiliary key itself, ``{databaseId}/{location}/...``: used as given;
+        - any other path is the file's asset-relative path, joined under ``{databaseId}/{location}/``.
+
+        Every result is under ``{databaseId}/{location}/``, so it is ``{databaseId}/`` plus a key the location
+        holds, and the full key reaches only keys the asset-relative path already reached. A path with a ``..``
+        segment, an empty location and a path that names nothing under the location give None.
+        """
         raw = value or ""
         loc = self.location
         if not loc or _has_traversal_segment(raw):
             return None
-        base = f"{(database_id or '').strip('/')}/{loc.strip('/')}/"
-        rel = raw[1:] if raw.startswith("/") else raw
-        if rel.startswith(base):
+        database = (database_id or '').strip('/')
+        base = f"{database}/{loc.strip('/')}/"
+        in_asset = raw.startswith("/")
+        rel = raw[1:] if in_asset else raw
+        if not in_asset and self.names_held_file_data(rel):
+            key = f"{database}/{rel}"
+        elif not in_asset and rel.startswith(base):
             key = rel
-        elif self.is_single_file and rel.startswith(loc + "/preview/"):
-            key = base + rel[len(loc) + 1:]
         else:
             key = base + rel
-        return key if len(key) > len(base) else None
+        return key if key.startswith(base) and len(key) > len(base) else None
 
 
 def own_aux_scope(database_id: Optional[str], location: Optional[str],

@@ -79,6 +79,8 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: rows a file delete left before the update stay, so the asset's version listings keep showing those files as permanently deleted, and deleting the file again cannot remove them (`400` `File not found.`).
 -   **Assets** Uploads of the same file to one asset that complete at the same time each store a version of the file. They shared one staged copy, so most or all of them failed with `Upload ID mismatch.` ([#1928](https://github.com/awslabs/visual-asset-management-system/issues/1928))
     -   Note: each upload is now staged in its own folder under `temp-uploads/`, so a file key uploaded through VAMS can be at most 998 bytes in a bucket registered at its root (1,011 before), less the bucket's base prefix otherwise. A longer key is refused when the upload starts, with a message that names the limit. ([#1928](https://github.com/awslabs/visual-asset-management-system/issues/1928))
+-   **Web/Backend** The Potree point cloud viewer loads the viewer data of a file outside an `{assetId}/` folder: in a bucket registered under a base prefix, in an asset created on an existing folder, and in the companion folder of an asset created from a single Amazon S3 object. The viewers send the file's full key, and the auxiliary preview stream reads it as the file routes do. ([#1855](https://github.com/awslabs/visual-asset-management-system/issues/1855))
+    -   Note: the auxiliary preview stream path accepts a file's full S3 key as well as its path in the asset. A path with a leading `/` is always the path in the asset; a path without one that starts with the asset's location key is the full key. The licensed VEERUM viewer's point cloud loading gets the same fix. ([#1855](https://github.com/awslabs/visual-asset-management-system/issues/1855))
 
 ### Chores
 
@@ -88,6 +90,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Known Outstanding Issues
 
+-   **Backend** A single-file asset's own file does not appear in file search results, so it cannot be found or opened from search; open it from the asset's file manager or file page instead. ([#1982](https://github.com/awslabs/visual-asset-management-system/issues/1982))
 -   **Backend** An asset permanent delete can report success while Amazon S3 keeps the asset's files (for example, when a bucket policy denies the delete or the objects are locked): the asset's records are removed and the files stay in the bucket. Fixed in 2.7.0. ([#1768](https://github.com/awslabs/visual-asset-management-system/issues/1768))
 -   **Backend** Deleting a file of an asset stored in a folder also deletes the viewer data of the same asset's files under a folder named like that file: deleting `p/scan.e57` removes the viewer data of the files under `p/scan.e57/`. Fixed in 2.7.0. ([#1870](https://github.com/awslabs/visual-asset-management-system/issues/1870))
 -   **Backend** Comments and subscriptions are stored by asset ID alone. Two assets with the same asset ID in different databases share their comments and subscription, and permanently deleting one of them deletes the other's comments and subscription. Fixed in 2.7.0. ([#1860](https://github.com/awslabs/visual-asset-management-system/issues/1860))
