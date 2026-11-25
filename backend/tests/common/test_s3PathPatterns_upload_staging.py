@@ -15,8 +15,10 @@ import pytest
 
 from backend.backend.common.s3PathPatterns import (
     TEMPORARY_UPLOAD_PREFIX,
+    UPLOAD_STAGING_KEY_OVERHEAD_BYTES,
     key_has_reserved_segment,
     legacy_staged_upload_key,
+    max_uploaded_file_key_bytes,
     staged_upload_key,
     upload_staging_tag,
 )
@@ -53,3 +55,31 @@ class TestTheStagingKey:
         key = staged_upload_key(base, UPLOAD_ID, f"{base}asset-1/scans/pump.glb")
         assert key.startswith(f"{base}{TEMPORARY_UPLOAD_PREFIX}")
         assert key_has_reserved_segment(key, base)
+
+
+@pytest.mark.unit
+class TestTheUploadedFileKeyBound:
+    def test_the_overhead_is_the_prefix_the_tag_and_its_slash(self):
+        assert UPLOAD_STAGING_KEY_OVERHEAD_BYTES == len(TEMPORARY_UPLOAD_PREFIX) + 12 + 1 == 26
+
+    @pytest.mark.parametrize("base", ["", "assets/", "deep/area/", "\u00e9rea/"])
+    def test_the_bound_is_the_s3_limit_less_the_prefix_and_the_overhead(self, base):
+        assert max_uploaded_file_key_bytes(base) == 1024 - len(base.encode("utf-8")) - UPLOAD_STAGING_KEY_OVERHEAD_BYTES
+
+    def test_the_bound_is_998_bytes_at_a_bucket_root(self):
+        assert max_uploaded_file_key_bytes("") == 998
+
+    @pytest.mark.parametrize("base", ["", "assets/", "deep/area/", "\u00e9rea/"])
+    @pytest.mark.parametrize("final_key", ["a/m.glb", "asset-1/scans/\u4e2d.glb"])
+    def test_the_bound_matches_what_the_staging_key_adds(self, base, final_key):
+        """The staging key adds the same bytes the bound reserves, so a final key at the bound stages at
+        exactly 1,024 bytes."""
+        staged = staged_upload_key(base, UPLOAD_ID, base + final_key).encode("utf-8")
+        added = len(staged) - len((base + final_key).encode("utf-8"))
+        assert max_uploaded_file_key_bytes(base) == 1024 - added
+
+    def test_a_final_key_at_the_bound_stages_at_the_s3_limit(self):
+        base = "assets/"
+        final_key = base + "a" * (max_uploaded_file_key_bytes(base) - len(base))
+        assert len(final_key.encode("utf-8")) == max_uploaded_file_key_bytes(base)
+        assert len(staged_upload_key(base, UPLOAD_ID, final_key).encode("utf-8")) == 1024
