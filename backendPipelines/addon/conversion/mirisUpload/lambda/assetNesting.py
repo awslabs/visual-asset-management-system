@@ -7,6 +7,10 @@ A key belongs to the deepest stored location that contains it (the backend's
 fingerprint and the container's listing, download and root choice. `normalize_location`,
 `_is_preview_of` and `contains` repeat the backend's rule, because a pipeline function cannot
 import `backend/`; `tests/test_miris_upload_location_rule_matches_core.py` holds them to it.
+
+The locations are written to an object under the run's auxiliary path, and only its URI travels on
+the state machine input and in the job's command, which AWS Batch and Amazon ECS limit to a few
+kilobytes.
 """
 
 import json
@@ -16,9 +20,10 @@ from typing import Optional
 LOCATION_INDEX_NAME = "AssetLocationGSI"
 # The preview file marker, `{file}.previewFile.{ext}` (the backend's `s3PathPatterns`).
 PREVIEW_FILE_PATTERN = ".previewFile."
-# The nested locations travel to the container on the state machine input, which Step Functions
-# limits to 256 KB; past this size the run fails instead.
-MAX_NESTED_LOCATIONS_BYTES = 64 * 1024
+# The pages of the location index read for one asset root, as the backend's MAX_NESTED_LOCATION_PAGES.
+MAX_NESTED_LOCATION_PAGES = 50
+# The object under the run's auxiliary path that holds the nested locations.
+NESTED_LOCATIONS_OBJECT_NAME = "nested-locations.json"
 
 
 def normalize_location(key: Optional[str]) -> str:
@@ -72,23 +77,52 @@ def nested_locations(asset_table, bucket, root_prefix, database_id, asset_id):
         "KeyConditionExpression": "locationBucket = :bucket AND begins_with(locationKey, :root)",
         "ExpressionAttributeValues": {":bucket": bucket, ":root": root},
     }
-    while True:
+    for _ in range(MAX_NESTED_LOCATION_PAGES):
         page = asset_table.query(**request)
         for row in page.get("Items", []):
             location = normalize_location(row.get("locationKey"))
             own = row.get("databaseId") == database_id and row.get("assetId") == asset_id
             if not own and len(location) > len(root) and location.startswith(root):
                 found.add(location)
-        if not page.get("LastEvaluatedKey"):
+        if "LastEvaluatedKey" not in page:
             return sorted(found)
         request["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    raise Exception(
+        f"The location index lists more assets under the asset's location than the Miris upload reads "
+        f"({MAX_NESTED_LOCATION_PAGES} pages), so its nested assets cannot all be left out and its files "
+        "are not sent to Miris.")
 
 
-def check_size(locations) -> None:
-    """Raise when the nested locations are too large to hand to the container."""
-    size = len(json.dumps(locations).encode("utf-8"))
-    if size > MAX_NESTED_LOCATIONS_BYTES:
-        raise Exception(
-            f"The asset holds {len(locations)} nested assets, whose locations ({size} bytes) are more "
-            f"than the Miris upload can leave out ({MAX_NESTED_LOCATIONS_BYTES} bytes), so its files "
-            "are not sent to Miris.")
+def _object_location(s3_uri):
+    """(bucket, key) of an s3:// URI naming an object."""
+    bucket, _, key = (s3_uri or "").replace("s3://", "", 1).partition("/")
+    if not (s3_uri or "").startswith("s3://") or not bucket or not key:
+        raise ValueError(f"Not an s3:// object URI: {s3_uri!r}")
+    return bucket, key
+
+
+def write_nested_locations(s3_client, aux_uri, locations):
+    """Write `locations` to the nested-locations object under the run's auxiliary path `aux_uri`
+    and return its s3:// URI, or '' without writing when there are none."""
+    if not locations:
+        return ""
+    uri = aux_uri.rstrip("/") + "/" + NESTED_LOCATIONS_OBJECT_NAME
+    bucket, key = _object_location(uri)
+    s3_client.put_object(
+        Bucket=bucket, Key=key, ContentType="application/json",
+        Body=json.dumps({"nestedLocations": list(locations)}).encode("utf-8"))
+    return uri
+
+
+def read_nested_locations(s3_client, uri):
+    """The nested locations in the object at `uri`, or [] when `uri` is ''. A read error or an
+    object that is not a list of locations is raised: the run fails rather than upload another
+    asset's files."""
+    if not uri:
+        return []
+    bucket, key = _object_location(uri)
+    body = json.loads(s3_client.get_object(Bucket=bucket, Key=key)["Body"].read())
+    locations = body.get("nestedLocations") if isinstance(body, dict) else None
+    if not isinstance(locations, list) or not all(isinstance(loc, str) for loc in locations):
+        raise ValueError(f"{uri} does not hold a list of nested locations")
+    return locations

@@ -232,11 +232,11 @@ def test_the_run_reports_are_under_the_results_path(open_pipeline, results, expe
 
 
 @pytest.mark.parametrize("overrides, expected", [
-    ({"nestedLocations": ["vams/data/a1/parts/"]}, ["vams/data/a1/parts/"]),
-    ({}, []),
-    ({"nestedLocations": "vams/data/a1/parts/"}, []),
-], ids=["list", "absent", "not-a-list"])
-def test_the_nested_locations_are_on_the_state_machine_input(open_pipeline, overrides, expected):
+    ({"nestedLocationsS3Uri": AUX + "nested-locations.json"}, AUX + "nested-locations.json"),
+    ({}, ""),
+    ({"nestedLocationsS3Uri": ["not", "a", "uri"]}, ""),
+], ids=["uri", "absent", "not-a-string"])
+def test_the_nested_locations_uri_is_on_the_state_machine_input(open_pipeline, overrides, expected):
     import datetime
 
     with patch.object(open_pipeline, "sfn") as sfn, patch.object(open_pipeline, "s3_client"):
@@ -246,4 +246,6 @@ def test_the_nested_locations_are_on_the_state_machine_input(open_pipeline, over
         }
         open_pipeline.lambda_handler(_execute_event(**overrides), None)
 
-    assert json.loads(sfn.start_execution.call_args.kwargs["input"])["nestedLocations"] == expected
+    sfn_input = json.loads(sfn.start_execution.call_args.kwargs["input"])
+    assert sfn_input["nestedLocationsS3Uri"] == expected
+    assert "nestedLocations" not in sfn_input

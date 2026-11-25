@@ -52,7 +52,7 @@ With `upload.enabled`, the upload builder stack creates an AWS Batch compute env
 | `/aws/vendedlogs/VAMSStateMachine-MirisUpload<hash>` | The inner state machine            |
 | `/aws/vendedlogs/Pipelines/MirisUpload<hash>`        | The upload container (AWS Fargate) |
 
-The pipeline also keeps objects of its own in the auxiliary bucket: its duplicate-upload claims under `locks/miris-upload/<databaseId>/<assetId>/<fingerprint>.claim` (see [Duplicate uploads and re-runs](./upload-pipeline.md#duplicate-uploads-and-re-runs)) and the dependency manifests of its uploads under `pipelines/miris-upload/manifests/<databaseId>/<assetId>/<sha256>.json`.
+The pipeline also keeps objects of its own in the auxiliary bucket: its duplicate-upload claims under `locks/miris-upload/<databaseId>/<assetId>/<fingerprint>.claim` (see [Duplicate uploads and re-runs](./upload-pipeline.md#duplicate-uploads-and-re-runs)) the dependency manifests of its uploads under `pipelines/miris-upload/manifests/<databaseId>/<assetId>/<sha256>.json`, and, for an asset with [nested assets](./upload-pipeline.md#nested-assets), the run's `nested-locations.json` under its auxiliary path `pipelines/miris-upload/<executionId>/`.
 
 ## Monitoring
 

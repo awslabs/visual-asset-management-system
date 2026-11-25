@@ -38,7 +38,7 @@ from botocore.exceptions import ClientError
 
 import dependency_manifest
 import memory_budget
-from asset_nesting import held_by_nested
+from asset_nesting import held_by_nested, read_nested_locations
 import preflight
 from miris_uploader import MirisClient, MirisError
 from stream_metadata import (
@@ -544,9 +544,13 @@ def main():
     requested = requested_root(trigger_rel if manual else override)
     extensions = [
         e for e in (stage.get("rootExtensions") or _USD_MEDIA_TYPES) if e in _USD_MEDIA_TYPES]
-    # Files of another asset stored inside this one's location are that asset's.
-    nested = stage.get("nestedLocations")
-    nested = [n for n in nested if isinstance(n, str)] if isinstance(nested, list) else []
+    # Files of another asset stored inside this one's location are that asset's. Without the list
+    # the run cannot tell them apart, so it stops before anything is downloaded.
+    try:
+        nested = read_nested_locations(s3, stage.get("nestedLocations"))
+    except Exception as e:
+        _log("nested_locations_unreadable", location=stage.get("nestedLocations"), error=type(e).__name__)
+        sys.exit(EXIT_USAGE)
     files, listed_etags = list_asset_files(s3, asset_bucket, asset_root, nested)
     candidates = root_candidates([rel for _, rel, _ in files], extensions)
     if not candidates or (manual and requested not in candidates):

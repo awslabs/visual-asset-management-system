@@ -37,6 +37,7 @@ import boto3
 from botocore.config import Config
 from customLogging.logger import safeLogger
 
+from assetNesting import read_nested_locations
 from mirisClaim import (
     CLAIM_COMPLETED,
     asset_root_prefix,
@@ -118,9 +119,9 @@ def lambda_handler(event, context):
         logger.info("Manual run; uploading without a claim")
         return {"gate": "proceed", "claimFingerprint": ""}
 
-    nested = body.get("nestedLocations")
-    fingerprint = asset_fingerprint(
-        body.get("assetBucket", ""), body.get("assetRootS3Key", ""), nested if isinstance(nested, list) else [])
+    nested_uri = body.get("nestedLocationsS3Uri")
+    nested = read_nested_locations(s3_client, nested_uri if isinstance(nested_uri, str) else "")
+    fingerprint = asset_fingerprint(body.get("assetBucket", ""), body.get("assetRootS3Key", ""), nested)
     bucket, key = claim_location(
         body.get("inputOutputS3AssetAuxiliaryFilesPath", ""), database_id, asset_id, fingerprint)
 

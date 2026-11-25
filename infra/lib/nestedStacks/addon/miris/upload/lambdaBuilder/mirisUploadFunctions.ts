@@ -54,6 +54,19 @@ export const MIRIS_DEPENDENCY_MANIFEST_PREFIX = "pipelines/miris-upload/manifest
 export const MIRIS_DEPENDENCY_MANIFEST_PREFIX_OBJECT_REGEX =
     "/^Resource::<[A-Za-z0-9]*AssetAuxiliaryBucket[A-Za-z0-9]*\\.Arn>/pipelines/miris-upload/manifests/\\*$/g";
 
+/**
+ * Object name of the nested-locations list under a run's auxiliary path. Mirrors
+ * NESTED_LOCATIONS_OBJECT_NAME in backendPipelines/addon/conversion/mirisUpload/lambda/assetNesting.py.
+ */
+export const MIRIS_NESTED_LOCATIONS_OBJECT_NAME = "nested-locations.json";
+
+/** The nested-locations objects of this pipeline's runs, under its runs' auxiliary paths. */
+export const MIRIS_NESTED_LOCATIONS_OBJECT_KEYS = `pipelines/miris-upload/*/${MIRIS_NESTED_LOCATIONS_OBJECT_NAME}`;
+
+/** IAM5 `appliesTo` pattern for a grant on the runs' nested-locations objects, and nothing wider. */
+export const MIRIS_NESTED_LOCATIONS_OBJECT_REGEX =
+    "/^Resource::<[A-Za-z0-9]*AssetAuxiliaryBucket[A-Za-z0-9]*\\.Arn>/pipelines/miris-upload/\\*/nested-locations\\.json$/g";
+
 /** IAM5 `appliesTo` pattern for a grant on the claim prefix of the auxiliary bucket, and nothing wider. */
 export const MIRIS_CLAIM_PREFIX_OBJECT_REGEX =
     "/^Resource::<[A-Za-z0-9]*AssetAuxiliaryBucket[A-Za-z0-9]*\\.Arn>/locks/miris-upload/\\*$/g";
@@ -95,6 +108,37 @@ function suppressCdkNagClaimPrefixWildcard(fun: lambda.Function) {
         ],
         true
     );
+}
+
+/** Suppresses the IAM5 finding for a grant on the runs' nested-locations objects. */
+export function suppressCdkNagNestedLocationsObject(construct: Construct) {
+    NagSuppressions.addResourceSuppressions(
+        construct,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "A run's nested-locations object sits under that run's auxiliary path, keyed by its execution id, " +
+                    "known only at run time; the grant names the one object name under this pipeline's runs.",
+                appliesTo: [{ regex: MIRIS_NESTED_LOCATIONS_OBJECT_REGEX }],
+            },
+        ],
+        true
+    );
+}
+
+/** A grant of `actions` on the runs' nested-locations objects of the auxiliary bucket. */
+export function nestedLocationsObjectStatement(
+    storageResources: storageResources,
+    actions: string[]
+): iam.PolicyStatement {
+    return new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions,
+        resources: [
+            `${storageResources.s3.assetAuxiliaryBucket.bucketArn}/${MIRIS_NESTED_LOCATIONS_OBJECT_KEYS}`,
+        ],
+    });
 }
 
 /**
@@ -178,6 +222,9 @@ export function buildMirisUploadGateFunction(
             resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
         })
     );
+    // Reads the nested-locations object vamsExecute wrote, to leave those files out of the fingerprint.
+    fun.addToRolePolicy(nestedLocationsObjectStatement(storageResources, ["s3:GetObject"]));
+    suppressCdkNagNestedLocationsObject(fun);
     // Writes the claim; the read checks the owner of an existing claim, telling a retry of its own
     // put from another execution's. Object actions on the claim prefix only; the auxiliary bucket's
     // KMS key is granted by kmsKeyLambdaPermissionAddToResourcePolicy.
@@ -259,6 +306,9 @@ export function buildVamsExecuteMirisUploadFunction(
     if (config.app.compliance.quarantineBlocksDownload) {
         storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
     }
+    // Writes the run's nested-locations object, which the gate and the container read.
+    fun.addToRolePolicy(nestedLocationsObjectStatement(storageResources, ["s3:PutObject"]));
+    suppressCdkNagNestedLocationsObject(fun);
     // Releases the claim the gate wrote when the run cannot be handed off to the pipeline.
     grantClaimRelease(fun, storageResources);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);

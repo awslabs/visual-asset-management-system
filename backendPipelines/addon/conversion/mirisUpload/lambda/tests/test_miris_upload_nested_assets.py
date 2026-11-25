@@ -1,8 +1,9 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 """Another asset stored inside the asset's location keeps its files: vamsExecute looks the nested
-locations up in the location index once, the gate leaves their keys out of the fingerprint, and
-the locations travel to the container through openPipeline and constructPipeline."""
+locations up in the location index once and writes them to an object under the run's auxiliary
+path; the gate and the container read them from there, and only the object's URI travels through
+openPipeline, constructPipeline and the job's command."""
 import importlib
 import json
 import os
@@ -65,6 +66,69 @@ def test_the_lookup_reads_the_location_index_under_the_asset_root_across_pages()
     assert len(table.queries) == 3
 
 
+
+class EndlessIndex(IndexTable):
+    """A location index that always reports a further page."""
+
+    def query(self, **kwargs):
+        self.queries.append(kwargs)
+        return {"Items": [], "LastEvaluatedKey": {"i": len(self.queries)}}
+
+
+def test_the_walk_stops_only_when_a_page_has_no_last_evaluated_key():
+    import assetNesting
+
+    class EmptyKeyThenDone(IndexTable):
+        def query(self, **kwargs):
+            self.queries.append(kwargs)
+            if len(self.queries) == 1:
+                return {"Items": [_row(f"{ROOT}a/")], "LastEvaluatedKey": {}}
+            return {"Items": [_row(f"{ROOT}b/", asset_id="n2")]}
+
+    table = EmptyKeyThenDone([])
+    assert assetNesting.nested_locations(table, "b", ROOT, "db1", "a1") == [f"{ROOT}a/", f"{ROOT}b/"]
+    assert len(table.queries) == 2
+
+
+def test_a_walk_past_the_page_limit_fails_instead_of_returning_part_of_the_list():
+    import assetNesting
+
+    table = EndlessIndex([])
+    with pytest.raises(Exception) as raised:
+        assetNesting.nested_locations(table, "b", ROOT, "db1", "a1")
+
+    assert len(table.queries) == assetNesting.MAX_NESTED_LOCATION_PAGES == 50
+    assert "nested" in str(raised.value) and "Miris" in str(raised.value)
+
+
+def test_no_nested_location_writes_no_object():
+    import assetNesting
+
+    s3 = FakeS3()
+    assert assetNesting.write_nested_locations(s3, AUX, []) == ""
+    assert s3.objects == {}
+
+
+def test_the_nested_locations_round_trip_through_the_runs_auxiliary_path():
+    import assetNesting
+
+    s3 = FakeS3()
+    uri = assetNesting.write_nested_locations(s3, AUX, [f"{ROOT}parts/"])
+
+    assert uri == AUX + "nested-locations.json"
+    assert assetNesting.read_nested_locations(s3, uri) == [f"{ROOT}parts/"]
+    assert assetNesting.read_nested_locations(s3, "") == []
+
+
+@pytest.mark.parametrize("body", [b"not json", b'{"nestedLocations": "x"}', b"[1]"])
+def test_a_nested_locations_object_that_is_not_a_list_of_locations_is_refused(body):
+    import assetNesting
+
+    s3 = FakeS3()
+    s3.objects[("vams-aux-bucket", "pipelines/miris-upload/exec-aaaa1111/nested-locations.json")] = (body, '"e"')
+    with pytest.raises(Exception):
+        assetNesting.read_nested_locations(s3, AUX + "nested-locations.json")
+
 @pytest.mark.parametrize("key, held", [
     (f"{ROOT}parts/bolt.usd", True),
     (f"{ROOT}parts/", True),
@@ -98,11 +162,13 @@ def gate(monkeypatch):
 
 
 def _claim_fingerprint(gate, s3, nested):
+    import assetNesting
+
     body = {"assetId": "a1", "databaseId": "db1", "assetBucket": "b", "assetRootS3Key": ROOT,
             "manual": False, "inputOutputS3AssetAuxiliaryFilesPath": AUX,
             "sfnExternalTaskToken": "tok-1"}
     if nested is not None:
-        body["nestedLocations"] = nested
+        body["nestedLocationsS3Uri"] = assetNesting.write_nested_locations(s3, AUX, nested)
     with patch.object(gate, "s3_client", s3), patch.object(gate, "sfn_client"), \
          patch.object(gate.time, "time", return_value=s3.now):
         return gate.lambda_handler({"body": json.dumps(body)}, None)["claimFingerprint"]
@@ -124,7 +190,8 @@ class FakeS3Copy(FakeS3):
 
     def __init__(self, other):
         super().__init__()
-        self.objects = {k: v for k, v in other.objects.items() if not k[1].startswith("locks/")}
+        self.objects = {k: v for k, v in other.objects.items()
+                        if not k[1].startswith("locks/") and not k[1].endswith("nested-locations.json")}
 
 
 # --- vamsExecute ------------------------------------------------------------------------------
@@ -151,13 +218,12 @@ def _resolved():
     }
 
 
-def _execute(handler, index_rows):
-    table = IndexTable(index_rows, page_size=100)
+def _execute(handler, index_rows, page_size=100_000):
+    table = IndexTable(index_rows, page_size=page_size)
     table.get_item = MagicMock(return_value={"Item": {"assetName": "Pump", "isDistributable": True}})
     gate_reply = {"StatusCode": 200, "Payload": MagicMock(
         read=lambda: json.dumps({"gate": "proceed", "claimFingerprint": "f" * 64}).encode())}
-    s3 = MagicMock()
-    s3.get_object.side_effect = Exception("NoSuchKey")
+    s3 = FakeS3()
     with patch.object(handler.manifestHelper, "resolve_pipeline_inputs", return_value=_resolved()), \
          patch.object(handler, "_asset_table", return_value=table), \
          patch.object(handler, "s3_client", s3), \
@@ -169,28 +235,43 @@ def _execute(handler, index_rows):
     calls = lc.invoke.call_args_list
     gate_body = json.loads(json.loads(calls[0].kwargs["Payload"].decode())["body"]) if calls else None
     open_payload = json.loads(calls[1].kwargs["Payload"].decode()) if len(calls) > 1 else None
-    return response, gate_body, open_payload, sfn
+    return response, gate_body, open_payload, sfn, s3
 
 
-def test_vams_execute_hands_the_nested_locations_to_the_gate_and_the_pipeline(handler):
-    response, gate_body, open_payload, _ = _execute(handler, [_row(f"{ROOT}parts/")])
+def test_vams_execute_writes_the_nested_locations_and_hands_on_only_their_uri(handler):
+    import assetNesting
+
+    response, gate_body, open_payload, _, s3 = _execute(handler, [_row(f"{ROOT}parts/")])
 
     assert response["statusCode"] == 200
-    assert gate_body["nestedLocations"] == [f"{ROOT}parts/"]
-    assert open_payload["nestedLocations"] == [f"{ROOT}parts/"]
+    uri = AUX + "nested-locations.json"
+    assert gate_body["nestedLocationsS3Uri"] == uri and open_payload["nestedLocationsS3Uri"] == uri
+    assert "nestedLocations" not in gate_body and "nestedLocations" not in open_payload
+    assert assetNesting.read_nested_locations(s3, uri) == [f"{ROOT}parts/"]
 
 
-def test_an_asset_with_no_nested_asset_hands_on_an_empty_list(handler):
-    _, gate_body, open_payload, _ = _execute(handler, [])
+def test_an_asset_with_no_nested_asset_hands_on_no_uri_and_writes_nothing(handler):
+    _, gate_body, open_payload, _, s3 = _execute(handler, [])
 
-    assert gate_body["nestedLocations"] == [] and open_payload["nestedLocations"] == []
+    assert gate_body["nestedLocationsS3Uri"] == "" and open_payload["nestedLocationsS3Uri"] == ""
+    assert s3.objects == {}
 
 
-def test_too_many_nested_locations_fail_the_run_before_the_gate_claims(handler):
-    long_name = "n" * 900
-    rows = [_row(f"{ROOT}{i}-{long_name}/", asset_id=f"n{i}") for i in range(100)]
+def test_many_nested_locations_keep_the_payloads_small(handler):
+    rows = [_row(f"{ROOT}parts/subassembly-{i:05d}/", asset_id=f"n{i}") for i in range(5000)]
 
-    response, gate_body, _, sfn = _execute(handler, rows)
+    _, gate_body, open_payload, _, _ = _execute(handler, rows)
+
+    assert len(json.dumps(open_payload)) < 4096 and len(json.dumps(gate_body)) < 4096
+
+
+def test_an_unfinished_index_walk_fails_the_run_before_the_gate_claims(handler, monkeypatch):
+    import assetNesting
+
+    monkeypatch.setattr(assetNesting, "MAX_NESTED_LOCATION_PAGES", 2)
+    rows = [_row(f"{ROOT}p{i}/", asset_id=f"n{i}") for i in range(10)]
+
+    response, gate_body, _, sfn, _ = _execute(handler, rows, page_size=3)
 
     assert response["statusCode"] == 500
     assert gate_body is None
@@ -201,27 +282,50 @@ def test_too_many_nested_locations_fail_the_run_before_the_gate_claims(handler):
 # --- openPipeline and constructPipeline -------------------------------------------------------
 
 
-@pytest.mark.parametrize("given, expected", [
-    ([f"{ROOT}parts/"], [f"{ROOT}parts/"]),
-    (None, []),
-    ("not-a-list", []),
-], ids=["list", "absent", "not-a-list"])
-def test_construct_pipeline_puts_the_nested_locations_on_the_container_definition(monkeypatch, given, expected):
-    monkeypatch.setenv("MIRIS_API_BASE_URL", "https://api.example.test")
-    monkeypatch.setenv("MIRIS_API_KEY_SECRET_ARN", "arn:aws:secretsmanager:::secret:x")
+def _construct(monkeypatch, **overrides):
+    monkeypatch.setenv("MIRIS_API_BASE_URL", "https://app.miris.com")
+    monkeypatch.setenv("MIRIS_API_KEY_SECRET_ARN",
+                       "arn:aws:secretsmanager:us-west-2:123456789012:secret:miris-integration-key-AbCdEf")
     import constructPipeline
     construct = importlib.reload(constructPipeline)
+    bucket = "vams-core-prod-us-west-2-stora-assetbucket1d025086-jvkbmwej1q35"
+    run = "pipelines/miris-upload/6dcaefd1aa2842178da97a7845642ff7"
     event = {
-        "jobName": "job-1", "inputS3AssetFilePath": f"s3://b/{ROOT}scene.usda",
-        "inputOutputS3AssetAuxiliaryFilesPath": "s3://aux/a1",
-        "outputS3AssetFilesPath": "s3://b/pipelines/p/job/output/E1/files/",
-        "outputS3AssetMetadataPath": "s3://b/pipelines/p/job/output/E1/metadata/",
-        "inputConfigurationS3Location": "s3://b/cfg.json", "assetId": "a1", "databaseId": "db1",
-        "assetRootS3Path": f"s3://b/{ROOT}", "mirisAssetName": "Pump",
+        "jobName": "miris-upload-a1b2c3d4", "inputS3AssetFilePath": f"s3://{bucket}/{ROOT}scene.usda",
+        "inputVersionId": "rlarEJgQBB8jgaohLUEdbjiJC1WRGudQ",
+        "inputOutputS3AssetAuxiliaryFilesPath": f"s3://vams-core-prod-us-west-2--assetauxiliarybucket81b7-e4cbujs1aga0/{run}/",
+        "outputS3AssetFilesPath": f"s3://{bucket}/{run}/output/files/",
+        "outputS3AssetMetadataPath": f"s3://{bucket}/{run}/output/metadata/",
+        "inputConfigurationS3Location": f"s3://{bucket}/{run}/config.json",
+        "assetId": "a1", "databaseId": "db1", "assetRootS3Path": f"s3://{bucket}/{ROOT}", "mirisAssetName": "Pump",
     }
-    if given is not None:
-        event["nestedLocations"] = given
+    event.update(overrides)
+    return construct.lambda_handler(event, None)["definition"][0]
 
-    stage = json.loads(construct.lambda_handler(event, None)["definition"][0])["stages"][0]
+
+@pytest.mark.parametrize("given, expected", [
+    (AUX + "nested-locations.json",
+     {"bucketName": "vams-aux-bucket", "objectKey": "pipelines/miris-upload/exec-aaaa1111/nested-locations.json"}),
+    ("", {}),
+    (None, {}),
+], ids=["object", "none", "absent"])
+def test_construct_pipeline_puts_the_nested_locations_object_on_the_container_definition(monkeypatch, given, expected):
+    overrides = {} if given is None else {"nestedLocationsS3Uri": given}
+
+    stage = json.loads(_construct(monkeypatch, **overrides))["stages"][0]
 
     assert stage["nestedLocations"] == expected
+
+
+# Amazon ECS allows 8,192 characters for all of a task's overrides, JSON included, and a Fargate job's
+# command goes there. The definition carries a fixed-size object location, never the list.
+ECS_TASK_OVERRIDES_LIMIT = 8192
+
+
+def test_the_definition_stays_within_the_ecs_override_limit_whatever_is_nested(monkeypatch):
+    with_object = _construct(monkeypatch, nestedLocationsS3Uri=(
+        "s3://vams-core-prod-us-west-2--assetauxiliarybucket81b7-e4cbujs1aga0/pipelines/miris-upload/"
+        "6dcaefd1aa2842178da97a7845642ff7/nested-locations.json"))
+
+    # The command is a JSON string inside the overrides' JSON, so every quote is escaped once more.
+    assert len(json.dumps([with_object])) < ECS_TASK_OVERRIDES_LIMIT // 2

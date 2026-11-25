@@ -37,6 +37,8 @@ import {
     buildOpenPipelineFunction,
     buildPipelineEndFunction,
     buildVamsExecuteMirisUploadFunction,
+    MIRIS_NESTED_LOCATIONS_OBJECT_REGEX,
+    nestedLocationsObjectStatement,
 } from "../lambdaBuilder/mirisUploadFunctions";
 import path = require("path");
 
@@ -154,7 +156,9 @@ export class MirisUploadConstruct extends Construct {
                 resources: [
                     `${props.storageResources.s3.assetAuxiliaryBucket.bucketArn}/${MIRIS_DEPENDENCY_MANIFEST_PREFIX}/*`,
                 ],
-            })
+            }),
+            // The run's nested-locations object, written by vamsExecute; its files are left out.
+            nestedLocationsObjectStatement(props.storageResources, ["s3:GetObject"])
         );
         if (kmsKey) {
             assetBucketPolicy.addStatements(kmsKeyPolicyStatementGenerator(kmsKey));
@@ -575,6 +579,13 @@ export class MirisUploadConstruct extends Construct {
                         "under the fixed pipelines/miris-upload/manifests/ prefix of this deployment's " +
                         "auxiliary bucket; the container only writes them.",
                     appliesTo: [{ regex: MIRIS_DEPENDENCY_MANIFEST_PREFIX_OBJECT_REGEX }],
+                },
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason:
+                        "A run's nested-locations object sits under that run's auxiliary path, keyed by its " +
+                        "execution id, known only at run time; the container only reads that one object name.",
+                    appliesTo: [{ regex: MIRIS_NESTED_LOCATIONS_OBJECT_REGEX }],
                 },
                 {
                     id: "AwsSolutions-IAM5",

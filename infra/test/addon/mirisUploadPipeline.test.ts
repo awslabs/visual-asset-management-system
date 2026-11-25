@@ -12,7 +12,12 @@
 import * as fs from "fs";
 import * as path from "path";
 import { Template } from "aws-cdk-lib/assertions";
-import { MIRIS_DEPENDENCY_MANIFEST_PREFIX } from "../../lib/nestedStacks/addon/miris/upload/lambdaBuilder/mirisUploadFunctions";
+import {
+    MIRIS_DEPENDENCY_MANIFEST_PREFIX,
+    MIRIS_NESTED_LOCATIONS_OBJECT_KEYS,
+    MIRIS_NESTED_LOCATIONS_OBJECT_NAME,
+} from "../../lib/nestedStacks/addon/miris/upload/lambdaBuilder/mirisUploadFunctions";
+import { SynthResult } from "../support/templateSynth";
 import {
     MIRIS_UPLOAD_CONTAINER_OVERHEAD_SECONDS,
     MIRIS_UPLOAD_END_REPORT_MARGIN_SECONDS,
@@ -258,7 +263,7 @@ describe("Miris upload IAM", () => {
         expect(JSON.stringify(resources)).not.toContain("s3:HeadObject");
     });
 
-    test("the container roles make no Step Functions call and touch the auxiliary bucket only to write manifests", () => {
+    test("the container roles make no Step Functions call and touch the auxiliary bucket only for manifests and the nested-locations object", () => {
         for (const id of [roleId("ContainerJobRole"), roleId("ContainerExecutionRole")]) {
             const statements = statementsOf(id);
             expect(statements.flatMap(actionsOf).filter((a) => a.startsWith("states:"))).toEqual(
@@ -269,18 +274,15 @@ describe("Miris upload IAM", () => {
                 expect(aux).toEqual([]);
                 continue;
             }
-            // One write-only statement on exactly the manifest prefix.
-            expect(aux).toHaveLength(1);
-            expect(actionsOf(aux[0])).toEqual(["s3:PutObject"]);
-            expect(aux[0].Resource).toEqual({
-                "Fn::Join": [
-                    "",
-                    [
-                        { "Fn::GetAtt": [auxBucketId(), "Arn"] },
-                        `/${MIRIS_DEPENDENCY_MANIFEST_PREFIX}/*`,
-                    ],
-                ],
+            // A write-only statement on exactly the manifest prefix, and a read-only one on exactly the
+            // runs' nested-locations object.
+            const auxObject = (suffix: string) => ({
+                "Fn::Join": ["", [{ "Fn::GetAtt": [auxBucketId(), "Arn"] }, suffix]],
             });
+            expect(aux.map((s) => [actionsOf(s), s.Resource])).toEqual([
+                [["s3:PutObject"], auxObject(`/${MIRIS_DEPENDENCY_MANIFEST_PREFIX}/*`)],
+                [["s3:GetObject"], auxObject(`/${MIRIS_NESTED_LOCATIONS_OBJECT_KEYS}`)],
+            ]);
         }
         // The execution role pulls the image and writes logs only.
         const execution = roleId("ContainerExecutionRole");
@@ -317,6 +319,30 @@ describe("Miris upload IAM", () => {
         }
     });
 
+    test("the job role reads the nested-locations object and no other auxiliary-bucket key it does not write", () => {
+        const reads = statementsOf(roleId("ContainerJobRole")).filter((s) =>
+            [s.Resource].flat().some((r: unknown) => /nested-locations/.test(JSON.stringify(r)))
+        );
+        expect(reads).toHaveLength(1);
+        expect(actionsOf(reads[0])).toEqual(["s3:GetObject"]);
+        const resources = [reads[0].Resource].flat();
+        expect(resources).toHaveLength(1);
+        expect(SynthResult.flatten(resources[0])).toMatch(
+            /AssetAuxiliaryBucket[A-Za-z0-9]*\.?Arn\W.*\/pipelines\/miris-upload\/\*\/nested-locations\.json$/
+        );
+    });
+
+    test("the nested-locations object is the one the pipeline writes", () => {
+        const source = fs.readFileSync(
+            path.join(PIPELINE_DIR, "lambda", "assetNesting.py"),
+            "utf-8"
+        );
+        expect(source).toContain(
+            `NESTED_LOCATIONS_OBJECT_NAME = "${MIRIS_NESTED_LOCATIONS_OBJECT_NAME}"`
+        );
+        expect(source).toContain('aux_uri.rstrip("/") + "/" + NESTED_LOCATIONS_OBJECT_NAME');
+    });
+
     test("the manifest prefix is the one the container writes under", () => {
         const source = fs.readFileSync(
             path.join(PIPELINE_DIR, "container", "dependency_manifest.py"),
@@ -346,7 +372,7 @@ describe("Miris upload IAM", () => {
         expect(actions).toEqual([]);
     });
 
-    test("the gate lists the asset buckets and writes objects only under the claim prefix", () => {
+    test("the gate lists the asset buckets, writes objects only under the claim prefix and reads the nested-locations object", () => {
         const statements = statementsOf(lambdaRoleId("mirisUploadGate.lambda_handler"));
         const listing = statements.filter((s) => actionsOf(s).includes("s3:ListBucket"));
         expect(listing).toHaveLength(1);
@@ -361,7 +387,12 @@ describe("Miris upload IAM", () => {
         );
         expect(objectStatements.length).toBeGreaterThan(0);
         for (const s of objectStatements) {
-            expect(JSON.stringify(s.Resource)).toContain("/locks/miris-upload/*");
+            const resource = JSON.stringify(s.Resource);
+            if (resource.includes(MIRIS_NESTED_LOCATIONS_OBJECT_KEYS)) {
+                expect(actionsOf(s)).toEqual(["s3:GetObject"]);
+            } else {
+                expect(resource).toContain("/locks/miris-upload/*");
+            }
         }
     });
 
@@ -515,11 +546,22 @@ describe("Miris upload auxiliary-bucket grants", () => {
         condition: undefined,
     });
     const readDelete = claimObjects(["s3:DeleteObject", "s3:GetObject"]);
+    const nestedLocationsObject = (actions: string[]) => ({
+        actions,
+        resources: [`\${AUX}/${MIRIS_NESTED_LOCATIONS_OBJECT_KEYS}`],
+        condition: undefined,
+    });
 
     test.each([
-        ["mirisUploadGate", [claimObjects(["s3:GetObject", "s3:PutObject"])]],
+        [
+            "mirisUploadGate",
+            [
+                claimObjects(["s3:GetObject", "s3:PutObject"]),
+                nestedLocationsObject(["s3:GetObject"]),
+            ],
+        ],
         ["openPipeline", [readDelete]],
-        ["vamsExecuteMirisUpload", [readDelete]],
+        ["vamsExecuteMirisUpload", [readDelete, nestedLocationsObject(["s3:PutObject"])]],
         [
             "pipelineEnd",
             [
@@ -533,9 +575,12 @@ describe("Miris upload auxiliary-bucket grants", () => {
                 claimObjects(["s3:PutObject"]),
             ],
         ],
-    ])("%s touches the auxiliary bucket only under the claim prefix", (stem, expected) => {
-        expect(auxStatements(`${stem}.lambda_handler`)).toEqual(expected);
-    });
+    ])(
+        "%s touches the auxiliary bucket only under the claim prefix and the runs' nested-locations object",
+        (stem, expected) => {
+            expect(auxStatements(`${stem}.lambda_handler`)).toEqual(expected);
+        }
+    );
 
     test("no Lambda can delete an object version or delete with a wildcard action", () => {
         for (const stem of HANDLER_STEMS) {

@@ -17,6 +17,7 @@ import {
     MIRIS_AMBIGUOUS_ROOT_REPORT_REGEXES,
     MIRIS_CLAIM_PREFIX_OBJECT_REGEX,
     MIRIS_DEPENDENCY_MANIFEST_PREFIX_OBJECT_REGEX,
+    MIRIS_NESTED_LOCATIONS_OBJECT_REGEX,
 } from "../../lib/nestedStacks/addon/miris/upload/lambdaBuilder/mirisUploadFunctions";
 
 /** cdk-nag's NagSuppressionHelper.toRegEx: the body between the first and last slash, then flags. */
@@ -34,6 +35,7 @@ const ALL_PATTERNS: [string, string][] = [
     ),
     ["claim prefix object", MIRIS_CLAIM_PREFIX_OBJECT_REGEX],
     ["manifest prefix object", MIRIS_DEPENDENCY_MANIFEST_PREFIX_OBJECT_REGEX],
+    ["nested-locations object", MIRIS_NESTED_LOCATIONS_OBJECT_REGEX],
     ...MIRIS_AMBIGUOUS_ROOT_REPORT_REGEXES.map(
         (p, i) => [`ambiguous_root report ${i}`, p] as [string, string]
     ),
@@ -109,6 +111,15 @@ describe("Miris upload IAM5 suppression patterns", () => {
             "<AssetAuxiliaryBucket81B76230.Arn>/pipelines/miris-upload/manifests/../*",
             false,
         ],
+        ...[
+            [
+                "<AssetAuxiliaryBucket81B76230.Arn>/pipelines/miris-upload/*/nested-locations.json",
+                true,
+            ],
+            ["<AssetAuxiliaryBucket81B76230.Arn>/pipelines/miris-upload/*/other.json", false],
+            ["<AssetAuxiliaryBucket81B76230.Arn>/pipelines/*/nested-locations.json", false],
+            ["<AssetBucket1D025086.Arn>/pipelines/miris-upload/*/nested-locations.json", false],
+        ].map(([arn, accepted]) => [[MIRIS_NESTED_LOCATIONS_OBJECT_REGEX], arn, accepted]),
         ...[
             ["<AssetBucket1D025086.Arn>/pipelines/*/ambiguous_root.json", true],
             ["arn:aws:s3:::ext-vams-assets/vams/data/pipelines/*/ambiguous_root.json", true],

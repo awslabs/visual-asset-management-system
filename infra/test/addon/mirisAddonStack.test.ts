@@ -22,6 +22,7 @@ const STATUS_HANDLER = "handlers.addon.miris.getAssetStatus.lambda_handler";
 const MINT_HANDLER = "handlers.addon.miris.mintViewerKey.lambda_handler";
 const CLEANUP_HANDLER = "handlers.addon.miris.viewerKeyCleanup.lambda_handler";
 const UPLOAD_EXECUTE_HANDLER = "vamsExecuteMirisUpload.lambda_handler";
+const UPLOAD_GATE_HANDLER = "mirisUploadGate.lambda_handler";
 const COMPLIANCE_TABLE = /ComplianceAssetStateStorageTable/;
 const PARAM_SUFFIX = "/resourceNames/addon/dynamoTables/mirisViewerKeyStorage";
 const SCHEMA_ID = "miris-stream-file-schema";
@@ -320,6 +321,24 @@ describe("Miris add-on in static mode with the upload pipeline", () => {
             )
         );
         expect(reads).toMatch(/S3AssetBucketsStorageTable/i);
+    });
+
+    test("the execute function writes, and the gate reads, only the run's nested-locations object", () => {
+        const nestedObject = (handler: string, action: string) =>
+            functionStatements(synth, handler)
+                .filter((s) => actionsOf(s).includes(action))
+                .flatMap((s) => [s.Resource].flat().map((r: unknown) => SynthResult.flatten(r)))
+                .filter((r) => /nested-locations/.test(r));
+        const writes = functionStatements(synth, UPLOAD_EXECUTE_HANDLER).filter((s) =>
+            actionsOf(s).includes("s3:PutObject")
+        );
+        expect(writes).toHaveLength(1);
+        expect(actionsOf(writes[0])).toEqual(["s3:PutObject"]);
+        const [written] = nestedObject(UPLOAD_EXECUTE_HANDLER, "s3:PutObject");
+        expect(written).toMatch(
+            /AssetAuxiliaryBucket[A-Za-z0-9]*\.?Arn\W.*\/pipelines\/miris-upload\/\*\/nested-locations\.json$/
+        );
+        expect(nestedObject(UPLOAD_GATE_HANDLER, "s3:GetObject")).toEqual([written]);
     });
 
     test("the viewer key Lambda touches no S3 bucket", () => {

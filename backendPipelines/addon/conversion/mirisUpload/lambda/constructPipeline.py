@@ -67,10 +67,10 @@ def _bucket_of(s3_uri):
     return s3_uri[len("s3://"):].partition("/")[0]
 
 
-def _nested_locations(event):
-    """The nested locations openPipeline passed on, or [] when there are none."""
-    nested = event.get("nestedLocations")
-    return [location for location in nested if isinstance(location, str)] if isinstance(nested, list) else []
+def _nested_locations_uri(event):
+    """The nested-locations object openPipeline passed on, or '' when there is none."""
+    uri = event.get("nestedLocationsS3Uri")
+    return uri if isinstance(uri, str) else ""
 
 
 def lambda_handler(event, context):
@@ -134,8 +134,9 @@ def lambda_handler(event, context):
                 # metadata miris_root_file) on an automatic run when it is set.
                 "manualRun": event.get("manualRun") is True,
                 "mirisRootFile": event.get("mirisRootFile", "") or "",
-                # Other assets stored inside the asset root, whose files the run leaves out.
-                "nestedLocations": _nested_locations(event),
+                # The object listing the assets stored inside the asset root, whose files the run
+                # leaves out; {} when there are none.
+                "nestedLocations": _report_location(_nested_locations_uri(event)),
                 # Where the container lists tied roots on an ambiguous_root failure.
                 "ambiguousRootReport": _report_location(report_uri),
                 # Where the container lists the pre-flight warnings of a run that uploads.
