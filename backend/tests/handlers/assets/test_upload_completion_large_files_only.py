@@ -54,7 +54,7 @@ def _env(upload_record):
     comes from SIZES by the file's temp key; the external HEAD answers the same sizes."""
     from backend.backend.handlers.assets import uploadFile as uf
 
-    def _size_from_parts(bucket, key, upload_id, parts):
+    def _size_from_parts(bucket, key, upload_id, parts, **_):
         return SIZES["/" + key.rsplit("/", 1)[-1]], True, None
 
     def _head(Bucket, Key, **_):

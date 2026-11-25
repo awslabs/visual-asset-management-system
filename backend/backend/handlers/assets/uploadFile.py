@@ -1029,7 +1029,8 @@ def landed_synchronously(file_results) -> bool:
     return any(result.success and not result.largeFileAsynchronousHandling for result in file_results)
 
 
-def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: str, expected_parts: list) -> tuple:
+def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: str, expected_parts: list,
+                                         raise_errors: bool = False) -> tuple:
     """Calculate total file size by listing parts of an incomplete multipart upload
     
     Args:
@@ -1037,6 +1038,8 @@ def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: 
         key: The S3 object key
         upload_id: The multipart upload ID
         expected_parts: List of expected part objects with PartNumber and ETag
+        raise_errors: Raise a failed read's exception instead of logging it and returning it as the
+            error message, for a caller that decides how to log it
         
     Returns:
         Tuple of (total_size, success, error_message)
@@ -1080,6 +1083,8 @@ def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: 
         return total_file_size, True, None
         
     except Exception as e:
+        if raise_errors:
+            raise
         logger.exception(f"Error calculating file size from parts: {e}")
         return 0, False, f"Error verifying upload parts: {str(e)}"
 
@@ -1128,11 +1133,25 @@ def locate_staged_multipart_upload(bucket_name: str, temp_s3_key: str, legacy_te
     `legacy_temp_s3_key` tried (LEGACY STAGING KEY, #1928): an upload initialized before per-upload
     staging still completes after the upgrade. The legacy key is used only when the upload's own S3
     upload id is open under it, so a file staged there by another upload is never taken for this
-    one. An upload open under neither key keeps the first read's error."""
-    total_size, success, error = calculate_total_file_size_from_parts(
-        bucket_name, temp_s3_key, upload_id_s3, expected_parts)
+    one. An upload open under neither key keeps the first read's error.
+
+    The first read's S3 error is logged at ERROR only when it stands. For an upload completed under
+    the legacy key, the first read answers NoSuchUpload by design (#1971), so that error is not
+    logged; any other first-read error that the legacy key then recovers is logged as a warning."""
+    first_read_error = None
+    try:
+        total_size, success, error = calculate_total_file_size_from_parts(
+            bucket_name, temp_s3_key, upload_id_s3, expected_parts, raise_errors=True)
+    except Exception as e:
+        first_read_error = e
+        total_size, success, error = 0, False, f"Error verifying upload parts: {str(e)}"
     if success or not legacy_temp_s3_key or not multipart_upload_exists(bucket_name, legacy_temp_s3_key, upload_id_s3):
+        if first_read_error is not None:
+            logger.error(f"Error calculating file size from parts: {first_read_error}", exc_info=first_read_error)
         return temp_s3_key, total_size, success, error
+    if first_read_error is not None and not _is_no_such_upload(first_read_error):
+        logger.warning(f"Reading the parts of multipart upload {upload_id_s3} under its per-upload staging "
+                       f"key failed: {first_read_error}")
     logger.info(f"Multipart upload {upload_id_s3} was initialized before per-upload staging, "
                 f"so it is completed under its per-path staging key")
     total_size, success, error = calculate_total_file_size_from_parts(
