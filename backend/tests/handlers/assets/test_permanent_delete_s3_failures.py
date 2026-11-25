@@ -557,7 +557,8 @@ class TestSingleFileDeleteChecksTheFileFirst:
         assert sorted(response.affectedFiles) == ["/x.txt", "/x.txt.previewFile.png"]
         assert _keys_under(files.client, "proj/a/x.txt") == []
         assert _aux_prefixes(files.aux) == ["db1/proj/a/x.txt/preview/"]
-        files.delete_file_metadata.assert_called_once_with("db1", "a1", "x.txt")
+        # Keyed by the deleted file's listed path (#1943)
+        files.delete_file_metadata.assert_called_once_with("db1", "a1", "/x.txt")
 
 
 TABLE_KEYS = {"metadata": "metadataKey", "attributes": "attributeKey"}
@@ -763,7 +764,8 @@ class TestSingleFileDeleteKeepsRecordsInStepWithItsPreviews:
         assert str(raised.value).endswith(PREVIEWS_MESSAGE)
         # The file is gone, so its records and derived data go; the kept preview keeps its version rows
         assert _keys_under(files.client, "proj/a/x.txt") == ["proj/a/x.txt.previewFile.png"]
-        files.delete_file_metadata.assert_called_once_with("db1", "a1", "x.txt")
+        # Keyed by the deleted file's listed path (#1943)
+        files.delete_file_metadata.assert_called_once_with("db1", "a1", "/x.txt")
         files.delete_file_version_records.assert_called_once_with("db1", "a1", ["/x.txt"])
         assert _aux_prefixes(files.aux) == ["db1/proj/a/x.txt/preview/"]
         files.send_subscription_email.assert_not_called()
