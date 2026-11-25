@@ -34,7 +34,7 @@ cd infra && npx cdk --version   # the version pinned in infra/package.json
 The supported npm range is `>=11.10.0 <12`: npm 11, from 11.10.0 on. The `package.json` files declare it in `engines.npm` and the `.npmrc` files set `engine-strict`, so `npm install` and `npm ci` stop with `EBADENGINE` under any npm outside that range:
 
 -   **npm 10**, which Node.js 22 ships with, does not honor the `min-release-age` setting in the `.npmrc` files.
--   **npm 12** skips the install scripts of dependencies that no `allowScripts` entry approves, among them `esbuild` and `@parcel/watcher`. Those packages then install without the native binaries the frontend and CDK builds need.
+-   **npm 12** blocks dependency install scripts, among them those of `esbuild` and `@parcel/watcher`, unless an `allowScripts` entry approves them. VAMS has not approved or tested any, so builds are supported on npm 11 only until that is done.
 
 nvm keeps a separate npm per Node.js version, so install npm 11 after `nvm use` (the `.nvmrc` is in the `web/` directory). Install `npm@11`, not `npm@latest`:
 
@@ -43,6 +43,8 @@ cd web && nvm use
 npm install -g npm@11
 npm --version      # 11.10.0 or later, below 12
 ```
+
+npm 11.21 and later print an `install scripts not yet covered by allowScripts` warning for `esbuild` and `@parcel/watcher`; the warning is expected, and npm 11 still runs those scripts.
 
 :::
 

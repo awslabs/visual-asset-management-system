@@ -378,7 +378,7 @@ Every source file MUST begin with the Apache-2.0 copyright header:
 
 ### **Rule 9: npm Only -- Never Use yarn**
 
-**Package manager:** npm `>=11.10.0 <12`. Node 22.x ships with npm 10.9.x, which does **not** honor `min-release-age` (introduced in npm 11.10.0). npm 12 is **not** supported: it skips the install scripts of dependencies that no `allowScripts` entry approves (among them `esbuild` and `@parcel/watcher`, locked in `web/` and `infra/`), so their native binaries are missing. `engines.npm` in the root, `web/`, `infra/` and `documentation/docusaurus-site/` `package.json` files caps the range, and `engine-strict` in their `.npmrc` files makes npm 10 and npm 12 stop with `EBADENGINE`; do not add `allowScripts` entries to make npm 12 work. Always pin npm before installing:
+**Package manager:** npm `>=11.10.0 <12`. Node 22.x ships with npm 10.9.x, which does **not** honor `min-release-age` (introduced in npm 11.10.0). npm 12 is **not** supported: it blocks dependency install scripts, among them those of `esbuild` and `@parcel/watcher` (locked in `web/` and `infra/`), unless an `allowScripts` entry approves them, and VAMS has not approved or tested any, so builds are supported on npm 11 only until that is done. `engines.npm` in the root, `web/`, `infra/` and `documentation/docusaurus-site/` `package.json` files caps the range, and `engine-strict` in their `.npmrc` files makes npm 10 and npm 12 stop with `EBADENGINE`; do not add `allowScripts` entries to make npm 12 work. npm 11.21 and later print an `install scripts not yet covered by allowScripts` warning for `esbuild` and `@parcel/watcher`; the warning is expected, and npm 11 still runs those scripts. Always pin npm before installing:
 
 ```bash
 # Pin npm to the required version first
