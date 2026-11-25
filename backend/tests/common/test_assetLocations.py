@@ -491,8 +491,9 @@ class TestObjectKeyForRequest:
         assert al.relative_path_in(location, expected) == value
 
     @pytest.mark.parametrize("location", REQUEST_LOCATIONS)
-    def test_every_listed_path_names_its_own_key(self, location):
-        """Round trip: the path relative_path_in lists a key at names that key, empty segments included."""
+    def test_relative_path_in_and_the_path_reading_round_trip(self, location):
+        """Round trip: the path relative_path_in gives a key names that key again through object_key_for_path
+        and object_key_for_request, empty segments included."""
         keys = [location + "x", location + "/x", location + "//x", location + "sub//x", location + "/sub/x"]
         for key in keys:
             path = al.relative_path_in(location, key)

@@ -50,8 +50,8 @@ SUB_FILE = "A1/A1/cloud.las"
 PREFIXED_LOCATION = "vams/B1/"
 PREFIXED_ROOT = "vams/B1/x.las"
 PREFIXED_SUB = "vams/B1/vams/B1/x.las"
-# A key with an empty segment right after the location, which uploads before 2.7.0 could write; it is
-# listed at '//cloud.las'
+# A key with an empty segment right after the location, which uploads before 2.7.0 could write; its path in
+# the asset (relative_path_in) is '//cloud.las'
 EMPTY_SEGMENT_FILE = "A1//cloud.las"
 KEYS = (ROOT_FILE, SUB_FILE, "A1/A1/other.las", PREFIXED_ROOT, PREFIXED_SUB, EMPTY_SEGMENT_FILE)
 
@@ -439,10 +439,11 @@ class TestWorkflowOutputWriteBack:
 
 
 @pytest.mark.unit
-class TestAnEmptySegmentKeyIsReachableByItsListedPath:
-    """L4 (#1943): exactly one leading '/' marks a path in the asset, so the listed path '//cloud.las' of the
-    key 'A1//cloud.las' (an empty segment right after the location) names that key on every route, and the
-    root file 'A1/cloud.las' keeps its versions. One leading slash names what it named before."""
+class TestAnEmptySegmentKeyIsReachableByItsPath:
+    """L4 (#1943): exactly one leading '/' marks a path in the asset, so '//cloud.las', the path relative_path_in
+    gives the key 'A1//cloud.las' (an empty segment right after the location), names that key on every route,
+    and the root file 'A1/cloud.las' keeps its versions. One leading slash names what it named before. (The
+    file list's own paths are not tested here; it still shows such a key at '/cloud.las', #1977.)"""
 
     def test_file_info_names_the_empty_segment_key(self, af):
         assert af.resolve_asset_file_path(LOCATION, "//cloud.las") == EMPTY_SEGMENT_FILE

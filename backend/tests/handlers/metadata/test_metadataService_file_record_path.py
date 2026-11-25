@@ -283,8 +283,8 @@ class TestASubfolderNamedLikeTheLocation:
 
     @pytest.mark.parametrize("path", ["//x.obj", f"{_ASSET}//x.obj"], ids=["listed path", "full key"])
     def test_an_empty_segment_key_keeps_its_own_records(self, path):
-        """L4: the key '{assetId}//x.obj' is listed at '//x.obj'; one leading '/' is the marker, so both forms
-        name that key and its records, not the root file's."""
+        """L4: the path of the key '{assetId}//x.obj' in the asset is '//x.obj'; one leading '/' is the marker,
+        so both forms name that key and its records, not the root file's."""
         harness = _Harness(_asset(f"{_ASSET}/"), existing_keys={f"{_ASSET}//x.obj", f"{_ASSET}/x.obj"})
         response = harness.call("POST", body={"filePath": path, "type": "metadata", "metadata": [_ITEM]})
         assert response["statusCode"] == 200, response
