@@ -46,7 +46,7 @@ from common import uploadStatus
 from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
 from common.assetLocations import (
-    NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, contains, held_objects,
+    NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, _is_preview_of, contains, held_objects,
     is_folder_location, names_own_object, normalize_base_prefix, object_key_for,
 )
 from common.fileAttribution import nested_locations_for_asset_type, nested_locations_of_asset
@@ -1058,7 +1058,9 @@ def find_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
         paginator = s3.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
-                preview_files.append(obj['Key'])
+                # A preview is {base key}.previewFile.{ext}; a longer key that only shares the prefix is not one
+                if _is_preview_of(base_file_key, obj['Key']):
+                    preview_files.append(obj['Key'])
         
         # Sort the preview files alphabetically
         preview_files.sort()
