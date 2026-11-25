@@ -127,3 +127,17 @@ describe("Potree viewer data URL", () => {
         );
     });
 });
+
+describe("Potree viewer data URL for a path in the asset", () => {
+    it("keeps the leading slash of a path in the asset from search results", async () => {
+        expect(await loadUrlFor("/asset1/cloud.las")).toBe(
+            STREAM + "/asset1/cloud.las/preview/PotreeViewer/metadata.json"
+        );
+    });
+
+    it("sends repeated leading slashes as one", async () => {
+        expect(await loadUrlFor("//scans/cloud.las")).toBe(
+            STREAM + "/scans/cloud.las/preview/PotreeViewer/metadata.json"
+        );
+    });
+});

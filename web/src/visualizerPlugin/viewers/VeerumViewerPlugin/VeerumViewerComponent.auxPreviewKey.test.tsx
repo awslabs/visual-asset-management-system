@@ -88,6 +88,14 @@ describe("VeerumViewerComponent auxiliary preview key", () => {
         );
     });
 
+    it("keeps the leading slash of a path in the asset (D1)", async () => {
+        renderViewer({ multiFileKeys: ["/asset-1/scan.las"] });
+
+        await waitFor(() => expect((global as any).fetch).toHaveBeenCalled());
+
+        expect(streamedKeys()).toEqual(["/asset-1/scan.las/preview/PotreeViewer/metadata.json"]);
+    });
+
     it("sends an asset-relative key from a host without the full key unchanged", async () => {
         renderViewer({ multiFileKeys: ["scans/pump.e57"] });
 
