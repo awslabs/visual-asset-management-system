@@ -4578,7 +4578,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/createFolder:
         post:
             summary: "Create a folder in S3 for the specified asset"
-            description: "Creates a folder (zero-byte object with trailing slash) in S3 for the specified asset. The key path must be a folder prefix (ends with a slash) and must contain the base assetlocation key as the start of the path."
+            description: "Creates a folder (zero-byte object with trailing slash) in S3 for the specified asset. relativeKey is the folder's path in the asset with a leading / and a trailing / (/models/v2/). A value with a leading / is always a path in the asset, so / followed by the asset's location key names a subfolder of that name; a value without one is the folder's full S3 key when it is one of the asset's keys, else a path in the asset. A value with a .. segment, or one that starts with //, is refused."
             requestBody:
                 required: true
                 content:
@@ -4586,11 +4586,11 @@ paths:
                         schema:
                             type: object
                             required:
-                                - keyPath
+                                - relativeKey
                             properties:
-                                keyPath:
+                                relativeKey:
                                     type: string
-                                    description: "The key path for the folder to create. Must end with a slash and start with the asset's base key."
+                                    description: "The folder's path in the asset, with a leading / and ending with / (for example /models/v2/)."
             responses:
                 "200":
                     description: Folder created successfully.
