@@ -722,7 +722,7 @@ paid for in GPU time.
 
 **GPL-Licensed Mesh Repair Backends**
 
-`pymeshfix` and `PyMeshLab` are licensed under GPL-3.0 and are installed in every Image to 3D container image, so those images are subject to GPL-3.0 terms whichever backends a run selects through the `REPAIR_BACKENDS` pipeline setting. The default repair ladder walks only the permissively licensed `trimesh` (MIT) and `manifold3d` (Apache-2.0) rungs, but that does not change the license terms attaching to the images. GPL-3.0 is a strong copyleft license; review its terms with your legal team before deploying the Image to 3D pipeline, particularly if you redistribute the resulting container images.
+`pymeshfix` and `PyMeshLab` are licensed under GPL-3.0 and are installed in every Image to 3D container image, so those images are subject to GPL-3.0 terms whichever backends a run selects through the `REPAIR_BACKENDS` pipeline setting. The default `REPAIR_BACKENDS` names all four backends, and the ladder reaches the GPL-3.0 rungs when the permissively licensed `trimesh` (MIT) and `manifold3d` (Apache-2.0) rungs leave the mesh unrepaired; narrowing the setting does not change the license terms attaching to the images. The `sam3d` image also installs, through the SAM 3D Objects repository's own requirements, `bpy` and `point-cloud-utils` (GPL-3.0), `plyfile` (GPL-3.0-or-later), `igraph` (GPL-2.0-or-later) and `pdoc3` (AGPL-3.0-or-later); the SAM 3D Objects code imports `plyfile` and `igraph`. GPL-3.0 is a strong copyleft license; review its terms with your legal team before deploying the Image to 3D pipeline, particularly if you redistribute the resulting container images.
 
 **Container Base Images**
 
