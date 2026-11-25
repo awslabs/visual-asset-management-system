@@ -85,14 +85,14 @@ def _complete_with_rejected_preview(request_model):
 class TestExternalUploadPreviewRollbackBucket:
     def test_rollback_deletes_the_temp_object_from_the_source_bucket(self):
         mock_delete, response = _complete_with_rejected_preview(
-            _external_request(sourceBucket=RUN_BUCKET))
+            _external_request(sourceBucket=RUN_BUCKET, workflowExecutionId="0123456789abcdef0123456789abcdef"))
 
         assert response.overallSuccess is False
         mock_delete.assert_called_once_with(RUN_BUCKET, PREVIEW_TEMP_KEY)
 
     def test_rollback_does_not_target_the_destination_bucket(self):
         mock_delete, _ = _complete_with_rejected_preview(
-            _external_request(sourceBucket=RUN_BUCKET))
+            _external_request(sourceBucket=RUN_BUCKET, workflowExecutionId="0123456789abcdef0123456789abcdef"))
 
         targeted_buckets = {call.args[0] for call in mock_delete.call_args_list}
         assert DESTINATION_BUCKET not in targeted_buckets

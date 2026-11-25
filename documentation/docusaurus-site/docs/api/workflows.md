@@ -1581,7 +1581,9 @@ Once such a file has landed, its `outputs.files` row carries `ingestionStatus: "
                 "renderedConfigTruncated": false,
                 "renderedConfigLocation": {
                     "bucket": "vams-execution-run-bucket",
-                    "key": "executions/a1b2c3d4e5f60718293a4b5c6d7e8f90/input/1/config.json"
+                    "key": "executions/a1b2c3d4e5f60718293a4b5c6d7e8f90/input/1/config.json",
+                    "bucketId": "5f0c7e9a-2b1d-4c3e-8f6a-9d0b1c2e3f4a",
+                    "relativeKey": "executions/a1b2c3d4e5f60718293a4b5c6d7e8f90/input/1/config.json"
                 },
                 "templateId": "high-quality",
                 "templateTags": [{ "key": "scale", "value": "1.0" }],
@@ -1860,7 +1862,14 @@ The body the pipeline actually read is written to Amazon S3 per step, and `rende
 
 The inline copy is bounded by the record's field limit, and again by the response's own share for the step section: a run whose steps together carry more configuration than that share has each step's inline copy shortened, or removed when what would remain is too short to read as configuration. `renderedConfigLocation` survives either bound, so the fully substituted body stays reachable.
 
-`renderedConfigTruncated` reports whether the inline copy was shortened. The entry carries `renderedConfigLocation` — a \{`bucket`, `key`\} pair identifying the Amazon S3 object that holds the fully substituted body — whenever that object exists, not only on truncation:
+`renderedConfigTruncated` reports whether the inline copy was shortened. The entry carries `renderedConfigLocation` — the Amazon S3 object that holds the fully substituted body — whenever that object exists, not only on truncation:
+
+| Field         | Description                                                                                                                                                       |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bucket`      | The name of the run bucket, the VAMS default asset bucket the step ran in.                                                                                        |
+| `key`         | The object's full key in that bucket.                                                                                                                             |
+| `bucketId`    | The run bucket's registration, its identity inside VAMS (the `bucketId` of `GET /buckets`). Absent for an execution started before the registration was recorded. |
+| `relativeKey` | The key relative to the registration's `baseAssetsPrefix`; the same as `key` for a bucket registered at its root. Present with `bucketId`.                        |
 
 ```json
 {
@@ -1868,8 +1877,10 @@ The inline copy is bounded by the record's field limit, and again by the respons
     "renderedConfig": "{\"outputFormat\": \"gltf\", \"materials\": [",
     "renderedConfigTruncated": true,
     "renderedConfigLocation": {
-        "bucket": "vams-execution-run-bucket",
-        "key": "executions/a1b2c3d4e5f60718293a4b5c6d7e8f90/input/1/config.json"
+        "bucket": "customer-asset-bucket",
+        "key": "vams/executions/a1b2c3d4e5f60718293a4b5c6d7e8f90/input/1/config.json",
+        "bucketId": "5f0c7e9a-2b1d-4c3e-8f6a-9d0b1c2e3f4a",
+        "relativeKey": "executions/a1b2c3d4e5f60718293a4b5c6d7e8f90/input/1/config.json"
     }
 }
 ```

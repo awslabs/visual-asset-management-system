@@ -214,7 +214,7 @@ def test_the_workflow_runs_every_group():
 
 def test_own_requirements_setting_skips_the_nearest_requirements_file(monkeypatch):
     """A directory with an ``ownRequirements`` entry installs only the common requirements (and extras)."""
-    target = "backendPipelines/genAi/imageTo3d/container/tests"
+    target = "backendPipelines/conversion/cogConvert/container/tests"
     plain = {s.rel: s for s in runner.suites()}[target]
     assert any(p.name == "requirements.txt" for p in plain.requirement_files)
 

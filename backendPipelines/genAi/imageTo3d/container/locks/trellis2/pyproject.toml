@@ -8,7 +8,7 @@ dependencies = [
     # The torch build upstream pins, for CUDA 12.4. Every extension built from source after the install compiles against it.
     "torch==2.6.0",
     "torchvision==0.21.0",
-    # Shared pipeline dependencies: container/requirements.txt at the base commit, line for line.
+    # Shared pipeline dependencies: the shared container/requirements.txt (retired in #1726) at the base commit, line for line.
     "boto3",
     "botocore",
     "numpy",

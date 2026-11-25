@@ -45,6 +45,10 @@ from botocore.exceptions import (BotoCoreError, ClientError, ConnectionClosedErr
 
 from common.apiRoutes import API_AUTH_API_KEYS, API_AUTH_API_KEY_BY_ID
 from common.constants import TEMPORARY_SESSION_KEY_NAME_PREFIX
+from common.deployTimeValues import DeployTimeKeys
+from common.deployTimeValues import resolve as resolve_deploy_time_value
+from common.resourceNames import ResourceNameAccessError, ResourceNameUnavailableError
+from common.ssmParameters import ParameterReadError, ParameterUnavailableError
 from customLogging.auditLogging import log_auth_changes
 from customLogging.logger import safeLogger
 from .edhIdentity import SYSTEM_USER_ID
@@ -130,7 +134,6 @@ cross_call_config = Config(retries={'total_max_attempts': 1},
                            read_timeout=CROSS_CALL_READ_TIMEOUT_SECONDS)
 lambda_client = boto3.client('lambda', config=cross_call_config)
 secretsmanager_client = boto3.client('secretsmanager', config=retry_config)
-ssm_client = boto3.client('ssm', config=retry_config)
 logger = safeLogger(service_name="EdhSessionBootstrap")
 
 # With the feature on, every variable is required and a missing one aborts the import. With it off --
@@ -151,7 +154,10 @@ try:
     workstation_instance_role_arns = json.loads(_configured("EDH_WORKSTATION_INSTANCE_ROLE_ARNS", "[]"))
     session_secret_kms_key_arn = _configured("EDH_SESSION_SECRET_KMS_KEY_ARN", "")
     api_key_service_function_name = _configured("API_KEY_SERVICE_LAMBDA_FUNCTION_NAME", "")
-    # Either the deployment's static host or an ``ssm:<parameter>`` pointer to the deployed web URL.
+    # Either the deployment's static host or an ``ssm:<parameter>`` pointer to the deployed web URL. With the
+    # pointer, the URL is the resource names' ``web/deployedUrl`` key (common.deployTimeValues), which the
+    # container has loaded already; the named parameter is read, through common.ssmParameters, only while the
+    # resource names do not carry the key.
     vams_base_url = _configured("VAMS_BASE_URL", "")
 except Exception as e:
     logger.exception("Failed loading environment variables")
@@ -228,7 +234,10 @@ def session_key_expires_at(now: Optional[datetime] = None) -> str:
 
 def resolve_vams_base_url() -> str:
     """The URL the workstation's CLI is set up against: the configured static host, else the deployed
-    web URL the web stack publishes to the named SSM parameter (cached for the life of the container)."""
+    web URL (cached for the life of the container once read). The deployed web URL is the resource names'
+    ``web/deployedUrl``; while they do not carry it, the parameter the ``ssm:`` pointer names is read through
+    common.ssmParameters. Any refusal of either lookup is logged by its class and raised as
+    SessionBootstrapError."""
     global _resolved_base_url
     if not vams_base_url:
         raise SessionBootstrapError("VAMS base URL is not configured")
@@ -239,11 +248,12 @@ def resolve_vams_base_url() -> str:
     _check_budget("deployed web URL lookup")
     parameter_name = vams_base_url[len(VAMS_BASE_URL_SSM_SCHEME):]
     try:
-        response = ssm_client.get_parameter(Name=parameter_name, WithDecryption=False)
-    except (ClientError, BotoCoreError) as e:
-        logger.exception(f"Deployed web URL parameter could not be read: {e}")
+        value = resolve_deploy_time_value(DeployTimeKeys.WEB_DEPLOYED_URL, legacy_parameter_name=parameter_name)
+    except (KeyError, ResourceNameUnavailableError, ResourceNameAccessError, ParameterUnavailableError,
+            ParameterReadError, ValueError) as e:
+        logger.error(f"Deployed web URL could not be resolved ({type(e).__name__})")
         raise SessionBootstrapError("VAMS base URL is not available")
-    value = (response.get("Parameter", {}).get("Value") or "").strip()
+    value = (value or "").strip()
     if not value:
         raise SessionBootstrapError("VAMS base URL is not available")
     _resolved_base_url = value

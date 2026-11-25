@@ -17,11 +17,15 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import EndpointConnectionError
 
 from backend.backend.common.constants import TEMPORARY_SESSION_KEY_NAME_PREFIX
 from backend.backend.common.validators import object_name_pattern
 from backend.backend.handlers.addon.edh.common import edhSessionBootstrap as bootstrap
+from backend.tests.handlers.addon.edh.edhParameterStoreTestSupport import (
+    patch_globals, publish_resource_names, resolver_names, serve_parameters,
+)
+from backend.tests.ssmParametersStub import always, client_error, throttled
 
 USER = "user@example.com"
 BOOTSTRAP_ID = "5d1c8a2e-0b1f-4a6c-9d3e-7f8a9b0c1d2e"
@@ -162,12 +166,18 @@ class TestModuleLoad:
         assert bootstrap.CROSS_CALL_TIMEOUT_SECONDS == 11
         assert bootstrap.BOOTSTRAP_BUDGET_SECONDS >= bootstrap.CROSS_CALL_TIMEOUT_SECONDS
 
-    def test_the_secret_and_parameter_clients_retry_adaptively_inside_bounded_timeouts(self):
+    def test_the_secret_client_retries_adaptively_inside_bounded_timeouts(self):
         _module, factory = _load_fresh("retry_config")
-        for service in ("secretsmanager", "ssm"):
-            config = _config_for(factory, service)
-            assert config.retries == {"max_attempts": 5, "mode": "adaptive"}, service
-            assert (config.connect_timeout, config.read_timeout) == (1, 2), service
+        config = _config_for(factory, "secretsmanager")
+        assert config.retries == {"max_attempts": 5, "mode": "adaptive"}
+        assert (config.connect_timeout, config.read_timeout) == (1, 2)
+
+    def test_loading_the_module_builds_no_ssm_client(self):
+        # The deployed web URL is read through the resource names and common.ssmParameters.
+        _module, factory = _load_fresh("retry_config")
+        services = [call.args[0] if call.args else call.kwargs.get("service_name") for call in factory.call_args_list]
+        assert "secretsmanager" in services, "control: the module's clients were recorded"
+        assert "ssm" not in services
 
 
 @pytest.mark.unit
@@ -487,52 +497,81 @@ class TestCrossCallResend:
 
 @pytest.mark.unit
 class TestBaseUrl:
-    def test_a_static_base_url_is_returned_as_is(self):
-        ssm = MagicMock()
-        with patch.object(bootstrap, "vams_base_url", "https://vams.example.com"), \
-                patch.object(bootstrap, "_resolved_base_url", None), \
-                patch.object(bootstrap, "ssm_client", ssm):
-            assert bootstrap.resolve_vams_base_url() == "https://vams.example.com"
-        ssm.get_parameter.assert_not_called()
+    """An ``ssm:`` VAMS_BASE_URL is the resource names' ``web/deployedUrl``; the parameter it names is read through
+    common.ssmParameters only while the resource names do not carry the key."""
 
-    def test_an_ssm_pointer_reads_the_deployed_web_url_parameter_once(self):
-        ssm = MagicMock()
-        ssm.get_parameter.return_value = {"Parameter": {"Value": "https://d111.cloudfront.net "}}
-        with patch.object(bootstrap, "vams_base_url", "ssm:/vams-test/web/deployedUrl"), \
-                patch.object(bootstrap, "_resolved_base_url", None), \
-                patch.object(bootstrap, "ssm_client", ssm):
-            assert bootstrap.resolve_vams_base_url() == "https://d111.cloudfront.net"
-            assert bootstrap.resolve_vams_base_url() == "https://d111.cloudfront.net"
-        ssm.get_parameter.assert_called_once_with(Name="/vams-test/web/deployedUrl", WithDecryption=False)
+    POINTER = "ssm:/vams-test/web/deployedUrl"
+    LEGACY = "/vams-test/web/deployedUrl"
+    WEB_KEY = "web/deployedUrl"
 
-    def test_an_unreadable_parameter_raises(self):
-        ssm = MagicMock()
-        ssm.get_parameter.side_effect = ClientError(
-            {"Error": {"Code": "ParameterNotFound", "Message": "missing"}}, "GetParameter")
-        with patch.object(bootstrap, "vams_base_url", "ssm:/vams-test/web/deployedUrl"), \
-                patch.object(bootstrap, "_resolved_base_url", None), \
-                patch.object(bootstrap, "ssm_client", ssm):
-            with pytest.raises(bootstrap.SessionBootstrapError):
-                bootstrap.resolve_vams_base_url()
+    def _resolve(self, monkeypatch, base_url=POINTER):
+        monkeypatch.setattr(bootstrap, "vams_base_url", base_url)
+        monkeypatch.setattr(bootstrap, "_resolved_base_url", None)
+        return bootstrap.resolve_vams_base_url()
 
-    def test_a_parameter_read_that_fails_below_the_service_layer_raises(self):
-        from botocore.exceptions import EndpointConnectionError
-        ssm = MagicMock()
-        ssm.get_parameter.side_effect = EndpointConnectionError(endpoint_url="https://ssm.example")
-        with patch.object(bootstrap, "vams_base_url", "ssm:/vams-test/web/deployedUrl"), \
-                patch.object(bootstrap, "_resolved_base_url", None), \
-                patch.object(bootstrap, "ssm_client", ssm):
-            with pytest.raises(bootstrap.SessionBootstrapError):
-                bootstrap.resolve_vams_base_url()
+    def test_a_static_base_url_is_returned_as_is(self, monkeypatch):
+        names = publish_resource_names(monkeypatch, bootstrap, {})
+        parameters = serve_parameters(monkeypatch)
+        assert self._resolve(monkeypatch, "https://vams.example.com") == "https://vams.example.com"
+        assert names.method_calls == [] and parameters.calls == []
 
-    def test_a_blank_parameter_value_raises(self):
-        ssm = MagicMock()
-        ssm.get_parameter.return_value = {"Parameter": {"Value": "  "}}
-        with patch.object(bootstrap, "vams_base_url", "ssm:/vams-test/web/deployedUrl"), \
-                patch.object(bootstrap, "_resolved_base_url", None), \
-                patch.object(bootstrap, "ssm_client", ssm):
-            with pytest.raises(bootstrap.SessionBootstrapError):
-                bootstrap.resolve_vams_base_url()
+    def test_the_web_url_comes_from_the_resource_names_with_no_parameter_store_call(self, monkeypatch):
+        assert not hasattr(bootstrap, "ssm_client"), "the module still holds its own SSM client"
+        names = publish_resource_names(monkeypatch, bootstrap, {self.WEB_KEY: "https://d111.cloudfront.net "})
+        parameters = serve_parameters(monkeypatch, values={self.LEGACY: "https://legacy.example.com"})
+        assert self._resolve(monkeypatch) == "https://d111.cloudfront.net"
+        assert bootstrap.resolve_vams_base_url() == "https://d111.cloudfront.net"
+        assert names.method_calls == [] and parameters.calls == []
+
+    def test_without_the_key_the_legacy_parameter_is_read_once_through_the_shared_lookup(self, monkeypatch):
+        names = publish_resource_names(monkeypatch, bootstrap, {}, missing=[self.WEB_KEY])
+        parameters = serve_parameters(monkeypatch, values={self.LEGACY: "https://legacy.example.com"})
+        assert self._resolve(monkeypatch) == "https://legacy.example.com"
+        assert bootstrap.resolve_vams_base_url() == "https://legacy.example.com"
+        assert parameters.calls == [self.LEGACY]
+        assert parameters.call_arguments == [{}], "the URL is read without asking Parameter Store to decrypt"
+        assert names.method_calls == []
+
+    @pytest.mark.parametrize("fault", [
+        always(lambda: client_error("ParameterNotFound")),
+        always(lambda: client_error("AccessDeniedException")),
+        always(throttled),
+        always(lambda: EndpointConnectionError(endpoint_url="https://ssm.example")),
+    ], ids=["missing", "denied", "throttled", "transport"])
+    def test_a_legacy_read_that_is_refused_raises(self, monkeypatch, fault):
+        publish_resource_names(monkeypatch, bootstrap, {}, missing=[self.WEB_KEY])
+        serve_parameters(monkeypatch, fault=fault)
+        log = MagicMock()
+        monkeypatch.setattr(bootstrap, "logger", log)
+        with pytest.raises(bootstrap.SessionBootstrapError) as err:
+            self._resolve(monkeypatch)
+        assert str(err.value) == "VAMS base URL is not available"
+        assert bootstrap._resolved_base_url is None
+        assert any("Deployed web URL could not be resolved (" in str(call.args[0])
+                   for call in log.error.call_args_list)
+
+    def test_a_resource_name_lookup_that_is_refused_raises_and_reads_no_legacy_parameter(self, monkeypatch):
+        names = publish_resource_names(monkeypatch, bootstrap, {})
+        resolver = resolver_names(bootstrap)
+        patch_globals(monkeypatch, resolver, _failed_sweeps=1, _sweep_retry_after=resolver._monotonic() + 100)
+        parameters = serve_parameters(monkeypatch, values={self.LEGACY: "https://legacy.example.com"})
+        with pytest.raises(bootstrap.SessionBootstrapError):
+            self._resolve(monkeypatch)
+        assert parameters.calls == [] and names.method_calls == []
+
+    def test_a_resolved_url_is_kept_for_the_container_and_read_no_more(self, monkeypatch):
+        publish_resource_names(monkeypatch, bootstrap, {self.WEB_KEY: "https://d111.cloudfront.net"})
+        assert self._resolve(monkeypatch) == "https://d111.cloudfront.net"
+        # Parameter Store now refuses every lookup; the memo answers the re-issue's later steps.
+        names = publish_resource_names(monkeypatch, bootstrap, {}, missing=[self.WEB_KEY])
+        parameters = serve_parameters(monkeypatch, fault=always(throttled))
+        assert bootstrap.resolve_vams_base_url() == "https://d111.cloudfront.net"
+        assert parameters.calls == [] and names.method_calls == []
+
+    def test_a_blank_value_raises(self, monkeypatch):
+        publish_resource_names(monkeypatch, bootstrap, {self.WEB_KEY: "  "})
+        with pytest.raises(bootstrap.SessionBootstrapError):
+            self._resolve(monkeypatch)
 
     def test_an_empty_base_url_raises(self):
         with patch.object(bootstrap, "vams_base_url", ""), \

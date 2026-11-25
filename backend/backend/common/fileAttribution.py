@@ -36,6 +36,7 @@ import time
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 from boto3.dynamodb.conditions import Key
+from common.bucketRegistrations import active_registrations, primary_registrations, same_registration
 from common.assetLocations import (
     ARCHIVED_DATABASE_SUFFIX,
     RESOLVED_AMBIGUOUS,
@@ -300,7 +301,10 @@ def _from_first_folder(asset_table, buckets_table, bucket_name: str, object_key:
     except Exception as e:
         raise RegistrationUnavailableError(f"The registrations of bucket {bucket_name} could not be read: "
                                            f"{type(e).__name__}") from e
-    registrations = sorted(bucket_registrations,
+    # A retired registration (it left the configuration) answers no lookup by name. Two rows for one
+    # location (a duplicate and the row it names) are one registration: an asset of either is found.
+    active = active_registrations(bucket_registrations)
+    registrations = sorted(primary_registrations(active),
                            key=lambda r: -len(normalize_base_prefix(r.get('baseAssetsPrefix'))))
     for registration in registrations:
         prefix = normalize_base_prefix(registration.get('baseAssetsPrefix'))
@@ -309,11 +313,12 @@ def _from_first_folder(asset_table, buckets_table, bucket_name: str, object_key:
         first_folder, separator, _ = object_key[len(prefix):].partition('/')
         if not first_folder or not separator:
             continue
+        group_ids = {str(r.get('bucketId') or '') for r in active if same_registration(r, registration)}
         rows = _query_all(asset_table, IndexName='assetIdGSI', KeyConditionExpression=Key('assetId').eq(first_folder))
         live: List[FileAttribution] = []
         archived: List[FileAttribution] = []
         for row in rows:
-            if str(row.get('bucketId') or '') != str(registration.get('bucketId') or ''):
+            if str(row.get('bucketId') or '') not in group_ids:
                 continue
             is_archived = str(row.get('databaseId') or '').endswith(ARCHIVED_DATABASE_SUFFIX) \
                 or row.get('status') == 'archived'
@@ -375,7 +380,8 @@ def attribute_object(bucket_name: str, object_key: str, *, asset_table, buckets_
                      read_stamp: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
                      use_index_cache: bool = True, asset_table_name: Optional[str] = None,
                      get_row: Optional[Callable[[str, str, bool], Tuple[Optional[Dict[str, Any]], bool]]] = None,
-                     get_registration: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
+                     get_registration: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
+                     registration_bucket_id: Optional[str] = None
                      ) -> FileAttribution:
     """The asset `object_key` in `bucket_name` belongs to (see the module docstring for the order).
 
@@ -390,12 +396,48 @@ def attribute_object(bucket_name: str, object_key: str, *, asset_table, buckets_
         get_row: `(live database id, asset id, include_archived) -> (row, archived)`, replacing the
             strongly consistent asset-row reads of a binding or a stamp.
         get_registration: `bucketId -> registration row or None`, replacing the registration read.
+        registration_bucket_id: the `bucketId` the record was stamped with (`ASSET_BUCKET_ID`, the
+            registration whose bucket sync forwarded it). An owner in another registration is not
+            used: the answer is NOT_ATTRIBUTED and a warning is logged. A row that duplicates the
+            stamped registration, or that it duplicates, is the same registration. None or '' (a
+            message from an earlier release, a direct notification) checks nothing.
 
     Raises:
         RegistrationUnavailableError: a bucket registration the answer depends on could not be read;
             the caller retries the record.
     """
     readers = _Readers(asset_table, buckets_table, get_row, get_registration)
+    attribution = _attribute(readers, bucket_name, object_key, asset_table=asset_table,
+                             buckets_table=buckets_table, binding=binding, include_archived=include_archived,
+                             read_stamp=read_stamp, use_index_cache=use_index_cache,
+                             asset_table_name=asset_table_name)
+    if not registration_bucket_id or not attribution.attributed:
+        return attribution
+    if _in_registration(readers, attribution.bucket_id, registration_bucket_id):
+        return attribution
+    logger.warning(f"Key {normalize_location(object_key)} in bucket {bucket_name} is held by asset "
+                   f"{attribution.asset_id} of registration {attribution.bucket_id or '(none)'}, not of "
+                   f"{registration_bucket_id}, the registration that forwarded it; nothing is attributed")
+    return NOT_ATTRIBUTED_RESULT
+
+
+def _in_registration(readers: '_Readers', owner_bucket_id: str, registration_bucket_id: str) -> bool:
+    """Whether an owner's registration is the stamped one: the same bucketId, or two rows for one
+    location (`bucketRegistrations.same_registration`)."""
+    if not owner_bucket_id:
+        return False
+    if owner_bucket_id == registration_bucket_id:
+        return True
+    owner_rows = readers.registrations(owner_bucket_id)
+    stamped_rows = readers.registrations(registration_bucket_id)
+    return any(same_registration(owner, stamped) for owner in owner_rows for stamped in stamped_rows)
+
+
+def _attribute(readers: '_Readers', bucket_name: str, object_key: str, *, asset_table, buckets_table,
+               binding: Optional[Dict[str, Any]], include_archived: bool,
+               read_stamp: Optional[Callable[[], Optional[Dict[str, Any]]]], use_index_cache: bool,
+               asset_table_name: Optional[str]) -> FileAttribution:
+    """`attribute_object` without the registration check."""
     key = normalize_location(object_key)
     if not bucket_name or not key:
         return NOT_ATTRIBUTED_RESULT

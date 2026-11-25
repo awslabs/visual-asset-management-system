@@ -580,10 +580,9 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
     workflowId: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)
     workflowExecutionId: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)
     changeUserId: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)
-    # Bucket the tempKey source files live in when it differs from the asset's own (destination)
-    # bucket. Workflow-execution outputs are staged in the VAMS default run bucket while the output
-    # asset can live in another bucket; the copy reads from sourceBucket and writes to the asset
-    # bucket. Empty/omitted => same as the asset bucket (the normal single-bucket upload path).
+    # Accepted and not used to choose a bucket: the handler resolves the bucket the tempKey files are
+    # read from itself (the VAMS default asset bucket for a workflow execution's write-back, else the
+    # asset's own bucket) and logs a value that differs. Still validated, since it is logged.
     sourceBucket: Optional[str] = Field(None, max_length=MAX_S3_BUCKET_NAME_LENGTH)
     # Workflow output ingestion batch the caller waits on. When set, each file over the async
     # threshold is ingested by a large object copy job in this batch (no queue, no synchronous

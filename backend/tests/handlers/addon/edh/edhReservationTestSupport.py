@@ -7,7 +7,8 @@
 EC2 does: a request naming any id it does not hold fails as a whole with
 ``InvalidCapacityReservationId.NotFound``. ``failure`` makes every call raise instead. Every request is
 recorded. ``install_reservation_fakes`` points the registry module at a moto session table and the fake
-EC2 client; the handlers reach the module through its attribute, so one install serves them all.
+EC2 client, and ``FakeSsm`` behind ``common.ssmParameters``, the lookup the module reads EDH's private subnets
+through; the handlers reach the module through its attribute, so one install serves them all.
 """
 
 import os
@@ -18,6 +19,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 import backend.backend.handlers.addon.edh.common.edhCapacityReservations as reservations
+from backend.tests.handlers.addon.edh.edhParameterStoreTestSupport import serve_parameters
 
 CR_FREE = "cr-0123456789abcdef0"
 CR_FULL = "cr-0fedcba9876543210"
@@ -143,7 +145,8 @@ def create_session_table(resource, *, indexes=False):
 
 def install_reservation_fakes(monkeypatch, *, records=None, failure=None, registered=(), indexes=False,
                               subnets=None, subnet_parameter_value=None, ssm_failure=None, subnet_failure=None):
-    """Inside an active mock_aws: a moto session table and a FakeEc2 and FakeSsm behind the registry module, with
+    """Inside an active mock_aws: a moto session table and a FakeEc2 behind the registry module and a FakeSsm behind
+    common.ssmParameters, with
     each of ``registered`` -- (id, fields) pairs -- written as a registry row. EDH's private subnets are
     ``subnets`` (id -> Availability Zone), named by the parameter value ``subnet_parameter_value`` (by default the
     list of ``subnets``; no ``subnets`` and no value is a parameter EDH does not hold), and the zone cache starts
@@ -156,7 +159,7 @@ def install_reservation_fakes(monkeypatch, *, records=None, failure=None, regist
     ssm = FakeSsm(subnet_parameter_value, ssm_failure)
     monkeypatch.setattr(reservations, "_session_table", table)
     monkeypatch.setattr(reservations, "ec2", ec2)
-    monkeypatch.setattr(reservations, "ssm", ssm)
+    serve_parameters(monkeypatch, ssm)
     reset_subnet_zone_cache()
     for cr_id, fields in registered:
         table.put_item(Item=registry_item(cr_id, **fields))

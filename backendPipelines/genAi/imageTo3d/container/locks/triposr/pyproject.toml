@@ -8,7 +8,7 @@ dependencies = [
     # CUDA 12.8 torch stack. TripoSR builds a CUDA extension (torchmcubes) against this torch.
     "torch==2.11.0",
     "torchvision==0.26.0",
-    # Shared pipeline dependencies: container/requirements.txt at the base commit, line for line.
+    # Shared pipeline dependencies: the shared container/requirements.txt (retired in #1726) at the base commit, line for line.
     "boto3",
     "botocore",
     "numpy",

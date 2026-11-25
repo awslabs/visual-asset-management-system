@@ -11,6 +11,7 @@ from typing import Dict, Any, List
 from common.timestamps import utc_now
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload, audited_handler
@@ -525,6 +526,39 @@ def update_asset_preview_location(asset_id: str, database_id: str, final_s3_key:
         
     except Exception as e:
         logger.exception(f"Error updating asset preview location: {e}")
+
+def read_registration(bucket_id: str) -> Dict[str, Any]:
+    """The bucket registration row of a bucketId, or None. A read that fails raises (retryable)."""
+    table = dynamodb.Table(get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE))
+    items = table.query(KeyConditionExpression=Key('bucketId').eq(bucket_id), Limit=1).get('Items') or []
+    return items[0] if items else None
+
+
+def registration_refusal(file_info: Dict[str, Any]) -> str:
+    """'' when the message's bucket names are the registrations it names, else the reason.
+
+    The queuing handler names the destination registration (`bucketId`) and, for a workflow output
+    staged in the run bucket, the source registration (`sourceBucketId`) beside the bucket names. The
+    file is written only when the asset is in the destination registration and each bucketId resolves
+    to the bucket name the message carries. A message from an earlier release carries no bucketId and
+    is processed as before."""
+    bucket_id = file_info.get('bucketId')
+    if not bucket_id:
+        return ''
+    asset = get_asset_details(file_info.get('databaseId'), file_info.get('assetId'))
+    if asset and asset.get('bucketId') and asset.get('bucketId') != bucket_id:
+        return f"asset {file_info.get('assetId')} is in registration {asset.get('bucketId')}, not {bucket_id}"
+    checks = [(bucket_id, file_info.get('bucketName'))]
+    if file_info.get('sourceBucketId'):
+        checks.append((file_info['sourceBucketId'], file_info.get('sourceBucketName') or file_info.get('bucketName')))
+    for registration_id, bucket_name in checks:
+        registration = read_registration(registration_id)
+        if not registration:
+            return f"registration {registration_id} does not exist"
+        if registration.get('bucketName') != bucket_name:
+            return f"registration {registration_id} is not bucket {bucket_name}"
+    return ''
+
 
 def get_asset_details(database_id: str, asset_id: str) -> Dict[str, Any]:
     """
@@ -1379,6 +1413,16 @@ def process_large_file(file_info: Dict[str, Any], correlation_ids: Dict[str, str
             logger.info(f"File already handed to copy job {handed_off_job}; nothing to do - {correlation_str}")
             file_info['copyJobId'] = handed_off_job
             return True
+
+        # The buckets the message names must be the registrations it names. A mismatch is refused
+        # before anything is read or written, and nothing is cleaned up in a bucket the message may
+        # have misnamed.
+        refusal = registration_refusal(file_info)
+        if refusal:
+            logger.error(f"Large file refused: {refusal} - {correlation_str}")
+            audit_rejected_large_file(file_info, correlation_ids, "Bucket registration mismatch")
+            record_file_outcome(file_info, False, uploadStatus.REASON_PROCESSING_FAILED)
+            return False
 
         # Step 1: Complete multipart upload at temporary location
         logger.info(f"Step 1: Completing multipart upload - {correlation_str}")

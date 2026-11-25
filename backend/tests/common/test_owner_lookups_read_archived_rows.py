@@ -68,7 +68,7 @@ def _lookup_calls():
 class TestOwnerLookupsReadArchivedRows:
     def test_control_the_walk_finds_the_known_lookups(self):
         sites = {(path, function) for path, function, _, _ in _lookup_calls()}
-        assert ("common/fileAttribution.py", "attribute_object") in sites
+        assert ("common/fileAttribution.py", "_attribute") in sites
         assert ("common/indexing/fileEnumeration.py", "enumerate_latest_live_files") in sites
         assert ("handlers/indexing/crReindexer.py", "_process_bucket") in sites
         assert ("tag_synced_objects.py", "tag_synced_objects") in sites

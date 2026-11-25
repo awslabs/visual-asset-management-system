@@ -21,7 +21,8 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.batchItemFailures import failed_records_log_line
 from common.eventLogSummary import event_log_summary, exception_log_summary
-from common.indexerEvents import s3_records_from_indexer_message
+from common.bucketRegistrations import REGISTRATION_DUPLICATE_OF_FIELD, active_registrations
+from common.indexerEvents import carry_bucket_id_stamp, s3_records_from_indexer_message, stamped_bucket_id
 from common.resourceNames import get_table_name, ResourceKeys
 from common.deployTimeValues import DeployTimeKeys, resolve_together
 from common.s3MetadataKeys import (
@@ -372,7 +373,8 @@ def get_registered_bucket_prefixes(bucket_name: str) -> List[str]:
         KeyConditionExpression=Key('bucketName').eq(bucket_name)
     )
     prefixes = []
-    for record in records:
+    # A retired registration (it left the configuration) no longer splits this bucket's keys.
+    for record in active_registrations(records):
         normalized = normalize_bucket_prefix(record.get('baseAssetsPrefix'))
         if normalized is not None:
             prefixes.append(normalized)
@@ -455,12 +457,16 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
             logger.error(f"Bucket name missing for bucketId: {bucket_id}")
             return None
 
-        return {
+        details = {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
             'baseAssetsPrefix': base_assets_prefix,
             **bucket_region_fields(bucket)
         }
+        # The registration this row duplicates, so the attribution check treats both as one.
+        if bucket.get(REGISTRATION_DUPLICATE_OF_FIELD):
+            details[REGISTRATION_DUPLICATE_OF_FIELD] = bucket[REGISTRATION_DUPLICATE_OF_FIELD]
+        return details
     except Exception as e:
         logger.exception(f"Error getting bucket details for {bucket_id}: {e}")
         return None
@@ -533,6 +539,7 @@ def attribute_file(event_record: Dict[str, Any], bucket_name: str, s3_key: str, 
         asset_table_name=asset_storage_table_name,
         get_row=_asset_row_for_attribution,
         get_registration=get_bucket_details,
+        registration_bucket_id=stamped_bucket_id(event_record),
     )
 
 
@@ -2269,6 +2276,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     if asset_bucket_name:
                         record['ASSET_BUCKET_NAME'] = asset_bucket_name
                         record['ASSET_BUCKET_PREFIX'] = asset_bucket_prefix
+                    carry_bucket_id_stamp(record, event)
                     result = handle_s3_notification(record)
                     results.append(result)
                     
@@ -2314,6 +2322,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                                     if sns_bucket_name:
                                         s3_record['ASSET_BUCKET_NAME'] = sns_bucket_name
                                         s3_record['ASSET_BUCKET_PREFIX'] = sns_bucket_prefix
+                                    carry_bucket_id_stamp(s3_record, sns_message, event)
                                     result = handle_s3_notification(s3_record)
                                     results.append(result)
                             

@@ -37,3 +37,11 @@ def setup_environment():
     os.environ["ASSET_UPLOAD_TABLE_NAME"] = "test-asset-upload-table"
     os.environ["SEND_EMAIL_FUNCTION_NAME"] = "test-send-email-function"
     os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"] = "3600"
+
+
+@pytest.fixture(autouse=True)
+def _named_external_upload_source(request, monkeypatch):
+    """The write-back suites here stage outputs in a run bucket of their own (see
+    tests/externalUploadSource.py); the source-bucket decision has its own tests."""
+    from backend.tests.externalUploadSource import patch_external_upload_source
+    patch_external_upload_source(request, monkeypatch)
