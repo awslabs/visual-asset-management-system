@@ -166,6 +166,10 @@ vamscli role user create -u user@example.com --role-name admin --role-name viewe
 vamscli role user create -u user@example.com --json-input '{"roleName":["admin","viewer"]}'
 ```
 
+:::note[Federated users]
+With Amazon Cognito SAML or OIDC federation, a federated user's user ID is the username Amazon Cognito gives the user at the first sign-in: the identity provider's `name` from `infra/config/saml-config.ts` or `oidc-config.ts`, an underscore, and the user's identifier at the identity provider (the SAML `NameID`, or the OIDC `sub`), for example `MyIDP_bob@example.com`. It is not the user's email address unless the identity provider uses the email address as that identifier. After the user's first sign-in, `vamscli user cognito list` shows it as `userId`. The API takes the user ID from the token's `cognito:username` or `username` claim.
+:::
+
 The user role JSON structure is:
 
 ```json
