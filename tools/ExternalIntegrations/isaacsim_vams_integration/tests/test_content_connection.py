@@ -363,3 +363,21 @@ def test_the_watch_reconnects_once_the_profile_holds_a_usable_sign_in(cli_env, m
 def test_reconnect_does_nothing_when_not_running(cli_env):
     conn, _, procs = make(cli_env, api=FakeApi())
     assert conn.reconnect() is None and procs == []
+
+
+def test_the_sign_in_callback_hands_out_no_token_once_the_adapter_has_exited(cli_env):
+    conn, client, procs = make(cli_env, api=FakeApi())
+    conn.start()
+    procs[0].returncode = 1
+    assert client.callbacks[0](8, "http://127.0.0.1:40123/discovery") is True
+    assert client.cancelled == [8] and client.tokens == []
+
+
+def test_stale_entries_are_removed_even_when_the_adapter_does_not_start(cli_env):
+    stale = [types.SimpleNamespace(name="VAMS", discovery_url="http://127.0.0.1:1111/discovery", service_id=3)]
+    registry = FakeRegistry(stale)
+    conn, _, _ = make(cli_env, ready="", api=FakeApi(), registry=registry)
+    with pytest.raises(cc.ContentConnectionError):
+        conn.start()
+    assert registry.removed == ["http://127.0.0.1:1111/discovery"]
+

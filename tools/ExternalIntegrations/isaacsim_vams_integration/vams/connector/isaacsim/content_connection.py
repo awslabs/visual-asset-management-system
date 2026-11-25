@@ -160,6 +160,13 @@ class VamsContentConnection:
         """
         if self._origin is None or origin_of(server) != self._origin:
             return False
+        if not self.running:
+            # The adapter has exited, so another local process may hold its port now: the token is not handed
+            # to whatever answers there. The connection is made again at the next sign-in or start.
+            logger.warning("VAMS Content window: the storage adapter for profile %s is not running; no sign-in "
+                           "was handed out", self.profile)
+            self._client.authentication_cancel(auth_handle)
+            return True
         now = self._clock()
         if self._given is not None:
             self._refused[self._given] = now
@@ -234,6 +241,10 @@ class VamsContentConnection:
         with self._lock:
             if self.running:
                 return self._discovery_url
+            # Entries an earlier session left in omniverse.toml point at a loopback port that is gone. They are
+            # removed before the adapter starts, so they go even when this start fails.
+            if self._browser_api is not None and hasattr(self._browser_api, "add_discovery_server"):
+                self._remove_stale_entries(self._browser_api)
             if not has_storage_support(self._client):
                 raise ContentConnectionError(
                     "the Content window connection needs Isaac Sim 6.1 or later (Kit 110.2+)")

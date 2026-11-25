@@ -146,6 +146,19 @@ def test_databases_are_read_across_pages_sorted_and_cached_per_caller():
     assert api.calls == 4
 
 
+def test_the_cache_drops_expired_entries_and_stays_bounded(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(server.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(server, "MAX_CACHE_ENTRIES", 3)
+    tree = server.VamsTree("https://api.example.com/api")
+    tree._cached("old", lambda: 1)
+    now[0] += server.CACHE_TTL_SECONDS
+    for key in ("a", "b", "c", "d"):
+        tree._cached(key, lambda: 2)
+        now[0] += 1
+    assert sorted(tree._cache) == ["b", "c", "d"]
+
+
 def test_the_adapter_exits_when_its_parent_closes_the_pipe():
     import io
     import threading

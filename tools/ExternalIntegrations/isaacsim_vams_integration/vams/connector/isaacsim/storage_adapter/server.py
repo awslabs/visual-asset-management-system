@@ -48,6 +48,7 @@ ROOT = "vams://vams"
 VERSIONS = ("v1alpha", "v1beta")
 SERVICES = ("capabilities", "filefolder", "fileobject")
 CACHE_TTL_SECONDS = 30.0
+MAX_CACHE_ENTRIES = 256
 MAX_FOLDER_SUBSCRIPTIONS = 64
 PAGE_SIZE = 200
 
@@ -170,7 +171,14 @@ class VamsTree:
                 return hit[1]
         value = load()
         with self._lock:
-            self._cache[key] = (time.monotonic(), value)
+            now = time.monotonic()
+            # Expired entries go at each write, and the oldest beyond MAX_CACHE_ENTRIES, so a long session that
+            # visits many assets, or renews its sign-in (entries are per caller), holds a bounded cache.
+            for stale in [k for k, (at, _) in self._cache.items() if now - at >= CACHE_TTL_SECONDS]:
+                del self._cache[stale]
+            self._cache[key] = (now, value)
+            while len(self._cache) > MAX_CACHE_ENTRIES:
+                del self._cache[min(self._cache, key=lambda k: self._cache[k][0])]
         return value
 
     def databases(self, api, who=None):
