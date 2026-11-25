@@ -957,6 +957,14 @@ is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-
     `claims_and_roles["apiKeyId"]` is the id of the key an API-key caller authenticated with (the
     authorizer's `vams:apiKeyId`), for a handler that decides by the key itself, and `None` for every
     other caller.
+-   **An API key cannot create a key or change an expiration.** A caller whose `authMethod` (from
+    `request_to_claims`, set by the authorizer's `vams:authMethod`) is `apiKey` is answered `403` on
+    API-key create (`POST`) and on any update that carries `expiresAt` (checked before the key is
+    read), in every scope, so a key cannot mint its successor or extend itself; the refusal runs in
+    addition to Tier 1, after `enforceAPI` has allowed the route. Reads, deletes and updates of only
+    `description` or `isActive` follow Tier 1, and JWT callers (Amazon Cognito or the external IdP)
+    and Lambda cross-calls are unaffected (issue #433,
+    `tests/handlers/auth/test_apiKeyService_api_key_callers.py`).
 -   **A temporary session key cannot mint or extend a key.** A temporary session key is an API key
     named with `TEMPORARY_SESSION_KEY_NAME_PREFIX` (`temporary-session-`, `common/constants.py`) that
     a backend component mints for one session through a Lambda cross-call. API-key create and update
