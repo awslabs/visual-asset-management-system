@@ -574,6 +574,8 @@ Each entry in `files` is an object:
 | `file_size`   | integer | No       | File size in bytes. Either `file_size` or `num_parts` must be provided.               |
 | `num_parts`   | integer | No       | Number of multipart upload parts. Either `file_size` or `num_parts` must be provided. |
 
+A file's key, which is its asset's location followed by its `relativeKey`, may be at most 998 bytes of UTF-8 in a bucket registered at its root, and the length of the bucket's base prefix less than that otherwise. The upload is staged under a longer key that must fit the 1,024-byte Amazon S3 limit. A longer key is refused with `400` (`VAMS General Error: File key is too long to upload: a file key, including its asset location, may be at most N bytes`, where N is the bound for the asset's bucket), and no multipart upload is created for any file in the request. See [Amazon S3 quotas](../additional/quotas.md#amazon-s3).
+
 **Response:**
 
 ```json
@@ -600,7 +602,7 @@ Each entry in `files` is an object:
 
 | Status | Description                                                                                                                          |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, asset not found, blocked file extension, or blocked MIME type.                                                   |
+| `400`  | Invalid parameters, asset not found, blocked file extension or MIME type, or a file key over the upload bound described above.       |
 | `403`  | Not authorized to upload files to this asset.                                                                                        |
 | `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60). |
 | `500`  | Internal server error.                                                                                                               |

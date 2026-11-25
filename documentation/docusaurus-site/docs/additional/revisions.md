@@ -59,7 +59,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Scripts that create assets with a chosen asset ID: an ID another asset uses in any database, live or archived, is refused with `400`. Bucket sync creates no asset for a new top-level folder named like an asset stored under another registered bucket, and logs an error. (PR #1862)
     -   While Parameter Store reads fail, search answers an internal server error, the web application starts without the map until a later reload, and the indexers return their batch to the queue. (issue #1820)
     -   Operators and automation that run `tools/permissionsSetup/apply_template.py`: it prints `Status: Incomplete` naming the failed step and exits 1 when the constraint import, the user assignment or a role deletion fails, or a `vamscli` call runs over 60 seconds. A script that went on after such a failure now stops. (issue #1687)
-    -   Scripts and users that upload files with long keys: a file uploaded through VAMS can have a key of at most 998 bytes in a bucket registered at its root, down from 1,011, less the bucket's base prefix otherwise; a longer key is refused with `400` when the upload starts. (issue #1928)
+    -   Scripts and users that upload files with long keys: a file uploaded through VAMS can have a key of at most 998 bytes in a bucket registered at its root, down from 1,011, less the bucket's base prefix otherwise; a longer key is refused with a `400` that names the limit when the upload starts. (issue #1928)
 
 **Key fixes:**
 
