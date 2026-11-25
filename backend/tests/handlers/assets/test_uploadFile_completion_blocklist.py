@@ -174,8 +174,10 @@ def _unvalidated_request(*files, uploadType="assetFile"):
 
 
 def _temp_key(relativeKey):
-    """The temporary key completion writes a zero-byte object to (baseAssetsPrefix is '')."""
-    return f"{uploadFile.TEMPORARY_UPLOAD_PREFIX}asset-1/{relativeKey.lstrip('/')}"
+    """The temporary key completion writes a zero-byte object to: the file's key in the upload's own
+    staging folder (baseAssetsPrefix is '')."""
+    from backend.backend.common.s3PathPatterns import staged_upload_key
+    return staged_upload_key("", UPLOAD_ID, f"asset-1/{relativeKey.lstrip('/')}")
 
 
 @contextmanager
