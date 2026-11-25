@@ -1344,7 +1344,7 @@ Aborting a single execution returns:
 }
 ```
 
-The message is `Execution aborted` only when the call stopped the execution. An execution that was not running keeps its status, and the call still returns `200` with a message that names that status. This covers an execution that had already finished (`SUCCEEDED`, `FAILED`, `ABORTED`, or `TIMED_OUT`) and one that finished between the abort's read of it and its write:
+The message is `Execution aborted` when the call stopped a running execution, also when another writer, such as the AWS Step Functions status change for the call's own stop, recorded `ABORTED` first. An execution that was not running keeps its status, and the call still returns `200` with a message that names that status. This covers an execution that had already finished (`SUCCEEDED`, `FAILED`, `ABORTED`, or `TIMED_OUT`) and one that finished on its own (`SUCCEEDED`, `FAILED`, or `TIMED_OUT`) while the abort ran. The status is `unknown` when the execution's record is gone:
 
 ```json
 {
@@ -1352,7 +1352,7 @@ The message is `Execution aborted` only when the call stopped the execution. An 
 }
 ```
 
-When the abort of an already stopped execution sent a stop request to the sub-processes registered by its pipelines that did not finish on their own, as described above, the message adds `The sub-processes registered by its pipelines that did not finish on their own were sent a stop request.`
+When the abort of an execution that was not running still sent a stop request to a sub-process of a pipeline that did not finish on its own, as described above, the message adds `The sub-processes of its pipelines that did not finish on their own were sent a stop request.` The sentence is absent when no stop request went out, for example when those pipelines registered no sub-process or only ones VAMS cannot stop.
 
 A single-execution abort may include a `warnings` array when a best-effort inner sub-process abort failed, and a `notAbortable` array when a registered sub-process is of a type VAMS cannot stop (an externally owned pipeline's own compute, say). Each `notAbortable` entry is \{`resourceType`, `label`, `stageName`, `locator`\}, listed once per registered locator; `locator` is the registered id, or the final segment of a registered ARN (never the ARN itself). The sub-process is left running and its `warnings` sentence says so as well. Every sub-process `warnings` sentence names a sub-process the same way, by its registered id or the final segment of its registered ARN. `warnings` also carries a sentence when the outer Step Functions execution could not be confirmed stopped (the stop failed and Step Functions still reports it running, or could not be asked): the execution keeps its [concurrency locks](#concurrency-restriction) until it ends, and repeating the abort retries the stop. Both arrays are absent from a clean abort.
 

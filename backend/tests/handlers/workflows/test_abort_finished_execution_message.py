@@ -9,6 +9,11 @@ when the call wrote ABORTED to the main row. A run that was already terminal, or
 finished between the abort's read and its guarded write, answers a 200 whose message says it was not
 running and names its status.
 
+A run that was RUNNING when the abort read it and that another writer recorded ABORTED before the
+abort's own guarded write (the Step Functions status-change push for the abort's own StopExecution, a
+concurrent abort, a read-path reconcile) was still stopped by this call, so it answers "Execution
+aborted" (review r1 1962-1).
+
 Only the row reads, the state-machine stop and the DynamoDB tables are stubbed; the main-row write and
 its terminal guard (_persist_reconciled_main_row) are the code under test.
 
@@ -19,7 +24,7 @@ import json
 import os
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 from botocore.exceptions import ClientError
 
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "t-assets")
@@ -122,12 +127,21 @@ class TestAnAbortOfAFinishedRunSaysItWasNotRunning:
         assert [c.kwargs.get("jobId") for c in terminate.call_args_list] == ["job-orphan"]
 
     def test_warnings_still_accompany_the_not_running_message(self):
+        """A sub-process VAMS cannot stop gets no stop request, so the sweep sentence is left off."""
         response, _table, _reads, _emit, _terminate = _abort(
             [_main_row("ABORTED")],
             [_pipeline_row("ABORTED", [{"resourceType": "slurmJob", "jobId": "slurm-1"}])])
         body = _body(response)
-        assert body["message"].startswith("Execution was not running (status ABORTED)")
+        assert body["message"] == "Execution was not running (status ABORTED), so it was not aborted."
         assert body["warnings"] and body["notAbortable"]
+
+    def test_a_repeated_abort_with_no_registered_sub_process_gets_no_sweep_sentence(self):
+        """The ABORTED pipeline row is swept, but it registered nothing, so no stop request went out."""
+        response, _table, _reads, _emit, terminate = _abort(
+            [_main_row("ABORTED")], [_pipeline_row("ABORTED")])
+        assert _body(response) == {
+            "message": "Execution was not running (status ABORTED), so it was not aborted."}
+        terminate.assert_not_called()
 
 
 @pytest.mark.unit
@@ -143,14 +157,25 @@ class TestAnAbortOfARunningRunStillSaysAborted:
 
 @pytest.mark.unit
 class TestARunFinishedByAnotherWriterDuringTheAbort:
-    def test_the_message_names_the_status_the_other_writer_recorded(self):
-        """The row read RUNNING, the guarded ABORTED write was rejected because the end-state step
-        finished the run in between, so the status named is the one read back, not ABORTED."""
+    @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED", "TIMED_OUT"])
+    def test_the_message_names_the_status_the_run_finished_with_on_its_own(self, status):
+        """The row read RUNNING, the guarded ABORTED write was rejected because the run finished on its
+        own in between, so the status named is the one read back (strongly consistent), not ABORTED."""
         response, _table, reads, emit, _terminate = _abort(
-            [_main_row("RUNNING"), _main_row("SUCCEEDED")], update_error=CONDITIONAL_CHECK_FAILED)
+            [_main_row("RUNNING"), _main_row(status)], update_error=CONDITIONAL_CHECK_FAILED)
         assert _body(response) == {
-            "message": "Execution was not running (status SUCCEEDED), so it was not aborted."}
-        assert reads.call_count == 2
+            "message": f"Execution was not running (status {status}), so it was not aborted."}
+        assert reads.call_args_list == [call(EXEC_ID), call(EXEC_ID, consistent_read=True)]
+        emit.assert_not_called()
+
+    def test_aborted_recorded_first_by_another_writer_still_answers_aborted(self):
+        """Review r1 1962-1. This call stopped the RUNNING execution, and the Step Functions push for
+        that stop recorded ABORTED before the call's own guarded write. The run was aborted, so the
+        answer is "Execution aborted"; the writer that recorded it announced the completion."""
+        response, _table, reads, emit, _terminate = _abort(
+            [_main_row("RUNNING"), _main_row("ABORTED")], update_error=CONDITIONAL_CHECK_FAILED)
+        assert _body(response) == {"message": "Execution aborted"}
+        assert reads.call_args_list == [call(EXEC_ID), call(EXEC_ID, consistent_read=True)]
         emit.assert_not_called()
 
     def test_a_row_gone_on_the_read_back_is_named_unknown(self):
@@ -158,3 +183,57 @@ class TestARunFinishedByAnotherWriterDuringTheAbort:
             [_main_row("RUNNING"), None], update_error=CONDITIONAL_CHECK_FAILED)
         assert _body(response)["message"] == (
             "Execution was not running (status unknown), so it was not aborted.")
+
+
+STOP_REQUEST_CASES = [
+    ({"resourceType": "stepFunctionsExecution",
+      "executionArn": "arn:aws:states:us-east-1:123456789012:execution:sm:run-1"}, True),
+    ({"executionArn": "arn:aws:states:us-east-1:123456789012:execution:sm:run-1"}, True),
+    ({"resourceType": "stepFunctionsExecution",
+      "stateMachineArn": "arn:aws:states:us-east-1:123456789012:stateMachine:sm"}, False),
+    ({"resourceType": "batchJob", "jobId": "job-1"}, True),
+    ({"resourceType": "batchJob", "jobArn": "arn:aws:batch:us-east-1:123456789012:job/job-1"}, True),
+    ({"resourceType": "batchJob", "label": "no locator"}, False),
+    ({"resourceType": "deadlineCloudJob", "jobId": "job-1", "farmId": "farm-1", "queueId": "queue-1"}, True),
+    ({"resourceType": "deadlineCloudJob", "jobId": "job-1"}, False),
+    ({"resourceType": "sageMakerTrainingJob",
+      "trainingJobArn": "arn:aws:sagemaker:us-east-1:123456789012:training-job/train-1"}, True),
+    ({"resourceType": "sageMakerTrainingJob", "label": "no locator"}, False),
+    ({"resourceType": "sageMakerPipelineExecution",
+      "pipelineExecutionArn": "arn:aws:sagemaker:us-east-1:123456789012:pipeline/p1/execution/exec1"}, True),
+    ({"resourceType": "sageMakerPipelineExecution", "label": "no locator"}, False),
+    ({"resourceType": "slurmJob", "jobId": "slurm-1"}, False),
+]
+
+
+@pytest.mark.unit
+class TestTheSweepSentenceCountsOnlyStopRequestsSent:
+    """Review r1 1962-3. The sentence says a stop request was sent, so it is counted where the stop
+    dispatcher actually calls a stop API. `_sends_stop_request` mirrors the dispatcher's locator checks;
+    this pins the two together for every abortable type."""
+
+    @pytest.mark.parametrize("sub,expected", STOP_REQUEST_CASES)
+    def test_the_predicate_matches_whether_the_dispatcher_calls_a_stop_api(self, sub, expected):
+        stop_apis = {"sfn": MagicMock(return_value={}), "batch": MagicMock(return_value={}),
+                     "deadline": MagicMock(), "sagemaker": MagicMock()}
+        with patch.object(le.sfn, "stop_execution", stop_apis["sfn"]), \
+                patch.object(le.batch_client, "terminate_job", stop_apis["batch"]), \
+                patch.object(le, "deadline_client", stop_apis["deadline"]), \
+                patch.object(le, "sagemaker_client", stop_apis["sagemaker"]):
+            le._abort_registered_sub_process(dict(sub))
+        called = (stop_apis["sfn"].called or stop_apis["batch"].called
+                  or stop_apis["deadline"].update_job.called
+                  or stop_apis["sagemaker"].stop_training_job.called
+                  or stop_apis["sagemaker"].stop_pipeline_execution.called)
+        assert le._sends_stop_request(dict(sub)) is expected
+        assert called is expected
+
+    def test_a_deadline_job_found_by_discovery_counts_as_a_stop_request(self):
+        """A Deadline Cloud step that never registered its job is cancelled after discovery."""
+        row = dict(_pipeline_row("ABORTED"), pipelineExecutionType="DeadlineCloud")
+        with patch(f"{MOD}._deadline_farm_queue_for_pipeline", return_value=("farm-1", "queue-1")), \
+                patch(f"{MOD}._discover_deadline_job_id", return_value="job-found"), \
+                patch(f"{MOD}._cancel_deadline_job_reporting", return_value=(True, "")) as cancel:
+            response, _table, _reads, _emit, _terminate = _abort([_main_row("ABORTED")], [row])
+        assert _body(response)["message"].endswith(le.EXECUTION_NOT_RUNNING_RESWEPT_SUFFIX)
+        cancel.assert_called_once_with("farm-1", "queue-1", "job-found")
