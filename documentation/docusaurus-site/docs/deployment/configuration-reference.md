@@ -582,7 +582,7 @@ Amazon CloudFront requires the ACM certificate to be in `us-east-1`. Using a cer
 :::
 
 :::note[Web address in API stream share links]
-The Share File URLs modal builds **URLs (API Stream)** links on the web application URL that `GET /secure-config` returns, and the function behind that route keeps the URL for up to an hour. After a deployment that changes the URL (turning the CloudFront custom domain on or off, changing a `domainHost`, or moving between CloudFront and an ALB), new links can name the earlier host for up to an hour.
+The Share File URLs modal builds **URLs (API Stream)** links on the web application URL that `GET /secure-config` returns, and the function behind that route keeps the URL for up to an hour; a browser tab keeps the configuration it read at sign-in until the page is reloaded. After a deployment that changes the URL (turning the CloudFront custom domain on or off, changing a `domainHost`, or moving between CloudFront and an ALB), new links can name the earlier host for up to an hour, and in a tab opened before the deployment until it is reloaded.
 :::
 
 ## Authentication (`app.authProvider`)
