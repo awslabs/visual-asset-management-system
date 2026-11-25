@@ -233,6 +233,10 @@ Look for the output key `webDistributionUrl` in the deployment output. This is t
 3. Sign in with the admin user ID and temporary password.
 4. You will be prompted to set a new password on first login.
 
+:::note[With SAML or OIDC federation]
+With `app.authProvider.useCognito.useSaml` or `useOidc` enabled, the login page shows only the **Login with \{displayName\}** button, which signs users in through your identity provider. The administrator is a native user pool account, so it cannot sign in on that page. Sign in as the administrator with [VamsCLI](../cli/getting-started.md) instead (`vamscli auth login -u <admin user ID>`, which asks for a new password on the first sign-in), and give federated users their roles from there (`vamscli role user create`) or through a default role (`app.authProvider.authorizerOptions.defaultUserRoleName`).
+:::
+
 ### Create additional users (optional)
 
 After signing in as the administrator, you can create additional users through the web interface under **Admin - Auth > User Management** (when Amazon Cognito authentication is active). For detailed instructions, see the [Permissions Guide](../user-guide/permissions.md).

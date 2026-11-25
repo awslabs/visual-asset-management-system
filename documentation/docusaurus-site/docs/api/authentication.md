@@ -41,7 +41,7 @@ VAMS supports three approaches to external identity providers:
 -   **Cognito SAML federation** (`app.authProvider.useCognito.useSaml`, configured in `infra/config/saml-config.ts`): External SAML 2.0 provider authenticates users, Amazon Cognito issues session tokens. Same coexistence model as OIDC federation.
 -   **External OAuth** (`app.authProvider.useExternalOAuthIdp`): Bypasses Amazon Cognito entirely. All users authenticate via the external provider. Cannot be combined with Cognito.
 
-Choose Cognito federation (OIDC or SAML) when you need to support both corporate SSO and native username/password accounts. Choose external OAuth when you want to completely replace Cognito with an enterprise identity provider.
+Choose Cognito federation (OIDC or SAML) when you need corporate SSO and also native username/password accounts in the user pool. With federation on, the web application's login page offers only the federated sign-in button, so native accounts authenticate with their Amazon Cognito credentials outside the web application, for example with `vamscli auth login -u <username>`. Choose external OAuth when you want to completely replace Cognito with an enterprise identity provider.
 :::
 
 ### API Key
