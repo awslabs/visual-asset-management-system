@@ -581,6 +581,10 @@ Nested stack: `infra/lib/nestedStacks/staticWebApp/staticWebBuilder-nestedStack.
 Amazon CloudFront requires the ACM certificate to be in `us-east-1`. Using a certificate in any other Region causes a deployment failure.
 :::
 
+:::note[Viewer TLS versions]
+With a custom domain, VAMS sets the distribution's security policy to `TLSv1.2_2021`, which accepts TLS 1.3 and TLS 1.2. On the default `*.cloudfront.net` domain, CloudFront applies its `TLSv1` policy whatever the distribution sets, so the web application accepts TLS 1.3 down to TLS 1.0 there. See [Amazon CloudFront Viewer TLS](../architecture/security.md#amazon-cloudfront-viewer-tls).
+:::
+
 :::note[Web address in API stream share links]
 The Share File URLs modal builds **URLs (API Stream)** links on the web application URL that `GET /secure-config` returns, and the function behind that route keeps the URL for up to an hour; a browser tab keeps the configuration it read at sign-in until the page is reloaded. After a deployment that changes the URL (turning the CloudFront custom domain on or off, changing a `domainHost`, or moving between CloudFront and an ALB), new links can name the earlier host for up to an hour, and in a tab opened before the deployment until it is reloaded.
 :::

@@ -158,6 +158,9 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
         // Configure custom domain if enabled
         let certificate: acm.ICertificate | undefined;
         let domainNames: string[] | undefined;
+        // The viewer TLS floor applies only with a custom certificate. The default *.cloudfront.net
+        // certificate uses the policy CloudFront sets for it, so the property is left unset there.
+        let minimumProtocolVersion: cloudfront.SecurityPolicyProtocol | undefined;
 
         if (props.config.app.useCloudFront.customDomain.enabled) {
             // Import ACM certificate (must be in us-east-1 for CloudFront)
@@ -169,6 +172,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
 
             // Set custom domain name
             domainNames = [props.config.app.useCloudFront.customDomain.domainHost];
+            minimumProtocolVersion = cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021; // Required by security
         }
 
         const cloudFrontDistribution = new cloudfront.Distribution(this, "WebAppDistribution", {
@@ -199,7 +203,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
 
             defaultRootObject: "index.html",
             webAclId: props.webAcl != "" ? props.webAcl : undefined,
-            minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021, // Required by security
+            minimumProtocolVersion: minimumProtocolVersion,
             enableLogging: true,
             logBucket: props.webAppAccessLogsBucket,
             logFilePrefix: "cloudfront-access-logs/",
