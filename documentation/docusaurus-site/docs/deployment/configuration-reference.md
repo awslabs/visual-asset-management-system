@@ -582,7 +582,7 @@ Amazon CloudFront requires the ACM certificate to be in `us-east-1`. Using a cer
 :::
 
 :::note[Viewer TLS versions]
-With a custom domain, VAMS sets the distribution's security policy to `TLSv1.2_2021`, which accepts TLS 1.3 and TLS 1.2. On the default `*.cloudfront.net` domain, CloudFront applies its `TLSv1` policy whatever the distribution sets, so the web application accepts TLS 1.3 down to TLS 1.0 there. See [Amazon CloudFront Viewer TLS](../architecture/security.md#amazon-cloudfront-viewer-tls).
+With a custom domain, VAMS sets the distribution's security policy to `TLSv1.2_2021`, which accepts TLS 1.3 and TLS 1.2. On the default `*.cloudfront.net` domain, CloudFront applies its `TLSv1` policy whatever the distribution sets, so the web application and the API at `/api/*` accept TLS 1.3 down to TLS 1.0 there, while the `execute-api` endpoint and the REST API custom domain keep TLS 1.2. See [Amazon CloudFront Viewer TLS](../architecture/security.md#amazon-cloudfront-viewer-tls).
 :::
 
 :::note[Web address in API stream share links]

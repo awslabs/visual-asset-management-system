@@ -263,7 +263,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-CFR4",
-                    reason: "Custom domain support is now available through configuration. When custom domain is disabled, CloudFront uses the default certificate. When enabled, customers must provide their own ACM certificate in us-east-1.",
+                    reason: "With the default *.cloudfront.net certificate, CloudFront fixes the viewer security policy at TLSv1 (TLS 1.0 and later) for every path, /api/* included, and no distribution setting can raise it. A custom domain (app.useCloudFront.customDomain, with an ACM certificate in us-east-1) gets TLSv1.2_2021. See documentation/docusaurus-site/docs/architecture/security.md#amazon-cloudfront-viewer-tls.",
                 },
             ],
             true

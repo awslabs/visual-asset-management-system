@@ -414,7 +414,7 @@ All data in transit is encrypted using TLS:
 
 #### REST API TLS Security Policy
 
-A security policy is a predefined combination of minimum TLS version and cipher suites that Amazon API Gateway offers during the TLS handshake. VAMS sets one on the REST API resource itself, so it applies to the default `execute-api` endpoint the API serves from rather than only to a custom domain name.
+A security policy is a predefined combination of minimum TLS version and cipher suites that Amazon API Gateway offers during the TLS handshake. VAMS sets one on the REST API resource itself, so it applies to the default `execute-api` endpoint the API serves from rather than only to a custom domain name. It governs connections made to API Gateway; a request that reaches the API through the Amazon CloudFront distribution at `/api/*` negotiates TLS with CloudFront first (see [Amazon CloudFront Viewer TLS](#amazon-cloudfront-viewer-tls)).
 
 | Deployment                                               | Security policy                          | TLS versions accepted |
 | -------------------------------------------------------- | ---------------------------------------- | --------------------- |
@@ -440,7 +440,9 @@ The Amazon CloudFront security policy sets the minimum TLS version and the ciphe
 | Default `*.cloudfront.net` domain (`customDomain.enabled: false`)    | `TLSv1`, set by CloudFront  | TLS 1.3, TLS 1.2, TLS 1.1, TLS 1.0 |
 | Custom domain with an ACM certificate (`customDomain.enabled: true`) | `TLSv1.2_2021`, set by VAMS | TLS 1.3, TLS 1.2                   |
 
-On the default domain the distribution uses the CloudFront certificate, and CloudFront always applies the `TLSv1` policy there; a distribution cannot raise that floor. VAMS therefore sets the security policy only when `app.useCloudFront.customDomain` supplies a certificate. To refuse TLS 1.1 and TLS 1.0 on the web application, configure a custom domain (see [Amazon CloudFront](../deployment/configuration-reference.md#amazon-cloudfront-appusecloudfront) in the configuration reference). The GovCloud mode (AWS GovCloud (US) and the AWS European Sovereign Cloud) refuses `app.useCloudFront.enabled`; those deployments serve the web application from the Application Load Balancer instead.
+On the default domain the distribution uses the CloudFront certificate, and CloudFront always applies the `TLSv1` policy there; a distribution cannot raise that floor. VAMS therefore sets the security policy only when `app.useCloudFront.customDomain` supplies a certificate.
+
+The policy covers every path on the distribution, including the API at `/api/*`. On the default domain a client can therefore reach the API through the web URL at TLS 1.0, while the `execute-api` endpoint and the REST API custom domain keep the TLS 1.2 floor described in [REST API TLS Security Policy](#rest-api-tls-security-policy). To refuse TLS 1.1 and TLS 1.0 on the web application and on `/api/*`, configure a custom domain (see [Amazon CloudFront](../deployment/configuration-reference.md#amazon-cloudfront-appusecloudfront) in the configuration reference). The GovCloud mode (AWS GovCloud (US) and the AWS European Sovereign Cloud) refuses `app.useCloudFront.enabled`; those deployments serve the web application from the Application Load Balancer instead.
 
 The following bucket policy statement is applied to every Amazon S3 bucket in VAMS:
 
