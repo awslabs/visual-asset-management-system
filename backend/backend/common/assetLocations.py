@@ -259,8 +259,11 @@ class AssetFilePaths:
     def aux_stream_key_for(self, database_id: Optional[str], value: Optional[str]) -> Optional[str]:
         """The auxiliary key of a viewer data path ``{file}/preview/...`` in this location, or None.
 
-        A file's viewer data is ``{databaseId}/{file key}/preview/...``. After one leading ``/`` is dropped, the
-        path is read in this order:
+        A file's viewer data is ``{databaseId}/{file key}/preview/...``. A leading ``/`` marks the file's
+        asset-relative path, the rule ``download_key_for`` uses: such a path (one ``/`` dropped) is joined under
+        ``{databaseId}/{location}/`` and never read as a full key or as the auxiliary key, so ``/{location}x`` is
+        the file ``{location}{location}x`` of a subfolder named like the location. A path without one is read in
+        this order:
 
         - the file's full S3 key (the ``key`` the file list returns, the form the web viewers send), when the
           path starts with the key of a file the location holds followed by ``/preview/``: used as given under
@@ -278,10 +281,11 @@ class AssetFilePaths:
             return None
         database = (database_id or '').strip('/')
         base = f"{database}/{loc.strip('/')}/"
-        rel = raw[1:] if raw.startswith("/") else raw
-        if self.names_held_file_data(rel):
+        in_asset = raw.startswith("/")
+        rel = raw[1:] if in_asset else raw
+        if not in_asset and self.names_held_file_data(rel):
             key = f"{database}/{rel}"
-        elif rel.startswith(base):
+        elif not in_asset and rel.startswith(base):
             key = rel
         else:
             key = base + rel

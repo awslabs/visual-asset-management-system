@@ -12,6 +12,10 @@ a single-file asset found no viewer data. The route now reads these path forms:
     folder segment and a file in a subfolder named like the location;
 -   the asset-relative path and the auxiliary key ``{databaseId}/{location}/...``, as before.
 
+A leading ``/`` marks the file's path in the asset, the rule the download route uses:
+``/{location}x`` is the file ``{location}{location}x`` of a subfolder named like the location, never the full key
+``{location}x``. Search results send such paths; reading them as full keys showed another file's point cloud.
+
 Every resolved key stays under ``{databaseId}/{location}/``, so it is ``{databaseId}/`` plus a key the asset's
 location holds: another asset's key, a neighbour that only shares the location's characters and another
 database's auxiliary key resolve inside this asset, never to that data. The route still authorizes before any S3
@@ -135,6 +139,48 @@ class TestEveryResolvedKeyStaysInTheAsset:
         assert _resolve(location, path) is None
 
 
+@pytest.mark.unit
+class TestALeadingSlashMarksThePathInTheAsset:
+    """A path with a leading ``/`` is read only as the file's path in the asset."""
+
+    @pytest.mark.parametrize("location,path,key", [
+        # A subfolder named like the location: /{location}x is {location}{location}x, not {location}x
+        ("a1/", "/a1/cloud.laz", "a1/a1/cloud.laz"),
+        ("vams/a1/", "/vams/a1/cloud.laz", "vams/a1/vams/a1/cloud.laz"),
+        ("custom/path/", "/custom/path/cloud.laz", "custom/path/custom/path/cloud.laz"),
+        # A single-file asset's companion entry whose path spells the file's key
+        ("p1/model.laz", "/p1/model.laz/x.laz", "p1/model.laz/p1/model.laz/x.laz"),
+        ("p1/model.laz", "/p1/model.laz", "p1/model.laz/p1/model.laz"),
+    ], ids=["asset-id-folder", "base-prefix", "custom-root", "single-file-companion", "single-file-key-path"])
+    def test_a_path_that_starts_with_the_location_key_is_a_path_in_the_asset(self, location, path, key):
+        assert _resolve(location, f"{path}/{DATA}") == f"db1/{key}/{DATA}"
+
+    @pytest.mark.parametrize("location,full_key", [
+        ("a1/", "a1/cloud.laz"),
+        ("vams/a1/", "vams/a1/cloud.laz"),
+        ("custom/path/", "custom/path/cloud.laz"),
+        ("p1/model.laz", "p1/model.laz/x.laz"),
+        ("p1/model.laz", "p1/model.laz"),
+    ])
+    def test_control_the_same_text_without_the_slash_is_the_full_key(self, location, full_key):
+        assert _resolve(location, f"{full_key}/{DATA}") == f"db1/{full_key}/{DATA}"
+
+    @pytest.mark.parametrize("location,path,key", [
+        ("a1/", "/db1/a1/cloud.laz", "a1/db1/a1/cloud.laz"),
+        ("p1/model.laz", "/db1/p1/model.laz", "p1/model.laz/db1/p1/model.laz"),
+    ])
+    def test_a_path_in_the_asset_is_never_the_auxiliary_key(self, location, path, key):
+        assert _resolve(location, f"{path}/{DATA}") == f"db1/{key}/{DATA}"
+
+    @pytest.mark.parametrize("location,relative,full_key", [
+        ("a1/", "/cloud.laz", "a1/cloud.laz"),
+        ("vams/a1/", "/scans/cloud.laz", "vams/a1/scans/cloud.laz"),
+        ("p1/model.laz", "/sub/x.laz", "p1/model.laz/sub/x.laz"),
+    ])
+    def test_control_an_ordinary_path_in_the_asset_reads_as_before(self, location, relative, full_key):
+        assert _resolve(location, f"{relative}/{DATA}") == f"db1/{full_key}/{DATA}"
+
+
 # The route end to end: a folder asset in a bucket registered under a base prefix
 OUTER = {
     "databaseId": "db-a", "assetId": "outer", "isDistributable": True,
@@ -179,6 +225,13 @@ class TestTheRouteByFullKey:
         m, mock_s3 = handler
         assert _call(m, OWN_FULL_KEY, method)["statusCode"] in SERVED
         assert _read_key(mock_s3, method) == "db-a/" + OWN_FULL_KEY
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD"])
+    def test_a_subfolder_named_like_the_location_is_served_by_its_path_in_the_asset(self, handler, method):
+        """Search results send /{location}x for the file {location}{location}x."""
+        m, mock_s3 = handler
+        assert _call(m, "/" + OWN_FULL_KEY, method)["statusCode"] in SERVED
+        assert _read_key(mock_s3, method) == "db-a/vams/outer/" + OWN_FULL_KEY
 
     @pytest.mark.parametrize("method", ["GET", "HEAD"])
     def test_control_the_asset_relative_path_is_served_the_same_data(self, handler, method):

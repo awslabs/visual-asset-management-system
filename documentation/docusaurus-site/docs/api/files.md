@@ -769,10 +769,10 @@ Returns file metadata without the file body.
 
 A file's viewer data lives in its own `preview/` folder, so the path is the file, then `/preview/`, then the data path a pipeline wrote (for example `scans/site.laz/preview/PotreeViewer/metadata.json`). The file part names a file the asset holds in either form, for folder and single-file assets:
 
--   its full S3 key, the `key` the file list returns (`vams/a1/scans/site.laz` for an asset in a bucket registered under the base prefix `vams/`), the form the web viewers send for a file the list showed;
--   its path in the asset, the file list's `relativePath` (`/scans/site.laz`).
+-   its path in the asset with its leading `/`, the file list's `relativePath` (`/scans/site.laz`, so the request path has two slashes after `stream`);
+-   its full S3 key, the `key` the file list returns (`vams/a1/scans/site.laz` for an asset in a bucket registered under the base prefix `vams/`), the form the web viewers send for a file the list showed.
 
-A path that starts with the key of a file the asset holds, followed by `/preview/`, is read as the full key, and any other path as the path in the asset. URL-encode each segment and keep the slashes, so a viewer that reads the files beside `metadata.json` can resolve them. A path that names no file of this asset is refused with `400` and the `message` `The file path does not name a file in this asset.`
+A leading `/` marks the path in the asset: `/a1/cloud.laz` in an asset stored at `a1/` is the file `a1/a1/cloud.laz` of a subfolder named like the asset, never `a1/cloud.laz`. A path without a leading `/` that starts with the key of a file the asset holds, followed by `/preview/`, is read as the full key, and any other path as the path in the asset. URL-encode each segment and keep the slashes, so a viewer that reads the files beside `metadata.json` can resolve them. A path that names no file of this asset is refused with `400` and the `message` `The file path does not name a file in this asset.`
 
 **Response:**
 

@@ -84,10 +84,11 @@ FILE_PATH_NOT_IN_ASSET_MESSAGE = "The file path does not name a file in this ass
 def resolve_aux_preview_key(database_id: str, location_key: str, object_key: str) -> Optional[str]:
     """The auxiliary-bucket key of a viewer data path ``{file}/preview/...`` in one asset, or None.
 
-    ``common.assetLocations.AssetFilePaths.aux_stream_key_for``: the file part is the file's full S3 key (the
-    ``key`` the file list returns, what the web viewers send), the auxiliary key ``{databaseId}/{location}/...``,
-    or the file's asset-relative path. The result is always under ``{databaseId}/`` plus a key the asset's
-    location holds. This function reads no asset-bucket object, so the mapping is the one that needs no S3 read.
+    ``common.assetLocations.AssetFilePaths.aux_stream_key_for``: a path with a leading ``/`` is the file's
+    asset-relative path; a path without one is the file's full S3 key (the ``key`` the file list returns, what
+    the web viewers send), the auxiliary key ``{databaseId}/{location}/...``, or the asset-relative path. The
+    result is always under ``{databaseId}/`` plus a key the asset's location holds. This function reads no
+    asset-bucket object, so the mapping is the one that needs no S3 read.
     """
     return AssetFilePaths(location_key).aux_stream_key_for(database_id, object_key)
 
