@@ -495,6 +495,12 @@ class TestFileUploadCommand:
         assert '--asset-preview' in result.output
         assert '--json-input' in result.output
         assert '--json-output' in result.output
+
+    def test_upload_help_names_the_asset_location_a_folder_path_in_the_asset(self, cli_runner):
+        """--asset-location is a folder path in the asset with a leading '/', never an S3 key (#1943)."""
+        result = cli_runner.invoke(cli, ['file', 'upload', '--help'], terminal_width=200)
+        assert result.exit_code == 0
+        assert 'Folder path in the asset to upload into, with a leading "/"' in ' '.join(result.output.split())
     
     def test_upload_missing_required_args(self, cli_runner, file_command_mocks):
         """Test upload command with missing required arguments."""
