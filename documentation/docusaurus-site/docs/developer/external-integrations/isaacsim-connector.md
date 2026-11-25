@@ -21,7 +21,7 @@ This integration is in **experimental** status and may still have issues. Verify
 -   **NVIDIA Isaac Sim 5.1 or 6.2** (other Isaac Sim 6.x releases are untested); the Content window connection needs Isaac Sim 6.1 or later
 -   **Python 3.10+** for the extension (included with Isaac Sim), and **Python 3.12+** for the VAMS CLI's own environment
 -   **VAMS CLI** installed and configured
--   For the optional Content window connection: `grpcio` and `protobuf` in the VAMS CLI's environment (see [Content window connection (optional, Isaac Sim 6.1+)](#content-window-connection-optional-isaac-sim-61))
+-   For the optional Content window connection: **VAMS CLI 2.7.0 or later** (from the same VAMS release as the connector), and `grpcio` and `protobuf` in the VAMS CLI's environment (see [Content window connection (optional, Isaac Sim 6.1+)](#content-window-connection-optional-isaac-sim-61))
 
 ### VAMS CLI setup
 
@@ -86,12 +86,14 @@ folders = ["/path/to/kit-exts"]
 
 To browse VAMS in the Isaac Sim **Content** window as well (see [Content window connection](#content-window-connection-isaac-sim-61)), after installing the extension:
 
-1.  Install `grpcio` and `protobuf` into the **VAMS CLI's** environment (not Isaac Sim's bundled Python) from the connector's hashed lock, with that environment's `pip`. The environment needs Python 3.12 or later, as the VAMS CLI does:
+1.  Check that the VAMS CLI is 2.7.0 or later, then install `grpcio` and `protobuf` into the **VAMS CLI's** environment (not Isaac Sim's bundled Python) from the connector's hashed lock, with that environment's `pip`. The environment needs Python 3.12 or later, as the VAMS CLI does. The storage adapter sends each request with the signed-in user's own token through the VAMS CLI's API client, which an earlier VAMS CLI cannot do: with one, VAMS appears in the Content window with nothing under it, and no log names the cause. Install the VAMS CLI from the same VAMS release as the connector:
 
     ```bash
     # Linux and macOS
+    ~/vamscli-venv/bin/vamscli --version    # VamsCLI version 2.7.0 or later
     ~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
     # Windows
+    %USERPROFILE%\vamscli-venv\Scripts\vamscli --version
     %USERPROFILE%\vamscli-venv\Scripts\pip install --require-hashes --only-binary :all: -r C:\path\to\kit-exts\vams.connector.isaacsim\locks\storage\requirements.lock
     ```
 
@@ -226,7 +228,7 @@ The **VAMS Connector** window stays for sign-in, workflows, export and upload. T
 -   **When it connects**: as soon as the extension has a sign-in, on an EDH Workstations desktop or anywhere else. A sign-in the VAMS CLI profile already holds when Isaac Sim starts (the desktop's session sign-in, or an earlier `vamscli auth login`) is taken over at startup. Without one, sign in under **Authentication** in the **VAMS Connector** window; a sign-in made outside Isaac Sim after it started (a desktop sign-in that finishes late, or `vamscli auth login` in a terminal) is found within 30 seconds, or at once with **Refresh Databases**.
 -   **How it runs**: the extension starts a storage adapter (`vams/connector/isaacsim/storage_adapter/`) with the VAMS CLI's Python, as its own process listening on `127.0.0.1` only, and registers it with the Content window. The adapter serves the Omniverse Storage API over gRPC and holds no credential: each request carries your own VAMS CLI sign-in, which the extension hands to Isaac Sim for the adapter's exact address only. The adapter exits when Isaac Sim's process ends, however it ends.
 -   **Sign-in expiry**: a Cognito sign-in whose token has expired, or expires within five minutes, is renewed with the CLI profile's refresh token when Isaac Sim asks for a sign-in, as `vamscli auth refresh` does, and the renewed tokens are saved to the profile; API keys and other override tokens are used as they are. When VAMS refuses the sign-in, Content window requests fail at once instead of waiting, and the connection reconnects by itself once the CLI profile holds a usable sign-in again, for example after signing in in the **VAMS Connector** window.
--   **Requirements**: `grpcio` and `protobuf` in the VAMS CLI's environment, installed from the connector's hashed lock `locks/storage/requirements.lock` (exported from `locks/storage/uv.lock`, which the CI dependency audit checks) with that environment's `pip`:
+-   **Requirements**: VAMS CLI 2.7.0 or later (`vamscli --version`), and `grpcio` and `protobuf` in the VAMS CLI's environment, installed from the connector's hashed lock `locks/storage/requirements.lock` (exported from `locks/storage/uv.lock`, which the CI dependency audit checks) with that environment's `pip`:
 
     ```bash
     ~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock

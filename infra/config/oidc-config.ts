@@ -13,7 +13,8 @@ import * as cognito from "aws-cdk-lib/aws-cognito";
  * standalone constant (like `useCognito.useSaml` does for SAML), and the settings
  * object carries the provider details. When enabled, the Cognito construct adds a
  * `UserPoolIdentityProviderOidc` to the user pool and the web UI shows a
- * federated login button alongside the native username/password form.
+ * federated login button in place of the native username/password form; native
+ * pool users sign in with VamsCLI.
  */
 export interface OidcSettings {
     // Provider name registered in the Cognito user pool. The web UI federates
