@@ -272,8 +272,8 @@ def object_key_for_request(location: Optional[str], value: Optional[str]) -> Opt
       so ``/{location}x`` is the file ``{location}{location}x`` of a subfolder named like the location. Exactly
       one leading ``/`` is the marker, so a value that starts with ``//`` names a key with an empty segment
       right after the location (``//x`` in ``A1/`` is ``A1//x``, the path ``relative_path_in`` gives that
-      key); uploads before 2.7.0 could write such keys, and each is reached by that path and by its key (the
-      file list still shows it at ``/x``, #1977);
+      key, at which the file list shows it); uploads before 2.7.0 could write such keys, and each is reached
+      by that path and by its key (#1977);
     - a value without one is the file's full S3 key when the location holds it (``contains``), the ``key`` the
       file list returns; any other value is the file's path in the asset.
 
