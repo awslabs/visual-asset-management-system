@@ -797,10 +797,12 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
         if not items:
             return None
 
+        # The export compares each entry with the file's path without its leading slash, so the key
+        # is handed out in that form; an entry stored before #1795 can carry the slash.
         files = []
         for item in items:
             file_info = {
-                'relativeKey': item.get('fileKey'),
+                'relativeKey': str(item.get('fileKey') or '').lstrip('/'),
                 'versionId': item.get('versionId'),
                 'size': item.get('size'),
                 'lastModified': item.get('lastModified'),
