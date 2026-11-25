@@ -1209,7 +1209,9 @@ class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('comment', pre=True, allow_reuse=True)(trim_name)
     
-    @root_validator
+    # Skipped when a field failed: the field's message is then the one answer, so a refused entry in
+    # `files` is not also reported as a missing file list.
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         # If not using latest files, ensure file list is provided
         if not values.get('useLatestFiles') and (not values.get('files') or len(values.get('files')) == 0):
