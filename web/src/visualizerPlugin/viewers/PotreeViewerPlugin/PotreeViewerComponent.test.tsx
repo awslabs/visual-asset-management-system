@@ -6,9 +6,10 @@
 /**
  * The Potree viewer keeps the point cloud's node and hierarchy requests authorized after the ID
  * token is refreshed: it renews the Authorization of the header object its node loader reads.
+ * It names the file's viewer data by the key the host gives, never a guessed asset path (#1855).
  */
 import React from "react";
-import { render, act } from "@testing-library/react";
+import { render, act, waitFor } from "@testing-library/react";
 import PotreeViewerComponent from "./PotreeViewerComponent";
 
 const mockLoadPointCloud = jest.fn();
@@ -94,5 +95,49 @@ describe("Potree viewer authorization", () => {
         // The same object, renewed in place: the loader keeps the reference it was given.
         expect(mockLoadPointCloud.mock.calls[0][2]).toBe(header);
         expect(header.Authorization).toBe("Bearer t2");
+    });
+});
+
+const STREAM = "https://api.example/api/database/db1/assets/asset1/auxiliaryPreviewAssets/stream/";
+
+const loadUrlFor = async (assetKey: string) => {
+    render(
+        <PotreeViewerComponent {...({ assetId: "asset1", databaseId: "db1", assetKey } as any)} />
+    );
+    await waitFor(() => expect(mockLoadPointCloud).toHaveBeenCalled());
+    return mockLoadPointCloud.mock.calls[0][0];
+};
+
+describe("Potree viewer data URL", () => {
+    it.each([
+        ["a file in an {assetId}/ folder", "asset1/cloud.las"],
+        ["a bucket with a base prefix", "vams/asset1/scans/cloud.las"],
+        ["an asset on an existing folder", "custom/path/cloud.las"],
+        ["a subfolder named like the asset", "asset1/asset1/cloud.las"],
+        ["a single-file asset's companion entry", "p1/model.las/sub/x.las"],
+    ])("sends the full key of %s as the host gives it", async (_case, assetKey) => {
+        expect(await loadUrlFor(assetKey)).toBe(
+            `${STREAM}${assetKey}/preview/PotreeViewer/metadata.json`
+        );
+    });
+
+    it("encodes each segment of the file key in the stream URL, keeping the slashes", async () => {
+        expect(await loadUrlFor("asset1/scans #2/50% cloud?.las")).toBe(
+            STREAM + "asset1/scans%20%232/50%25%20cloud%3F.las/preview/PotreeViewer/metadata.json"
+        );
+    });
+});
+
+describe("Potree viewer data URL for a path in the asset", () => {
+    it("keeps the leading slash of a path in the asset from search results", async () => {
+        expect(await loadUrlFor("/asset1/cloud.las")).toBe(
+            STREAM + "/asset1/cloud.las/preview/PotreeViewer/metadata.json"
+        );
+    });
+
+    it("sends repeated leading slashes as one", async () => {
+        expect(await loadUrlFor("//scans/cloud.las")).toBe(
+            STREAM + "/scans/cloud.las/preview/PotreeViewer/metadata.json"
+        );
     });
 });

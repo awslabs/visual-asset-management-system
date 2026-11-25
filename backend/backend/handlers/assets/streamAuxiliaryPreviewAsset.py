@@ -76,15 +76,19 @@ def get_asset_details(databaseId, assetId):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving asset")
 
-# The refusal of a path that names nothing in the asset's auxiliary data ('..' segments, or outside it)
+# The refusal of a path that names nothing in the asset's auxiliary data ('..' segments, or outside it).
+# A fixed message: it echoes no part of the request.
 FILE_PATH_NOT_IN_ASSET_MESSAGE = "The file path does not name a file in this asset."
 
 
 def resolve_aux_preview_key(database_id: str, location_key: str, object_key: str) -> Optional[str]:
-    """The auxiliary-bucket key a stream path names under ``{databaseId}/{location key}/``, or None.
+    """The auxiliary-bucket key of a viewer data path ``{file}/preview/...`` in one asset, or None.
 
-    ``common.assetLocations.AssetFilePaths.aux_stream_key_for``. This function reads no asset-bucket
-    object, so the mapping is the one that needs no S3 read.
+    ``common.assetLocations.AssetFilePaths.aux_stream_key_for``: a path with a leading ``/`` is the file's
+    asset-relative path; a path without one is the file's full S3 key (the ``key`` the file list returns, what
+    the web viewers send), the auxiliary key ``{databaseId}/{location}/...``, or the asset-relative path. The
+    result is always under ``{databaseId}/`` plus a key the asset's location holds. This function reads no
+    asset-bucket object, so the mapping is the one that needs no S3 read.
     """
     return AssetFilePaths(location_key).aux_stream_key_for(database_id, object_key)
 
@@ -161,8 +165,8 @@ def handle_head_request(event, claims_and_roles):
         return general_error(body={'message': message}, status_code=404, event=event)
     
     # Auxiliary preview objects live under the database-scoped per-file layout
-    # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
-    # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
+    # {databaseId}/{file key}/preview/... . The resolve keeps every key under {databaseId}/ plus a key
+    # this asset's location holds, so a caller cannot fetch files outside this asset.
     object_key = resolve_aux_preview_key(databaseId, assetLocationKey, object_key)
     if object_key is None:
         logger.error(f"Auxiliary stream path names no key of asset {databaseId}/{assetId}")
@@ -356,8 +360,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     return error_response
 
                 # Auxiliary preview objects live under the database-scoped per-file layout
-                # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
-                # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
+                # {databaseId}/{file key}/preview/... . The resolve keeps every key under {databaseId}/ plus a
+                # key this asset's location holds, so a caller cannot fetch files outside this asset.
                 object_key = resolve_aux_preview_key(databaseId, assetLocationKey, object_key)
                 if object_key is None:
                     logger.error(f"Auxiliary stream path names no key of asset {databaseId}/{assetId}")
