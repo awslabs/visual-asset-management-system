@@ -2772,7 +2772,7 @@ paths:
                             schema:
                                 type: string
                 "400":
-                    description: Invalid parameters, file too large for streaming, or unallowed file type.
+                    description: "Invalid parameters, file too large for streaming, or unallowed file type; or a path that names no file of this asset (`message` \"The file path does not name a file in this asset.\")."
                     content:
                         application/json:
                             schema:
@@ -2810,7 +2810,7 @@ paths:
                       $ref: '#/components/schemas/id_regex'
                 - name: "proxy+"
                   in: "path"
-                  description: "File path within the auxiliary preview bucket to stream. Can include subdirectories and filename."
+                  description: "The viewer data path {file}/preview/{data path}, for example scans/site.laz/preview/PotreeViewer/metadata.json. {file} names a file the asset holds, for folder and single-file assets, by its path in the asset with its leading slash (the relativePath the file list returns, so the URL has two slashes after stream) or by its full S3 key (the key the file list returns). A path with a leading slash is always read as the path in the asset; a path without one that starts with the key of a file the asset holds, followed by /preview/, is read as the full key, and any other path as the path in the asset. In an asset created from one Amazon S3 object, this route reads the object's own path /{file name} as the file {key}/{file name} of its companion folder, so name the object's viewer data by the object's key. URL-encode each segment and keep the slashes."
                   required: true
                   schema:
                     type: "string"
@@ -2867,7 +2867,7 @@ paths:
                                 type: string
                                 example: "no-cache, no-store"
                 "400":
-                    description: Invalid parameters or unallowed file type.
+                    description: "Invalid parameters or unallowed file type; or a path that names no file of this asset (`message` \"The file path does not name a file in this asset.\")."
                     content:
                         application/json:
                             schema:
@@ -2905,7 +2905,7 @@ paths:
                       $ref: '#/components/schemas/id_regex'
                 - name: "proxy+"
                   in: "path"
-                  description: "File path within the auxiliary preview bucket to check. Can include subdirectories and filename."
+                  description: "The viewer data path {file}/preview/{data path}, for example scans/site.laz/preview/PotreeViewer/metadata.json. {file} names a file the asset holds, for folder and single-file assets, by its path in the asset with its leading slash (the relativePath the file list returns, so the URL has two slashes after stream) or by its full S3 key (the key the file list returns). A path with a leading slash is always read as the path in the asset; a path without one that starts with the key of a file the asset holds, followed by /preview/, is read as the full key, and any other path as the path in the asset. In an asset created from one Amazon S3 object, this route reads the object's own path /{file name} as the file {key}/{file name} of its companion folder, so name the object's viewer data by the object's key. URL-encode each segment and keep the slashes."
                   required: true
                   schema:
                     type: "string"

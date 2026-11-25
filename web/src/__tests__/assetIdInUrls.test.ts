@@ -64,8 +64,10 @@ describe("asset ids in in-app links and direct API URLs", () => {
 
     it("are found by the scan (control)", () => {
         rawAssetIds();
-        // 40 in-app links, 9 viewer stream URLs and the execution page's link at the time of #1476.
-        expect(rawAssetIds.encoded).toBeGreaterThanOrEqual(50);
+        // 40 in-app links, 8 viewer stream URLs and the execution page's link. The Potree and VEERUM
+        // point cloud URLs are one template, auxiliaryPreviewStreamUrl in visualizerPlugin/core/viewerData.ts
+        // (#1855), so they count once.
+        expect(rawAssetIds.encoded).toBeGreaterThanOrEqual(49);
     });
 
     it("are decoded back by the router, so the asset page opens the asset itself", () => {

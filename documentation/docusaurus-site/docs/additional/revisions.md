@@ -110,6 +110,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **A file delete removes its version records** — A file delete removes the deleted files' rows from the asset versions, however each version was created, so an asset version no longer lists a file whose versions are gone. The file routes' function could read those rows but not delete them, and it matched only rows stored with a leading slash, which a version created from the asset's current files does not write. (PR #1913)
     -   Note: rows a file delete left before the update stay, so the asset's version listings keep showing those files as permanently deleted, and deleting the file again cannot remove them (`400` `File not found.`).
 -   **Concurrent uploads of one file** — Uploads of the same file to one asset that complete at the same time each store a version of the file, instead of most or all failing with `Upload ID mismatch.`. Each upload is staged in its own folder, so an uploaded file key can be at most 998 bytes at a bucket's root (1,011 before). (issue #1928)
+-   **Point cloud viewer data outside an `{assetId}/` folder** — The Potree viewer loads the octree of a file in a bucket registered under a base prefix, in an asset created on an existing folder, or in the companion folder of an asset created from one S3 object; the auxiliary preview stream reads a file's full key as well as its path in the asset. (issue #1855)
+    -   Note: A path with a leading `/` is always the path in the asset; a path without one that starts with the asset's location key is the full key. The licensed VEERUM viewer's point cloud loading gets the same fix.
 
 **Other changes:**
 
@@ -119,6 +121,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Known issues:**
 
+-   A single-file asset's own file does not appear in file search results, so it cannot be found or opened from search; open it from the asset's file manager or file page instead. (issue #1982)
 -   An asset permanent delete can report success while Amazon S3 keeps the asset's files (for example, when a bucket policy denies the delete or the objects are locked): the asset's records are removed and the files stay in the bucket. Fixed in 2.7.0. (issue #1768)
 -   Deleting a file of an asset stored in a folder also deletes the viewer data of the same asset's files under a folder named like that file: deleting `p/scan.e57` removes the viewer data of the files under `p/scan.e57/`. Fixed in 2.7.0. (issue #1870)
 -   Comments and subscriptions are stored by asset ID alone. Two assets with the same asset ID in different databases share their comments and subscription, and permanently deleting one of them deletes the other's comments and subscription. Fixed in 2.7.0. (issue #1860)
