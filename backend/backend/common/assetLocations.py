@@ -1302,9 +1302,16 @@ def index_ready(asset_table_name: str, read_parameter: Optional[Callable[[str], 
     root (an empty location), no `bucketId`, or a bucket registration that no longer exists. A row
     at its registration's own prefix is indexed. The step's report lists both kinds.
 
-    The answer is cached per container and table for INDEX_READY_CACHE_TTL_SECONDS either way. A
-    marker that cannot be read (no prefix, a missing parameter, AccessDenied, throttling) answers
-    False, so a failure falls back to the checks that do not depend on the index.
+    The answer of a completed read is cached per container and table for
+    INDEX_READY_CACHE_TTL_SECONDS. A marker that cannot be read (no prefix, a missing parameter,
+    AccessDenied) answers False and is cached the same way, so a failure falls back to the checks
+    that do not depend on the index.
+
+    A read that common.ssmParameters reports unavailable (throttled or timed out, or refused inside
+    its back-off window) is not cached: the container keeps the last answer it read, False when it
+    has none, and reads again on the next check once the window has passed. So a transient error
+    holds a ready index as not ready for no longer than that window. A `read_parameter` passed in
+    has no such window, so its failures are cached like any other.
 
     The marker is written after the deployment, so it is read uncached with
     common.ssmParameters.read_parameter_value(): one read gives up within
@@ -1320,11 +1327,14 @@ def index_ready(asset_table_name: str, read_parameter: Optional[Callable[[str], 
     name = index_ready_parameter_name()
     ready = False
     if name and asset_table_name:
+        transient = ()
         try:
             if read_parameter is None:
                 # Imported on first use: only this check reads Parameter Store, and the location
                 # rules above stay free of AWS dependencies for the handlers that import them.
+                from common.ssmParameters import ParameterUnavailableError
                 from common.ssmParameters import read_parameter_value as read_parameter
+                transient = (ParameterUnavailableError,)
             value = read_parameter(name)
             ready = marker_says_complete(value, asset_table_name)
             if not ready:
@@ -1332,6 +1342,15 @@ def index_ready(asset_table_name: str, read_parameter: Optional[Callable[[str], 
                                f"of {asset_table_name}")
         except Exception as e:
             code = _error_code_of(e)
+            if isinstance(e, transient):
+                kept = cached is not None and cached[0]
+                if e.__cause__ is not None:
+                    # A refusal inside the back-off window has no cause; common.ssmParameters logs
+                    # those once per window.
+                    logger.warning(f"Location index marker {name} could not be read ({code}); "
+                                   + ("the last ready answer is kept" if kept
+                                      else "the index is treated as not ready"))
+                return kept
             if code != 'ParameterNotFound':
                 logger.warning(f"Location index marker {name} could not be read ({code}); "
                                "the index is treated as not ready")
