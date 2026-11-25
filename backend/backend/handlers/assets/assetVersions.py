@@ -782,6 +782,12 @@ def resolve_asset_version_id_from_alias(databaseId: str, assetId: str, alias: st
     return matches[0]['assetVersionId']
 
 
+def count_version_files(file_keys) -> int:
+    """The number of files a version's rows name: one per path without its leading slash, a row that
+    names no file ('/') left out. The version detail lists the same set (collapse_version_entries)."""
+    return len({str(file_key or '').lstrip('/') for file_key in file_keys} - {''})
+
+
 def get_asset_version_file_count(databaseId: str, assetId: str, assetVersionId: str) -> int:
     """Get count of available files for a specific asset version
 
@@ -791,19 +797,36 @@ def get_asset_version_file_count(databaseId: str, assetId: str, assetVersionId: 
         assetVersionId: The asset version ID
 
     Returns:
-        The number of snapshot rows recorded for the version -- EVERY row, including ones
-        marked isPermanentlyDeleted. No such filter is applied, and this is the number the
-        version listing reports, so an assertion against it must compare with the unfiltered
-        file list (get_asset_version_details emits isPermanentlyDeleted rows too).
+        The number of files the version's detail lists (get_asset_version_details): one per path
+        without its leading slash, a row that names no file left out (count_version_files), and
+        every other row counted, including ones marked isPermanentlyDeleted. No such filter is
+        applied, so an assertion against it must compare with the unfiltered file list.
     """
     try:
         # Query using the table PK (databaseId:assetId:assetVersionId is now the table PK)
         version_composite_key = f"{databaseId}:{assetId}:{assetVersionId}"
+        version_key_condition = Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
+
+        # A row stored with a leading slash exists only in a version a file list created before
+        # #1795, where it can name a file another row names too, or name no file ('/'). Such a
+        # version is counted from its keys; any other is counted without reading them. The probe is
+        # a key condition on the sort key, so it reads only those rows.
+        slashed_query = {
+            'KeyConditionExpression': version_key_condition & Key('fileKey').begins_with('/'),
+            'ProjectionExpression': '#fileKey',
+            'ExpressionAttributeNames': {'#fileKey': 'fileKey'},
+            'Limit': 1
+        }
+        if asset_file_versions_table.query(**slashed_query).get('Items'):
+            file_keys = [item.get('fileKey') for item in query_all_items(
+                asset_file_versions_table, KeyConditionExpression=version_key_condition,
+                ProjectionExpression='#fileKey', ExpressionAttributeNames={'#fileKey': 'fileKey'})]
+            return count_version_files(file_keys)
 
         # A COUNT query is bounded by the same 1 MB scan limit as any other query, so page to
         # exhaustion or a version holding many files reports a short count.
         query_kwargs = {
-            'KeyConditionExpression': Key('databaseId:assetId:assetVersionId').eq(version_composite_key),
+            'KeyConditionExpression': version_key_condition,
             'Select': 'COUNT'
         }
         count = 0
@@ -827,20 +850,21 @@ def tally_asset_version_file_counts(databaseId: str, assetId: str) -> Optional[D
         assetId: The asset ID
 
     Returns:
-        Mapping of assetVersionId to file count, or None when the walk exceeded
-        FILE_COUNT_TALLY_MAX_PAGES and the tally would be partial
+        Mapping of assetVersionId to file count (count_version_files), or None when the walk
+        exceeded FILE_COUNT_TALLY_MAX_PAGES and the tally would be partial
     """
     composite_key = f"{databaseId}:{assetId}"
     version_key_prefix = f"{composite_key}:"
-    counts: Dict[str, int] = {}
+    keys_by_version: Dict[str, set] = {}
 
-    # Only the version each row belongs to is needed, which keeps the pages small enough to
-    # deserialize on an asset holding many files.
+    # Only the version each row belongs to and its key are needed, which keeps the pages small
+    # enough to deserialize on an asset holding many files. The key is read because a version a
+    # file list created before #1795 can name one file both with and without the leading slash.
     query_kwargs = {
         'IndexName': 'databaseIdAssetIdIndex',
         'KeyConditionExpression': Key('databaseId:assetId').eq(composite_key),
-        'ProjectionExpression': '#versionPk',
-        'ExpressionAttributeNames': {'#versionPk': 'databaseId:assetId:assetVersionId'}
+        'ProjectionExpression': '#versionPk, #fileKey',
+        'ExpressionAttributeNames': {'#versionPk': 'databaseId:assetId:assetVersionId', '#fileKey': 'fileKey'}
     }
 
     try:
@@ -850,10 +874,10 @@ def tally_asset_version_file_counts(databaseId: str, assetId: str) -> Optional[D
                 version_key = item.get('databaseId:assetId:assetVersionId') or ''
                 if version_key.startswith(version_key_prefix):
                     version_id = version_key[len(version_key_prefix):]
-                    counts[version_id] = counts.get(version_id, 0) + 1
+                    keys_by_version.setdefault(version_id, set()).add(str(item.get('fileKey') or '').lstrip('/'))
 
             if 'LastEvaluatedKey' not in response:
-                return counts
+                return {version_id: len(keys - {''}) for version_id, keys in keys_by_version.items()}
             query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
 
         logger.info(
