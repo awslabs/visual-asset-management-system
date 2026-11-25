@@ -40,6 +40,7 @@ from common.s3PathPatterns import (
     PREVIEW_FILE_SIZE_LIMIT_BYTES,
     PREVIEW_PREFIX,
     legacy_staged_upload_key,
+    max_uploaded_file_key_bytes,
     staged_upload_key,
 )
 from common.apiRoutes import API_UPLOADS, API_UPLOAD_COMPLETE, API_UPLOAD_COMPLETE_EXTERNAL, API_UPLOAD_STATUS
@@ -862,6 +863,13 @@ def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
 OWN_FILE_PATH_MESSAGE = OWN_FILE_OUTPUT_REFUSAL
 
 
+def upload_key_too_long_message(max_key_bytes):
+    """The refusal of an upload whose file key is longer than `max_key_bytes`
+    (common/s3PathPatterns.max_uploaded_file_key_bytes for the bucket). Names the bound, not the key."""
+    return (f"File key is too long to upload: a file key, including its asset location, "
+            f"may be at most {max_key_bytes} bytes")
+
+
 def upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key) -> Optional[str]:
     """Why neither a user upload nor a workflow output may write `final_s3_key` through this asset, or None.
     A key in the location of another asset nested in this asset's is that asset's (NESTED_PATH_REFUSAL); a key
@@ -1506,6 +1514,9 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     # Generate the upload ID ahead of the per-file checks too: each file is staged in a folder named
     # for it, and the key-length rule measures that staging key.
     uploadId = f"y{str(uuid.uuid4())}"
+    # The longest final key a file uploaded into this bucket area can have: its staging key must fit
+    # the S3 object key limit.
+    max_upload_key_bytes = max_uploaded_file_key_bytes(baseAssetsPrefix)
 
     # Every remaining per-file rule is checked here, before any upload is initiated. Each reads only
     # relativeKey, file_size, uploadType and the asset's location, so none of it depends on the
@@ -1547,11 +1558,14 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
 
         # The request model bounded relativeKey; the keys S3 measures carry the asset prefix and, for
         # the temporary object, the temp-uploads prefix and the upload's folder as well, so a relativeKey
-        # inside the limit can resolve to a key S3 refuses. Refuse both forms here, with a generic message
-        # that does not echo the key, so S3's KeyTooLongError never surfaces as a 500 after an earlier
-        # file's multipart upload has already been created.
-        if exceeds_s3_object_key_limit(final_s3_key) or exceeds_s3_object_key_limit(temp_s3_key):
-            raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
+        # inside the limit can resolve to a key S3 refuses. A final key over the upload bound is refused
+        # here with a message that names the bound and does not echo the key, so S3's KeyTooLongError
+        # never surfaces as a 500 after an earlier file's multipart upload has already been created. The
+        # staging key is checked against the S3 limit too; the two agree by construction (both derive
+        # from staged_upload_key's layout).
+        if (exceeds_s3_object_key_limit(final_s3_key, max_upload_key_bytes)
+                or exceeds_s3_object_key_limit(temp_s3_key)):
+            raise VAMSGeneralErrorResponse(upload_key_too_long_message(max_upload_key_bytes))
 
         num_parts = calculate_num_parts(file.file_size, file.num_parts)
         estimated_response_bytes += estimate_initialize_response_file_bytes(

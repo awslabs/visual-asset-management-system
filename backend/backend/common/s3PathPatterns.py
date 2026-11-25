@@ -91,15 +91,19 @@ AUXILIARY_PREVIEW_PREFIX = "preview/"
 # The upload tag is UPLOAD_STAGING_TAG_LENGTH hex characters of the SHA-256 of
 # the upload id: a fixed length, and shorter than the upload id itself, because
 # the whole staging key must fit the 1,024-byte S3 key limit.
-# The folder costs a file key UPLOAD_STAGING_TAG_LENGTH + 1 bytes against that
-# limit; together with the prefix, an uploaded file's final key can be at most
-# 1024 - len(baseAssetsPrefix) - 26 bytes (998 at the bucket root). The tag only
-# has to tell apart uploads of the same path that are completed at the same
-# time; with 48 bits, a clash between 100 such uploads is about a 1 in 57
-# billion chance. Every staging key is built here; do not assemble one at a
-# call site.
+# The staging key is the final key plus the bucket's prefix and
+# UPLOAD_STAGING_KEY_OVERHEAD_BYTES (the temp-uploads prefix, the tag and its
+# slash: 26 bytes), so an uploaded file's final key can be at most
+# max_uploaded_file_key_bytes(baseAssetsPrefix) bytes: 998 at the bucket root.
+# Upload initialize refuses a longer key with that number. The tag only has to
+# tell apart uploads of the same path that are completed at the same time; with
+# 48 bits, a clash between 100 such uploads is about a 1 in 57 billion chance.
+# Every staging key is built here; do not assemble one at a call site.
 # ---------------------------------------------------------------------------
 UPLOAD_STAGING_TAG_LENGTH = 12
+
+# Bytes a staging key adds to the final key besides the bucket's prefix.
+UPLOAD_STAGING_KEY_OVERHEAD_BYTES = len(TEMPORARY_UPLOAD_PREFIX.encode("utf-8")) + UPLOAD_STAGING_TAG_LENGTH + 1
 
 
 def upload_staging_tag(upload_id: str) -> str:
@@ -112,6 +116,18 @@ def staged_upload_key(base_assets_prefix: str, upload_id: str, final_s3_key: str
     """The key upload ``upload_id`` stages the file bound for ``final_s3_key`` under, in the bucket
     whose normalized ``baseAssetsPrefix`` is ``base_assets_prefix``."""
     return f"{base_assets_prefix}{TEMPORARY_UPLOAD_PREFIX}{upload_staging_tag(upload_id)}/{final_s3_key}"
+
+
+def max_uploaded_file_key_bytes(base_assets_prefix: str) -> int:
+    """The longest final key, in bytes of UTF-8, of a file uploaded into the bucket area whose
+    normalized ``baseAssetsPrefix`` is ``base_assets_prefix``: its staging key (staged_upload_key)
+    must fit the S3 object key limit, so that limit less the prefix and
+    UPLOAD_STAGING_KEY_OVERHEAD_BYTES. 998 at the bucket root."""
+    # Imported here: validators imports this module at load.
+    from common.validators import MAX_S3_OBJECT_KEY_BYTES
+
+    return (MAX_S3_OBJECT_KEY_BYTES - len((base_assets_prefix or "").encode("utf-8"))
+            - UPLOAD_STAGING_KEY_OVERHEAD_BYTES)
 
 
 def legacy_staged_upload_key(base_assets_prefix: str, final_s3_key: str) -> str:
