@@ -6,6 +6,7 @@ for browsing VAMS databases/assets/files, importing 3D assets (USD, URDF,
 MJCF), executing processing workflows, and uploading scenes.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -17,7 +18,13 @@ import omni.kit.app
 import omni.ui as ui
 
 from .connector import IsaacVAMSConnector, MalformedXmlError, _free_prim_path, _prim_name
-from .content_connection import ContentConnectionError, VamsContentConnection, content_browser_api
+from .content_connection import (
+    ContentConnectionError,
+    VamsContentConnection,
+    content_browser_api,
+    ensure_future,
+    read_profile_token,
+)
 from .vams_cli_service import (
     PipelineTemplate,
     VamsAccessDeniedError,
@@ -32,6 +39,8 @@ SETTING_PROFILE = "/exts/vams.connector.isaacsim/profile"
 SETTING_VAMSCLI_PATH = "/exts/vams.connector.isaacsim/vamscli_path"
 # Shows VAMS in the Content window under Omniverse Storage once signed in (Isaac Sim 6.1+). Off by default.
 SETTING_CONTENT_WINDOW = "/exts/vams.connector.isaacsim/content_window"
+# How often, with the Content window connection on, the extension checks for a sign-in that lands after startup.
+SIGN_IN_WATCH_SECONDS = 30
 
 _USD_EXTENSIONS = (".usd", ".usda", ".usdc", ".usdz")
 _URDF_EXTENSIONS = (".urdf",)
@@ -286,6 +295,34 @@ class VamsConnectorExtension(omni.ext.IExt):
         if self._adopt_existing_session():
             self._start_content_connection()
             self._load_databases()
+        else:
+            self._watch_for_late_sign_in()
+
+    def _watch_for_late_sign_in(self):
+        """With the Content window connection on and no sign-in at startup, checks the CLI profile every
+        SIGN_IN_WATCH_SECONDS and takes the sign-in over when one appears: an EDH desktop's sign-in that lands
+        after Isaac Sim started, or a ``vamscli auth login`` run in a terminal. The check runs off Kit's main
+        thread and stops at a sign-in in this window, at sign-out and at shutdown."""
+        if not getattr(self, "_content_window_enabled", False) or getattr(self, "_sign_in_watching", False):
+            return
+        self._sign_in_watching = True
+        ensure_future(self._late_sign_in_watch())
+
+    async def _late_sign_in_watch(self):
+        try:
+            while self._connector is not None and not self._connector._authenticated:
+                await asyncio.sleep(SIGN_IN_WATCH_SECONDS)
+                if self._connector is None or self._connector._authenticated:
+                    return
+                token = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: read_profile_token(self._profile, getattr(self, "_vamscli_path", None)))
+                if token and self._connector is not None and not self._connector._authenticated:
+                    if self._adopt_existing_session():
+                        self._start_content_connection()
+                        self._load_databases()
+                        return
+        finally:
+            self._sign_in_watching = False
 
     # =========================================================================
     # Content window connection
@@ -505,8 +542,9 @@ class VamsConnectorExtension(omni.ext.IExt):
     # =========================================================================
 
     def _load_databases(self):
-        if not self._connector._authenticated:
-            self._adopt_existing_session()
+        if not self._connector._authenticated and self._adopt_existing_session():
+            # Refresh Databases took over a sign-in that landed after startup: show it in the Content window too.
+            self._start_content_connection()
         self._set_status("Loading databases...")
         try:
             self._databases = self._connector.list_databases()

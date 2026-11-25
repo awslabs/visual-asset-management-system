@@ -135,20 +135,7 @@ class VamsContentConnection:
 
     def read_token(self):
         """The profile's VAMS token through token_helper.py, or None. The token travels only through the pipe."""
-        python = cli_python(self.vamscli_path)
-        if not python:
-            return None
-        try:
-            result = self._run([python, TOKEN_SCRIPT, "--profile", self.profile], capture_output=True, text=True,
-                               timeout=TOKEN_TIMEOUT_SECONDS, check=False)
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if result.returncode != 0:
-            return None
-        try:
-            return json.loads(result.stdout.strip().splitlines()[-1]).get("token") or None
-        except (ValueError, IndexError):
-            return None
+        return read_profile_token(self.profile, self.vamscli_path, run=self._run)
 
     def on_auth_request(self, auth_handle, server):
         """``register_storage_auth_callback`` callback. Answers only for this adapter's exact origin.
@@ -397,6 +384,30 @@ class VamsContentConnection:
             except subprocess.TimeoutExpired:
                 process.kill()
         return self._stderr_tail[-1] if self._stderr_tail else ""
+
+
+def read_profile_token(profile, vamscli_path=None, run=subprocess.run):
+    """A VAMS CLI profile's usable token through token_helper.py (which renews an expiring Cognito sign-in), or
+    None when the profile holds no usable sign-in. The token travels only through the pipe."""
+    python = cli_python(vamscli_path)
+    if not python:
+        return None
+    try:
+        result = run([python, TOKEN_SCRIPT, "--profile", profile], capture_output=True, text=True,
+                     timeout=TOKEN_TIMEOUT_SECONDS, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout.strip().splitlines()[-1]).get("token") or None
+    except (ValueError, IndexError):
+        return None
+
+
+def ensure_future(coroutine):
+    """Schedules a coroutine on Kit's event loop; closes it when there is no loop (a plain interpreter)."""
+    _ensure_future(coroutine)
 
 
 def _current_loop():
