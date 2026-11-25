@@ -47,7 +47,7 @@ from common.assetLocations import (
     NESTED_PATH_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations,
     _is_preview_of, aux_owner_filter, aux_scope, contains,
     fill_location_attributes, folder_listing_prefix, held_objects, in_folder, is_folder_location,
-    names_own_object, normalize_base_prefix, object_key_for, relative_path_in,
+    names_own_object, normalize_base_prefix, object_key_for, object_key_for_request, relative_path_in,
     viewer_data_prefix, viewer_data_scope,
 )
 from common.fileAttribution import nested_locations_of_asset
@@ -341,44 +341,26 @@ def get_asset_s3_location(asset: Dict) -> Tuple[str, str]:
     return bucket, key
 
 def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
-    """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-    
+    """The S3 key a request's file path names in the asset (common.assetLocations.object_key_for_request).
+
+    A path with a leading '/' is the file's path in the asset; a path without one is the file's full key
+    when the asset's location holds it, else the path in the asset. A single-file location's paths name
+    its object, its previews and its companion folder {key}/.
+
     Args:
         asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-        
+        file_path: The file path from the request
+
     Returns:
-        The properly resolved S3 key without duplication
+        The S3 key, always one the asset's location holds
 
     Raises:
-        VAMSGeneralErrorResponse: the asset is a single file and the path does not name it
+        VAMSGeneralErrorResponse: the path names no key of the asset
     """
-    # A single-file location's paths name its object, its previews and its companion folder {key}/
-    if asset_base_key and not is_folder_location(asset_base_key):
-        object_key = object_key_for(asset_base_key, file_path)
-        if object_key is None:
-            raise VAMSGeneralErrorResponse("Requested file is not part of this asset")
-        return object_key
-
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-    
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-    
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
+    object_key = object_key_for_request(asset_base_key, file_path)
+    if object_key is None:
+        raise VAMSGeneralErrorResponse("Requested file is not part of this asset")
+    return object_key
 
 def nested_locations_for(asset: Dict, bucket: str, base_key: str, destructive: bool = False,
                          include_shared: bool = False) -> NestedLocations:

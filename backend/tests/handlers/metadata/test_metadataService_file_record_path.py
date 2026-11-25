@@ -197,7 +197,7 @@ class TestEveryFormKeysTheListedPath:
     @pytest.mark.parametrize("form", ["full key", "listed path"])
     @pytest.mark.parametrize("metadata_type", ["metadata", "attribute"])
     def test_get_reads_the_listed_paths_records(self, kind, location, key, listed, form, metadata_type):
-        path = "/" + key if form == "full key" else listed
+        path = key if form == "full key" else listed
         harness = _Harness(_asset(location), stored={_record(listed): [_stored_row(listed, metadata_type)]})
         response = harness.call("GET", {"filePath": path, "type": metadata_type})
         assert response["statusCode"] == 200, response
@@ -208,7 +208,7 @@ class TestEveryFormKeysTheListedPath:
     @pytest.mark.parametrize("kind,location,key,listed", KINDS, ids=KIND_IDS)
     @pytest.mark.parametrize("form", ["full key", "listed path"])
     def test_create_checks_the_file_and_writes_the_listed_paths_records(self, kind, location, key, listed, form):
-        path = "/" + key if form == "full key" else listed
+        path = key if form == "full key" else listed
         harness = _Harness(_asset(location), existing_keys={key})
         response = harness.call("POST", body={"filePath": path, "type": "metadata", "metadata": [_ITEM]})
         assert response["statusCode"] == 200, response
@@ -219,7 +219,7 @@ class TestEveryFormKeysTheListedPath:
     @pytest.mark.parametrize("kind,location,key,listed", KINDS, ids=KIND_IDS)
     @pytest.mark.parametrize("form", ["full key", "listed path"])
     def test_update_checks_the_file_and_writes_the_listed_paths_records(self, kind, location, key, listed, form):
-        path = "/" + key if form == "full key" else listed
+        path = key if form == "full key" else listed
         harness = _Harness(_asset(location), existing_keys={key})
         response = harness.call("PUT", body={"filePath": path, "type": "attribute", "metadata": [_ITEM],
                                              "updateType": "update"})
@@ -231,7 +231,7 @@ class TestEveryFormKeysTheListedPath:
     @pytest.mark.parametrize("kind,location,key,listed", KINDS, ids=KIND_IDS)
     @pytest.mark.parametrize("form", ["full key", "listed path"])
     def test_delete_removes_the_listed_paths_records(self, kind, location, key, listed, form):
-        path = "/" + key if form == "full key" else listed
+        path = key if form == "full key" else listed
         harness = _Harness(_asset(location), stored={_record(listed): [_stored_row(listed)]})
         response = harness.call("DELETE", body={"filePath": path, "type": "metadata", "metadataKeys": ["k"]})
         assert response["statusCode"] == 200, response
@@ -240,7 +240,7 @@ class TestEveryFormKeysTheListedPath:
 
     @pytest.mark.parametrize("form", ["full key", "listed path"])
     def test_a_version_snapshot_is_read_at_the_listed_path(self, form):
-        path = "/projects/site-a/sub/x.obj" if form == "full key" else "/sub/x.obj"
+        path = "projects/site-a/sub/x.obj" if form == "full key" else "/sub/x.obj"
         row = SimpleNamespace(filePath="/sub/x.obj", type="metadata", metadataKey="k", metadataValue="v",
                               metadataValueType="string")
         harness = _Harness(_asset("projects/site-a/"), snapshot=[row])
@@ -250,7 +250,7 @@ class TestEveryFormKeysTheListedPath:
 
     @pytest.mark.parametrize("form", ["full key", "listed path"])
     def test_an_archived_asset_read_with_show_archived_keys_by_its_location(self, form):
-        path = "/projects/site-a/sub/x.obj" if form == "full key" else "/sub/x.obj"
+        path = "projects/site-a/sub/x.obj" if form == "full key" else "/sub/x.obj"
         harness = _Harness(_asset("projects/site-a/", archived=True))
         response = harness.call("GET", {"filePath": path, "type": "metadata", "showArchived": "true"})
         assert response["statusCode"] == 200, response
@@ -258,15 +258,49 @@ class TestEveryFormKeysTheListedPath:
 
 
 @pytest.mark.unit
+class TestASubfolderNamedLikeTheLocation:
+    """#1943: in an asset at ``{assetId}/``, the file ``/{assetId}/x.obj`` (key ``{assetId}/{assetId}/x.obj``)
+    has records of its own, apart from the root file ``/x.obj``, whichever form names it."""
+
+    SUB_KEY = f"{_ASSET}/{_ASSET}/x.obj"
+    SUB_LISTED = f"/{_ASSET}/x.obj"
+
+    @pytest.mark.parametrize("path", [SUB_LISTED, SUB_KEY], ids=["listed path", "full key"])
+    def test_get_reads_the_subfolder_files_records(self, path):
+        harness = _Harness(_asset(f"{_ASSET}/"), stored={_record(self.SUB_LISTED): [_stored_row(self.SUB_LISTED)],
+                                                         _record("/x.obj"): [_stored_row("/x.obj")]})
+        response = harness.call("GET", {"filePath": path, "type": "metadata"})
+        assert response["statusCode"] == 200, response
+        assert harness.record_paths() == [_record(self.SUB_LISTED)]
+
+    @pytest.mark.parametrize("path", [SUB_LISTED, SUB_KEY], ids=["listed path", "full key"])
+    def test_create_checks_and_writes_the_subfolder_file(self, path):
+        harness = _Harness(_asset(f"{_ASSET}/"), existing_keys={self.SUB_KEY, f"{_ASSET}/x.obj"})
+        response = harness.call("POST", body={"filePath": path, "type": "metadata", "metadata": [_ITEM]})
+        assert response["statusCode"] == 200, response
+        assert harness.checked_keys() == [self.SUB_KEY]
+        assert harness.written_paths() == [_record(self.SUB_LISTED)]
+
+    @pytest.mark.parametrize("path", ["/x.obj", f"{_ASSET}/x.obj"], ids=["listed path", "full key"])
+    def test_the_root_file_keeps_its_records(self, path):
+        harness = _Harness(_asset(f"{_ASSET}/"), existing_keys={self.SUB_KEY, f"{_ASSET}/x.obj"})
+        response = harness.call("PUT", body={"filePath": path, "type": "attribute", "metadata": [_ITEM],
+                                             "updateType": "update"})
+        assert response["statusCode"] == 200, response
+        assert harness.checked_keys() == [f"{_ASSET}/x.obj"]
+        assert harness.written_paths() == [_record("/x.obj")]
+
+
+@pytest.mark.unit
 class TestRefusalsStay:
     def test_a_create_for_a_file_that_does_not_exist_is_refused(self):
         harness = _Harness(_asset("projects/site-a/"), existing_keys=set())
-        response = harness.call("POST", body={"filePath": "/projects/site-a/sub/x.obj", "type": "metadata",
+        response = harness.call("POST", body={"filePath": "projects/site-a/sub/x.obj", "type": "metadata",
                                               "metadata": [_ITEM]})
         assert _status(response) == (400, "VAMS General Error: File not found in S3")
         harness.client.batch_write_item.assert_not_called()
 
-    @pytest.mark.parametrize("file_path", ["/projects/site-a/inner/x.obj", "/inner/x.obj"])
+    @pytest.mark.parametrize("file_path", ["projects/site-a/inner/x.obj", "/inner/x.obj"])
     def test_a_nested_assets_file_is_refused_through_the_containing_asset(self, file_path):
         harness = _Harness(_asset("projects/site-a/"), existing_keys={"projects/site-a/inner/x.obj"},
                            nested_location="projects/site-a/inner/")
@@ -283,10 +317,12 @@ class TestRefusalsStay:
 
 # (case, asset location, request path, the path the file list shows it at)
 READ_FORMS = [
-    ("custom location, full key", "projects/site-a/", "/projects/site-a/sub/x.obj", "/sub/x.obj"),
-    ("custom location, asset id segment", "projects/site-a/", f"/{_ASSET}/sub/x.obj", "/sub/x.obj"),
-    ("asset id location, full key", f"{_ASSET}/", f"/{_ASSET}/sub/x.obj", "/sub/x.obj"),
-    ("single-file asset, full key", "projects/model.glb", "/projects/model.glb", "/model.glb"),
+    ("custom location, full key", "projects/site-a/", "projects/site-a/sub/x.obj", "/sub/x.obj"),
+    ("custom location, asset id segment", "projects/site-a/", f"/{_ASSET}/sub/x.obj", f"/{_ASSET}/sub/x.obj"),
+    ("asset id location, full key", f"{_ASSET}/", f"{_ASSET}/sub/x.obj", "/sub/x.obj"),
+    ("asset id location, path that starts with the location", f"{_ASSET}/", f"/{_ASSET}/sub/x.obj",
+     f"/{_ASSET}/sub/x.obj"),
+    ("single-file asset, full key", "projects/model.glb", "projects/model.glb", "/model.glb"),
     ("listed path", "projects/site-a/", "/sub/x.obj", "/sub/x.obj"),
 ]
 
@@ -314,7 +350,7 @@ class TestTheReadRecordsTheListedPath:
 
     @pytest.mark.parametrize("show_archived", [False, True], ids=["current", "showArchived"])
     def test_recording_the_listed_path_adds_no_read(self, show_archived):
-        query = {"filePath": "/projects/site-a/sub/x.obj", "type": "metadata"}
+        query = {"filePath": "projects/site-a/sub/x.obj", "type": "metadata"}
         if show_archived:
             query["showArchived"] = "true"
         harness = _Harness(_asset("projects/site-a/", archived=show_archived))
@@ -340,7 +376,7 @@ class TestWritesAuthorizeTheAssetBeforeTheFile:
 
     @pytest.mark.parametrize("write,method,body", WRITES, ids=WRITE_IDS)
     @pytest.mark.parametrize("file_exists", [True, False], ids=["existing file", "missing file"])
-    @pytest.mark.parametrize("path", ["/sub/x.obj", "/projects/site-a/sub/x.obj"], ids=["listed path", "full key"])
+    @pytest.mark.parametrize("path", ["/sub/x.obj", "projects/site-a/sub/x.obj"], ids=["listed path", "full key"])
     def test_a_caller_refused_on_the_asset_is_refused_before_the_file_is_checked(
             self, write, method, body, file_exists, path):
         harness = _Harness(_asset("projects/site-a/"), allowed=False,
@@ -354,7 +390,7 @@ class TestWritesAuthorizeTheAssetBeforeTheFile:
     @pytest.mark.parametrize("write,method,body", WRITES, ids=WRITE_IDS)
     def test_an_allowed_caller_is_still_told_the_file_is_missing(self, write, method, body):
         harness = _Harness(_asset("projects/site-a/"), existing_keys=set())
-        response = harness.call(method, body={"filePath": "/projects/site-a/sub/x.obj", **body})
+        response = harness.call(method, body={"filePath": "projects/site-a/sub/x.obj", **body})
         assert _status(response) == (400, "VAMS General Error: File not found in S3")
         assert harness.checked_keys() == ["projects/site-a/sub/x.obj"]
         harness.client.batch_write_item.assert_not_called()
@@ -362,7 +398,7 @@ class TestWritesAuthorizeTheAssetBeforeTheFile:
     def test_a_delete_refused_on_the_asset_reads_no_records(self):
         harness = _Harness(_asset("projects/site-a/"), allowed=False,
                            stored={_record("/sub/x.obj"): [_stored_row("/sub/x.obj")]})
-        response = harness.call("DELETE", body={"filePath": "/projects/site-a/sub/x.obj", "type": "metadata",
+        response = harness.call("DELETE", body={"filePath": "projects/site-a/sub/x.obj", "type": "metadata",
                                                 "metadataKeys": ["k"]})
         assert response["statusCode"] == 403, response
         assert harness.queries == []
@@ -384,24 +420,47 @@ class TestFileRecordPath:
     def _path(self, location, file_path):
         return metadataService.file_record_path(_asset(location), _ASSET, file_path)
 
-    @pytest.mark.parametrize("file_path", ["/model.glb/model.glb", "/projects/model.glb/model.glb"])
+    @pytest.mark.parametrize("file_path", ["/model.glb/model.glb", "projects/model.glb/model.glb"])
     def test_the_companion_entry_named_like_the_file_keeps_its_own_path(self, file_path):
         assert self._path("projects/model.glb", file_path) == "/model.glb/model.glb"
 
-    @pytest.mark.parametrize("file_path", ["/model.glb.previewFile.png", "/projects/model.glb.previewFile.png"])
+    @pytest.mark.parametrize("file_path", ["/model.glb.previewFile.png", "projects/model.glb.previewFile.png"])
     def test_an_own_preview_is_keyed_by_its_listed_path(self, file_path):
         assert self._path("projects/model.glb", file_path) == "/model.glb.previewFile.png"
 
-    def test_a_key_that_only_shares_the_files_characters_is_not_the_file(self):
-        assert self._path("projects/model.glb", "/projects/model.glb.bak") == "/projects/model.glb.bak"
+    @pytest.mark.parametrize("file_path", ["/projects/model.glb.bak", "projects/model.glb.bak"])
+    def test_a_key_that_only_shares_the_files_characters_is_not_the_file(self, file_path):
+        assert self._path("projects/model.glb", file_path) == "/projects/model.glb.bak"
 
-    def test_a_leading_asset_id_segment_is_still_dropped_where_the_location_does_not_hold_the_path(self):
-        assert self._path(f"vams/{_ASSET}/", f"/{_ASSET}/x.obj") == "/x.obj"
+    def test_a_leading_asset_id_segment_is_a_folder_of_the_path(self):
+        """#1943: a path with a leading slash is the file's path in the asset; no segment is guessed away."""
+        assert self._path(f"vams/{_ASSET}/", f"/{_ASSET}/x.obj") == f"/{_ASSET}/x.obj"
 
-    def test_an_asset_without_a_stored_location_keeps_the_dropped_segment_rule(self):
+    @pytest.mark.parametrize("file_path,listed", [
+        (f"/{_ASSET}/cloud.las", f"/{_ASSET}/cloud.las"),
+        (f"{_ASSET}/{_ASSET}/cloud.las", f"/{_ASSET}/cloud.las"),
+        (f"{_ASSET}/cloud.las", "/cloud.las"),
+        ("/cloud.las", "/cloud.las"),
+    ])
+    def test_a_subfolder_named_like_the_location_keeps_its_own_records(self, file_path, listed):
+        """#1943: '/{assetId}/cloud.las' and its full key name the subfolder file, never the root file."""
+        assert self._path(f"{_ASSET}/", file_path) == listed
+
+    @pytest.mark.parametrize("file_path,listed", [
+        ("/vams/a1/x.obj", "/vams/a1/x.obj"),
+        ("vams/a1/vams/a1/x.obj", "/vams/a1/x.obj"),
+        ("vams/a1/x.obj", "/x.obj"),
+        ("/projects/model.glb/x.obj", "/projects/model.glb/x.obj"),
+    ])
+    def test_a_path_that_spells_a_base_prefixed_or_single_file_location_is_a_path(self, file_path, listed):
+        location = "projects/model.glb" if file_path.startswith("/projects") else f"vams/{_ASSET}/"
+        assert self._path(location, file_path) == listed
+
+    def test_an_asset_without_a_stored_location_keys_the_path_as_given(self):
         asset = {"databaseId": _DB, "assetId": _ASSET}
-        assert metadataService.file_record_path(asset, _ASSET, f"/{_ASSET}/x.obj") == "/x.obj"
+        assert metadataService.file_record_path(asset, _ASSET, f"/{_ASSET}/x.obj") == f"/{_ASSET}/x.obj"
         assert metadataService.file_record_path(asset, _ASSET, "/projects/x.obj") == "/projects/x.obj"
+        assert metadataService.file_record_path(asset, _ASSET, "projects/x.obj") == "/projects/x.obj"
 
     def test_an_asset_at_the_bucket_root_holds_no_key(self):
         assert self._path("", "/projects/x.obj") == "/projects/x.obj"

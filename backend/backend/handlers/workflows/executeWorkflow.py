@@ -41,8 +41,8 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 
 from common.validators import validate
 from common.assetLocations import (
-    folder_listing_prefix, in_folder, is_folder_location, normalize_base_prefix, normalize_location, object_key_for,
-    relative_path_in,
+    folder_listing_prefix, in_folder, is_folder_location, normalize_base_prefix, normalize_location,
+    object_key_for_request, relative_path_in,
 )
 from common.fileAttribution import folder_input_exclude_locations, nested_locations_of_asset
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
@@ -1801,19 +1801,15 @@ def _asset_root_key(asset):
 
 
 def _resolve_full_key(asset_root_key, relative_file_key):
-    """Full S3 key for an input file: the asset root key joined with the asset-relative key,
-    avoiding duplication when the relative key already starts with the root. A single-file asset
-    (`common.assetLocations`) resolves '' and '/' to its object, its file name to the object and any
-    other path to its companion folder."""
-    if asset_root_key and not is_folder_location(asset_root_key):
-        return object_key_for(asset_root_key, relative_file_key) or normalize_location(asset_root_key)
-    root = asset_root_key or ""
-    if root and not root.endswith("/"):
-        root += "/"
-    rel = (relative_file_key or "").lstrip("/")
-    if rel and rel.startswith(root):
-        return rel
-    return root + rel
+    """Full S3 key for an input file: the key the input's asset-relative path names in the asset's
+    location (`common.assetLocations.object_key_for_request`; the execute request's key always has a
+    leading '/', so it is a path in the asset, and `/{location}x` is the file of a subfolder named like
+    the location). A single-file asset (`common.assetLocations`) resolves '' and '/' to its object, its
+    file name to the object and any other path to its companion folder."""
+    key = object_key_for_request(asset_root_key, relative_file_key)
+    if key is None:
+        return normalize_location(asset_root_key)
+    return key
 
 
 def _input_key(asset_root_key, relative_file_key):
