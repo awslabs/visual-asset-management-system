@@ -9488,7 +9488,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create API keys.
+                    description: "Not authorized to create API keys, or the caller authenticated with an API key (`API keys cannot be created with an API key. Sign in through your identity provider to create one.`)."
                     content:
                         application/json:
                             schema:
@@ -9581,7 +9581,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update this API key.
+                    description: "Not authorized to update this API key, or the caller authenticated with an API key and the body carries expiresAt (`An API key's expiration cannot be changed with an API key. Sign in through your identity provider to change it.`)."
                     content:
                         application/json:
                             schema:
@@ -9728,7 +9728,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create API keys.
+                    description: "Not authorized to create API keys, or the caller authenticated with an API key (`API keys cannot be created with an API key. Sign in through your identity provider to create one.`)."
                     content:
                         application/json:
                             schema:
@@ -9821,7 +9821,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update API keys.
+                    description: "Not authorized to update API keys, or the caller authenticated with an API key and the body carries expiresAt (`An API key's expiration cannot be changed with an API key. Sign in through your identity provider to change it.`)."
                     content:
                         application/json:
                             schema:
