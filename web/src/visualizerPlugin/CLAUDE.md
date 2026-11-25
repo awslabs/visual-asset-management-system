@@ -15,6 +15,7 @@ The 3D/media viewer system uses a plugin-based architecture:
 -   **viewerLayers.ts** (`core/viewerLayers.ts`) — `VIEWER_LAYER`, the stacking scale for what a viewer draws over its scene (see "Stacking Over the Scene")
 -   **useOverlap.ts** (`core/useOverlap.ts`) — `useOverlap(a, b)`, whether two elements overlap on screen, and `useInfoBoxClearOfPanel()`, which leaves a viewer's info box out while its open panel overlaps it (see "Stacking Over the Scene")
 -   **types.ts** (`core/types.ts`) — Shared `ViewerPluginProps` and config interfaces
+-   **viewerData.ts** (`core/viewerData.ts`) — `auxiliaryPreviewStreamUrl(apiBase, databaseId, assetId, fileKey, dataPath)`, the auxiliary preview stream URL of one file's viewer data (`{file key}/preview/{dataPath}`, each segment encoded and the slashes kept, a leading `/` dropped), and `POTREE_VIEWER_METADATA`. The Potree and VEERUM viewers build their point cloud URL with it. It sends the key the host gives as it is: the API reads the full S3 key and the asset-relative path alike and decides which file of the asset a path names, so a viewer never strips or adds a prefix to guess a path (#1855).
 
 Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below maps to a directory of that form (e.g. `potree-viewer` → `viewers/PotreeViewerPlugin/`). Per-viewer custom-install scripts live in `web/customInstalls/` (one dir per viewer, plus a shared `utility/` helper dir) and are executed by the `postinstall` chain in `web/package.json`.
 
