@@ -106,4 +106,6 @@ class TestThePerVersionCount:
         assert av.get_asset_version_file_count(DB, ASSET, "2") == 2
         probe, *reads = table.calls
         assert probe.get("Limit") == 1
-        assert reads and all(read.get("Select") == "COUNT" for read in reads)
+        # At least one read after the probe, and every one of them a COUNT
+        assert len(reads) >= 1, "the version was not counted after the probe"
+        assert [read.get("Select") for read in reads] == ["COUNT"] * len(reads)
