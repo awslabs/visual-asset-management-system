@@ -509,3 +509,38 @@ class TestAnEmptySegmentKeyIsReachableByItsPath:
             assert av.validate_s3_files_exist("bkt", LOCATION, [
                 AssetFileVersionItemModel(relativeKey="//cloud.las", versionId="v1")]) == []
         assert client.head_object.call_args.kwargs["Key"] == EMPTY_SEGMENT_FILE
+
+
+@pytest.mark.unit
+class TestTheFileListNamesAnEmptySegmentKeyByItsOwnPath:
+    """#1977: the file list names 'A1//cloud.las' at '//cloud.las', the path that names it on the file routes,
+    and 'A1/cloud.las' at '/cloud.las'; before, both were listed at '/cloud.las'."""
+
+    @pytest.mark.parametrize("basic_mode", [True, False])
+    def test_both_files_are_listed_at_their_own_paths(self, af, basic_mode):
+        listing = af.list_s3_objects_with_archive_status(BUCKET, LOCATION, {}, basic_mode=basic_mode)
+        paths = {item["key"]: item["relativePath"] for item in listing["items"]}
+        assert paths[EMPTY_SEGMENT_FILE] == "//cloud.las"
+        assert paths[ROOT_FILE] == "/cloud.las"
+        assert paths[SUB_FILE] == "/A1/cloud.las"
+        for key, path in paths.items():
+            assert af.resolve_asset_file_path(LOCATION, path) == key
+
+    def test_an_archived_empty_segment_key_is_listed_at_its_own_path(self, af):
+        af.test_client.delete_object(Bucket=BUCKET, Key=EMPTY_SEGMENT_FILE)
+        listing = af.list_s3_objects_with_archive_status(BUCKET, LOCATION, {}, include_archived=True)
+        archived = [item for item in listing["items"] if item["key"] == EMPTY_SEGMENT_FILE]
+        assert [item["relativePath"] for item in archived] == ["//cloud.las"]
+
+    def test_a_folder_filter_lists_paths_relative_to_the_filter_as_before(self, af):
+        af.test_client.put_object(Bucket=BUCKET, Key="A1/sub/x.las", Body=b"x")
+        af.test_client.put_object(Bucket=BUCKET, Key="A1/sub//y.las", Body=b"x")
+        listing = af.list_s3_objects_with_archive_status(BUCKET, LOCATION, {"prefix": "sub/"}, basic_mode=True)
+        assert sorted(item["relativePath"] for item in listing["items"]) == ["//y.las", "/x.las"]
+
+    @pytest.mark.parametrize("prefix,key,expected", [
+        ("A1/", "A1/x", "/x"), ("A1/", "A1//x", "//x"), ("A1/", "A1/", "/"),
+        ("A1/sub", "A1/sub/x", "/x"), ("A1/sub", "A1/subway.glb", "/way.glb"),
+    ])
+    def test_the_listed_path_rule(self, af, prefix, key, expected):
+        assert af.listed_relative_path(prefix, key) == expected

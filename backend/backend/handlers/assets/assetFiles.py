@@ -1504,6 +1504,19 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
                 raise VAMSGeneralErrorResponse(f"Error retrieving file metadata.")
         raise VAMSGeneralErrorResponse(f"Error retrieving file metadata.")
 
+def listed_relative_path(prefix: str, key: str) -> str:
+    """The path a folder listing names a key at: the key after the listing's ``prefix`` with one leading '/'.
+
+    A prefix that ends in '/' (the asset's folder, or a folder filter) always gets exactly one '/' added, so a
+    key with an empty segment right after it (``A1//x`` under ``A1/``) is listed at ``//x``, the path that names
+    it on the file routes (common.assetLocations.relative_path_in), never at ``/x``, the path of ``A1/x``
+    (#1977). A filter prefix that does not end in '/' keeps the listing's earlier form."""
+    rest = key[len(prefix):]
+    if prefix.endswith('/') or not rest.startswith('/'):
+        return '/' + rest
+    return rest
+
+
 def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: Dict, include_archived: bool = False,
                                         basic_mode: bool = False, nested: Optional[NestedLocations] = None) -> Dict:
     """List S3 objects with pagination and archive status
@@ -1587,10 +1600,7 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
             if single_object:
                 relative_path = relative_path_in(location, relative_path)
             elif relative_path.startswith(prefix):
-                relative_path = relative_path[len(prefix):]
-                # Ensure relative path starts with /
-                if not relative_path.startswith('/'):
-                    relative_path = '/' + relative_path
+                relative_path = listed_relative_path(prefix, relative_path)
             
             # Create the item with fields available from S3 list operation
             item = {
@@ -1724,9 +1734,7 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                         if single_object:
                             relative_path = relative_path_in(location, relative_path)
                         elif relative_path.startswith(prefix):
-                            relative_path = relative_path[len(prefix):]
-                            if not relative_path.startswith('/'):
-                                relative_path = '/' + relative_path
+                            relative_path = listed_relative_path(prefix, relative_path)
                         
                         # Find the latest version before the delete marker
                         latest_version = None

@@ -902,9 +902,9 @@ def list_s3_files(bucket: str, prefix: str, max_objects: Optional[int] = None,
                 if single_file:
                     relative_path = relative_path_in(location, key)
                 elif relative_path.startswith(prefix):
-                    relative_path = relative_path[len(prefix):]
-                    if not relative_path.startswith('/'):
-                        relative_path = '/' + relative_path
+                    # One '/' added after the folder, so a key with an empty segment right after it is
+                    # '//x', the path that names it (#1977)
+                    relative_path = relative_path_in(location, relative_path) or '/' + relative_path[len(prefix):]
 
                 item = {
                     'fileName': os.path.basename(key),
