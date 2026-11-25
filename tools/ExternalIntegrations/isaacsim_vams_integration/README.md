@@ -73,8 +73,9 @@ The Execute view offers **Run** only for the files that pass the input-file filt
 ### Prerequisites
 
 -   **NVIDIA Isaac Sim 5.1 or 6.2** (other Isaac Sim 6.x releases are untested)
--   **Python 3.10+** (included with Isaac Sim)
+-   **Python 3.10+** for the extension (included with Isaac Sim), and **Python 3.12+** for the VAMS CLI's own environment
 -   **VAMS CLI** installed and configured (see below)
+-   For the optional Content window connection: **Isaac Sim 6.1 or later**, and `grpcio` and `protobuf` in the VAMS CLI's environment (see [Content window connection](#content-window-connection-optional-isaac-sim-61))
 
 ### VAMS CLI Setup
 
@@ -182,6 +183,30 @@ Then search for "VAMS" and enable `vams.connector.isaacsim`.
 folders = ["/path/to/kit-exts"]
 ```
 
+### Content window connection (optional, Isaac Sim 6.1+)
+
+To browse VAMS in the Isaac Sim **Content** window as well (see [Content Window Connection](#content-window-connection-isaac-sim-61)), after installing the extension:
+
+1.  Install `grpcio` and `protobuf` into the **VAMS CLI's** environment (not Isaac Sim's bundled Python) from the connector's hashed lock, with that environment's `pip`. The environment needs Python 3.12 or later, as the VAMS CLI does:
+
+    ```bash
+    # Linux and macOS
+    ~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
+    # Windows
+    %USERPROFILE%\vamscli-venv\Scripts\pip install --require-hashes --only-binary :all: -r C:\path\to\kit-exts\vams.connector.isaacsim\locks\storage\requirements.lock
+    ```
+
+2.  Turn the connection on in `/path/to/kit-exts/vams.connector.isaacsim/config/extension.toml`:
+
+    ```toml
+    [settings]
+    exts."vams.connector.isaacsim".content_window = true
+    ```
+
+3.  Start Isaac Sim and sign in (or start it with a CLI profile that is already signed in). VAMS appears under **Omniverse Storage** > **VAMS**.
+
+The setting lives in the copy Kit loads, so set it again after each update of the connector, and run step 1 again when an update changes `locks/storage/requirements.lock`. Without the packages, or on Isaac Sim 5.1, the extension leaves the Content window alone and logs why. The EDH Workstations `isaacsim` desktop image does all three steps. The connection has been tested on Linux only.
+
 ---
 
 ## Ubuntu / EC2 Setup
@@ -208,6 +233,12 @@ Point the extension to the venv executable so it does not depend on `PATH`, in `
 ```toml
 [settings]
 exts."vams.connector.isaacsim".vamscli_path = "/home/ubuntu/vamscli-venv/bin/vamscli"
+```
+
+Optionally, for the Content window connection (Isaac Sim 6.1+), install its packages into the same environment and set `content_window = true` in the same file (see [Content window connection](#content-window-connection-optional-isaac-sim-61)):
+
+```bash
+~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
 ```
 
 ### 4. Verify the CLI works

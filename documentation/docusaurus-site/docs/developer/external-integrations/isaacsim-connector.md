@@ -19,8 +19,9 @@ This integration is in **experimental** status and may still have issues. Verify
 ## Prerequisites
 
 -   **NVIDIA Isaac Sim 5.1 or 6.2** (other Isaac Sim 6.x releases are untested); the Content window connection needs Isaac Sim 6.1 or later
--   **Python 3.10+** (included with Isaac Sim)
+-   **Python 3.10+** for the extension (included with Isaac Sim), and **Python 3.12+** for the VAMS CLI's own environment
 -   **VAMS CLI** installed and configured
+-   For the optional Content window connection: `grpcio` and `protobuf` in the VAMS CLI's environment (see [Content window connection (optional, Isaac Sim 6.1+)](#content-window-connection-optional-isaac-sim-61))
 
 ### VAMS CLI setup
 
@@ -81,6 +82,30 @@ isaac-sim --ext-folder /path/to/kit-exts --enable vams.connector.isaacsim
 folders = ["/path/to/kit-exts"]
 ```
 
+### Content window connection (optional, Isaac Sim 6.1+)
+
+To browse VAMS in the Isaac Sim **Content** window as well (see [Content window connection](#content-window-connection-isaac-sim-61)), after installing the extension:
+
+1.  Install `grpcio` and `protobuf` into the **VAMS CLI's** environment (not Isaac Sim's bundled Python) from the connector's hashed lock, with that environment's `pip`. The environment needs Python 3.12 or later, as the VAMS CLI does:
+
+    ```bash
+    # Linux and macOS
+    ~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
+    # Windows
+    %USERPROFILE%\vamscli-venv\Scripts\pip install --require-hashes --only-binary :all: -r C:\path\to\kit-exts\vams.connector.isaacsim\locks\storage\requirements.lock
+    ```
+
+2.  Turn the connection on in `/path/to/kit-exts/vams.connector.isaacsim/config/extension.toml`:
+
+    ```toml
+    [settings]
+    exts."vams.connector.isaacsim".content_window = true
+    ```
+
+3.  Start Isaac Sim and sign in (or start it with a CLI profile that is already signed in). VAMS appears under **Omniverse Storage** > **VAMS**.
+
+The setting lives in the copy Kit loads, so set it again after each update of the connector, and run step 1 again when an update changes `locks/storage/requirements.lock`. Without the packages, or on Isaac Sim 5.1, the extension leaves the Content window alone and logs why. The EDH Workstations `isaacsim` desktop image does all three steps. The connection has been tested on Linux only.
+
 ## Ubuntu / EC2 Setup
 
 When running Isaac Sim on Ubuntu (e.g., on an Amazon EC2 instance), the VAMS CLI should be installed in an isolated Python virtual environment to avoid conflicts with Isaac Sim's bundled Python.
@@ -98,6 +123,12 @@ Then set the explicit CLI path in `/path/to/kit-exts/vams.connector.isaacsim/con
 ```toml
 [settings]
 exts."vams.connector.isaacsim".vamscli_path = "/home/ubuntu/vamscli-venv/bin/vamscli"
+```
+
+Optionally, for the Content window connection (Isaac Sim 6.1+), install its packages into the same environment and set `content_window = true` in the same file (see [Content window connection (optional, Isaac Sim 6.1+)](#content-window-connection-optional-isaac-sim-61)):
+
+```bash
+~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
 ```
 
 ### SSL certificate bundle
@@ -201,7 +232,7 @@ The **VAMS Connector** window stays for sign-in, workflows, export and upload. T
     ~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
     ```
 
-    Without them, or on Isaac Sim 5.1, the **VAMS Connector** window works as before and the Isaac Sim log says why the Content window entry was not added.
+    Without them, or on Isaac Sim 5.1, the **VAMS Connector** window works as before and the Isaac Sim log says why the Content window entry was not added. The install steps are under [Content window connection (optional, Isaac Sim 6.1+)](#content-window-connection-optional-isaac-sim-61).
 
 -   **Turning it on**: the connection is off unless `content_window` is `true`, because the Content window keeps its connections in your `omniverse.toml` and the VAMS entry is written there while the connection is on. The entry is removed when you sign out or close Isaac Sim, and an entry left by a session that did not close cleanly is removed at the next sign-in. The EDH Workstations `isaacsim` desktop image installs the dependencies and turns it on.
 -   **Limits**: the database list is read when the connection is made, so a database created later appears after the next sign-in. A folder shows changes made elsewhere when it is opened again, not live. Folders show no modification date (the Omniverse Storage API carries no date for folders; the Content window shows 1970-01-01).
