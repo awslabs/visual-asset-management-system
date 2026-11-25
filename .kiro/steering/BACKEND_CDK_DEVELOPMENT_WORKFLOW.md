@@ -699,11 +699,14 @@ The file-key validators (`RELATIVE_FILE_PATH`, `RELATIVE_FILE_PATH_ARRAY`, `DOWN
 `MAX_S3_OBJECT_KEY_BYTES` (1024, the Amazon S3 object-key limit) — bytes, not characters. The
 validator sees only the asset-relative part, so the handlers that resolve a key against the asset prefix
 re-check the RESOLVED key before their first S3 call and answer a generic `400` that does not echo the
-key: `streamAsset.py`, `streamAuxiliaryPreviewAsset.py`, `downloadAsset.py`, `uploadFile.py`
-`initialize_upload` (final and per-upload `temp-uploads/{upload tag}/` staging key, in the pre-loop block so a refused batch creates no
-multipart upload) and `assetFiles.py` `create_folder` / `move_file` / `copy_file` (destination key).
-Every guard calls `common/validators.exceeds_s3_object_key_limit(key)` rather than re-implementing the
-byte comparison; an over-long key is a `400`, never an S3 `ClientError` reported as a `500` (issue #407).
+key: `streamAsset.py`, `streamAuxiliaryPreviewAsset.py`, `downloadAsset.py` and `assetFiles.py`
+`create_folder` / `move_file` / `copy_file` (destination key). `uploadFile.py` `initialize_upload` holds
+the final key to the upload bound `common/s3PathPatterns.max_uploaded_file_key_bytes(baseAssetsPrefix)`
+(998 at a bucket root; the per-upload `temp-uploads/{upload tag}/` staging key must fit too), in the
+pre-loop block so a refused batch creates no multipart upload, and its `400` names that bound
+(`File key is too long to upload: a file key, including its asset location, may be at most N bytes`).
+Every guard calls `common/validators.exceeds_s3_object_key_limit(key[, limit])` rather than
+re-implementing the byte comparison; an over-long key is a `400`, never an S3 `ClientError` reported as a `500` (issue #407).
 
 #### **Request/Response Model Strategy**:
 
