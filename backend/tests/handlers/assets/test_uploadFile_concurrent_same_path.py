@@ -453,6 +453,11 @@ def _error_lines(logger):
     return logger.error.call_args_list + logger.exception.call_args_list
 
 
+def _error_lines_with_traceback(logger):
+    """The ERROR-level calls that carry a traceback: `logger.exception`, or `logger.error` with `exc_info`."""
+    return logger.exception.call_args_list + [c for c in logger.error.call_args_list if c.kwargs.get("exc_info")]
+
+
 class _FirstReadRefused:
     """The S3 client, with ListParts under `key` refused by `code` for every upload id."""
 
@@ -503,6 +508,7 @@ class TestTheStagedPartsReadLogsAnErrorOnlyWhenItStands:
         assert (key, size, success) == (temp_key, 0, False)
         assert error.startswith("Error verifying upload parts: ") and "NoSuchUpload" in error
         assert len(_error_lines(logger)) == 1
+        assert len(_error_lines_with_traceback(logger)) == 1
 
     def test_another_first_read_error_that_the_legacy_key_recovers_is_a_warning(self, env):
         upload_id, entry = _legacy_start(env, b"L" * 16)
@@ -527,6 +533,7 @@ class TestTheStagedPartsReadLogsAnErrorOnlyWhenItStands:
         success, error = results[RELATIVE_KEY]
         assert success is False and "AccessDenied" in error
         assert len(_error_lines(logger)) == 1
+        assert len(_error_lines_with_traceback(logger)) == 1
 
 
 @pytest.mark.unit
