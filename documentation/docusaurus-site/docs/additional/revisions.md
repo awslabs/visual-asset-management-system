@@ -368,6 +368,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Search page accessibility** — The toast dismiss button and status icon, the filter dropdowns' filtering inputs, the column picker's filter, and the Table/Map view switch have accessible names; the keyword box no longer advertises wildcards, which the general query escapes. (issues #906, #1254)
 -   **CLI csv output** — `vamscli search ... --output-format csv` writes only the CSV document to stdout. (issue #1250)
 -   **Workflow execute trigger type** — The workflow execute API accepts only the `manual` trigger type from users and API keys. (issue #316)
+-   **Abort of a finished execution** — Aborting an execution that was not running (already finished, or finished on its own while the abort ran) answers that it was not running and names its status, instead of "Execution aborted". The status code stays `200`. (issue #344)
 -   **Keyword search when OpenSearch cannot be reached** — The keyword `/search` routes answer `503` with a try-again message when OpenSearch is enabled but cannot be reached, instead of a `404` saying the OpenSearch feature is not enabled. (issue #1267)
 -   **Locked Database filter** — The locked **Database** filter on a database's search page shows that database. (issue #1253)
 -   **Search page breadcrumb** — The search page breadcrumb no longer has a step that links to the page itself. (issue #1258)
