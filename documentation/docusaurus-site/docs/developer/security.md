@@ -83,7 +83,7 @@ The authorizer caches three separate things so that a per-request authorization 
 | User roles (populated) | `USER_ROLES_CACHE_TTL`       | 60 seconds | Per user | Resolved role names for a user holding at least one role                                                                                                                                                                |
 | User roles (empty)     | `USER_ROLES_EMPTY_CACHE_TTL` | 5 seconds  | Per user | An empty role list is cached too, but for a shorter window: the API key path denies a caller that resolves to no roles, so a full-lifetime empty entry would keep denying a newly granted machine identity for a minute |
 | API key records        | `API_KEY_CACHE_TTL`          | 15 seconds | Per key  | A not-found key is cached as `None`, preventing repeated lookups from invalid keys                                                                                                                                      |
-| JWKS signing keys      | `CACHE_TTL`                  | 1 hour     | Per pool | Applies to Amazon Cognito keys, external IDP keys, and resolved OpenID Connect JWKS URIs                                                                                                                                |
+| JWKS signing keys      | `CACHE_TTL`                  | 1 hour     | Per pool | Applies to Amazon Cognito keys, external IDP keys, and resolved OpenID Connect JWKS URIs; a fallback JWKS URI, used when discovery fails, is kept for 60 seconds (`JWKS_MIN_REFETCH_INTERVAL_SECONDS`)                  |
 
 API Gateway caches the authorizer result itself on top of these, set through `authorizerResultTtlInSeconds` on each security scheme in `buildOpenApiSpec.ts`:
 
