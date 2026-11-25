@@ -97,7 +97,7 @@ Returns a single database object in the same format as the items in the list res
 
 ## Bucket configurations
 
-A database is created against a **bucket configuration** — a registered pairing of an Amazon S3 bucket and a base prefix. Bucket configurations are registered at deployment time from the `app.assetBuckets` deployment configuration, covering both the bucket the deployment creates and any external buckets it is given, and cannot be created, changed, or removed through the API. This endpoint lists them so you can obtain the `defaultBucketId` a database requires.
+A database is created against a **bucket configuration** — a registered pairing of an Amazon S3 bucket and a base prefix. Bucket configurations are registered at deployment time from the `app.assetBuckets` deployment configuration, covering both the bucket the deployment creates and any external buckets it is given, and cannot be created, changed, or removed through the API. This endpoint lists them so you can obtain the `defaultBucketId` a database requires. A registration whose entry was removed from `app.assetBuckets` is kept as retired and is not listed.
 
 ### List bucket configurations
 
@@ -154,7 +154,7 @@ GET /buckets
 `NextToken` is `null` on the last page.
 
 :::note[Authorization is route-level only]
-`bucket` is not a constraint object type, so no per-bucket constraint can be authored and this listing applies no entity-level filter. A role that is granted the `/buckets` route receives every registered bucket configuration, which is why the shipped permission templates grant it to administrator roles alone.
+`bucket` is not a constraint object type, so no per-bucket constraint can be authored and this listing applies no entity-level filter. A role that is granted the `/buckets` route receives every bucket configuration that is not retired, which is why the shipped permission templates grant it to administrator roles alone.
 :::
 
 #### Error responses
@@ -181,7 +181,7 @@ POST /database
 | --------------------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `databaseId`                      | string  | Yes      | Unique database identifier (4-63 chars, alphanumeric plus `-` and `_`). Cannot be `GLOBAL` or a reserved S3 keyword (`pipeline(s)`, `preview(s)`, `temp-upload(s)`, `workspace(s)`), matched case-insensitively. |
 | `description`                     | string  | Yes      | Description of the database (4-256 chars).                                                                                                                                                                       |
-| `defaultBucketId`                 | string  | Yes      | UUID of a pre-configured S3 bucket and prefix combination. Obtain it from [List bucket configurations](#list-bucket-configurations).                                                                             |
+| `defaultBucketId`                 | string  | Yes      | UUID of a pre-configured S3 bucket and prefix combination. Obtain it from [List bucket configurations](#list-bucket-configurations). A retired registration is refused.                                          |
 | `restrictMetadataOutsideSchemas`  | boolean | No       | When `true`, user and API metadata writes may add only keys defined in applied schemas. Keys already stored on a record pass; pipeline write-backs are not restricted. Defaults to `false`.                      |
 | `restrictFileUploadsToExtensions` | string  | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Use `.all` or leave blank to allow all. Defaults to empty.                                                                             |
 
@@ -234,12 +234,12 @@ At least one field must be provided. The `databaseId` cannot be changed after cr
 
 ### Request body
 
-| Field                             | Type    | Required | Description                                                                                                                                                            |
-| --------------------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `description`                     | string  | No       | Updated description (4-256 chars).                                                                                                                                     |
-| `defaultBucketId`                 | string  | No       | UUID of a pre-configured S3 bucket and prefix combination, from [List bucket configurations](#list-bucket-configurations). Must reference an existing bucket.          |
-| `restrictMetadataOutsideSchemas`  | boolean | No       | When `true`, user and API metadata writes may add only keys defined in applied schemas. Keys already stored on a record pass; pipeline write-backs are not restricted. |
-| `restrictFileUploadsToExtensions` | string  | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Use `.all` or leave blank to allow all.                                                      |
+| Field                             | Type    | Required | Description                                                                                                                                                                                                                               |
+| --------------------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `description`                     | string  | No       | Updated description (4-256 chars).                                                                                                                                                                                                        |
+| `defaultBucketId`                 | string  | No       | UUID of a pre-configured S3 bucket and prefix combination, from [List bucket configurations](#list-bucket-configurations). Must reference an existing bucket configuration; a retired one is refused unless the database already uses it. |
+| `restrictMetadataOutsideSchemas`  | boolean | No       | When `true`, user and API metadata writes may add only keys defined in applied schemas. Keys already stored on a record pass; pipeline write-backs are not restricted.                                                                    |
+| `restrictFileUploadsToExtensions` | string  | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Use `.all` or leave blank to allow all.                                                                                                                         |
 
 ### Request body example
 
