@@ -1352,6 +1352,35 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
     # request changes, so the write below touches nothing else on the record.
     edited_attributes = {}
 
+    # A name and a tag list can carry object-level authority, so the check above, made against
+    # the stored record, is satisfied by the very values the edit replaces. A constraint matches
+    # its action exactly (`r.act == p.act`), and a rule that gates visibility is written as a GET
+    # rule while the edit itself is a PUT, so a PUT-only check never consults it. A change to
+    # either is therefore authorized for GET as well: the caller must already reach the asset they
+    # are renaming or retagging, and must still reach the record they are about to write. A name or
+    # tag that keeps the asset out of their reach can neither be dropped nor attached. The changed
+    # record differs from the stored one only in the changed name and tags, so the decision
+    # isolates the edit; PUT on the stored record is established above, and an edit that resubmits
+    # the stored name and tags is gated exactly once.
+    renamed = 'assetName' in update_data and update_data['assetName'] != stored_asset.get('assetName')
+    retagged = 'tags' in update_data and (
+        sorted(update_data['tags']) != sorted(stored_asset.get('tags') or []))
+    if renamed or retagged:
+        stored_record = {**stored_asset, 'object__type': 'asset'}
+        changed_record = dict(stored_record)
+        if renamed:
+            changed_record['assetName'] = update_data['assetName']
+        if retagged:
+            changed_record['tags'] = update_data['tags']
+        change_enforcer = CasbinEnforcer(claims_and_roles)
+        for enforced_asset, enforced_action in (
+            (stored_record, "GET"),
+            (changed_record, "GET"),
+            (changed_record, "PUT"),
+        ):
+            if not change_enforcer.enforce(enforced_asset, enforced_action):
+                raise AuthorizationDenied()
+
     if 'assetName' in update_data:
         asset['assetName'] = update_data['assetName']
         edited_attributes['assetName'] = update_data['assetName']
@@ -1380,27 +1409,6 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         # simply cannot add it again, because it no longer resolves in scope.
         existing_tags = asset.get('tags') or []
         added_tags = [tag for tag in new_tags if tag not in existing_tags]
-
-        # A tag can carry object-level authority, so the check above — made against the stored
-        # tag list — is satisfied by the very tags a tag edit replaces. A constraint matches its
-        # action exactly (`r.act == p.act`), and a tag that gates visibility is written as a GET
-        # rule while the edit itself is a PUT, so a PUT-only check never consults it. A tag change
-        # is therefore authorized for GET as well: the caller must already reach the asset they are
-        # retagging, and must still reach the record they are about to write. A tag that keeps the
-        # asset out of their reach can neither be dropped nor attached. The two objects differ only
-        # in the tag list, so the decision isolates the tag change; PUT on the stored tag list is
-        # established above, and an unchanged tag list is still gated exactly once.
-        if sorted(new_tags) != sorted(existing_tags):
-            stored_asset = {**asset, 'object__type': 'asset'}
-            post_mutation_asset = {**stored_asset, 'tags': new_tags}
-            tag_change_enforcer = CasbinEnforcer(claims_and_roles)
-            for enforced_asset, enforced_action in (
-                (stored_asset, "GET"),
-                (post_mutation_asset, "GET"),
-                (post_mutation_asset, "PUT"),
-            ):
-                if not tag_change_enforcer.enforce(enforced_asset, enforced_action):
-                    raise AuthorizationDenied()
 
         # The shared validators raise ValueError, which this handler does not translate — it
         # would surface as a 500. Re-raised as VAMSGeneralErrorResponse so a rejected tag is a
