@@ -448,6 +448,94 @@ class TestAnUploadInitializedBeforePerUploadStaging:
         assert queue.call_args.args[0]["tempS3Key"] == LEGACY_STAGING_KEY
 
 
+def _error_lines(logger):
+    """The ERROR-level calls made on a mocked module logger."""
+    return logger.error.call_args_list + logger.exception.call_args_list
+
+
+def _error_lines_with_traceback(logger):
+    """The ERROR-level calls that carry a traceback: `logger.exception`, or `logger.error` with `exc_info`."""
+    return logger.exception.call_args_list + [c for c in logger.error.call_args_list if c.kwargs.get("exc_info")]
+
+
+class _FirstReadRefused:
+    """The S3 client, with ListParts under `key` refused by `code` for every upload id."""
+
+    def __init__(self, s3, key, code):
+        self._s3, self._key, self._code = s3, key, code
+
+    def __getattr__(self, name):
+        return getattr(self._s3, name)
+
+    def list_parts(self, **kwargs):
+        if kwargs.get("Key") == self._key:
+            raise ClientError({"Error": {"Code": self._code, "Message": self._code}}, "ListParts")
+        return self._s3.list_parts(**kwargs)
+
+
+@pytest.mark.unit
+class TestTheStagedPartsReadLogsAnErrorOnlyWhenItStands:
+    """#1971: completing an upload initialized before per-upload staging first reads its parts under the
+    per-upload key, which answers NoSuchUpload by design. That read logged an ERROR line with a stack
+    trace for every such upload; it is logged only when the upload cannot be completed."""
+
+    def test_an_upload_initialized_before_per_upload_staging_completes_with_no_error_line(self, env):
+        upload_id, entry = _legacy_start(env, b"L" * 16)
+
+        with patch.object(uf, "logger") as logger:
+            assert _results(_complete(upload_id, entry)) == {RELATIVE_KEY: (True, None)}
+
+        assert _error_lines(logger) == []
+        assert logger.warning.call_args_list == []
+        assert any("initialized before per-upload staging" in str(c) for c in logger.info.call_args_list)
+
+    def test_an_upload_initialized_after_completes_with_no_error_line(self, env):
+        upload_id, entry = _start(b"N" * 16)
+
+        with patch.object(uf, "logger") as logger:
+            assert _results(_complete(upload_id, entry)) == {RELATIVE_KEY: (True, None)}
+
+        assert _error_lines(logger) == []
+
+    def test_an_upload_open_under_neither_key_logs_its_error_once(self, env):
+        temp_key = uf.staged_upload_key("", "y00000000-1971-4000-8000-gone00000001", FINAL_KEY)
+
+        with patch.object(uf, "logger") as logger:
+            located = uf.locate_staged_multipart_upload(BUCKET, temp_key, LEGACY_STAGING_KEY, "no-such-upload",
+                                                        [MagicMock(PartNumber=1)])
+
+        key, size, success, error = located
+        assert (key, size, success) == (temp_key, 0, False)
+        assert error.startswith("Error verifying upload parts: ") and "NoSuchUpload" in error
+        assert len(_error_lines(logger)) == 1
+        assert len(_error_lines_with_traceback(logger)) == 1
+
+    def test_another_first_read_error_that_the_legacy_key_recovers_is_a_warning(self, env):
+        upload_id, entry = _legacy_start(env, b"L" * 16)
+        temp_key = uf.staged_upload_key("", upload_id, FINAL_KEY)
+
+        with patch.object(uf, "s3", _FirstReadRefused(env["s3"], temp_key, "SlowDown")), \
+                patch.object(uf, "logger") as logger:
+            assert _results(_complete(upload_id, entry)) == {RELATIVE_KEY: (True, None)}
+
+        assert _error_lines(logger) == []
+        assert len(logger.warning.call_args_list) == 1
+        assert "SlowDown" in logger.warning.call_args.args[0]
+
+    def test_a_first_read_error_with_no_legacy_upload_is_logged_and_returned(self, env):
+        upload_id, entry = _start(b"N" * 16)
+        temp_key = uf.staged_upload_key("", upload_id, FINAL_KEY)
+
+        with patch.object(uf, "s3", _FirstReadRefused(env["s3"], temp_key, "AccessDenied")), \
+                patch.object(uf, "logger") as logger:
+            results = _results(_complete(upload_id, entry))
+
+        success, error = results[RELATIVE_KEY]
+        assert success is False and "AccessDenied" in error
+        assert len(_error_lines(logger)) == 1
+        assert len(_error_lines_with_traceback(logger)) == 1
+
+
 @pytest.mark.unit
 class TestAbortsReachTheRightUpload:
     def test_a_cancelled_upload_aborts_only_its_own_multipart_upload(self, env):
