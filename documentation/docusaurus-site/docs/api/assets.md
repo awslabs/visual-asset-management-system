@@ -214,6 +214,8 @@ Each entry in `files` is an object:
 | `file_size`   | integer | No       | File size in bytes. Either `file_size` or `num_parts` must be provided.               |
 | `num_parts`   | integer | No       | Number of multipart upload parts. Either `file_size` or `num_parts` must be provided. |
 
+A file's key, including its asset location, is held to the same bound as an upload: 998 bytes of UTF-8 in a bucket registered at its root, less the bucket's base prefix otherwise. A longer key is refused with `400` at the initialize stage. That check needs the asset's bucket, so a missing asset has already been created when it runs. See [Upload File](files.md#upload-file).
+
 ```json
 {
     "databaseId": "my-database",
