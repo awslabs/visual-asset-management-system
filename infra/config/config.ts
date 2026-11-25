@@ -1767,23 +1767,26 @@ export function getConfig(app: cdk.App): Config {
             3600)
     );
 
-    // The Amazon Cognito web app client takes this value as its ID and access token lifetime
-    // (cognito-web-native-construct.ts), and the CDK UserPoolClient accepts only a whole number of
-    // minutes from 5 minutes to 1 day there, so any other value stops the synthesis at that client.
-    const credTokenTimeout = String(config.app.authProvider.useCognito.credTokenTimeoutSeconds);
+    // The Amazon Cognito web app client, which exists only with Amazon Cognito enabled, takes this
+    // value as its ID and access token lifetime (cognito-web-native-construct.ts). Amazon Cognito
+    // accepts 5 minutes to 1 day, and the CDK UserPoolClient sets the lifetimes in minutes, so it also
+    // needs a whole number of minutes. It reads the value as a number, as Number() does (so "3600 "
+    // and "3.6e3" are 3600), and any other value stops the synthesis at that client.
+    const credTokenTimeout = config.app.authProvider.useCognito.credTokenTimeoutSeconds;
+    const credTokenSeconds = Number(credTokenTimeout);
     if (
-        !/^\d+$/.test(credTokenTimeout) ||
-        Number(credTokenTimeout) < COGNITO_TOKEN_MIN_VALIDITY_SECONDS ||
-        Number(credTokenTimeout) > COGNITO_TOKEN_MAX_VALIDITY_SECONDS ||
-        Number(credTokenTimeout) % 60 !== 0
+        config.app.authProvider.useCognito.enabled &&
+        (!Number.isInteger(credTokenSeconds) ||
+            credTokenSeconds < COGNITO_TOKEN_MIN_VALIDITY_SECONDS ||
+            credTokenSeconds > COGNITO_TOKEN_MAX_VALIDITY_SECONDS ||
+            credTokenSeconds % 60 !== 0)
     ) {
         console.warn(
             `Configuration Warning: app.authProvider.useCognito.credTokenTimeoutSeconds should be a whole ` +
                 `number of minutes, in seconds, from ${COGNITO_TOKEN_MIN_VALIDITY_SECONDS} to ` +
-                `${COGNITO_TOKEN_MAX_VALIDITY_SECONDS} (5 minutes to 1 day, the ID and access token lifetimes ` +
-                `the Amazon Cognito web app client accepts). Got: '${credTokenTimeout}'. With ` +
-                `app.authProvider.useCognito.enabled the synthesis stops at the web app client with this ` +
-                `value; with Amazon Cognito off the value is not used.`
+                `${COGNITO_TOKEN_MAX_VALIDITY_SECONDS}: 5 minutes to 1 day (the Amazon Cognito limit), in ` +
+                `whole minutes (the VAMS web app client sets the lifetimes in minutes). ` +
+                `Got: '${String(credTokenTimeout)}'. With this value the synthesis stops at the web app client.`
         );
     }
 

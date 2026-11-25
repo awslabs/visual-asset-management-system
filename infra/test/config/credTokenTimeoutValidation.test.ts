@@ -5,14 +5,16 @@
 
 /**
  * `app.authProvider.useCognito.credTokenTimeoutSeconds` is the ID and access token lifetime of the
- * Amazon Cognito web app client (`cognitoWebClientTokenAndAuthFlowSettings`). The CDK
- * `UserPoolClient` accepts only a whole number of minutes from 5 minutes to 1 day there and throws
- * on anything else, so with Amazon Cognito enabled such a value stops the synthesis at that client
- * with a message that does not name the configuration field; with Amazon Cognito off the value is
- * not used.
+ * Amazon Cognito web app client (`cognitoWebClientTokenAndAuthFlowSettings`). Amazon Cognito
+ * accepts 5 minutes to 1 day, and the CDK `UserPoolClient` sets the lifetimes in minutes, so it takes
+ * only a whole number of minutes in that range and throws on anything else. It reads the value as a
+ * number, as `Number()` does, so `"3600 "` or `"3.6e3"` builds. Such a value stops the synthesis at
+ * that client with a message that does not name the configuration field. The client exists only with
+ * Amazon Cognito enabled; with Amazon Cognito off (external OAuth IdP) the value is not used.
  *
- * `getConfig()` warns about such a value and leaves the resolved value as it is, so a configuration
- * that deploys today still deploys. Every warning arm also asserts that the value is unchanged.
+ * With Amazon Cognito enabled, `getConfig()` warns about exactly the values the client refuses and
+ * leaves the resolved value as it is, so a configuration that deploys today still deploys. Every
+ * warning arm also asserts that the value is unchanged.
  *
  * CDK context and the environment variable deliver the value as a string, so each source has its
  * own arms. An absent, null, empty or zero `config.json` value falls through to the environment
@@ -53,11 +55,16 @@ const KEY_ABSENT = Symbol("key absent");
  * Builds a config.json from the commercial template with `credTokenTimeoutSeconds` set to `value`
  * (or removed), and returns a thunk that calls getConfig() with the given CDK context.
  */
-function resolve(value: unknown, context: Record<string, unknown> = {}): () => Config.Config {
+function resolve(
+    value: unknown,
+    context: Record<string, unknown> = {},
+    mutate: (config: any) => void = () => undefined
+): () => Config.Config {
     const config = JSON.parse(JSON.stringify(commercialTemplate));
     config.env.region = "us-east-1";
     config.env.account = "123456789012";
     config.app.baseStackName = "vamstest";
+    mutate(config);
     if (value === KEY_ABSENT) {
         delete config.app.authProvider.useCognito.credTokenTimeoutSeconds;
     } else {
@@ -73,8 +80,12 @@ function resolve(value: unknown, context: Record<string, unknown> = {}): () => C
 }
 
 /** Calls getConfig() with console.warn silenced. Returns the resolved value and the warnings that name the field. */
-function run(value: unknown, context: Record<string, unknown> = {}) {
-    const load = resolve(value, context);
+function run(
+    value: unknown,
+    context: Record<string, unknown> = {},
+    mutate: (config: any) => void = () => undefined
+) {
+    const load = resolve(value, context, mutate);
     const captured: string[] = [];
     const spy = jest.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
         captured.push(args.map(String).join(" "));
@@ -93,6 +104,32 @@ function run(value: unknown, context: Record<string, unknown> = {}) {
 
 const OUT_OF_RANGE =
     /app\.authProvider\.useCognito\.credTokenTimeoutSeconds should be a whole number of minutes, in seconds, from 300 to 86400/;
+
+/**
+ * Strings the web app client reads as a whole number of minutes in range (`Number()` coercion, as
+ * CDK's Duration arithmetic does), so they build and must not warn. A trailing space or newline is
+ * plausible in `CRED_TOKEN_TIMEOUT_SECONDS` or a `-c` value.
+ */
+const COERCIBLE = [" 3600", "3600 ", "1800\n", "3600.0", "3.6e3", "+3600", "0x0E10"];
+
+/** Values the web app client refuses even after that coercion, so they must warn. */
+const NOT_A_NUMBER: unknown[] = ["abc", "1h", true, "   "];
+
+/** External OAuth IdP mode: Amazon Cognito off, so no web app client reads the value. */
+function externalIdp(config: any) {
+    config.app.authProvider.useCognito.enabled = false;
+    // The same complete provider block as additionalTokenAudiences.test.ts.
+    Object.assign(config.app.authProvider.useExternalOAuthIdp, {
+        enabled: true,
+        idpAuthProviderUrl: "https://idp.example.com",
+        idpAuthClientId: "client-id",
+        idpAuthProviderScope: "openid",
+        idpAuthProviderTokenEndpoint: "/oauth2/token",
+        idpAuthProviderAuthorizationEndpoint: "/oauth2/authorize",
+        lambdaAuthorizorJWTIssuerUrl: "https://idp.example.com",
+        lambdaAuthorizorJWTAudience: "vams",
+    });
+}
 
 /** The assertions every out-of-range arm makes: one warning, naming the value, nothing changed. */
 function expectWarned(result: ReturnType<typeof run>, value: string) {
@@ -161,12 +198,36 @@ describe("credTokenTimeoutSeconds from config.json", () => {
         }
     );
 
-    test.each([["abc"], ["   "], [true], ["1h"]])(
+    test.each(NOT_A_NUMBER.map((v) => [v]))(
         "%p is not a number of seconds: warns and resolves unchanged",
         (v) => {
             expectWarned(run(v), String(v));
         }
     );
+
+    test.each(COERCIBLE.map((v) => [v]))(
+        "%p reads as a whole number of minutes in range: no warning, resolves unchanged",
+        (v) => {
+            const result = run(v);
+            expect(result.timeout).toBe(v);
+            expect(result.warnings).toEqual([]);
+        }
+    );
+});
+
+describe("credTokenTimeoutSeconds with Amazon Cognito off (external OAuth IdP)", () => {
+    test.each([[299], [3601], [86401], ["abc"]])(
+        "%p is not used by any web app client: no warning, resolves unchanged",
+        (v) => {
+            const result = run(v, {}, externalIdp);
+            expect(result.timeout).toBe(String(v));
+            expect(result.warnings).toEqual([]);
+        }
+    );
+
+    test("[control] the same value warns with Amazon Cognito enabled", () => {
+        expectWarned(run(299), "299");
+    });
 });
 
 describe("credTokenTimeoutSeconds from CDK context", () => {
@@ -201,6 +262,13 @@ describe("credTokenTimeoutSeconds from CRED_TOKEN_TIMEOUT_SECONDS", () => {
         expect(result.warnings).toEqual([]);
     });
 
+    test("an environment value with a trailing newline reads as its number: no warning", () => {
+        process.env[ENV_KEY] = "1800\n";
+        const result = run(KEY_ABSENT);
+        expect(result.timeout).toBe("1800\n");
+        expect(result.warnings).toEqual([]);
+    });
+
     test("an out-of-range environment value warns and resolves unchanged", () => {
         process.env[ENV_KEY] = "100000";
         expectWarned(run(KEY_ABSENT), "100000");
@@ -210,24 +278,39 @@ describe("credTokenTimeoutSeconds from CRED_TOKEN_TIMEOUT_SECONDS", () => {
 const RULE_ID = "cred-token-timeout-range";
 
 /** The token timeout rule the ConfigBuilder reports for the commercial preset holding `value`, if any. */
-const builderRule = (value: unknown) => {
+const builderRule = (value: unknown, cognitoEnabled = true) => {
     const cfg = makeDefaultConfig("commercial");
+    cfg.app.authProvider.useCognito.enabled = cognitoEnabled;
     cfg.app.authProvider.useCognito.credTokenTimeoutSeconds = value;
     return evaluateRules(cfg).find((rule) => rule.id === RULE_ID);
 };
 
 describe("ConfigBuilder mirror of the token timeout warning", () => {
-    test.each([[299], [-60], [86401], [3601], [3600.5], ["abc"], ["   "], [true], [" 3600"]])(
+    test.each([[299], [-60], [86401], [3601], [3600.5], ...NOT_A_NUMBER.map((v) => [v])])(
         "fires for %p",
         (v) => {
             expect(builderRule(v)).toBeDefined();
         }
     );
 
-    test.each([[3600], [300], [86400], ["1800"], [""], [null], [undefined], [0]])(
-        "stays silent for %p",
+    test.each([
+        [3600],
+        [300],
+        [86400],
+        ["1800"],
+        [""],
+        [null],
+        [undefined],
+        [0],
+        ...COERCIBLE.map((v) => [v]),
+    ])("stays silent for %p", (v) => {
+        expect(builderRule(v)).toBeUndefined();
+    });
+
+    test.each([[299], [3601], ["abc"]])(
+        "stays silent for %p with Amazon Cognito off, where the field is hidden and unused",
         (v) => {
-            expect(builderRule(v)).toBeUndefined();
+            expect(builderRule(v, false)).toBeUndefined();
         }
     );
 
@@ -255,15 +338,18 @@ describe("the warned range is the range the web app client accepts", () => {
         return Template.fromStack(stack);
     };
 
-    test.each([[300], [3600], [86400], ["1800"]])("%p builds the client", (v) => {
-        const template = buildClient(v);
-        template.hasResourceProperties("AWS::Cognito::UserPoolClient", {
-            IdTokenValidity: Number(v) / 60,
-            AccessTokenValidity: Number(v) / 60,
-        });
-    });
+    test.each([[300], [3600], [86400], ["1800"], ...COERCIBLE.map((v) => [v])])(
+        "%p builds the client",
+        (v) => {
+            const template = buildClient(v);
+            template.hasResourceProperties("AWS::Cognito::UserPoolClient", {
+                IdTokenValidity: Number(v) / 60,
+                AccessTokenValidity: Number(v) / 60,
+            });
+        }
+    );
 
-    test.each([[299], [240], [86401], [86460], [3601], ["abc"], [true]])(
+    test.each([[299], [240], [86401], [86460], [3601], ...NOT_A_NUMBER.map((v) => [v])])(
         "%p, which getConfig() warns about, is refused by the client",
         (v) => {
             expect(() => buildClient(v)).toThrow();
