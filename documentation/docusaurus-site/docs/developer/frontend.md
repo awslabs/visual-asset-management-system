@@ -611,7 +611,7 @@ The base policy sets `worker-src 'self' blob: data:`. A viewer that decodes in a
 
 ### Add-on origins
 
-When add-ons that embed external content are enabled, CSP is extended dynamically. For example, with the Physna add-on enabled the configured `apiBaseEndpoint` origin is added to both `frame-src` (so the Physna hosted viewer can be loaded in an iframe) and `connect-src` (so any auxiliary fetches to Physna succeed). With the Miris Spatial Streaming add-on enabled, `https://*.miris.com` and `wss://*.miris.com` are added to `connect-src` and `blob:` to `script-src`, from which the Miris web SDK loads part of its engine. Add-on sources come from `addonCspSources()` in `infra/lib/nestedStacks/addon/addonCsp.ts`. See `generateContentSecurityPolicy()` in `infra/lib/helper/security.ts` for the full set of conditional rules.
+When add-ons that embed external content are enabled, CSP is extended dynamically. For example, with the Physna add-on enabled the configured `apiBaseEndpoint` origin is added to both `frame-src` (so the Physna hosted viewer can be loaded in an iframe) and `connect-src` (so any auxiliary fetches to Physna succeed). With the Miris Spatial Streaming add-on enabled, `https://*.miris.com`, `wss://*.miris.com` and `https://*.miris-content.com` (asset content) are added to `connect-src` and `blob:` to `script-src`, from which the Miris web SDK loads part of its engine. Add-on sources come from `addonCspSources()` in `infra/lib/nestedStacks/addon/addonCsp.ts`. See `generateContentSecurityPolicy()` in `infra/lib/helper/security.ts` for the full set of conditional rules.
 
 ## Anti-Patterns
 
