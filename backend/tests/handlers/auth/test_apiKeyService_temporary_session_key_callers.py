@@ -7,10 +7,12 @@ Lambda cross-call may create a key under the reserved name prefix.
 A temporary session key is a short-lived API key a backend component mints for one session through a
 Lambda cross-call, named with ``TEMPORARY_SESSION_KEY_NAME_PREFIX``. It carries its user's roles, so a
 user whose roles reach the key routes could otherwise mint a key that never expires, or extend the session
-key itself, with it. The refusal is narrow: it recognises the key by the name prefix, so ordinary API-key
-automation that manages keys and every JWT caller are unaffected, and reads and deletes stay open to a
-temporary session key. An API-key caller whose key cannot be identified is refused; one whose record
-cannot be read is answered as an internal error rather than as a session key. The prefix is reserved: a
+key itself, with it. The refusal recognises the key by the name prefix and covers every create and update,
+so it reaches further than the refusal every API-key caller gets (a create or an expiration change, issue
+#433, test_apiKeyService_api_key_callers.py): an ordinary API key may still change a description or
+deactivate a key, and every JWT caller is unaffected. Reads and deletes stay open to a temporary session key.
+An API-key caller whose key cannot be identified is refused; one whose record cannot be read is answered as
+an internal error rather than as a session key. The prefix is reserved: a
 create that names a key under it is answered 400 unless it arrives as a Lambda cross-call, which API
 Gateway cannot produce, so no user can create a key that would be treated as a session key."""
 
@@ -40,6 +42,9 @@ CREATE_BODY = {"apiKeyName": "forever", "userId": USER, "description": "x"}
 USER_CREATE_BODY = {"apiKeyName": "mine", "description": "x", "expiresAt": "2027-01-01T00:00:00Z"}
 UPDATE_BODY = {"description": "changed"}
 REFUSAL = "API keys cannot be created or updated with a temporary session key"
+# The refusal every API-key caller gets on a create (issue #433, test_apiKeyService_api_key_callers.py).
+API_KEY_CREATE_REFUSAL = ("API keys cannot be created with an API key. "
+                          "Sign in through your identity provider to create one.")
 RESERVED_NAME_REFUSAL = ("API key names starting with the temporary session key prefix are reserved. "
                          "Please choose a different name.")
 CREATE_ROUTES = [("/auth/api-keys", CREATE_BODY), ("/auth/user/api-keys", USER_CREATE_BODY)]
@@ -189,11 +194,14 @@ class TestATemporarySessionKeyCannotCreateOrExtendAKey:
 
 @pytest.mark.unit
 class TestEveryOtherCallerIsUnaffected:
-    def test_an_ordinary_api_key_creates_a_key(self, monkeypatch):
+    def test_an_ordinary_api_key_create_gets_the_api_key_refusal_not_this_one(self, monkeypatch):
+        # Every API-key caller is refused a create (issue #433); an ordinary key is told why, not that it
+        # holds a session key.
         response, table, audit = _run(monkeypatch, ORDINARY_KEY_CALLER, "POST", "/auth/api-keys", CREATE_BODY)
-        assert response["statusCode"] == 200
-        assert table.put_item.call_args.kwargs["Item"]["apiKeyName"] == "forever"
-        assert audit.call_args.args[1] == "apiKeyCreate"
+        assert response["statusCode"] == 403
+        assert _message(response) == API_KEY_CREATE_REFUSAL
+        table.put_item.assert_not_called()
+        audit.assert_not_called()
         # The caller's own record was consulted once, and nothing else was read by id.
         assert _looked_up(table) == [ORDINARY_KEY_ID]
 
@@ -242,10 +250,11 @@ class TestTheSessionKeyPrefixIsReserved:
 
     @pytest.mark.parametrize("path,body", CREATE_ROUTES, ids=CREATE_ROUTE_IDS)
     def test_an_ordinary_api_key_cannot_create_one_either(self, monkeypatch, path, body):
+        # No API-key caller creates a key at all (issue #433), so the name is never considered.
         response, table, _audit = _run(monkeypatch, ORDINARY_KEY_CALLER, "POST", path,
                                        dict(body, apiKeyName=PROBE_SESSION_KEY_NAME))
-        assert response["statusCode"] == 400
-        assert _message(response) == RESERVED_NAME_REFUSAL
+        assert response["statusCode"] == 403
+        assert _message(response) == API_KEY_CREATE_REFUSAL
         table.put_item.assert_not_called()
 
     @pytest.mark.parametrize("path,body", CREATE_ROUTES, ids=CREATE_ROUTE_IDS)

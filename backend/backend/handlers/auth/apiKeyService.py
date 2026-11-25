@@ -78,6 +78,15 @@ API_KEY_USER_ID_INDEX_NAME = 'userIdIndex'
 API_KEY_LISTING_MAX_ITEMS = 3000
 API_KEY_LISTING_PAGE_SIZE = 1000
 
+# The 403s a caller that authenticated with an API key gets on a key create and on an expiration change
+# (issue #433). A key that could mint keys or move an expiration could keep a leaked credential alive
+# indefinitely, each new key with a fresh expiration window. Reads, description changes, deactivation and
+# deletes stay open to it, so a key can still list and revoke itself.
+API_KEY_CALLER_CREATE_REFUSAL = ("API keys cannot be created with an API key. "
+                                 "Sign in through your identity provider to create one.")
+API_KEY_CALLER_EXPIRATION_REFUSAL = ("An API key's expiration cannot be changed with an API key. "
+                                     "Sign in through your identity provider to change it.")
+
 
 def _resolve_page_bounds(query_params):
     """(maxItems, pageSize) for one listing response, from the request's query parameters.
@@ -264,6 +273,13 @@ def _requesting_user_id():
     return claims_and_roles['tokens'][0] if claims_and_roles.get('tokens') else None
 
 
+def _caller_used_an_api_key():
+    """Whether the request was authenticated with an API key, as the authorizer marks it
+    (vams:authMethod, surfaced by request_to_claims). A JWT from the deployment's identity provider and a
+    Lambda cross-call read as jwt."""
+    return claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY
+
+
 def _caller_is_temporary_session_key():
     """Whether the caller authenticated with a temporary session key: an API key named with
     TEMPORARY_SESSION_KEY_NAME_PREFIX. Such a key may neither create nor update a key, or a session
@@ -271,7 +287,7 @@ def _caller_is_temporary_session_key():
     record cannot be identified is treated as one; every other caller is not. A record that cannot be
     read is no judgement on the caller: the read error propagates and the request is answered as an
     internal error."""
-    if claims_and_roles.get('authMethod') != AUTH_METHOD_API_KEY:
+    if not _caller_used_an_api_key():
         return False
     api_key_id = claims_and_roles.get('apiKeyId')
     if not api_key_id or api_key_table is None:
@@ -640,6 +656,12 @@ def update_api_key(event, api_key_id, user_scope=False):
 
     request = parse(body, model=UpdateUserApiKeyRequestModel if user_scope else UpdateApiKeyRequestModel)
 
+    # Any expiresAt in the request, a clear ("") on the admin route included, is an expiration change.
+    # Refused before the key is read, so the answer says nothing about whether the key exists.
+    if request.expiresAt is not None and _caller_used_an_api_key():
+        logger.info("Refused an API key expiration change to a caller that authenticated with an API key")
+        return authorization_error(body={'message': API_KEY_CALLER_EXPIRATION_REFUSAL}, event=event)
+
     # Fetch existing item
     response = api_key_table.get_item(Key={'apiKeyId': api_key_id})
     item = response.get('Item')
@@ -754,6 +776,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return authorization_error(
                 body={'message': 'API keys cannot be created or updated with a temporary session key'},
                 event=event)
+
+        if method == 'POST' and _caller_used_an_api_key():
+            logger.info("Refused an API key create to a caller that authenticated with an API key")
+            return authorization_error(body={'message': API_KEY_CALLER_CREATE_REFUSAL}, event=event)
 
         if method == 'GET':
             return handle_get(event, path)

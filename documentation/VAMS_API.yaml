@@ -9449,7 +9449,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         post:
             summary: "Create a new API key for any user (administrative)."
-            description: "Create an API key bound to the userId supplied in the request body. The key acts as that user and carries that user's roles, so access to this route is equivalent to full administrative access and is reserved for administrator roles; regular users create their own keys through /auth/user/api-keys. The plaintext API key is returned exactly once in the response and cannot be retrieved again. Refuses a caller that authenticates with a temporary session key (403). Refuses an apiKeyName that starts with the reserved temporary session key prefix temporary-session- (400)."
+            description: "Create an API key bound to the userId supplied in the request body. The key acts as that user and carries that user's roles, so access to this route is equivalent to full administrative access and is reserved for administrator roles; regular users create their own keys through /auth/user/api-keys. The plaintext API key is returned exactly once in the response and cannot be retrieved again. Refuses a caller that authenticates with an API key (403); create keys signed in through the identity provider. Refuses a caller that authenticates with a temporary session key (403). Refuses an apiKeyName that starts with the reserved temporary session key prefix temporary-session- (400)."
             requestBody:
                 required: true
                 content:
@@ -9488,7 +9488,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create API keys.
+                    description: "Not authorized to create API keys, or the caller authenticated with an API key (`API keys cannot be created with an API key. Sign in through your identity provider to create one.`)."
                     content:
                         application/json:
                             schema:
@@ -9541,7 +9541,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         put:
             summary: "Update an API key (administrative)."
-            description: "Update the description, expiration date, and/or active status of any user's API key. The key name and userId cannot be changed. At least one field must be provided. Administrative route, reserved for administrator roles; regular users update their own keys through /auth/user/api-keys/{apiKeyId}. Refuses a caller that authenticates with a temporary session key (403)."
+            description: "Update the description, expiration date, and/or active status of any user's API key. The key name and userId cannot be changed. At least one field must be provided. Administrative route, reserved for administrator roles; regular users update their own keys through /auth/user/api-keys/{apiKeyId}. Refuses an expiresAt change from a caller that authenticates with an API key (403), before the key is read. Refuses a caller that authenticates with a temporary session key (403)."
             parameters:
                 - name: apiKeyId
                   in: path
@@ -9581,7 +9581,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update this API key.
+                    description: "Not authorized to update this API key, or the caller authenticated with an API key and the body carries expiresAt (`An API key's expiration cannot be changed with an API key. Sign in through your identity provider to change it.`)."
                     content:
                         application/json:
                             schema:
@@ -9692,7 +9692,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         post:
             summary: "Create a new self-service API key for the current user."
-            description: "Create an API key tied to the requesting user. The key always acts as the authenticated caller (no userId field). An expiration date is required and may be at most 365 days from creation; after the window elapses a new key must be created (rotation). The plaintext API key is returned exactly once. Refuses a caller that authenticates with a temporary session key (403). Refuses an apiKeyName that starts with the reserved temporary session key prefix temporary-session- (400)."
+            description: "Create an API key tied to the requesting user. The key always acts as the authenticated caller (no userId field). An expiration date is required and may be at most 365 days from creation; after the window elapses a new key must be created (rotation). The plaintext API key is returned exactly once. Refuses a caller that authenticates with an API key (403); create keys signed in through the identity provider. Refuses a caller that authenticates with a temporary session key (403). Refuses an apiKeyName that starts with the reserved temporary session key prefix temporary-session- (400)."
             requestBody:
                 required: true
                 content:
@@ -9728,7 +9728,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create API keys.
+                    description: "Not authorized to create API keys, or the caller authenticated with an API key (`API keys cannot be created with an API key. Sign in through your identity provider to create one.`)."
                     content:
                         application/json:
                             schema:
@@ -9781,7 +9781,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         put:
             summary: "Update one of the current user's own API keys."
-            description: "Update the description, expiration date, and/or active status of an API key owned by the requesting user. The expiration cannot be cleared and cannot be set beyond 365 days from the key's original creation date; after that window a new key must be created (rotation). Refuses a caller that authenticates with a temporary session key (403)."
+            description: "Update the description, expiration date, and/or active status of an API key owned by the requesting user. The expiration cannot be cleared and cannot be set beyond 365 days from the key's original creation date; after that window a new key must be created (rotation). Refuses an expiresAt change from a caller that authenticates with an API key (403), before the key is read. Refuses a caller that authenticates with a temporary session key (403)."
             parameters:
                 - name: apiKeyId
                   in: path
@@ -9821,7 +9821,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update API keys.
+                    description: "Not authorized to update API keys, or the caller authenticated with an API key and the body carries expiresAt (`An API key's expiration cannot be changed with an API key. Sign in through your identity provider to change it.`)."
                     content:
                         application/json:
                             schema:

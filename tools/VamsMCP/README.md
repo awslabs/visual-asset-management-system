@@ -768,7 +768,12 @@ the host's conversation log and telemetry. Keep both create tools out of
 `autoApprove`, and relay the value to the user once rather than repeating it.
 `create_api_key` (administrative) mints a key acting as ANY `user_id`;
 `create_user_api_key` (self-service) always binds the key to the authenticated
-user and requires an expiry within 365 days. `update_*_api_key` with
+user and requires an expiry within 365 days. A session whose `vamscli` profile is
+signed in with an API key cannot create keys or change an expiry: both create
+tools, and `update_*_api_key` with `expires_at`, are refused with `403` (the
+message says to sign in through the identity provider), while the reads, the
+deletes and `update_*_api_key` with only `description` or `is_active` work. A
+remote MCP session, signed in with OAuth, is unaffected. `update_*_api_key` with
 `is_active=False` is the reversible revoke: the key stops authenticating until it
 is re-enabled, and nothing is destroyed. VAMS briefly caches API key authorization
 in both directions (the API Gateway authorizer cache for 30 seconds and the

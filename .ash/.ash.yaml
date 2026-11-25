@@ -91,18 +91,18 @@ global_settings:
         # Documentation code samples (request and response examples).
         - rule_id: SECRET-SECRET-KEYWORD
           path: documentation/docusaurus-site/docs/api/auth.md
-          line_start: 877
-          line_end: 877
+          line_start: 879
+          line_end: 879
           reason: apiKeyName field holding a display name in a request example, not a secret
         - rule_id: SECRET-SECRET-KEYWORD
           path: documentation/docusaurus-site/docs/api/auth.md
-          line_start: 957
-          line_end: 957
+          line_start: 959
+          line_end: 959
           reason: masked API key placeholder (vams_ followed by x characters) in a response example
         - rule_id: SECRET-SECRET-KEYWORD
           path: documentation/docusaurus-site/docs/api/auth.md
-          line_start: 1076
-          line_end: 1076
+          line_start: 1079
+          line_end: 1079
           reason: apiKeyName field holding a display name in a request example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/files.md
