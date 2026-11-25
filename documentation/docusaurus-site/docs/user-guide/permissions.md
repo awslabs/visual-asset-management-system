@@ -69,7 +69,7 @@ separate role with its own constraints.
 
 1. Navigate to **Roles** from the left navigation menu.
 2. Choose **Create Role**.
-3. Enter a **Role Name** (3-64 characters, letters, numbers, hyphens, and underscores).
+3. Enter a **Role Name** of 3-64 characters (the form's limit; the API and the CLI accept 1-256). The name can contain letters, numbers, spaces, hyphens (`-`), periods (`.`), and underscores (`_`). Spaces before and after the name are removed when it is saved.
 4. Enter a **Description** (4-256 characters).
 5. Optionally enable **MFA Required** -- when checked, this role is only active for users who have authenticated with multi-factor authentication.
 6. Choose **Create**.

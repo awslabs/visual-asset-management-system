@@ -298,6 +298,11 @@ export const MODELOPS_STAGED_INPUT_PREFIX = "pipelines/modelops.staged-inputs/";
 // app.authProvider.presignedUrlTimeoutSeconds would deploy and then fail every download, and
 // getConfig() warns about it at synthesis. The export staging expiry below is derived from it.
 export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
+// The ID and access token lifetimes an Amazon Cognito app client accepts, in seconds (5 minutes to
+// 1 day, in whole minutes). app.authProvider.useCognito.credTokenTimeoutSeconds sets both on the web
+// app client; getConfig() warns about a value outside this range at synthesis.
+export const COGNITO_TOKEN_MIN_VALIDITY_SECONDS = 300;
+export const COGNITO_TOKEN_MAX_VALIDITY_SECONDS = 86400;
 // The auxiliary-bucket prefix where the asset export service stages an over-size export payload
 // before returning a presigned URL for it (EXPORT_STAGING_PREFIX in
 // backend/backend/handlers/assets/assetExportService.py). The export function's S3 grant and the
@@ -1761,6 +1766,26 @@ export function getConfig(app: cdk.App): Config {
             process.env.CRED_TOKEN_TIMEOUT_SECONDS ||
             3600)
     );
+
+    // The Amazon Cognito web app client takes this value as its ID and access token lifetime
+    // (cognito-web-native-construct.ts), and the CDK UserPoolClient accepts only a whole number of
+    // minutes from 5 minutes to 1 day there, so any other value stops the synthesis at that client.
+    const credTokenTimeout = String(config.app.authProvider.useCognito.credTokenTimeoutSeconds);
+    if (
+        !/^\d+$/.test(credTokenTimeout) ||
+        Number(credTokenTimeout) < COGNITO_TOKEN_MIN_VALIDITY_SECONDS ||
+        Number(credTokenTimeout) > COGNITO_TOKEN_MAX_VALIDITY_SECONDS ||
+        Number(credTokenTimeout) % 60 !== 0
+    ) {
+        console.warn(
+            `Configuration Warning: app.authProvider.useCognito.credTokenTimeoutSeconds should be a whole ` +
+                `number of minutes, in seconds, from ${COGNITO_TOKEN_MIN_VALIDITY_SECONDS} to ` +
+                `${COGNITO_TOKEN_MAX_VALIDITY_SECONDS} (5 minutes to 1 day, the ID and access token lifetimes ` +
+                `the Amazon Cognito web app client accepts). Got: '${credTokenTimeout}'. With ` +
+                `app.authProvider.useCognito.enabled the synthesis stops at the web app client with this ` +
+                `value; with Amazon Cognito off the value is not used.`
+        );
+    }
 
     config.app.authProvider.presignedUrlTimeoutSeconds = <number>(
         (app.node.tryGetContext("presignedUrlTimeoutSeconds") ||
