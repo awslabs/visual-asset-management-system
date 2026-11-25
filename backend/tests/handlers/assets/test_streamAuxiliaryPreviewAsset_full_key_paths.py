@@ -13,6 +13,10 @@ to its folder) found no viewer data. Both routes now read the same path forms:
     folder segment and a file in a subfolder named like the location;
 -   the asset-relative path and the auxiliary key ``{databaseId}/{location}...``, as before.
 
+A leading ``/`` marks the file's path in the asset (in-development defect D1): ``/{location}x`` is the file
+``{location}{location}x`` of a subfolder named like the location, never the full key ``{location}x``. Search
+results send such paths; reading them as full keys showed another file's point cloud.
+
 Every resolved key stays under ``{databaseId}/`` plus a key the asset's location holds: another asset's key, a
 neighbour that only shares the location's characters and another database's auxiliary key resolve inside this
 asset, never to that data. The route still authorizes before any S3 read, still answers a nested asset's data
@@ -99,6 +103,42 @@ class TestFullKeyOfASingleFileAssetsFile:
 
 
 @pytest.mark.unit
+class TestALeadingSlashMarksThePathInTheAsset:
+    """D1: a path with a leading ``/`` is read only as the file's path in the asset."""
+
+    @pytest.mark.parametrize("location,path,key", [
+        # A subfolder named like the location: /{location}x is {location}{location}x, not {location}x
+        ("a1/", "/a1/cloud.laz", "a1/a1/cloud.laz"),
+        ("vams/a1/", "/vams/a1/cloud.laz", "vams/a1/vams/a1/cloud.laz"),
+        ("custom/path/", "/custom/path/cloud.laz", "custom/path/custom/path/cloud.laz"),
+        # A single-file asset's companion entry whose path spells the file's key
+        ("p1/model.laz", "/p1/model.laz/x.laz", "p1/model.laz/p1/model.laz/x.laz"),
+        ("p1/model.laz", "/p1/model.laz.previewFile.png", "p1/model.laz/p1/model.laz.previewFile.png"),
+    ], ids=["asset-id-folder", "base-prefix", "custom-root", "single-file-companion", "single-file-preview-name"])
+    def test_a_path_that_starts_with_the_location_key_is_a_path_in_the_asset(self, location, path, key):
+        assert _resolve(location, f"{path}/{DATA}") == f"db1/{key}/{DATA}"
+
+    @pytest.mark.parametrize("location,full_key", [
+        ("a1/", "a1/cloud.laz"),
+        ("vams/a1/", "vams/a1/cloud.laz"),
+        ("custom/path/", "custom/path/cloud.laz"),
+        ("p1/model.laz", "p1/model.laz/x.laz"),
+    ])
+    def test_control_the_same_text_without_the_slash_is_the_full_key(self, location, full_key):
+        assert _resolve(location, f"{full_key}/{DATA}") == f"db1/{full_key}/{DATA}"
+
+    @pytest.mark.parametrize("location,path,key", [
+        ("a1/", "/db1/a1/cloud.laz", "a1/db1/a1/cloud.laz"),
+        ("p1/model.laz", "/db1/p1/model.laz", "p1/model.laz/db1/p1/model.laz"),
+    ])
+    def test_a_path_in_the_asset_is_never_the_auxiliary_key(self, location, path, key):
+        assert _resolve(location, f"{path}/{DATA}") == f"db1/{key}/{DATA}"
+
+    def test_control_the_object_of_a_single_file_asset_by_its_path(self):
+        assert _resolve("p1/model.laz", f"/model.laz/{DATA}") == f"db1/p1/model.laz/{DATA}"
+
+
+@pytest.mark.unit
 class TestEveryResolvedKeyStaysInTheAsset:
     @pytest.mark.parametrize("location,path,inside", [
         # Another asset's full key is read as a path inside this asset, never as that asset's data
@@ -178,6 +218,14 @@ class TestTheRouteByFullKey:
         assert _call(m, OWN_FULL_KEY, method)["statusCode"] in SERVED
         called = mock_s3.get_object if method == "GET" else mock_s3.head_object
         assert called.call_args.kwargs["Key"] == "db-a/" + OWN_FULL_KEY
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD"])
+    def test_a_subfolder_named_like_the_location_is_served_by_its_path_in_the_asset(self, handler, method):
+        """D1: search results send /{location}x for the file {location}{location}x."""
+        m, mock_s3 = handler
+        assert _call(m, "/" + OWN_FULL_KEY, method)["statusCode"] in SERVED
+        called = mock_s3.get_object if method == "GET" else mock_s3.head_object
+        assert called.call_args.kwargs["Key"] == "db-a/vams/outer/" + OWN_FULL_KEY
 
     @pytest.mark.parametrize("path", NESTED_FULL_KEYS, ids=["another-database", "same-database"])
     @pytest.mark.parametrize("method", ["GET", "HEAD"])

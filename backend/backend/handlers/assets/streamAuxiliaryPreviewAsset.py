@@ -13,7 +13,9 @@ from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import asset_authorization_object
 from common.validators import validate, exceeds_s3_object_key_limit
-from common.assetLocations import LOCATION_BUCKET_ATTRIBUTE, contains, normalize_location, object_key_for
+from common.assetLocations import (
+    LOCATION_BUCKET_ATTRIBUTE, contains, normalize_location, object_key_for, object_key_for_path,
+)
 from common.fileAttribution import nested_locations_of_asset
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 from handlers.authz import CasbinEnforcer
@@ -108,35 +110,41 @@ def resolve_aux_preview_key(database_id: str, location_key: str, file_path: str)
     """The auxiliary-bucket key of a viewer data path ``{file}/preview/...`` in one asset.
 
     A file's viewer data lives at ``{databaseId}/{file key}/preview/...``. The file part names a file the
-    asset's location holds, in one of three forms, read in this order:
+    asset's location holds. A leading ``/`` marks the file's path in the asset, the rule the download route
+    uses (``common.downloadEligibility.resolve_asset_file_key``); a path without one is read in this order:
 
-    - the file's full S3 key (the ``key`` the file list returns, the form the file stream route also
-      accepts): a path that starts with the location key (a folder ``{location}...``; a single file ``K/...``
-      or ``K.previewFile.{ext}...``) is used as given under ``{databaseId}/``;
+    - the file's full S3 key (the ``key`` the file list returns, the form the web viewers send): a path that
+      starts with the location key (a folder ``{location}...``; a single file ``K/...`` or
+      ``K.previewFile.{ext}...``) is used as given under ``{databaseId}/``;
     - the auxiliary key itself, ``{databaseId}/{location}...``, used as given;
-    - the asset-relative path: a folder location joins it under ``{databaseId}/{location}``; a single-file
-      location maps it through ``object_key_for``, so ``/{file name}/preview/...`` reads the object's data and
-      a companion entry's path reads that entry's data.
+    - any other path is the file's path in the asset.
 
-    An asset-relative path that itself starts with the location key (a subfolder named like the location) is
-    read as a full key, as the file stream route reads it. In a single-file location the file part ends at the
-    first ``/preview/`` after the location key (full key) or after a non-empty path (relative path). The
-    result is always under ``{databaseId}/`` plus a key the location holds; a path that names none is refused
-    with a fixed message that echoes no input.
+    A path in the asset is read only as a path (``object_key_for_path``): a folder location joins it under
+    ``{databaseId}/{location}``; a single-file location maps it by the file's name chain, so
+    ``/{file name}/preview/...`` reads the object's data and a companion entry's path reads that entry's data.
+    So ``/{location}x/preview/...`` is the file ``{location}{location}x`` of a subfolder named like the
+    location, never ``{location}x``. In a single-file location the file part ends at the first ``/preview/``
+    after the location key (full key) or after a non-empty path (path in the asset). The result is always
+    under ``{databaseId}/`` plus a key the location holds; a path that names none is refused with a fixed
+    message that echoes no input.
     """
     location = normalize_location(location_key)
     db = (database_id or "").strip("/")
-    stripped = (file_path or "").lstrip("/")
+    raw = file_path or ""
+    in_asset = raw.startswith("/")
+    stripped = raw.lstrip("/")
     if not location:
         raise VAMSGeneralErrorResponse(NOT_PART_OF_ASSET)
-    full_key = _is_full_key(location, stripped)
+    full_key = not in_asset and _is_full_key(location, stripped)
+    auxiliary_key = not in_asset and not full_key and stripped.startswith(
+        f"{db}/{location}" if location.endswith("/") else f"{db}/{location}/")
     if location.endswith("/"):
         if full_key:
             return f"{db}/{stripped}"
-        if stripped.startswith(f"{db}/{location}"):
+        if auxiliary_key:
             return stripped
         return f"{db}/{location}{stripped}"
-    if not full_key and stripped.startswith(f"{db}/{location}/"):
+    if auxiliary_key:
         return stripped
     path = "/" + stripped
     # A full key's file part is at least the location key, which may itself hold a "/preview/" segment
@@ -145,7 +153,8 @@ def resolve_aux_preview_key(database_id: str, location_key: str, file_path: str)
         index = path.find(AUX_PREVIEW_SEGMENT, start)
         if index == -1:
             raise VAMSGeneralErrorResponse(NOT_PART_OF_ASSET)
-        object_key = object_key_for(location, path[:index])
+        resolve = object_key_for if full_key else object_key_for_path
+        object_key = resolve(location, path[:index])
         if object_key is not None and contains(location, object_key):
             return f"{db}/{object_key}{path[index:]}"
         start = index + 1

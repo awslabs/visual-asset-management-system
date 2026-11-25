@@ -3276,7 +3276,7 @@ paths:
                       $ref: '#/components/schemas/id_regex'
                 - name: "proxy+"
                   in: "path"
-                  description: "The viewer data path {file}/preview/{data path}, for example scans/site.laz/preview/PotreeViewer/metadata.json. {file} names a file the asset holds, by its full S3 key (the key the file list returns) or by its path in the asset (relativePath without the leading slash), for folder and single-file assets; a path that starts with the asset's location key is read as the full key. URL-encode each segment and keep the slashes."
+                  description: "The viewer data path {file}/preview/{data path}, for example scans/site.laz/preview/PotreeViewer/metadata.json. {file} names a file the asset holds, for folder and single-file assets, by its path in the asset with its leading slash (the relativePath the file list returns, so the URL has two slashes after stream) or by its full S3 key (the key the file list returns). A path with a leading slash is always read as the path in the asset; a path without one that starts with the asset's location key is read as the full key, and any other path as the path in the asset. URL-encode each segment and keep the slashes."
                   required: true
                   schema:
                     type: "string"
@@ -3371,7 +3371,7 @@ paths:
                       $ref: '#/components/schemas/id_regex'
                 - name: "proxy+"
                   in: "path"
-                  description: "The viewer data path {file}/preview/{data path}, for example scans/site.laz/preview/PotreeViewer/metadata.json. {file} names a file the asset holds, by its full S3 key (the key the file list returns) or by its path in the asset (relativePath without the leading slash), for folder and single-file assets; a path that starts with the asset's location key is read as the full key. URL-encode each segment and keep the slashes."
+                  description: "The viewer data path {file}/preview/{data path}, for example scans/site.laz/preview/PotreeViewer/metadata.json. {file} names a file the asset holds, for folder and single-file assets, by its path in the asset with its leading slash (the relativePath the file list returns, so the URL has two slashes after stream) or by its full S3 key (the key the file list returns). A path with a leading slash is always read as the path in the asset; a path without one that starts with the asset's location key is read as the full key, and any other path as the path in the asset. URL-encode each segment and keep the slashes."
                   required: true
                   schema:
                     type: "string"
