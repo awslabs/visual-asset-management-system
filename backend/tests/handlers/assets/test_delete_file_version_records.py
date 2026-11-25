@@ -16,6 +16,7 @@ built from a file list stores the paths as the caller wrote them, often as the f
 """
 
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import boto3
@@ -28,11 +29,38 @@ os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
 os.environ.setdefault("ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME", "test-asset-file-versions-table")
 
 from backend.backend.handlers.assets import assetFiles as af  # noqa: E402
-# The file route on a versioned moto bucket holding the folder asset db1/a1 at proj/a/ (x.txt and its
-# preview, sub/y.txt, sub/z.txt); the fixtures are imported so this module can drive delete_file.
-from tests.handlers.assets.test_permanent_delete_s3_failures import (  # noqa: E402,F401
-    CLAIMS, aux, files, s3,
-)
+
+BUCKET = "vams-test-assets"
+FOLDER_LOCATION = "proj/a/"
+FOLDER_FILES = ("proj/a/x.txt", "proj/a/x.txt.previewFile.png", "proj/a/sub/y.txt", "proj/a/sub/z.txt")
+CLAIMS = {"tokens": ["tester"], "roles": []}
+
+
+@pytest.fixture
+def files(monkeypatch):
+    """The file route on a versioned moto bucket holding the folder asset db1/a1 at proj/a/ (x.txt and its
+    preview, sub/y.txt, sub/z.txt), with its record helpers observed."""
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket=BUCKET)
+        client.put_bucket_versioning(Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"})
+        for key in (FOLDER_LOCATION,) + FOLDER_FILES:
+            client.put_object(Bucket=BUCKET, Key=key, Body=b"v1")
+        client.put_object(Bucket=BUCKET, Key="proj/a/x.txt", Body=b"v2")
+        asset = {"databaseId": "db1", "assetId": "a1", "bucketId": "b1",
+                 "assetLocation": {"Key": FOLDER_LOCATION}}
+        monkeypatch.setattr(af, "s3_client", client)
+        monkeypatch.setattr(af, "get_asset_with_permissions", lambda *args, **kwargs: asset)
+        monkeypatch.setattr(af, "get_default_bucket_details",
+                            lambda bucket_id: {"bucketId": bucket_id, "bucketName": BUCKET, "baseAssetsPrefix": ""})
+        # moto serves one request at a time reliably; the worker pool is not under test
+        monkeypatch.setattr(af, "MAX_PARALLEL_S3_WORKERS", 1)
+        observed = {name: MagicMock(name=name) for name in ("delete_assetAuxiliary_files", "delete_file_metadata",
+                                                            "delete_file_version_records", "send_subscription_email")}
+        for name, mock in observed.items():
+            monkeypatch.setattr(af, name, mock)
+        yield SimpleNamespace(client=client, **observed)
+
 
 PK = "databaseId:assetId:assetVersionId"
 DELETE_FILE_VERSION_RECORDS = af.delete_file_version_records

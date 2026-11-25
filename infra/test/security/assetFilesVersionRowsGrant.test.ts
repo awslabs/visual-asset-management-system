@@ -16,16 +16,47 @@
  * also be on the role.
  */
 
-import {
-    synthAllTemplates,
-    synthTemplate,
-    lambdaByHandler,
-    statementsOf,
-    actionsOf,
-    SynthResult,
-} from "../support/templateSynth";
+import { synthAllTemplates, synthTemplate, Resource, SynthResult } from "../support/templateSynth";
 
 const HANDLER = "handlers.assets.assetFiles.lambda_handler";
+
+/** The one Lambda whose handler is `handler`; fails when there are none or several. */
+function lambdaByHandler(s: SynthResult, handler: string): Resource {
+    const found = s.where(
+        "AWS::Lambda::Function",
+        (r) => SynthResult.flatten(r.properties.Handler) === handler
+    );
+    expect(found).toHaveLength(1);
+    return found[0];
+}
+
+/** Actions of one IAM statement, normalised to an array of strings. */
+const actionsOf = (statement: any): string[] =>
+    ([] as unknown[]).concat(statement.Action ?? []).map(String);
+
+/**
+ * Every IAM statement attached to the function's execution role: inline `AWS::IAM::Policy`, the
+ * `AWS::IAM::ManagedPolicy` overflow, and role-level policies.
+ */
+function statementsOf(s: SynthResult, fn: Resource): any[] {
+    const role = fn.properties.Role;
+    expect(role?.["Fn::GetAtt"]?.[1]).toBe("Arn");
+    const roleId = role["Fn::GetAtt"][0];
+    const attached = (r: Resource) =>
+        r.stack === fn.stack &&
+        ((r.properties.Roles ?? []) as any[]).some((ref) => ref?.Ref === roleId);
+    const out: any[] = [
+        ...s.where("AWS::IAM::Policy", attached),
+        ...s.where("AWS::IAM::ManagedPolicy", attached),
+    ].flatMap((p) => (p.properties.PolicyDocument?.Statement ?? []) as any[]);
+    const roleResource = s
+        .ofType("AWS::IAM::Role")
+        .find((r) => r.stack === fn.stack && r.logicalId === roleId);
+    for (const p of roleResource?.properties.Policies ?? []) {
+        out.push(...(p.PolicyDocument?.Statement ?? []));
+    }
+    return out;
+}
 
 const onFileVersionsTable = (st: any): boolean =>
     st.Effect === "Allow" &&
