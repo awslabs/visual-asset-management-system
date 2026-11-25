@@ -50,16 +50,20 @@ export function addonCspSources(config: Config.Config): AddonCspSources {
         // inline script, so browsers ignore the keyword wherever it appears.
     }
 
-    // The Miris web SDK streams from *.miris.com over HTTPS and WebSocket. The
-    // Miris API base URL is called only by the add-on's Lambdas, so it is not a
-    // browser source. Two script sources serve SDK internals and can be removed
+    // The Miris web SDK streams from *.miris.com over HTTPS and WebSocket and fetches
+    // asset content from *.miris-content.com. The Miris API base URL is called only
+    // by the add-on's Lambdas, so it is not a browser source. Two script sources serve SDK internals and can be removed
     // once an SDK release drops them: `blob:`, because the SDK imports its engine
     // glue from a blob: URL, and `'unsafe-eval'`, because the SDK's generated
     // bindings create call wrappers with `new Function`. The latter comes from
     // app.webUi.allowUnsafeEvalFeatures, which getConfig() requires with the add-on.
     if (config.app.addons?.useMirisStreaming?.enabled) {
         const mirisHosts = "*.miris.com";
-        sources.connectSrc.push(`https://${mirisHosts}`, `wss://${mirisHosts}`);
+        sources.connectSrc.push(
+            `https://${mirisHosts}`,
+            `wss://${mirisHosts}`,
+            "https://*.miris-content.com"
+        );
         sources.scriptSrc.push("blob:");
     }
 

@@ -62,7 +62,11 @@ test("the add-on adds the Miris hosts to connect-src and blob: to script-src onl
     );
     const added = (name: string) =>
         directive(on, name).filter((source) => !directive(off, name).includes(source));
-    expect(added("connect-src")).toEqual(["https://*.miris.com", "wss://*.miris.com"]);
+    expect(added("connect-src")).toEqual([
+        "https://*.miris.com",
+        "wss://*.miris.com",
+        "https://*.miris-content.com",
+    ]);
     expect(added("script-src")).toEqual(["blob:"]);
     for (const name of ["worker-src", "img-src", "media-src", "frame-src", "font-src"]) {
         expect(directive(on, name)).toEqual(directive(off, name));

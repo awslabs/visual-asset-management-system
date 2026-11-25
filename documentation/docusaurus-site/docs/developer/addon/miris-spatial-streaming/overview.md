@@ -21,7 +21,7 @@ The add-on's pages cover the rest: [Enable the Miris Spatial Streaming Add-on](.
 
 ## Requirements and limitations
 
--   **Commercial partition only.** Configuration validation rejects the add-on in any partition other than `aws`. Every browser that streams, and the add-on's Lambda functions, must reach `*.miris.com`.
+-   **Commercial partition only.** Configuration validation rejects the add-on in any partition other than `aws`. Every browser that streams must reach `*.miris.com` and `*.miris-content.com`, and the add-on's Lambda functions `*.miris.com`.
 -   **`app.webUi.allowUnsafeEvalFeatures` must be `true`.** The Miris web SDK runs in the VAMS web application's own origin and compiles code at runtime. The setting adds `'unsafe-eval'` to `script-src` for the whole web application, not only the viewer. Review this with your security team (see [Security](../../../architecture/security.md)).
 -   **Not with `app.useGlobalVpc.useForAllLambdas`.** Configuration validation rejects the add-on with that setting, which would place the add-on's Lambda functions in the VPC's isolated subnets, where they have no route to the Miris API. See [Network](./security-and-networking.md#network).
 -   **Browser support.** A browser with WebGPU, for example Chrome or Edge 113 or later, or Safari 26 or later, over HTTPS, with WebSocket support.

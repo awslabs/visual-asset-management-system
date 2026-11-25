@@ -533,16 +533,16 @@ when `app.webUi.allowUnsafeEvalFeatures` is enabled.
 
 ### Conditional CSP Sources
 
-| Condition                        | Added Sources                                                                                                                         |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Amazon Cognito enabled           | Cognito IDP and Identity endpoints in `connect-src`                                                                                   |
-| SAML enabled                     | Cognito auth domain in `connect-src`                                                                                                  |
-| External OAuth IDP               | IDP auth provider URL in `connect-src`                                                                                                |
-| `allowUnsafeEvalFeatures = true` | `'unsafe-eval'` in `script-src` (required for certain 3D viewer plugins)                                                              |
-| Amazon Location Service enabled  | Maps endpoint in `connect-src`                                                                                                        |
-| API custom domain enabled        | `https://{domainHost}` of `app.api.apiGatewayRest.customDomain` in `connect-src`, beside the API Gateway URL                          |
-| Physna Sync add-on enabled       | Physna viewer origin in `connect-src` and `frame-src`. The add-on adds no `script-src` source, and in particular no `'unsafe-inline'` |
-| Miris Streaming add-on enabled   | `https://*.miris.com` and `wss://*.miris.com` in `connect-src`, and `blob:` in `script-src` for the Miris web SDK                     |
+| Condition                        | Added Sources                                                                                                                                    |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Amazon Cognito enabled           | Cognito IDP and Identity endpoints in `connect-src`                                                                                              |
+| SAML enabled                     | Cognito auth domain in `connect-src`                                                                                                             |
+| External OAuth IDP               | IDP auth provider URL in `connect-src`                                                                                                           |
+| `allowUnsafeEvalFeatures = true` | `'unsafe-eval'` in `script-src` (required for certain 3D viewer plugins)                                                                         |
+| Amazon Location Service enabled  | Maps endpoint in `connect-src`                                                                                                                   |
+| API custom domain enabled        | `https://{domainHost}` of `app.api.apiGatewayRest.customDomain` in `connect-src`, beside the API Gateway URL                                     |
+| Physna Sync add-on enabled       | Physna viewer origin in `connect-src` and `frame-src`. The add-on adds no `script-src` source, and in particular no `'unsafe-inline'`            |
+| Miris Streaming add-on enabled   | `https://*.miris.com`, `wss://*.miris.com` and `https://*.miris-content.com` in `connect-src`, and `blob:` in `script-src` for the Miris web SDK |
 
 :::note[The Physna add-on does not relax inline-script protection]
 The Physna viewer embeds Physna's hosted viewer URL directly as the `src` of an `<iframe>`, so the framed

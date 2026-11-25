@@ -26,7 +26,7 @@ No viewer key is configured or stored. Each key is minted for one Miris asset an
 
 ## Web origin and Content Security Policy
 
-The Miris web SDK runs in the VAMS web application's own origin, with the same access to the page as VAMS code. The add-on requires `app.webUi.allowUnsafeEvalFeatures`, which adds `'unsafe-eval'` to `script-src` for the whole web application, not only the Miris viewer: the SDK's generated WebAssembly bindings compile code with `new Function`. Enabling the add-on also adds `blob:` to `script-src`, from which the SDK loads its engine, and `https://*.miris.com` and `wss://*.miris.com` to `connect-src` (see [Conditional CSP Sources](../../../architecture/security.md#conditional-csp-sources)).
+The Miris web SDK runs in the VAMS web application's own origin, with the same access to the page as VAMS code. The add-on requires `app.webUi.allowUnsafeEvalFeatures`, which adds `'unsafe-eval'` to `script-src` for the whole web application, not only the Miris viewer: the SDK's generated WebAssembly bindings compile code with `new Function`. Enabling the add-on also adds `blob:` to `script-src`, from which the SDK loads its engine, and `https://*.miris.com`, `wss://*.miris.com` and `https://*.miris-content.com` (asset content) to `connect-src` (see [Conditional CSP Sources](../../../architecture/security.md#conditional-csp-sources)).
 
 ## Network
 
