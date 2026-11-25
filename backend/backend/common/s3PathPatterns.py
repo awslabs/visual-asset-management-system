@@ -23,6 +23,7 @@ The frontend mirrors the preview-file values in
 ``previewFileFormats``); keep the two in sync when changing them.
 """
 
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, FrozenSet, Iterable, Optional, Tuple
 
@@ -76,6 +77,71 @@ TEMPORARY_UPLOAD_PREFIX = "temp-uploads/"
 PREVIEW_PREFIX = "previews/"
 PIPELINES_PREFIX = "pipelines/"
 AUXILIARY_PREVIEW_PREFIX = "preview/"
+
+# ---------------------------------------------------------------------------
+# Upload staging keys.
+#
+# An upload's files are staged under TEMPORARY_UPLOAD_PREFIX and copied to their
+# final keys when the upload is completed. Each upload stages in its own folder,
+#
+#   ``{baseAssetsPrefix}temp-uploads/{upload tag}/{final key}``
+#
+# so concurrent uploads of one file path never share a staged object, and a
+# completion that refuses its staged object deletes only its own upload's file.
+# The upload tag is UPLOAD_STAGING_TAG_LENGTH hex characters of the SHA-256 of
+# the upload id: a fixed length, and shorter than the upload id itself, because
+# the whole staging key must fit the 1,024-byte S3 key limit.
+# The staging key is the final key plus the bucket's prefix and
+# UPLOAD_STAGING_KEY_OVERHEAD_BYTES (the temp-uploads prefix, the tag and its
+# slash: 26 bytes), so an uploaded file's final key can be at most
+# max_uploaded_file_key_bytes(baseAssetsPrefix) bytes: 998 at the bucket root.
+# Upload initialize refuses a longer key with that number. The tag only has to
+# tell apart uploads of the same path that are completed at the same time; with
+# 48 bits, a clash between 100 such uploads is about a 1 in 57 billion chance.
+# Every staging key is built here; do not assemble one at a call site.
+# ---------------------------------------------------------------------------
+UPLOAD_STAGING_TAG_LENGTH = 12
+
+# Bytes a staging key adds to the final key besides the bucket's prefix.
+UPLOAD_STAGING_KEY_OVERHEAD_BYTES = len(TEMPORARY_UPLOAD_PREFIX.encode("utf-8")) + UPLOAD_STAGING_TAG_LENGTH + 1
+
+
+def upload_staging_tag(upload_id: str) -> str:
+    """The folder name an upload's files are staged under: the first UPLOAD_STAGING_TAG_LENGTH hex
+    characters of the SHA-256 of ``upload_id``."""
+    return hashlib.sha256(upload_id.encode("utf-8")).hexdigest()[:UPLOAD_STAGING_TAG_LENGTH]
+
+
+def staged_upload_key(base_assets_prefix: str, upload_id: str, final_s3_key: str) -> str:
+    """The key upload ``upload_id`` stages the file bound for ``final_s3_key`` under, in the bucket
+    whose normalized ``baseAssetsPrefix`` is ``base_assets_prefix``."""
+    return f"{base_assets_prefix}{TEMPORARY_UPLOAD_PREFIX}{upload_staging_tag(upload_id)}/{final_s3_key}"
+
+
+def max_uploaded_file_key_bytes(base_assets_prefix: str) -> int:
+    """The longest final key, in bytes of UTF-8, of a file uploaded into the bucket area whose
+    normalized ``baseAssetsPrefix`` is ``base_assets_prefix``: its staging key (staged_upload_key)
+    must fit the S3 object key limit, so that limit less the prefix and
+    UPLOAD_STAGING_KEY_OVERHEAD_BYTES. 998 at the bucket root."""
+    # Imported here: validators imports this module at load.
+    from common.validators import MAX_S3_OBJECT_KEY_BYTES
+
+    return (MAX_S3_OBJECT_KEY_BYTES - len((base_assets_prefix or "").encode("utf-8"))
+            - UPLOAD_STAGING_KEY_OVERHEAD_BYTES)
+
+
+def legacy_staged_upload_key(base_assets_prefix: str, final_s3_key: str) -> str:
+    """LEGACY STAGING KEY (#1928): the per-path key every upload staged under before per-upload
+    staging. Read only to complete or abort an upload initialized before the upgrade; nothing is
+    created under it any more.
+
+    Remove it, and the fallbacks in ``handlers/assets/uploadFile.py`` that use it, once no supported
+    upgrade starts from a release that staged per path (2.6.7 and earlier). Until then an upload
+    initialized before the upgrade can still be completed through it for as long as its upload
+    record is completable: 7 days after initialization (UPLOAD_EXPIRATION_DAYS in uploadFile.py,
+    the same age the VAMS asset bucket aborts incomplete multipart uploads at)."""
+    return f"{base_assets_prefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+
 
 # ---------------------------------------------------------------------------
 # Auxiliary-bucket top-level prefixes.
