@@ -23,7 +23,7 @@ from ..utils.exceptions import (
     SyncError, SyncPlanError, SyncPushError, SyncPullError,
     SyncConfirmationRequiredError, InvalidSyncIgnoreFileError,
     InvalidFileError, FileTooLargeError, UploadSequenceError, FileUploadError,
-    AssetNotFoundError, DatabaseNotFoundError, AssetVersionError, APIError
+    AssetNotFoundError, DatabaseNotFoundError, AssetVersionError, APIError, InvalidAssetDataError
 )
 from ..utils.file_processor import (
     FileInfo, create_upload_sequences, validate_file_for_upload,
@@ -435,7 +435,9 @@ def push(ctx: click.Context, local_directory, database_id, asset_id, asset_locat
                             'isPrefix': False
                         })
                     delete_results['succeeded'].append(entry['relativeKey'])
-                except (APIError, AssetNotFoundError) as e:
+                # InvalidAssetDataError: the API's 400 for a delete it refused (Amazon S3 kept a
+                # version) or for a file that is already gone. One file's refusal must not stop the rest.
+                except (APIError, AssetNotFoundError, InvalidAssetDataError) as e:
                     delete_results['failed'].append({
                         'relativeKey': entry['relativeKey'],
                         'error': str(e)

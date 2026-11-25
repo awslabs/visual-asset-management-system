@@ -67,7 +67,6 @@ BUCKET_DETAILS_HELPERS = [
     ("handlers/osVectorSearch/vectorIndexer.py", "_get_bucket_record"),
     ("handlers/addon/garnetFramework/garnetDataIndexFile.py", "get_bucket_details"),
     ("handlers/addon/physna/physnaCommon.py", "get_bucket_details"),
-    ("handlers/addon/physna/physnaCommon.py", "get_bucket_details_by_name"),
     ("handlers/addon/miris/getAssetStatus.py", "get_asset_bucket_details"),
 ]
 

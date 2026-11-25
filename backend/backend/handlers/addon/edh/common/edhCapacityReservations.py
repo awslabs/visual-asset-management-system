@@ -20,8 +20,9 @@ for the caller to decide on: a launch refuses, a listing lists none or reports `
 A reservation that is ``expired``, ``cancelled``, ``failed`` or ``notFound`` has ended (``has_ended``). EDH picks
 the subnet of a launch into a reservation among its private subnets in the reservation's Availability Zone, so
 the live view also says whether EDH has one there (``edhSubnetAvailable``): the subnets are read from EDH's
-``/edh/<cluster id>/configuration/PrivateSubnets`` parameter and mapped to their zones with ``DescribeSubnets``,
-at most once every five minutes per container; a read that fails leaves it unknown (None) for that window.
+``/edh/<cluster id>/configuration/PrivateSubnets`` parameter through ``common.ssmParameters`` (bounded, backing off
+after a throttled read, uncached there) and mapped to their zones with ``DescribeSubnets``, at most once every five
+minutes per container; a read that fails leaves it unknown (None) for that window.
 """
 
 import os
@@ -37,6 +38,12 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from common.addonResourceNames import AddonResourceKeys
 from common.resourceNames import get_table_name
+from common.ssmParameters import (
+    ParameterNotFoundError,
+    ParameterReadError,
+    ParameterUnavailableError,
+    read_parameter_value,
+)
 from customLogging.logger import safeLogger
 
 from .edhSessionState import EC2_RESERVATION_STATE_ACTIVE, reservation_has_free_slot, reservation_is_full
@@ -121,7 +128,6 @@ class RegistrationNotFound(Exception):
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
 ec2 = boto3.client("ec2", config=retry_config)
-ssm = boto3.client("ssm", config=retry_config)
 
 try:
     _session_table_name = get_table_name(AddonResourceKeys.EDH_SESSION_STORAGE_TABLE)
@@ -366,13 +372,14 @@ def _read_subnet_zones() -> Optional[FrozenSet[str]]:
     could not be read, or the parameter names no subnet, which is not taken to mean EDH has none."""
     name = EDH_PRIVATE_SUBNETS_PARAMETER.format(cluster_id=_edh_cluster_id)
     try:
-        value = ((ssm.get_parameter(Name=name).get("Parameter") or {}).get("Value"))
+        value = read_parameter_value(name)
         subnet_ids = parse_subnet_ids(value)
         if not subnet_ids:
             logger.warning("EDH's private subnets parameter names no subnet; the Availability Zone check is skipped")
             return None
         return _subnet_zone_set(subnet_ids)
-    except (ClientError, BotoCoreError) as err:
+    except (ClientError, BotoCoreError, ParameterNotFoundError, ParameterUnavailableError, ParameterReadError,
+            ValueError) as err:
         logger.warning(f"EDH's private subnets not read ({type(err).__name__}); the Availability Zone check is "
                        f"skipped")
         return None

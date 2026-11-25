@@ -2978,11 +2978,25 @@ def _scrub_pipeline_detail(prow, pipeline_def, rendered_config="", rendered_conf
     # unconditionally above, so nothing depended on this field's absence to convey it.
     config_s3_key = snapshot.get('inputConfigurationFileS3Key', '') or ''
     if config_s3_key:
-        detail["renderedConfigLocation"] = {
-            "bucket": prow.get('S3AssetPipelineBucket', '') or '',
-            "key": config_s3_key,
-        }
+        detail["renderedConfigLocation"] = rendered_config_location(prow, config_s3_key)
     return detail
+
+
+def rendered_config_location(prow, config_s3_key):
+    """The renderedConfigLocation of one step: `bucket` and `key` (the bucket name and the full key, as
+    before), plus, for a run recorded with its run bucket's registration, `bucketId` (the registration,
+    its identity inside VAMS) and `relativeKey` (the key without the registration's prefix). A run
+    recorded before the registration was captured gets the two fields as before and no others."""
+    location = {
+        "bucket": prow.get('S3AssetPipelineBucket', '') or '',
+        "key": config_s3_key,
+    }
+    bucket_id = prow.get('S3AssetPipelineBucketId', '') or ''
+    if bucket_id:
+        prefix = prow.get('S3AssetPipelineBucketBasePrefix', '') or ''
+        location["bucketId"] = bucket_id
+        location["relativeKey"] = config_s3_key[len(prefix):] if config_s3_key.startswith(prefix) else config_s3_key
+    return location
 
 
 def _scrub_input_file(row):

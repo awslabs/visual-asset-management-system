@@ -64,12 +64,20 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from common.addonResourceNames import AddonResourceKeys
 from common.resourceNames import get_table_name
+from common.ssmParameters import (
+    ParameterNotFoundError,
+    ParameterReadError,
+    ParameterUnavailableError,
+    read_parameter_value,
+)
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler
 from .common.edhRootKeySyncTrigger import ROOT_KEY_SYNC_MIN_INTERVAL_SECONDS, ROOT_KEY_SYNC_TRIGGER
 
 # Bounded clients: one call ends within (connect + read) x attempts = 26 s, so a call started with
-# RUN_RESERVE_SECONDS left still leaves the run time to log its outcome before the function's timeout.
+# RUN_RESERVE_SECONDS left still leaves the run time to log its outcome before the function's timeout. The
+# Systems Manager client serves the document checks and Run Command; the controller's instance id parameter is
+# read through common.ssmParameters, which ends a read within about 7 s.
 CLIENT_CONNECT_TIMEOUT_SECONDS = 3
 CLIENT_READ_TIMEOUT_SECONDS = 10
 CLIENT_TOTAL_ATTEMPTS = 2
@@ -282,9 +290,11 @@ def _acquire_rate_limit(manual: bool, now: int) -> dict:
 
 
 def _controller_instance_id() -> str:
+    """EDH's controller instance id, read now (a replaced controller is found on the next run) through
+    common.ssmParameters; any refusal ends the run controllerNotFound."""
     try:
-        value = _ssm_client().get_parameter(Name=CONTROLLER_INSTANCE_ID_PARAMETER)["Parameter"]["Value"]
-    except (ClientError, BotoCoreError, KeyError, TypeError) as exc:
+        value = read_parameter_value(CONTROLLER_INSTANCE_ID_PARAMETER)
+    except (ParameterNotFoundError, ParameterUnavailableError, ParameterReadError, ValueError) as exc:
         logger.warning("EDH controller instance id could not be read", extra={"error": _error_code(exc)})
         raise _SyncStop(OUTCOME_CONTROLLER_NOT_FOUND)
     instance_id = str(value).strip()

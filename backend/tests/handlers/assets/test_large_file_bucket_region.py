@@ -74,8 +74,8 @@ class TestQueuedMessageNamesTheRegions:
 
     def test_a_workflow_output_names_the_run_bucket_region_separately(self):
         file_info, lookup = _queue_external_upload(
-            _external_request(sourceBucket="run-bucket"), uploadFile.LARGE_FILE_THRESHOLD_BYTES + 1,
-            REMOTE_BUCKET)
+            _external_request(sourceBucket="run-bucket", workflowExecutionId="0123456789abcdef0123456789abcdef"),
+            uploadFile.LARGE_FILE_THRESHOLD_BYTES + 1, REMOTE_BUCKET)
         assert file_info["sourceBucketName"] == "run-bucket"
         assert file_info["sourceBucketRegion"] == "us-west-2"
         assert file_info["bucketRegion"] == "us-east-1"

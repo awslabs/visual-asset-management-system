@@ -648,6 +648,8 @@ Comments and subscriptions are keyed by database and asset id, because the same 
 | AppFeatureEnabledStorageTable | `featureName` | --                                                   |
 | S3AssetBucketsStorageTable    | `bucketId`    | `bucketName:baseAssetsPrefix` (GSI: `bucketNameGSI`) |
 
+Each row of `S3AssetBucketsStorageTable` is a bucket registration: one entry of the asset bucket configuration, identified inside VAMS by its `bucketId`. Every deployment rewrites the table from the configuration. A registration is matched on its bucket name and its `baseAssetsPrefix` with one trailing `/`, so it keeps its `bucketId` when the prefix is written with or without the slash. A registration removed from the configuration keeps its row with `retired` set to `true` and `isDefault` set to `false`: assets and databases that name its `bucketId` still resolve, but it answers no lookup by bucket name, is never the default bucket and is not offered for a new database. Two rows that an earlier release wrote for one registration are both kept; the one the others name in `duplicateOfBucketId` answers lookups by bucket name and prefix.
+
 An enabled add-on can add tables of its own; the add-on's page describes their schemas (see [Add-ons Overview](../developer/addons-overview.md)).
 
 ## Amazon S3 Bucket Organization
@@ -667,7 +669,7 @@ Where:
 -   `relative_path` is zero or more subdirectory levels within the asset
 -   `filename` is the actual file name
 
-An asset created on an existing bucket folder (`bucketExistingKey`, see [Assets](../concepts/assets.md)) uses that folder as its root instead of `{baseAssetsPrefix}{assetId}/`, so its keys need not contain the asset ID. A file's relative path is the part of its key after the asset's root.
+An asset created on an existing bucket folder (`bucketExistingKey`, see [Assets](../concepts/assets.md)) uses that folder as its root instead of `{baseAssetsPrefix}{assetId}/`, so its keys need not contain the asset ID. A file's relative path is the part of its key after the asset's root. An asset created from a single object key (a `bucketExistingKey` with no trailing `/`) holds that object at `/{file name}`, its companion folder `{key}/` and its previews; see [Files](../api/files.md#list-files).
 
 #### File Output Conventions
 

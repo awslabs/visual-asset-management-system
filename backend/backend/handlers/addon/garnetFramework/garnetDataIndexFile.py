@@ -49,6 +49,8 @@ from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_al
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
 from common.assetLocations import normalize_base_prefix, object_key_for
 from common.fileAttribution import AMBIGUOUS, attribute_object, binding_of, stored_location
+from common.bucketRegistrations import REGISTRATION_DUPLICATE_OF_FIELD
+from common.indexerEvents import carry_bucket_id_stamp, stamped_bucket_id
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 from models.common import VAMSGeneralErrorResponse
 
@@ -218,12 +220,16 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
             logger.error(f"Bucket name missing for bucketId: {bucket_id}")
             return None
 
-        return {
+        details = {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
             'baseAssetsPrefix': base_assets_prefix,
             **bucket_region_fields(bucket)
         }
+        # The registration this row duplicates, so the attribution check treats both as one.
+        if bucket.get(REGISTRATION_DUPLICATE_OF_FIELD):
+            details[REGISTRATION_DUPLICATE_OF_FIELD] = bucket[REGISTRATION_DUPLICATE_OF_FIELD]
+        return details
     except Exception as e:
         logger.exception(f"Error getting bucket details for {bucket_id}: {e}")
         return None
@@ -757,6 +763,7 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
             asset_table_name=asset_storage_table_name,
             get_row=_asset_row_for_attribution,
             get_registration=lambda bucket_id: get_bucket_details(bucket_id),
+            registration_bucket_id=stamped_bucket_id(event_record),
         )
         if not attribution.attributed:
             reason = 'claimed by several assets' if attribution.status == AMBIGUOUS else 'in no asset location'
@@ -990,6 +997,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                         if asset_bucket_name:
                                             inner_record['ASSET_BUCKET_NAME'] = asset_bucket_name
                                             inner_record['ASSET_BUCKET_PREFIX'] = asset_bucket_prefix
+                                        carry_bucket_id_stamp(inner_record, sns_message, event)
                                         success = handle_s3_notification(inner_record)
                                         if success:
                                             successful_records += 1
@@ -1018,6 +1026,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                                             if nested_bucket_name:
                                                                 s3_record['ASSET_BUCKET_NAME'] = nested_bucket_name
                                                                 s3_record['ASSET_BUCKET_PREFIX'] = nested_bucket_prefix
+                                                            carry_bucket_id_stamp(s3_record, inner_sns_message, sns_message, event)
                                                             
                                                             success = handle_s3_notification(s3_record)
                                                             if success:

@@ -73,7 +73,8 @@ infra/
                                          # cross-Region asset bucket Region when addCrossRegionS3Endpoints)
       storage/
         storageBuilder-nestedStack.ts    # ~2700 lines: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch
-        customResources/populateS3AssetBucketsTable.ts
+        customResources/populateS3AssetBucketsTable.ts  # registration rows: matched on name + prefix with one
+                                         # trailing '/', never deleted (retired / duplicateOfBucketId; backend/CLAUDE.md)
       resourceNames/
         resourceNamesBuilder-nestedStack.ts  # 78 SSM String parameters, one per registry descriptor
         resourceNameRegistry.ts              # ResourceNameDescriptor cross-stack registry

@@ -86,9 +86,11 @@ import backend.backend.handlers  # noqa: E402,F401
 def _fresh_edh_module_state(monkeypatch):
     """The module-level singletons and caches the EDH handlers lean on start empty and are emptied
     again after each test: the client's Secrets Manager handle, HTTP pool, root key and CA bundle, the SSM
-    resource-name cache and back-off state (restored after the test), the capacity-reservation
-    module's cache of EDH's private-subnet zones, whose SSM client is a stand-in holding no parameter
-    (zones unknown) unless a test installs its own, and the workstation
+    resource-name cache and back-off state (restored after the test), the state of common.ssmParameters, the
+    lookup every EDH Parameter Store read goes through (its cache, missing-parameter record and back-off window,
+    restored after the test), whose client is a stand-in holding no parameter (EDH's private-subnet zones unknown,
+    a parent image parameter not found) unless a test installs its own and whose clock is a FakeClock, the
+    capacity-reservation module's cache of EDH's private-subnet zones, and the workstation
     service's cache of EC2's instance-type facts. Imported lazily so
     the environment above is in place first, and by the package paths every EDH test and support module
     patches."""
@@ -97,9 +99,8 @@ def _fresh_edh_module_state(monkeypatch):
     # Only once a test module has imported it: importing it here would resolve its ``common`` imports before the
     # handler package has set them up for a test run that collects nothing else of the add-on.
     reservations = sys.modules.get("backend.backend.handlers.addon.edh.common.edhCapacityReservations")
-    if reservations is not None:
-        from backend.tests.handlers.addon.edh.edhReservationTestSupport import FakeSsm
-        monkeypatch.setattr(reservations, "ssm", FakeSsm())
+    from backend.tests.handlers.addon.edh.edhParameterStoreTestSupport import reset_shared_lookup
+    reset_shared_lookup(monkeypatch)
 
     root_key_sync = sys.modules.get("backend.backend.handlers.addon.edh.common.edhRootKeySyncTrigger")
     workstation_service = sys.modules.get("backend.backend.handlers.addon.edh.edhWorkstationService")

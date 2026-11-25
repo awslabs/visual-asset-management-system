@@ -11,7 +11,9 @@ yields only registry rows. EC2's facts are read live, one batched call for every
 per id when EC2 refuses the batch for an id it does not hold.
 """
 
+import importlib.util
 from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 from boto3.dynamodb.conditions import Key
@@ -21,10 +23,14 @@ import backend.backend.handlers.addon.edh.edhAdminService as admin_service
 import backend.backend.handlers.addon.edh.edhSessionReconciler as reconciler
 from backend.backend.handlers.addon.edh.common import edhCapacityReservations as reservations
 from backend.backend.handlers.addon.edh.common.edhLeasePolicy import LEASE_SETTINGS_KEY
+from backend.tests.handlers.addon.edh.edhParameterStoreTestSupport import (
+    lookup_clock, reads_through_the_shared_lookup, set_lookup_state, shared_lookup,
+)
 from backend.tests.handlers.addon.edh.edhReservationTestSupport import (
     CR_FREE, CR_FULL, CR_OTHER, END_DATE, NOT_FOUND_CODE, FakeEc2, client_error, ec2_reservation,
     install_reservation_fakes, registry_item,
 )
+from backend.tests.ssmParametersStub import throttled
 
 SESSION_ROW = {
     "bootstrapId": "3f2a9c1e-4b7d-4e0a-9d2b-6c1f8a7e5b30", "sessionId": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
@@ -443,3 +449,64 @@ class TestAReservationThatHasEnded:
 
     def test_no_facts_have_not_ended(self):
         assert reservations.has_ended(None) is False
+
+
+@pytest.mark.unit
+class TestEdhsPrivateSubnetsReadThroughTheSharedLookup:
+    """EDH's PrivateSubnets parameter is read through common.ssmParameters: bounded under throttling, backing off
+    with the rest of the container, and answering unknown (None) on any refusal, as a failed read did before."""
+
+    def test_the_read_goes_through_the_shared_lookup_and_the_module_builds_no_ssm_client(self, monkeypatch):
+        assert reads_through_the_shared_lookup(reservations), "the module reads Parameter Store on its own"
+        assert not hasattr(reservations, "ssm"), "the module still holds its own SSM client"
+        with mock_aws():
+            fakes = install_reservation_fakes(monkeypatch, subnets=ZONES)
+            assert reservations.subnet_zones() == frozenset({"us-east-1a", "us-east-1b"})
+        assert fakes.ssm.names == ["/edh/edh-test/configuration/PrivateSubnets"]
+
+    def test_a_throttled_read_ends_within_the_budget_and_is_kept_for_the_window(self, monkeypatch):
+        log = MagicMock()
+        monkeypatch.setattr(reservations, "logger", log)
+        clock = lookup_clock()
+        started = clock.now
+        with mock_aws():
+            fakes = install_reservation_fakes(monkeypatch, subnets=ZONES, ssm_failure=throttled())
+            assert reservations.subnet_zones() is None
+            elapsed = clock.now - started
+            assert reservations.subnet_zones() is None
+        helper = shared_lookup()
+        assert elapsed <= helper.PARAMETER_READ_BUDGET_SECONDS + helper.READ_RETRY_MAX_SLEEP_SECONDS
+        assert fakes.ssm.names, "control: the throttled parameter was asked for"
+        assert fakes.ec2.subnet_calls == []
+        warnings = [call.args[0] for call in log.warning.call_args_list]
+        assert any("EDH's private subnets not read (ParameterUnavailableError)" in text for text in warnings)
+
+    def test_inside_the_containers_back_off_window_nothing_is_read(self, monkeypatch):
+        set_lookup_state(monkeypatch, _failed_reads=1, _retry_after=lookup_clock().now + 10)
+        with mock_aws():
+            fakes = install_reservation_fakes(monkeypatch, subnets=ZONES)
+            assert reservations.subnet_zones() is None
+        assert fakes.ssm.names == []
+        assert fakes.ec2.subnet_calls == []
+
+    def test_a_read_after_the_cache_window_reads_again_and_serves_no_stale_zones(self, monkeypatch):
+        clock = [1000.0]
+        monkeypatch.setattr(reservations, "_monotonic", lambda: clock[0])
+        with mock_aws():
+            fakes = install_reservation_fakes(monkeypatch, subnets=ZONES)
+            assert reservations.subnet_zones() == frozenset({"us-east-1a", "us-east-1b"})
+            fakes.ssm.failure = client_error("AccessDeniedException", "GetParameter")
+            clock[0] += reservations.SUBNET_ZONES_CACHE_SECONDS
+            assert reservations.subnet_zones() is None
+        assert len(fakes.ssm.names) == 2
+
+    def test_loading_the_module_builds_no_ssm_client(self):
+        spec = importlib.util.spec_from_file_location(
+            "backend.backend.handlers.addon.edh.common.edhCapacityReservations_under_test", reservations.__file__)
+        module = importlib.util.module_from_spec(spec)
+        factory = MagicMock(return_value=MagicMock())
+        with patch("boto3.client", factory), patch("boto3.resource", MagicMock()):
+            spec.loader.exec_module(module)
+        services = [call.args[0] for call in factory.call_args_list]
+        assert "ec2" in services, "control: the module's clients were recorded"
+        assert "ssm" not in services

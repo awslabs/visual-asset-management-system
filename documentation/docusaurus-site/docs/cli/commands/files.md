@@ -265,20 +265,20 @@ vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/file.gltf"
 
 ## file archive
 
-Archive a file or all files under a prefix (soft delete, recoverable).
+Archive a file or every file in a folder (soft delete, recoverable).
 
 ```bash
 vamscli file archive [OPTIONS]
 ```
 
-| Option             | Type | Required | Description                                  |
-| ------------------ | ---- | -------- | -------------------------------------------- |
-| `-d`, `--database` | TEXT | Yes      | Database ID                                  |
-| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                     |
-| `-p`, `--path`     | TEXT | Yes      | File path to archive                         |
-| `--prefix`         | FLAG | No       | Archive all files under the path as a prefix |
-| `--json-input`     | TEXT | No       | JSON parameters as a string or `@file` path  |
-| `--json-output`    | FLAG | No       | Output raw JSON response                     |
+| Option             | Type | Required | Description                                             |
+| ------------------ | ---- | -------- | ------------------------------------------------------- |
+| `-d`, `--database` | TEXT | Yes      | Database ID                                             |
+| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                                |
+| `-p`, `--path`     | TEXT | Yes      | File path to archive                                    |
+| `--prefix`         | FLAG | No       | Treat the path as a folder and archive every file in it |
+| `--json-input`     | TEXT | No       | JSON parameters as a string or `@file` path             |
+| `--json-output`    | FLAG | No       | Output raw JSON response                                |
 
 ```bash
 vamscli file archive -d my-db -a my-asset -p "/file.gltf"
@@ -311,21 +311,21 @@ vamscli file unarchive -d my-db -a my-asset -p "/file.gltf"
 
 ## file delete
 
-Permanently delete a file or all files under a prefix.
+Permanently delete a file or every file in a folder.
 
 ```bash
 vamscli file delete [OPTIONS]
 ```
 
-| Option             | Type | Required | Description                                 |
-| ------------------ | ---- | -------- | ------------------------------------------- |
-| `-d`, `--database` | TEXT | Yes      | Database ID                                 |
-| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                    |
-| `-p`, `--path`     | TEXT | Yes      | File path to delete                         |
-| `--prefix`         | FLAG | No       | Delete all files under the path as a prefix |
-| `--confirm`        | FLAG | Yes      | Confirm permanent deletion                  |
-| `--json-input`     | TEXT | No       | JSON parameters as a string or `@file` path |
-| `--json-output`    | FLAG | No       | Output raw JSON response                    |
+| Option             | Type | Required | Description                                            |
+| ------------------ | ---- | -------- | ------------------------------------------------------ |
+| `-d`, `--database` | TEXT | Yes      | Database ID                                            |
+| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                               |
+| `-p`, `--path`     | TEXT | Yes      | File path to delete                                    |
+| `--prefix`         | FLAG | No       | Treat the path as a folder and delete every file in it |
+| `--confirm`        | FLAG | Yes      | Confirm permanent deletion                             |
+| `--json-input`     | TEXT | No       | JSON parameters as a string or `@file` path            |
+| `--json-output`    | FLAG | No       | Output raw JSON response                               |
 
 ```bash
 vamscli file delete -d my-db -a my-asset -p "/file.gltf" --confirm
@@ -335,6 +335,15 @@ vamscli file delete -d my-db -a my-asset -p "/folder/" --prefix --confirm
 :::danger[Permanent Deletion]
 Requires the `--confirm` flag. Without it, the command exits with an error (a JSON error object in `--json-output` mode). This action cannot be undone.
 :::
+
+When the API refuses the delete with `400`, the command prints `✗ File Deletion Error:` followed by the API's message, and exits `1`. With `--json-output` it prints one JSON object whose `error_type` is `InvalidAssetDataError`. The API answers `400` when Amazon S3 does not delete every version of the file or of a file under the prefix, for example because a bucket policy denies the delete or the objects are locked; the files Amazon S3 kept keep their records, and the delete can be run again once the cause is removed. It also answers `400` for a file that is already gone:
+
+```json
+{
+    "error": "Invalid delete operation: VAMS General Error: File not found.",
+    "error_type": "InvalidAssetDataError"
+}
+```
 
 ---
 

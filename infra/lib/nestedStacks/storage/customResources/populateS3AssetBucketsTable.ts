@@ -21,13 +21,17 @@ import { suppressCdkNagLambda } from "../../../helper/security";
  * @param id The construct ID
  * @param table The DynamoDB table to populate
  * @param newBucket Optional reference to a newly created bucket to add as a dependency
+ * @param assetTable Optional asset table and its bucketId index. When two rows exist for one
+ *   registration, the Lambda queries the index (one item per row) to keep the row assets reference
+ *   as the one that answers lookups. Without it the Lambda keeps every row and logs the choice.
  * @returns The custom resource
  */
 export function createPopulateS3AssetBucketsTableCustomResource(
     scope: Construct,
     id: string,
     table: dynamodb.Table,
-    newBucket?: s3.Bucket
+    newBucket?: s3.Bucket,
+    assetTable?: { table: dynamodb.Table; bucketIdIndexName: string }
 ): cdk.CustomResource {
     // Create the Lambda function for the custom resource
     const populateS3AssetBucketsTableLambda = new lambda.Function(scope, `${id}Lambda`, {
@@ -39,6 +43,7 @@ import json
 import boto3
 import uuid
 import logging
+from datetime import datetime, timezone
 from botocore.exceptions import ClientError
 
 # Configure logging
@@ -48,6 +53,17 @@ logger.setLevel(logging.INFO)
 # Initialize clients
 dynamodb = boto3.resource('dynamodb')
 s3_clients_by_region = {}
+
+SORT_KEY = 'bucketName:baseAssetsPrefix'
+# A registration that left the configuration. Its row is kept, never deleted, so the assets and
+# databases that name its bucketId still resolve; lookups by bucket name and prefix and the default
+# bucket choice leave it out (backend common/bucketRegistrations.py).
+RETIRED_FIELD = 'retired'
+RETIRED_AT_FIELD = 'retiredAt'
+# A second row for one bucket name and prefix, written by an earlier release when only the prefix's
+# spelling changed. It names the row that answers lookups by name and prefix (the primary).
+DUPLICATE_OF_FIELD = 'duplicateOfBucketId'
+REPORT_FIELD_MAX_CHARS = 1000
 
 def s3_client_for_region(region):
     """An S3 client for the bucket's Region. A bucket in another Region answers GetBucketVersioning
@@ -62,19 +78,104 @@ def generate_guid():
     """Generate a UUID (GUID)"""
     return str(uuid.uuid4())
 
+def canonical_prefix(prefix):
+    """A registration prefix with exactly one trailing '/', and '/' for the bucket root. 'assets',
+    'assets/' and 'assets//' are one registration; a leading '/' is kept as written."""
+    trimmed = (prefix or '').rstrip('/')
+    return trimmed + '/' if trimmed else '/'
+
+def registration_pair(item):
+    """(bucket name, canonical prefix) of a stored row, read from its attributes, or from its sort key
+    for a row that lacks them. A bucket name has no ':', so the sort key splits at the first one."""
+    bucket_name = item.get('bucketName')
+    prefix = item.get('baseAssetsPrefix')
+    if bucket_name is None or prefix is None:
+        stored_name, _, stored_prefix = str(item.get(SORT_KEY) or '').partition(':')
+        bucket_name = bucket_name if bucket_name is not None else stored_name
+        prefix = prefix if prefix is not None else stored_prefix
+    return bucket_name, canonical_prefix(prefix)
+
 def get_existing_entries(table_name):
-    """Scan the table for existing entries"""
+    """Every stored row, grouped by registration pair (bucket name, canonical prefix). The scan is
+    paged to the end, so a table larger than one page does not re-mint the ids of later rows."""
     table = dynamodb.Table(table_name)
-    response = table.scan()
-    
-    existing_entries = {}
-    if 'Items' in response and response['Items']:
-        for item in response['Items']:
-            sort_key = item.get('bucketName:baseAssetsPrefix')
-            if sort_key:
-                existing_entries[sort_key] = item.get('bucketId')
-    
-    return existing_entries
+    groups = {}
+    scan_kwargs = {}
+    while True:
+        response = table.scan(**scan_kwargs)
+        for item in response.get('Items') or []:
+            if not item.get('bucketId'):
+                continue
+            groups.setdefault(registration_pair(item), []).append(item)
+        if 'LastEvaluatedKey' not in response:
+            break
+        scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    return groups
+
+def referenced_bucket_ids(bucket_ids, asset_table_name, asset_bucket_index):
+    """The ids among bucket_ids that at least one asset row names: one Query of one item per id on
+    the asset table's bucketId index, never a scan. None when the answer cannot be read."""
+    if not asset_table_name or not asset_bucket_index:
+        return None
+    from boto3.dynamodb.conditions import Key
+    asset_table = dynamodb.Table(asset_table_name)
+    referenced = set()
+    try:
+        for bucket_id in bucket_ids:
+            response = asset_table.query(
+                IndexName=asset_bucket_index,
+                KeyConditionExpression=Key('bucketId').eq(bucket_id),
+                Limit=1,
+            )
+            if response.get('Items'):
+                referenced.add(bucket_id)
+    except ClientError as e:
+        logger.warning("Could not read which duplicate registrations assets reference: " + str(e))
+        return None
+    return referenced
+
+def choose_primary(rows, sort_key, asset_table_name, asset_bucket_index):
+    """The row of a duplicate group that answers lookups by bucket name and prefix, and whether the
+    choice is unresolved (several rows are referenced by assets and none was chosen before).
+
+    1. A row already chosen by an earlier deployment: the one row the others name in
+       duplicateOfBucketId, when it is in the group.
+    2. The one row assets reference (one Query per row on the asset table's bucketId index).
+    3. Otherwise the row whose sort key the current configuration spells, then the lowest bucketId.
+    """
+    ids = {row['bucketId'] for row in rows}
+    named = {row.get(DUPLICATE_OF_FIELD) for row in rows if row.get(DUPLICATE_OF_FIELD)}
+    previous = [row for row in rows if row['bucketId'] in named and not row.get(DUPLICATE_OF_FIELD)]
+    if len(previous) == 1 and named <= ids:
+        return previous[0], False
+    ordered = sorted(rows, key=lambda row: (0 if row.get(SORT_KEY) == sort_key else 1, row['bucketId']))
+    referenced = referenced_bucket_ids([row['bucketId'] for row in ordered], asset_table_name,
+                                       asset_bucket_index)
+    if referenced is not None:
+        candidates = [row for row in ordered if row['bucketId'] in referenced]
+        if len(candidates) == 1:
+            return candidates[0], False
+        if len(candidates) > 1:
+            return candidates[0], True
+        return ordered[0], False
+    return ordered[0], True
+
+def retire_row(table, row, retired_at):
+    """Mark a row whose registration left the configuration. The row is kept: an asset or a database
+    that names its bucketId still resolves. The update is conditional on the row still existing, so a
+    row removed by hand is not written back."""
+    try:
+        table.update_item(
+            Key={'bucketId': row['bucketId'], SORT_KEY: row[SORT_KEY]},
+            UpdateExpression='SET #retired = :true, #isDefault = :false, #retiredAt = :at',
+            ConditionExpression='attribute_exists(bucketId)',
+            ExpressionAttributeNames={'#retired': RETIRED_FIELD, '#isDefault': 'isDefault',
+                                      '#retiredAt': RETIRED_AT_FIELD},
+            ExpressionAttributeValues={':true': True, ':false': False, ':at': retired_at},
+        )
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') != 'ConditionalCheckFailedException':
+            raise
 
 def check_bucket_versioning(bucket_name, bucket_region):
     """Check whether a bucket has versioning enabled.
@@ -169,33 +270,69 @@ def lambda_handler(event, context):
         resource_properties = event.get('ResourceProperties', {})
         buckets = json.loads(resource_properties.get('buckets', '[]'))
         table_name = resource_properties.get('tableName')
-        
-        # Get existing entries from the table
+        asset_table_name = resource_properties.get('assetTableName')
+        asset_bucket_index = resource_properties.get('assetTableBucketIdIndex')
+        request_type = event.get('RequestType')
+
+        # A registration is matched on its bucket name and canonical prefix, read from the stored
+        # rows, so a prefix whose spelling changed ('assets' to 'assets/') keeps its bucketId.
         logger.info(f"Scanning table {table_name} for existing entries...")
-        existing_entries = get_existing_entries(table_name)
-        logger.info(f"Existing entries: {json.dumps(existing_entries)}")
-        
+        existing_groups = get_existing_entries(table_name)
+        logger.info(f"Existing registrations: {sum(len(rows) for rows in existing_groups.values())} rows "
+                    f"for {len(existing_groups)} bucket name and prefix pairs")
+
         # Process each bucket
         table = dynamodb.Table(table_name)
+        configured_pairs = set()
+        duplicate_reports = []
         for bucket in buckets:
             bucket_name = bucket.get('bucketName')
-            prefix = bucket.get('prefix')
+            prefix = canonical_prefix(bucket.get('prefix'))
+            pair = (bucket_name, prefix)
             sort_key = f"{bucket_name}:{prefix}"
+            if pair in configured_pairs:
+                raise Exception(
+                    "Two entries of the configuration register bucket " + str(bucket_name) +
+                    " under the prefix " + prefix + ". Remove one of them from "
+                    "app.assetBuckets.externalAssetBuckets and deploy again."
+                )
+            configured_pairs.add(pair)
 
-            #if prefix doesn't end in a slash, add a slash at the end
-            if prefix and not prefix.endswith("/"):
-                prefix = prefix + "/"
-            
-            # Check if an entry with this sort key already exists
-            if sort_key in existing_entries:
-                # Use the existing bucketId
-                bucket_id = existing_entries[sort_key]
+            # The rows already stored for this registration. Each keeps its own key (the sort key is
+            # part of the primary key, so a rewritten sort key would be a second item).
+            group = existing_groups.get(pair, [])
+            duplicate_of = None
+            if not group:
+                bucket_id = generate_guid()
+                rows_to_write = [{'bucketId': bucket_id, SORT_KEY: sort_key}]
+                logger.info(f"Generating new bucketId for {sort_key}: {bucket_id}")
+            elif len(group) == 1:
+                bucket_id = group[0]['bucketId']
+                rows_to_write = [{'bucketId': bucket_id, SORT_KEY: group[0][SORT_KEY]}]
                 logger.info(f"Found existing entry for {sort_key} with bucketId: {bucket_id}")
             else:
-                # Generate a new bucketId
-                bucket_id = generate_guid()
-                logger.info(f"Generating new bucketId for {sort_key}: {bucket_id}")
-            
+                # Rows an earlier release wrote twice for one registration. None is merged or
+                # deleted: the primary answers lookups by name and prefix and carries isDefault, the
+                # others name it, and every row keeps resolving for the assets that name it.
+                primary, unresolved = choose_primary(group, sort_key, asset_table_name, asset_bucket_index)
+                bucket_id = primary['bucketId']
+                duplicate_of = bucket_id
+                rows_to_write = [{'bucketId': row['bucketId'], SORT_KEY: row[SORT_KEY]}
+                                 for row in [primary] + [r for r in group if r is not primary]]
+                others = sorted(row['bucketId'] for row in group if row is not primary)
+                report = (f"{bucket_name} prefix {prefix}: {len(group)} registrations; {bucket_id} "
+                          f"answers lookups, {', '.join(others)} kept as duplicates")
+                duplicate_reports.append(report)
+                if unresolved:
+                    logger.error(
+                        "Bucket " + str(bucket_name) + " prefix " + prefix + " has " + str(len(group)) +
+                        " registrations, and assets reference more than one of them (or the references "
+                        "could not be read). All are kept; " + bucket_id + " answers lookups by name and "
+                        "prefix. Review the assets of " + ", ".join(others) + "."
+                    )
+                else:
+                    logger.warning("Duplicate registrations: " + report)
+
             logger.info(f"Processing bucket: {bucket_name} with prefix: {prefix}")
 
             # The bucket's Region and owning account, resolved at synth time per bucket record.
@@ -218,36 +355,61 @@ def lambda_handler(event, context):
             if is_accelerated and event.get('RequestType') in ('Create', 'Update'):
                 verify_transfer_acceleration(bucket_name, bucket_region)
 
-            # Create or update the record in DynamoDB
-            item = {
-                'bucketId': bucket_id,
-                'bucketName:baseAssetsPrefix': sort_key,
-                'bucketName': bucket_name,
-                'baseAssetsPrefix': prefix,
-                'isVersioningEnabled': is_versioning_enabled,
-                'isDefault': is_default,
-                'bucketRegion': bucket_region,
-            }
-            if bucket_account_id:
-                item['bucketAccountId'] = bucket_account_id
-            # Written only when true, so a row of a bucket without acceleration keeps today's shape
-            # (a missing attribute means false) and toggling the flag off removes it on the next deploy.
-            if is_accelerated:
-                item['isAccelerated'] = True
-            # Whether bucket sync tags the file versions it syncs from this registration (VAMS:databaseId,
-            # VAMS:assetId). Always written; a row from an earlier release without it means true.
-            item['tagSyncedObjects'] = bucket.get('tagSyncedObjects') is not False
-            # The registration's bucket-sync created-events queue, to which createAsset sends an import
-            # request for the files already at a bucketExistingKey.
-            if bucket.get('syncCreatedQueueUrl'):
-                item['syncCreatedQueueUrl'] = bucket['syncCreatedQueueUrl']
-            table.put_item(Item=item)
+            # Create or update the record in DynamoDB. put_item replaces the whole item, so a row
+            # that was retired and is configured again loses the retired flag here.
+            for row_key in rows_to_write:
+                item = {
+                    'bucketId': row_key['bucketId'],
+                    SORT_KEY: row_key[SORT_KEY],
+                    'bucketName': bucket_name,
+                    'baseAssetsPrefix': prefix,
+                    'isVersioningEnabled': is_versioning_enabled,
+                    'isDefault': is_default and row_key['bucketId'] == bucket_id,
+                    'bucketRegion': bucket_region,
+                }
+                if duplicate_of and row_key['bucketId'] != duplicate_of:
+                    item[DUPLICATE_OF_FIELD] = duplicate_of
+                if bucket_account_id:
+                    item['bucketAccountId'] = bucket_account_id
+                # Written only when true, so a row of a bucket without acceleration keeps today's shape
+                # (a missing attribute means false) and toggling the flag off removes it on the next deploy.
+                if is_accelerated:
+                    item['isAccelerated'] = True
+                # Whether bucket sync tags the file versions it syncs from this registration (VAMS:databaseId,
+                # VAMS:assetId). Always written; a row from an earlier release without it means true.
+                item['tagSyncedObjects'] = bucket.get('tagSyncedObjects') is not False
+                # The registration's bucket-sync created-events queue, to which createAsset sends an import
+                # request for the files already at a bucketExistingKey.
+                if bucket.get('syncCreatedQueueUrl'):
+                    item['syncCreatedQueueUrl'] = bucket['syncCreatedQueueUrl']
+                table.put_item(Item=item)
             logger.info(f"Successfully added/updated record for bucket: {bucket_name} (region: {bucket_region}, versioning: {is_versioning_enabled}, default: {is_default})")
-        
+
+        # Rows whose registration left the configuration are retired, never deleted. Only on Create
+        # and Update: a Delete leaves the table as it is. An empty bucket list is never a reason to
+        # retire every row (the configuration always registers the default bucket).
+        retired = []
+        if request_type in ('Create', 'Update') and configured_pairs:
+            retired_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            for pair, rows in existing_groups.items():
+                if pair in configured_pairs:
+                    continue
+                for row in rows:
+                    if row.get(RETIRED_FIELD) is True:
+                        continue
+                    retire_row(table, row, retired_at)
+                    retired.append(row['bucketId'])
+                    logger.info(f"Retired bucketId {row['bucketId']} ({pair[0]} prefix {pair[1]}): the "
+                                "registration is no longer configured; its row is kept")
+
+        # A custom resource response is limited to 4 KB, so the report fields are capped; the log
+        # lines above carry every id.
         return {
             'PhysicalResourceId': 'S3AssetBucketsTablePopulator',
             'Data': {
-                'Message': f"Successfully processed {len(buckets)} buckets"
+                'Message': f"Successfully processed {len(buckets)} buckets",
+                'RetiredRegistrations': ', '.join(sorted(retired))[:REPORT_FIELD_MAX_CHARS],
+                'DuplicateRegistrations': '; '.join(duplicate_reports)[:REPORT_FIELD_MAX_CHARS],
             }
         }
     except Exception as e:
@@ -258,6 +420,19 @@ def lambda_handler(event, context):
 
     // Grant the Lambda function permissions to read/write to the DynamoDB table
     table.grantReadWriteData(populateS3AssetBucketsTableLambda);
+
+    // Which of two rows for one registration assets reference: Query on the asset table's bucketId
+    // index only (no table read, no scan), plus decrypt when the table uses the customer managed key.
+    if (assetTable) {
+        populateS3AssetBucketsTableLambda.addToRolePolicy(
+            new iam.PolicyStatement({
+                actions: ["dynamodb:Query"],
+                resources: [`${assetTable.table.tableArn}/index/${assetTable.bucketIdIndexName}`],
+                effect: iam.Effect.ALLOW,
+            })
+        );
+        assetTable.table.encryptionKey?.grantDecrypt(populateS3AssetBucketsTableLambda);
+    }
 
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
 
@@ -332,6 +507,12 @@ def lambda_handler(event, context):
         properties: {
             buckets: cdk.Lazy.string({ produce: () => JSON.stringify(bucketData()) }),
             tableName: table.tableName,
+            ...(assetTable
+                ? {
+                      assetTableName: assetTable.table.tableName,
+                      assetTableBucketIdIndex: assetTable.bucketIdIndexName,
+                  }
+                : {}),
             // Add a timestamp to force the custom resource to run on every deployment
             timestamp: new Date().toISOString(),
         },

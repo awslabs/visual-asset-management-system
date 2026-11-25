@@ -14,6 +14,7 @@ from common.constants import STANDARD_JSON_RESPONSE
 from common.apiRoutes import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
 from common.validators import validate
 from common.dynamodb import validate_pagination_info, to_update_expr
+from common.bucketRegistrations import is_retired
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
@@ -329,13 +330,18 @@ def update_database(database_id, update_data, claims_and_roles=None, event=None)
         if not casbin_enforcer.enforce(database, "PUT"):
             raise DatabaseAccessDeniedError("Access denied")
         
-        # If defaultBucketId is being updated, verify it exists
+        # If defaultBucketId is being updated, verify it exists. A retired registration (it left the
+        # configuration) is not offered for a database, so moving a database onto one is refused as an
+        # unknown id, as create refuses it. A database already on it keeps it: the edit form sends the
+        # current id with every update, and refusing it would block editing the other fields.
         if 'defaultBucketId' in update_data and update_data['defaultBucketId'] is not None:
             buckets_table = dynamodb.Table(s3_asset_buckets_table)
             bucket_response = buckets_table.query(
                 KeyConditionExpression=Key('bucketId').eq(update_data['defaultBucketId'])
             )
-            if not bucket_response.get('Items') or len(bucket_response['Items']) == 0:
+            items = bucket_response.get('Items') or []
+            moving = update_data['defaultBucketId'] != database.get('defaultBucketId')
+            if not items or (moving and all(is_retired(item) for item in items)):
                 raise VAMSGeneralErrorResponse("Bucket ID not found")
         
         updates = {
@@ -668,6 +674,11 @@ def get_buckets(query_params, claims_and_roles=None):
         items = []
         for item in response.get('Items', []):
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+            # A retired registration left the configuration: no bucket sync and no grants serve it, so
+            # it is not offered for a database. Its row stays for the assets that name its bucketId.
+            # A page can therefore hold fewer rows than its size; NextToken still continues the scan.
+            if is_retired(deserialized_document):
+                continue
 
             # Convert to model
             bucket_model = BucketModel(

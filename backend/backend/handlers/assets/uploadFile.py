@@ -50,6 +50,7 @@ from common.assetLocations import (
     is_folder_location, names_own_object, normalize_base_prefix, object_key_for,
 )
 from common.fileAttribution import nested_locations_for_asset_type, nested_locations_of_asset
+from common.workflows.defaultBucket import DefaultBucketNotFoundError, resolve_default_bucket
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -232,6 +233,28 @@ def get_database_details(databaseId):
     except Exception as e:
         logger.exception(f"Error getting database details: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving database configuration")
+
+def external_upload_source(workflow_execution_id, asset_bucket, named_source_bucket=None):
+    """The registration ({bucketId, bucketName, ...}) an external completion reads its tempKey files
+    from. A workflow execution's write-back reads from the VAMS default asset bucket, where the
+    pipelines staged the outputs (the run bucket the launch resolved the same way); any other
+    completion reads from the asset's own bucket. Resolved from the registration table, so a caller
+    never names the bucket the files are copied from: `named_source_bucket` (the request's
+    `sourceBucket`) is only logged when it differs from the resolved one."""
+    if not workflow_execution_id:
+        source = asset_bucket
+    else:
+        try:
+            run_bucket = resolve_default_bucket(buckets_table)
+        except DefaultBucketNotFoundError as e:
+            logger.exception(f"The workflow run bucket could not be resolved: {e}")
+            raise VAMSGeneralErrorResponse("The workflow run bucket could not be resolved.")
+        source = asset_bucket if run_bucket.get('bucketId') == asset_bucket.get('bucketId') else run_bucket
+    if named_source_bucket and named_source_bucket != source.get('bucketName'):
+        logger.warning(f"An external completion named source bucket {named_source_bucket}; reading from "
+                       f"{source.get('bucketName')}, the bucket it resolves to")
+    return source
+
 
 def get_default_bucket_details(bucketId):
     """Get default S3 bucket details from database default bucket DynamoDB"""
@@ -1648,11 +1671,13 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
     # Get bucket details from asset's bucketId. bucket_name is the DESTINATION (the asset's own
     # bucket). source_bucket is where the tempKey files are read from: it equals bucket_name for a
     # normal upload, but a workflow-execution completion stages its outputs in the VAMS default run
-    # bucket (request_model.sourceBucket), which can differ from the output asset's bucket.
+    # bucket, which can differ from the output asset's bucket. That registration is resolved here,
+    # never taken from the caller.
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
-    source_bucket = request_model.sourceBucket or bucket_name
+    source_registration = external_upload_source(workflow_execution_id, bucketDetails, request_model.sourceBucket)
+    source_bucket = source_registration['bucketName']
 
     # Get database details to check file upload restrictions
     database = get_database_details(databaseId)
@@ -1823,6 +1848,9 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
                         "tempS3Key": file.tempKey,
                         "finalS3Key": final_s3_key,
                         "bucketName": bucket_name,
+                        # The registrations the consumer checks the two names against.
+                        "bucketId": asset['bucketId'],
+                        "sourceBucketId": source_registration.get('bucketId') or asset['bucketId'],
                         "bucketRegion": bucketDetails.get('bucketRegion'),
                         "sourceBucketName": source_bucket,
                         "sourceBucketRegion": (bucketDetails.get('bucketRegion')
@@ -2543,6 +2571,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     "tempS3Key": temp_s3_key,
                     "finalS3Key": final_s3_key,
                     "bucketName": bucket_name,
+                    # The registration the consumer checks bucketName against.
+                    "bucketId": bucketDetails.get('bucketId'),
                     "bucketRegion": bucketDetails.get('bucketRegion'),
                     "databaseId": databaseId,
                     "assetId": assetId,

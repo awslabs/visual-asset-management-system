@@ -157,24 +157,44 @@ DELIBERATE_DEPARTURES = {
     ("common/ssmParameters.py", "parameter_client_config"),
 }
 
-# Where a Parameter Store client may be built. Every other module reads resource names through
-# common/resourceNames.py and any other parameter through common/ssmParameters.py, so a handler does
-# not build an SSM client with Rule 6's five adaptive attempts, which wait out about 30 s under
-# throttling (#1820). The modules listed with a reason keep their own client for now.
+# Where a Parameter Store client may be built and a Parameter Store operation called (#1820). Every other module
+# reads resource names through common/resourceNames.py, the deploy-time values through common/deployTimeValues.py and
+# any other parameter through common/ssmParameters.py, so no handler builds an SSM client with Rule 6's five adaptive
+# attempts, which wait out about 30 s under throttling, and none calls Parameter Store on a client of its own or one
+# passed to it. The shared lookups only read; the modules below each keep an exception, with its reason.
 SSM_CLIENT_MODULES = {"common/resourceNames.py", "common/ssmParameters.py"}
-SSM_CLIENTS_KEPT = {
-    # Deploy-time custom resource (15-minute timeout) that must read the values the schema-deploy
-    # resource has just written, so it neither caches nor gives up early.
-    "handlers/indexing/crReindexer.py": "deploy-time reader of freshly written values",
-    # Deploy-time custom resource that writes and deletes the location index marker (PutParameter,
-    # DeleteParameter); it reads no parameter, and the shared lookups only read.
-    "handlers/indexing/crAssetLocationIndexMarker.py": "deploy-time writer of the location index marker",
-    # EDH add-on lane: AWS- and EDH-owned parameters, moved onto common/ssmParameters.py in its own step.
-    "handlers/addon/edh/common/edhCapacityReservations.py": "EDH add-on lane, follow-up step",
-    "handlers/addon/edh/common/edhImageBuilder.py": "EDH add-on lane, follow-up step",
-    "handlers/addon/edh/common/edhSessionBootstrap.py": "EDH add-on lane, follow-up step",
-    "handlers/addon/edh/edhRootKeySync.py": "EDH add-on lane, follow-up step",
+# Every Parameter Store operation of the Systems Manager client, as boto3 names it.
+PARAMETER_STORE_OPERATIONS = frozenset({
+    "get_parameter", "get_parameters", "get_parameters_by_path", "put_parameter", "delete_parameter",
+    "delete_parameters", "describe_parameters", "get_parameter_history", "label_parameter_version",
+    "unlabel_parameter_version",
+})
+# Deploy-time custom resources that build their own SSM client: the module -> (the Parameter Store operations it may
+# call, why).
+PARAMETER_STORE_DEPLOY_TIME_MODULES = {
+    "handlers/indexing/crReindexer.py": (
+        frozenset({"get_parameter"}),
+        "deploy-time custom resource (15-minute function, also run by direct invoke and the local reindex utility) "
+        "that reads the values the schema-deploy resource has just written, so it neither caches nor gives up early"),
+    "handlers/indexing/crAssetLocationIndexMarker.py": (
+        frozenset({"put_parameter", "delete_parameter"}),
+        "deploy-time custom resource that writes and deletes the location index marker; the shared lookups only "
+        "read"),
 }
+# Modules that build a Systems Manager client for operations other than Parameter Store: the module -> (the Systems
+# Manager operations it calls, why). They call no Parameter Store operation; a parameter they need is read through
+# common.ssmParameters.
+SYSTEMS_MANAGER_CLIENT_MODULES = {
+    "handlers/addon/edh/edhRootKeySync.py": (
+        frozenset({"describe_document", "get_document", "send_command", "get_command_invocation"}),
+        "Run Command on the EDH controller and the checks of its document; the controller's instance id is read "
+        "through common.ssmParameters"),
+}
+# The trees the Parameter Store walk covers beside backend/backend: the pipelines (their tests excluded) and the
+# backend add-ons. Neither can import common.ssmParameters, so a Parameter Store call there has no allowance: it is a
+# finding to decide on, not an entry to add.
+REPO_ROOT = os.path.abspath(os.path.join(BACKEND, "..", ".."))
+OTHER_PARAMETER_STORE_TREES = ("backendPipelines", "backendAddons")
 
 
 def _parse(relative_path):
@@ -628,39 +648,153 @@ class TestTheWiderGapIsPinned:
         return sorted(bare)
 
 
-class TestParameterStoreReadsAreBounded:
-    """No handler builds its own Parameter Store client (#1820).
+def _parameter_store_sources():
+    """Every parseable module the Parameter Store walk covers, as (label, tree): backend/backend by its path under
+    it (as the rest of this file names modules), and every ``.py`` under OTHER_PARAMETER_STORE_TREES outside a
+    ``tests`` directory, by its path from the repository root."""
+    yield from _source_files()
+    for top in OTHER_PARAMETER_STORE_TREES:
+        root = os.path.join(REPO_ROOT, top)
+        for directory, subdirectories, filenames in os.walk(root):
+            subdirectories[:] = sorted(d for d in subdirectories
+                                       if d not in ("tests", "__pycache__", "node_modules", "cdk.out")
+                                       and not d.startswith("."))
+            for filename in sorted(filenames):
+                if not filename.endswith(".py"):
+                    continue
+                path = os.path.join(directory, filename)
+                try:
+                    with open(path, encoding="utf-8") as handle:
+                        tree = ast.parse(handle.read())
+                except (SyntaxError, UnicodeDecodeError):
+                    continue
+                yield os.path.relpath(path, REPO_ROOT).replace(os.sep, "/"), tree
 
-    Search, both OpenSearch indexers, the secure-config handler and the workflow output step built
-    one with Rule 6's dict, so a throttled read waited out five adaptive retries: search failed after
-    about 30 s, the web app's start waited 19 s, the file indexer's init timed out, and the output step
-    failed 3 of 1,000 runs on its copy-engine name. They now read through common/resourceNames.py and
-    common/ssmParameters.py, whose clients are the bounded departures above. Pure AST over the source.
+
+def _operation_calls(tree, operations):
+    """Every call of one of ``operations`` as a method, on any receiver (a name, an attribute such as ``ctx.ssm``,
+    or a call result such as ``boto3.client(name)``), as (line, operation, receiver as written)."""
+    calls = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in operations):
+            calls.append((node.lineno, node.func.attr, ast.unparse(node.func.value)))
+    return calls
+
+
+def _ssm_client_builders(sources):
+    return {label for label, tree in sources for _, service, _ in _client_sites(tree) if service == "ssm"}
+
+
+class TestParameterStoreReadsAreBounded:
+    """No handler builds its own Parameter Store client or calls Parameter Store outside the shared lookups (#1820).
+
+    Search, both OpenSearch indexers, the secure-config handler, the workflow output step and the EDH Workstations
+    add-on (its capacity reservation zone check, AMI recipe parent images, workstation session web URL and root key
+    sync controller lookup) built one with Rule 6's dict or read Parameter Store on a client passed to them, so a
+    throttled read waited out five adaptive retries: search failed after about 30 s, the web app's start waited 19
+    s, the file indexer's init timed out, and the output step failed 3 of 1,000 runs on its copy-engine name. They
+    now read through common/resourceNames.py, common/deployTimeValues.py and common/ssmParameters.py, whose clients
+    are the bounded departures above.
+
+    Two angles, both pure AST over the source: where an ``ssm`` client is built, and where a Parameter Store
+    operation is called on any receiver, which also sees a call on a client passed in (``ctx.ssm.get_parameter``) or
+    built inline. The walk covers backend/backend (core, add-on and custom lanes), backendPipelines/ outside its
+    tests, and backendAddons/. Not seen: an operation reached by name (``getattr(client, "get_parameter")``) or a
+    client built off a boto3 Session, which TestTheWiderGapIsPinned keeps out of backend/backend.
     """
 
     MOVED = ("handlers/osSemanticSearch/search.py", "handlers/osSemanticSearch/osAssetIndexer.py",
              "handlers/osSemanticSearch/osFileIndexer.py", "handlers/config/configService.py",
-             "handlers/workflows/sfn/processWorkflowExecutionOutput.py")
+             "handlers/workflows/sfn/processWorkflowExecutionOutput.py",
+             "handlers/addon/edh/common/edhCapacityReservations.py", "handlers/addon/edh/common/edhImageBuilder.py",
+             "handlers/addon/edh/common/edhSessionBootstrap.py", "handlers/addon/edh/common/edhAmiRecipes.py")
 
-    @staticmethod
-    def _ssm_client_modules():
-        return {relative_path for relative_path, tree in _source_files()
-                for _, service, _ in _client_sites(tree) if service == "ssm"}
+    @pytest.fixture(scope="class")
+    def sources(self):
+        return list(_parameter_store_sources())
 
-    def test_only_the_shared_lookups_and_the_kept_modules_build_an_ssm_client(self):
-        building = self._ssm_client_modules()
+    def test_the_walk_covers_every_tree(self, sources):
+        labels = [label for label, _ in sources]
+        assert sum(1 for label in labels if not label.startswith(OTHER_PARAMETER_STORE_TREES)) >= 100
+        for top in OTHER_PARAMETER_STORE_TREES:
+            assert os.path.isdir(os.path.join(REPO_ROOT, top)), f"{top}/ is gone, so the walk no longer covers it"
+        # backendAddons/ holds recipe bundles and no Python today; the pipelines hold hundreds of modules.
+        assert any(label.startswith("backendPipelines/") for label in labels), "the walk read no pipeline module"
+        assert not any("/tests/" in label for label in labels if label.startswith("backendPipelines/"))
+
+    def test_only_the_listed_modules_build_an_ssm_client(self, sources):
+        building = _ssm_client_builders(sources)
         assert SSM_CLIENT_MODULES <= building, "a shared lookup no longer builds its client, so this proves nothing"
-        unexpected = building - SSM_CLIENT_MODULES - set(SSM_CLIENTS_KEPT)
+        allowed = SSM_CLIENT_MODULES | set(PARAMETER_STORE_DEPLOY_TIME_MODULES) | set(SYSTEMS_MANAGER_CLIENT_MODULES)
+        unexpected = building - allowed
         assert unexpected == set(), (
             f"{sorted(unexpected)} build their own SSM client. Read resource names with "
-            f"common.resourceNames.get_resource_name() and other parameters with "
-            f"common.ssmParameters.get_parameter_value()")
+            f"common.resourceNames.get_resource_name(), deploy-time values with common.deployTimeValues.resolve() "
+            f"and other parameters with common.ssmParameters.get_parameter_value() or read_parameter_value()")
+
+    def test_no_parameter_store_call_outside_the_shared_lookups(self, sources):
+        surveyed, unexplained = 0, []
+        for label, tree in sources:
+            for line, operation, receiver in _operation_calls(tree, PARAMETER_STORE_OPERATIONS):
+                surveyed += 1
+                if label in SSM_CLIENT_MODULES:
+                    continue
+                allowance = PARAMETER_STORE_DEPLOY_TIME_MODULES.get(label)
+                if allowance is not None and operation in allowance[0]:
+                    continue
+                unexplained.append("{}:{} {}.{}()".format(label, line, receiver, operation))
+        assert surveyed, "the walker found no Parameter Store call at all, not even in the shared lookups"
+        assert unexplained == [], (
+            "these call Parameter Store outside common/resourceNames.py and common/ssmParameters.py. Read the value "
+            "through common.ssmParameters (or common.resourceNames / common.deployTimeValues):\n  "
+            + "\n  ".join(unexplained))
+
+    @pytest.mark.parametrize("relative_path", sorted(SYSTEMS_MANAGER_CLIENT_MODULES))
+    def test_a_systems_manager_module_calls_no_parameter_store_operation(self, relative_path):
+        calls = _operation_calls(_parse(relative_path), PARAMETER_STORE_OPERATIONS)
+        assert calls == [], f"{relative_path} calls Parameter Store ({calls}), so read through common.ssmParameters"
+
+    @pytest.mark.parametrize("relative_path", sorted(PARAMETER_STORE_DEPLOY_TIME_MODULES))
+    def test_a_deploy_time_module_still_builds_its_client_and_calls_each_listed_operation(self, relative_path):
+        """Anti-rot: an entry whose module moved to the shared lookup, or stopped calling an operation, leaves."""
+        operations, reason = PARAMETER_STORE_DEPLOY_TIME_MODULES[relative_path]
+        tree = _parse(relative_path)
+        assert reason.strip() and operations
+        assert "ssm" in {service for _, service, _ in _client_sites(tree)}, f"{relative_path} builds no SSM client"
+        called = {operation for _, operation, _ in _operation_calls(tree, PARAMETER_STORE_OPERATIONS)}
+        assert operations <= called, f"{relative_path} no longer calls {sorted(operations - called)}"
+
+    @pytest.mark.parametrize("relative_path", sorted(SYSTEMS_MANAGER_CLIENT_MODULES))
+    def test_a_systems_manager_module_still_builds_its_client_and_calls_each_listed_operation(self, relative_path):
+        operations, reason = SYSTEMS_MANAGER_CLIENT_MODULES[relative_path]
+        tree = _parse(relative_path)
+        assert reason.strip() and operations
+        assert "ssm" in {service for _, service, _ in _client_sites(tree)}, f"{relative_path} builds no SSM client"
+        called = {operation for _, operation, _ in _operation_calls(tree, operations)}
+        assert operations <= called, f"{relative_path} no longer calls {sorted(operations - called)}"
+
+    def test_the_lists_do_not_overlap(self):
+        assert not (set(PARAMETER_STORE_DEPLOY_TIME_MODULES) & set(SYSTEMS_MANAGER_CLIENT_MODULES))
+        assert not ((set(PARAMETER_STORE_DEPLOY_TIME_MODULES) | set(SYSTEMS_MANAGER_CLIENT_MODULES))
+                    & SSM_CLIENT_MODULES)
+        for operations, _ in SYSTEMS_MANAGER_CLIENT_MODULES.values():
+            assert not (operations & PARAMETER_STORE_OPERATIONS)
+
+    @pytest.mark.parametrize("snippet,expected", [
+        ("ctx.ssm.get_parameter(Name=name)", [(1, "get_parameter", "ctx.ssm")]),
+        ("boto3.client(service).put_parameter(Name=n, Value=v)", [(1, "put_parameter", "boto3.client(service)")]),
+        ("ssm.get_parameters_by_path(Path=p)", [(1, "get_parameters_by_path", "ssm")]),
+        ("client().describe_parameters()", [(1, "describe_parameters", "client()")]),
+        ("ssm.send_command(DocumentName=d)", []),
+        ("get_parameter_value(name)", []),
+    ], ids=["attribute-receiver", "call-result", "bare-name", "factory", "run-command", "shared-lookup"])
+    def test_the_walker_sees_a_parameter_store_call_on_any_receiver(self, snippet, expected):
+        """Negative controls: an empty result over the tree means nothing if the walker cannot see these."""
+        assert _operation_calls(ast.parse(snippet), PARAMETER_STORE_OPERATIONS) == expected
 
     @pytest.mark.parametrize("relative_path", MOVED)
-    def test_the_moved_handlers_build_none(self, relative_path):
-        assert relative_path not in self._ssm_client_modules()
-
-    def test_every_kept_module_still_builds_one(self):
-        """Anti-rot: a kept module that moved to the shared lookup leaves the list."""
-        stale = set(SSM_CLIENTS_KEPT) - self._ssm_client_modules()
-        assert stale == set(), f"SSM_CLIENTS_KEPT names modules that build no SSM client any more: {sorted(stale)}"
+    def test_the_moved_handlers_build_none_and_call_none(self, relative_path):
+        tree = _parse(relative_path)
+        assert "ssm" not in {service for _, service, _ in _client_sites(tree)}
+        assert _operation_calls(tree, PARAMETER_STORE_OPERATIONS) == []
