@@ -23,6 +23,7 @@ The frontend mirrors the preview-file values in
 ``previewFileFormats``); keep the two in sync when changing them.
 """
 
+import hashlib
 from typing import FrozenSet, Tuple
 
 # ---------------------------------------------------------------------------
@@ -75,6 +76,57 @@ TEMPORARY_UPLOAD_PREFIX = "temp-uploads/"
 PREVIEW_PREFIX = "previews/"
 PIPELINES_PREFIX = "pipelines/"
 AUXILIARY_PREVIEW_PREFIX = "preview/"
+
+# ---------------------------------------------------------------------------
+# Upload staging keys.
+#
+# An upload's files are staged under TEMPORARY_UPLOAD_PREFIX and copied to their
+# final keys when the upload is completed. Each upload stages in its own folder,
+#
+#   ``{baseAssetsPrefix}temp-uploads/{upload tag}/{final key}``
+#
+# so concurrent uploads of one file path never share a staged object: before
+# #1928 every upload of a path staged at the one key
+# ``{baseAssetsPrefix}temp-uploads/{final key}``, the completions overwrote each
+# other's staged file, and a completion that found another upload's file there
+# deleted it. The upload tag is UPLOAD_STAGING_TAG_LENGTH hex characters of the
+# SHA-256 of the upload id: a fixed length, and shorter than the upload id
+# itself, because the whole staging key must fit the 1,024-byte S3 key limit.
+# The folder costs a file key UPLOAD_STAGING_TAG_LENGTH + 1 bytes against that
+# limit; together with the prefix, an uploaded file's final key can be at most
+# 1024 - len(baseAssetsPrefix) - 26 bytes (998 at the bucket root). The tag only
+# has to tell apart uploads of the same path that are completed at the same
+# time; with 48 bits, a clash between 100 such uploads is about a 1 in 57
+# billion chance. Every staging key is built here; do not assemble one at a
+# call site.
+# ---------------------------------------------------------------------------
+UPLOAD_STAGING_TAG_LENGTH = 12
+
+
+def upload_staging_tag(upload_id: str) -> str:
+    """The folder name an upload's files are staged under: the first UPLOAD_STAGING_TAG_LENGTH hex
+    characters of the SHA-256 of ``upload_id``."""
+    return hashlib.sha256(upload_id.encode("utf-8")).hexdigest()[:UPLOAD_STAGING_TAG_LENGTH]
+
+
+def staged_upload_key(base_assets_prefix: str, upload_id: str, final_s3_key: str) -> str:
+    """The key upload ``upload_id`` stages the file bound for ``final_s3_key`` under, in the bucket
+    whose normalized ``baseAssetsPrefix`` is ``base_assets_prefix``."""
+    return f"{base_assets_prefix}{TEMPORARY_UPLOAD_PREFIX}{upload_staging_tag(upload_id)}/{final_s3_key}"
+
+
+def legacy_staged_upload_key(base_assets_prefix: str, final_s3_key: str) -> str:
+    """LEGACY STAGING KEY (#1928): the per-path key every upload staged under before per-upload
+    staging. Read only to complete or abort an upload initialized before the upgrade; nothing is
+    created under it any more.
+
+    Remove it, and the fallbacks in ``handlers/assets/uploadFile.py`` that use it, once no supported
+    upgrade starts from a release that staged per path (2.6.7 and earlier). Until then an upload
+    initialized before the upgrade can still be completed through it for as long as its upload
+    record is completable: 7 days after initialization (UPLOAD_EXPIRATION_DAYS in uploadFile.py,
+    the same age the VAMS asset bucket aborts incomplete multipart uploads at)."""
+    return f"{base_assets_prefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+
 
 # ---------------------------------------------------------------------------
 # Pipeline staging path segments.
