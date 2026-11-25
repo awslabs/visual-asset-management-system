@@ -8,6 +8,7 @@ import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { PotreeDependencyManager } from "./dependencies";
 import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
+import { auxiliaryPreviewStreamUrl, POTREE_VIEWER_METADATA } from "../../core/viewerData";
 
 // How often the point cloud's authorization header is renewed while the viewer is open.
 const AUTH_HEADER_REFRESH_MS = 30_000;
@@ -69,18 +70,14 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
             if (!potreeInstance || !assetKey || loaded || !config) return;
 
             try {
-                // Pass only the asset-relative path (not the databaseId or the leading assetId).
-                // The stream endpoint prepends {databaseId}/{assetLocationKey} to resolve the
-                // database-scoped per-file aux preview location. If assetKey is the full,
-                // assetId-prefixed key, strip that leading assetId segment first.
-                let relativeAssetKey = assetKey || "";
-                if (relativeAssetKey.startsWith(assetId + "/")) {
-                    relativeAssetKey = relativeAssetKey.slice(assetId.length + 1);
-                }
-                const fileKey = relativeAssetKey + "/preview/PotreeViewer/metadata.json";
-                const url = `${config.api}database/${databaseId}/assets/${encodeURIComponent(
-                    assetId
-                )}/auxiliaryPreviewAssets/stream/${fileKey}`;
+                // The file's key as the host gives it; the API decides which file it names.
+                const url = auxiliaryPreviewStreamUrl(
+                    config.api,
+                    databaseId,
+                    assetId,
+                    assetKey,
+                    POTREE_VIEWER_METADATA
+                );
 
                 // Get a valid, fresh authorization header (automatically refreshes token if expired)
                 const authorizationHeader = await getDualAuthorizationHeader();

@@ -351,6 +351,24 @@ interface ViewerPluginProps {
 
 A multi-file selection can span assets. Build each file's URL from its `multiFiles` entry's `assetId` and `databaseId`, and fall back to the top-level pair when the entry carries none.
 
+### File Keys and Viewer Data
+
+`assetKey` and each `multiFileKeys` entry carry the key the host has for the file: the full Amazon S3 key the file list returns (the file manager, the file page) or the file's path in the asset (search results, with its leading `/`; the asset version views). Send it to the API as given, its leading `/` included; never strip or add a prefix to guess another form. The auxiliary preview stream reads the full key and the path in the asset, for assets on a folder and assets created from one object, and decides which file of the asset a path names: a path with a leading `/` is the path in the asset, and a path without one that starts with the asset's location key is the full key. In an asset created from one object, this route reads the object's own path `/{file name}` as the file `{key}/{file name}` of its companion folder; the file manager and the file page give the object's key, which reaches its viewer data.
+
+A viewer that reads data a pipeline wrote for the file, such as the octree of the Point Cloud Potree Viewer pipeline, builds the URL with `auxiliaryPreviewStreamUrl(config.api, databaseId, assetId, fileKey, dataPath)` from `core/viewerData.ts`. It requests `{file key}/preview/{dataPath}` on the auxiliary preview stream, keeps one leading `/` of a path in the asset, and URL-encodes each segment with the slashes kept, so a loader that resolves sibling files relative to `metadata.json` stays in the file's folder:
+
+```typescript
+import { auxiliaryPreviewStreamUrl, POTREE_VIEWER_METADATA } from "../../core/viewerData";
+
+const url = auxiliaryPreviewStreamUrl(
+    config.api,
+    databaseId,
+    assetId,
+    assetKey,
+    POTREE_VIEWER_METADATA
+);
+```
+
 ### Custom Parameters
 
 Viewers can access custom parameters from their configuration:
