@@ -1190,7 +1190,14 @@ class AssetFileVersionItemModel(BaseModel, extra='ignore'):
 
     @validator('relativeKey')
     def validate_relative_key(cls, v):
-        return validate_asset_file_path('relativeKey', v)
+        v = validate_asset_file_path('relativeKey', v)
+        # The version stores the path without its leading slash (#1795), so a path made only of
+        # slashes names no file it could store.
+        if not v.lstrip('/'):
+            message = "relativeKey must name a file"
+            logger.error(message)
+            raise ValueError(message)
+        return v
 
 class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new asset version"""
@@ -1216,9 +1223,10 @@ class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
             logger.error(message)
             raise ValueError(message)
             
-        # Check for duplicate keys if files provided
+        # Check for duplicate keys if files provided. '/a.txt' and 'a.txt' name one file, which the
+        # version stores once, without the leading slash (#1795).
         if values.get('files'):
-            keys = [file.relativeKey for file in values.get('files')]
+            keys = [file.relativeKey.lstrip('/') for file in values.get('files')]
             if len(keys) != len(set(keys)):
                 message = "Duplicate relative keys are not allowed"
                 logger.error(message)

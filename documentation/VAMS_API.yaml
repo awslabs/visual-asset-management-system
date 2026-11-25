@@ -19199,7 +19199,7 @@ components:
             properties:
                 relativeKey:
                     type: string
-                    description: "Path relative to the asset root"
+                    description: "Path relative to the asset root, without a leading slash (an entry a version built from a file list stored before 2.7.0 can still show one)"
                 versionId:
                     type: string
                     description: "S3 version ID"
@@ -19452,7 +19452,7 @@ components:
             properties:
                 relativeKey:
                     type: string
-                    description: "Path relative to the asset root"
+                    description: "Path relative to the asset root, with or without a leading slash. The version stores it without the slash; two entries that name the same file are refused as duplicates"
                 versionId:
                     type: string
                     description: "S3 version ID"

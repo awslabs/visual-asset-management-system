@@ -525,6 +525,15 @@ backend/
     (e.g. `/folder/file.txt`). Normalize inputs before storing or comparing:
     `file_path = "/" + raw_path.lstrip("/")`.
 
+    **Exception: an asset version's file entries.** The asset file versions table's `fileKey`
+    (sort key, read back as `relativeKey`) is the asset-relative path WITHOUT the leading `/`
+    (`folder/file.txt`). `assetVersions.save_asset_file_versions` strips it whatever form the
+    caller sent, and `CreateAssetVersionRequestModel` refuses `/a.txt` and `a.txt` together as
+    duplicates. Entries a version built from a file list stored before #1795 can still carry
+    the slash and are not migrated, so every reader compares with the slash stripped on both
+    sides (`str(fileKey).lstrip('/')`), a sort-key lookup tries the unslashed form first and
+    the slashed form on a miss, and a delete uses the key the row is stored under.
+
 14. **NEVER read only the first page of an S3 or DynamoDB listing when the full set is
     needed.** S3 `list_object_versions` / `list_objects_v2` and DynamoDB queries cap a
     single call (`MaxKeys`, `Limit`, one page). When completeness matters, page to

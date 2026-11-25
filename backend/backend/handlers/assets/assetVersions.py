@@ -591,11 +591,20 @@ def save_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
         partition_key = f"{databaseId}:{assetId}:{assetVersionId}"
         created_at = utc_now().isoformat()
 
-        # Create individual records for each file
-        with asset_file_versions_table.batch_writer() as batch:
+        # Create individual records for each file. Two entries of one file (an older version can hold
+        # '/a.txt' and 'a.txt', which a revert copies) are one row: the batch keeps the last one,
+        # where DynamoDB would refuse the whole batch.
+        with asset_file_versions_table.batch_writer(
+                overwrite_by_pkeys=['databaseId:assetId:assetVersionId', 'fileKey']) as batch:
             for file in files:
-                # Use the file's relativeKey as the sort key
-                file_key = file['relativeKey']
+                # The sort key is the file's asset-relative path without its leading slash, however the
+                # caller wrote it (#1795); every reader compares that form.
+                file_key = str(file.get('relativeKey') or '').lstrip('/')
+                if not file_key:
+                    # Only an entry an earlier release stored for the asset root can get here (a revert
+                    # copies it); it names no file.
+                    logger.warning(f"Skipping a version entry that names no file in {partition_key}")
+                    continue
 
                 # Create item for DynamoDB
                 item = {

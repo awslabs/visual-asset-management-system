@@ -2335,10 +2335,9 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
     deleted_count = 0
     db_asset_key = f"{databaseId}:{assetId}"
 
-    # A row's fileKey is the relativeKey its asset version was created with: without a leading
-    # slash for a version built from the current files (list_s3_files_with_versions), and as the
-    # caller wrote it for a version built from a file list. Paths are compared without the slash,
-    # and each row is deleted by the key it is stored under.
+    # A row's fileKey is the file's path without a leading slash; a version built from a file list
+    # before #1795 stored the path as the caller wrote it, often with the slash. Paths are compared
+    # without the slash, and each row is deleted by the key it is stored under.
     normalized_paths = set()
     for fp in file_paths:
         fp_clean = fp.strip()
