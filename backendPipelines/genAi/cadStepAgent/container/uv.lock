@@ -6,11 +6,6 @@ requires-python = "==3.12.*"
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
-[options.exclude-newer-package]
-numpy = "2026-11-16T21:32:28Z"
-python-multipart = "2026-11-17T10:40:38Z"
-trame-common = "2026-11-17T18:23:30Z"
-
 [manifest]
 constraints = [{ name = "mcp", specifier = ">=1.30.0,<2" }]
 

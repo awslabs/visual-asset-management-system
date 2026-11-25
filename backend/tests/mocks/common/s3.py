@@ -47,8 +47,17 @@ S3_ASSET_ACCELERATED_CLIENT_CONFIG = Config(
     max_pool_connections=S3_CLIENT_MAX_POOL_CONNECTIONS,
 )
 
+# The one-attempt client of the repeat-safe final copy (#1848); same values as the shipped module.
+S3_ASSET_SINGLE_ATTEMPT_CLIENT_CONFIG = Config(
+    signature_version='s3v4',
+    s3={'addressing_style': 'path', 'us_east_1_regional_endpoint': 'regional'},
+    retries={'total_max_attempts': 1, 'mode': 'adaptive'},
+    max_pool_connections=S3_CLIENT_MAX_POOL_CONNECTIONS,
+)
+
 _s3_clients_by_region = {}
 _s3_resources_by_region = {}
+_s3_single_attempt_clients_by_region = {}
 _bucket_regions_by_name = {}
 
 
@@ -76,6 +85,15 @@ def s3_resource_for_region(region=None):
         resource = boto3.resource('s3', region_name=region, config=S3_ASSET_CLIENT_CONFIG)
         _s3_resources_by_region[region] = resource
     return resource
+
+
+def s3_single_attempt_client_for_region(region=None):
+    region = region or deployment_region()
+    client = _s3_single_attempt_clients_by_region.get(region)
+    if client is None:
+        client = boto3.client('s3', region_name=region, config=S3_ASSET_SINGLE_ATTEMPT_CLIENT_CONFIG)
+        _s3_single_attempt_clients_by_region[region] = client
+    return client
 
 
 # S3 Transfer Acceleration: same contract as the shipped module. The flag comes from bucket details
@@ -203,6 +221,66 @@ def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, extra_args=
                 put_args[header] = value
     dest_client.upload_fileobj(source_object['Body'], dest_bucket, dest_key,
                                ExtraArgs=put_args or None)
+
+
+# The repeat-safe final copy of an upload or workflow output (#1848). Same signature, refusal,
+# threshold and branch selection as the shipped module; each copy is sent once, because the shipped
+# module's retry-and-landed-check loop is tested on the shipped module itself
+# (tests/common/test_s3_repeat_safe_copy.py), not through this mock.
+SINGLE_REQUEST_COPY_MAX_BYTES = 8 * 1024 * 1024
+SINGLE_REQUEST_COPY_MAX_ATTEMPTS = 6
+SINGLE_REQUEST_COPY_BACKOFF_BASE = 2
+SINGLE_REQUEST_COPY_MAX_BACKOFF_SECONDS = 20
+LANDED_CHECK_CLOCK_MARGIN_SECONDS = 2
+LANDED_CHECK_MAX_VERSION_HEADS = 50
+_COPY_UPLOAD_TOKEN_METADATA_KEY = "vams-copyuploadtoken"
+
+
+def is_retryable_write_error(error):
+    from botocore.exceptions import ClientError, ConnectionError as BotocoreConnectionError, HTTPClientError
+    if isinstance(error, (BotocoreConnectionError, HTTPClientError)):
+        return True
+    if not isinstance(error, ClientError):
+        return False
+    code = (error.response.get('Error') or {}).get('Code') or ''
+    status = (error.response.get('ResponseMetadata') or {}).get('HTTPStatusCode')
+    return (code in {'Throttling', 'ThrottlingException', 'ThrottledException', 'RequestThrottledException',
+                     'TooManyRequestsException', 'ProvisionedThroughputExceededException',
+                     'TransactionInProgressException', 'RequestLimitExceeded', 'BandwidthLimitExceeded',
+                     'LimitExceededException', 'RequestThrottled', 'SlowDown', 'PriorRequestNotComplete',
+                     'EC2ThrottledException', 'RequestTimeout', 'RequestTimeoutException'}
+            or status in {500, 502, 503, 504})
+
+
+def single_request_copy_backoff(attempt, rng):
+    return rng() * min(SINGLE_REQUEST_COPY_BACKOFF_BASE ** attempt, SINGLE_REQUEST_COPY_MAX_BACKOFF_SECONDS)
+
+
+def copy_s3_object_repeat_safe(source_bucket, source_key, dest_bucket, dest_key, extra_args, write_token,
+                               source_size, source_version_id=None, sleep=time.sleep, rng=None):
+    extra_args = dict(extra_args or {})
+    metadata = extra_args.get('Metadata')
+    if (not write_token or extra_args.get('MetadataDirective') != 'REPLACE' or not isinstance(metadata, dict)
+            or metadata.get(_COPY_UPLOAD_TOKEN_METADATA_KEY) != write_token):
+        raise ValueError("A repeat-safe copy must replace the metadata with one that carries its write token")
+    if not isinstance(source_size, int) or source_size >= SINGLE_REQUEST_COPY_MAX_BYTES:
+        copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, extra_args=extra_args,
+                       source_version_id=source_version_id)
+        return None
+    source_region = bucket_region_for_name(source_bucket)
+    dest_region = bucket_region_for_name(dest_bucket)
+    write_client = s3_single_attempt_client_for_region(dest_region)
+    copy_source = {'Bucket': source_bucket, 'Key': source_key}
+    if source_version_id:
+        copy_source['VersionId'] = source_version_id
+    if source_region == dest_region or not lambdas_in_vpc():
+        response = write_client.copy_object(CopySource=copy_source, Bucket=dest_bucket, Key=dest_key,
+                                            **extra_args)
+    else:
+        body = s3_client_for_region(source_region).get_object(**copy_source)['Body'].read()
+        put_args = {key: value for key, value in extra_args.items() if key not in _COPY_ARGS_NOT_FOR_PUT}
+        response = write_client.put_object(Bucket=dest_bucket, Key=dest_key, Body=body, **put_args)
+    return response.get('VersionId')
 
 
 class _RegionRoutingPaginator:

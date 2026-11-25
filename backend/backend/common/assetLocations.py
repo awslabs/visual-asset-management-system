@@ -266,6 +266,23 @@ def object_key_for(location: Optional[str], relative_path: Optional[str]) -> Opt
     ``/`` names the single-file asset as a whole, not one key, and resolves to None.
     """
     loc = normalize_location(location)
+    relative = (relative_path or "").lstrip("/")
+    if loc and not loc.endswith("/") and relative and (
+            relative == loc or relative.startswith(loc + "/") or _is_preview_of(loc, relative)):
+        return relative
+    return object_key_for_path(loc, relative)
+
+
+def object_key_for_path(location: Optional[str], relative_path: Optional[str]) -> Optional[str]:
+    """The S3 key an asset-relative path names in a location, the path read only as a path in the asset.
+
+    The inverse of ``relative_path_in``: a folder location joins the path under the folder; in a single-file
+    location a path made only of the file's name, with or without a preview suffix, names the key one level up
+    its chain, and any other path names ``{file key}/{path}``. Unlike ``object_key_for``, a path that spells
+    one of the location's own keys (``/{file key}/x``) is not taken as that key: it is the companion entry
+    ``{file key}/{file key}/x``. ``/`` names a single-file asset as a whole and resolves to None.
+    """
+    loc = normalize_location(location)
     if not loc:
         return None
     relative = (relative_path or "").lstrip("/")
@@ -273,8 +290,6 @@ def object_key_for(location: Optional[str], relative_path: Optional[str]) -> Opt
         return loc + relative
     if not relative:
         return None
-    if relative == loc or relative.startswith(loc + "/") or _is_preview_of(loc, relative):
-        return relative
     name = _file_name(loc)
     # The whole path first, as relative_path_in does, then the path without a preview suffix
     for body, preview in ((relative, ""), _split_preview(relative)):

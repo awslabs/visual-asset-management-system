@@ -716,6 +716,11 @@ All six models listed above are gated on HuggingFace and require explicit licens
 | huggingface_hub             | 2.4.0 in `blenderagent`; elsewhere as each model's requirements resolve            | Apache-2.0                                                                               | Model weight download, held to pinned HuggingFace revisions                                                  |
 | pymeshfix                   | 0.18.1                                                                             | GPL-3.0                                                                                  | Mesh repair backend, selectable through the `REPAIR_BACKENDS` pipeline setting                               |
 | PyMeshLab                   | 2025.7.post1                                                                       | GPL-3.0                                                                                  | Mesh repair backend, selectable through the `REPAIR_BACKENDS` pipeline setting                               |
+| bpy                         | 4.3.0                                                                              | GPL-3.0                                                                                  | Blender as a Python module, from the SAM 3D Objects requirements (`sam3d`); not imported                     |
+| point-cloud-utils           | 0.29.5                                                                             | GPL-3.0                                                                                  | Point cloud utilities, from the SAM 3D Objects requirements (`sam3d`); not imported                          |
+| plyfile                     | 1.1.3                                                                              | GPL-3.0-or-later                                                                         | PLY file reading and writing, imported by the SAM 3D Objects code (`sam3d`)                                  |
+| igraph                      | 0.11.8                                                                             | GPL-2.0-or-later                                                                         | Graph algorithms, imported by the SAM 3D Objects mesh postprocessing (`sam3d`)                               |
+| pdoc3                       | 0.10.0                                                                             | AGPL-3.0-or-later                                                                        | Documentation generator, from the SAM 3D Objects requirements (`sam3d`); not imported                        |
 
 PyTorch by image: 2.10.0 in `stable3dgen`; 2.11.0 in `triposr`, `step1x3d` and `hunyuan3d`; 2.6.0 in `trellis2`; 2.7.1 in `blenderagent`; and 2.5.1 in `sam3d`, where upstream's own requirements fix it (`torchaudio==2.5.1+cu121`). The model rows with a short commit are checked out at that commit when the image is built.
 
@@ -748,7 +753,7 @@ paid for in GPU time.
 
 **GPL-Licensed Mesh Repair Backends**
 
-`pymeshfix` and `PyMeshLab` are licensed under GPL-3.0 and are installed in every Image to 3D container image, so those images are subject to GPL-3.0 terms whichever backends a run selects through the `REPAIR_BACKENDS` pipeline setting. The default repair ladder walks only the permissively licensed `trimesh` (MIT) and `manifold3d` (Apache-2.0) rungs, but that does not change the license terms attaching to the images. GPL-3.0 is a strong copyleft license; review its terms with your legal team before deploying the Image to 3D pipeline, particularly if you redistribute the resulting container images.
+`pymeshfix` and `PyMeshLab` are licensed under GPL-3.0 and are installed in every Image to 3D container image, so those images are subject to GPL-3.0 terms whichever backends a run selects through the `REPAIR_BACKENDS` pipeline setting. The default `REPAIR_BACKENDS` names all four backends, and the ladder reaches the GPL-3.0 rungs when the permissively licensed `trimesh` (MIT) and `manifold3d` (Apache-2.0) rungs leave the mesh unrepaired; narrowing the setting does not change the license terms attaching to the images. The `sam3d` image also installs, through the SAM 3D Objects repository's own requirements, `bpy` and `point-cloud-utils` (GPL-3.0), `plyfile` (GPL-3.0-or-later), `igraph` (GPL-2.0-or-later) and `pdoc3` (AGPL-3.0-or-later); the SAM 3D Objects code imports `plyfile` and `igraph`. GPL-3.0 is a strong copyleft license; review its terms with your legal team before deploying the Image to 3D pipeline, particularly if you redistribute the resulting container images.
 
 **Container Base Images**
 
@@ -914,3 +919,19 @@ This software includes third party software subject to the following copyrights:
 | requests     | >=2.25.0                                     | Apache-2.0                 |
 | PyJWT        | ==2.15.1 (with the `crypto` extra)           | MIT                        |
 | cryptography | >=3.4.0 (required by PyJWT's `crypto` extra) | Apache-2.0 OR BSD-3-Clause |
+
+---
+
+## THIRD PARTY COMPONENTS - TOOLS (ISAAC SIM CONNECTOR)
+
+---
+
+This software includes third party software subject to the following copyrights:
+
+**Isaac Sim Connector Content Window Connection** (`tools/ExternalIntegrations/isaacsim_vams_integration/`)
+
+| Name                                | Version                                          | License      | Notes                                                                                                                           |
+| :---------------------------------- | :----------------------------------------------- | :----------- | :------------------------------------------------------------------------------------------------------------------------------ |
+| NVIDIA Omniverse Storage API protos | `NVIDIA-Omniverse/usd-content-workspace` a52c5d7 | Apache-2.0   | Copied into `storage_adapter/proto/` with their license; the generated modules in `storage_adapter/_proto/` are built from them |
+| grpcio                              | 1.85.4 (`locks/storage/requirements.lock`)       | Apache-2.0   | Installed into the VAMS CLI's environment for the storage adapter                                                               |
+| protobuf                            | 7.36.2 (`locks/storage/requirements.lock`)       | BSD-3-Clause | Installed into the VAMS CLI's environment for the storage adapter                                                               |

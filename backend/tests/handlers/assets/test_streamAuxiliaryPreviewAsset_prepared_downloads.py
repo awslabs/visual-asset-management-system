@@ -34,12 +34,18 @@ class TestStreamRouteNeverReachesPreparedDownloads:
     @pytest.mark.parametrize("database_id", ["preparedDownloads", "db1"])
     @pytest.mark.parametrize("path", [
         "scan.e57/preview/r/octree.bin",
+        "xa1/scan.e57/preview/r/octree.bin",
         "/vams.preparedDownloads/db1/xa1/h/r1/out.zip",
         "vams.preparedDownloads/db1/xa1/h/r1/out.zip",
+        "vams.preparedDownloads/db1/xa1/preview/r1/out.zip",
     ])
-    def test_every_resolved_key_is_under_the_database(self, database_id, path):
+    @pytest.mark.parametrize("location", ["xa1/", "xa1/scan.e57"])
+    def test_every_resolved_key_is_under_the_database(self, database_id, path, location):
         module = _load()
-        key = module.resolve_asset_file_path(f"{database_id}/xa1/", path)
+        try:
+            key = module.resolve_aux_preview_key(database_id, location, path)
+        except module.VAMSGeneralErrorResponse:
+            return
         assert key.startswith(f"{database_id}/xa1/")
         assert not key.startswith(PREFIX)
 

@@ -902,7 +902,7 @@ def _check_existing_preview(stage_input: StageInput, input_basename: str, localT
     Returns the path/key of the existing preview file, or None if not found.
 
     Preview files follow the naming pattern: <input_basename>.previewFile.<ext>
-    where ext is gif, jpg, or png.
+    where ext is gif, jpg, or png. A folder of that name, and the keys under it, are not previews.
 
     A generated preview is written back beside its input file, so the check looks at the input
     file's own directory. The stage output directory is a per-execution prefix that never holds a
@@ -915,8 +915,8 @@ def _check_existing_preview(stage_input: StageInput, input_basename: str, localT
         input_dir = os.path.dirname(stage_input.objectKey) or "."
         if os.path.isdir(input_dir):
             for entry in os.listdir(input_dir):
-                if entry.startswith(preview_prefix):
-                    existing_path = os.path.join(input_dir, entry)
+                existing_path = os.path.join(input_dir, entry)
+                if entry.startswith(preview_prefix) and os.path.isfile(existing_path):
                     logger.info(f"Found existing local preview: {existing_path}")
                     return existing_path
     else:
@@ -924,9 +924,10 @@ def _check_existing_preview(stage_input: StageInput, input_basename: str, localT
         if stage_input.bucketName and stage_input.objectKey:
             input_dir = stage_input.objectKey.rsplit("/", 1)[0] + "/" if "/" in stage_input.objectKey else ""
             s3_prefix = input_dir + preview_prefix
-            existing_keys = s3.list_objects_with_prefix(
-                stage_input.bucketName, s3_prefix
-            )
+            existing_keys = [
+                key for key in s3.list_objects_with_prefix(stage_input.bucketName, s3_prefix)
+                if key[len(s3_prefix):] and "/" not in key[len(s3_prefix):]
+            ]
             if existing_keys:
                 logger.info(f"Found existing S3 preview: {existing_keys[0]}")
                 return existing_keys[0]
