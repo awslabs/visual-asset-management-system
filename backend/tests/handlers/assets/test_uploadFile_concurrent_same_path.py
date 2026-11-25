@@ -11,8 +11,9 @@ the file the winning one staged, and often both failed. Now each upload stages i
 one version of the file.
 
 These tests drive the real initialize_upload and complete_upload against moto S3 (a versioned bucket)
-and a moto upload table. Parts are sent to the presigned URLs the initialization returned, as the web
-app and the CLI send them. moto answers ListParts, AbortMultipartUpload and CompleteMultipartUpload for
+and a moto upload table; only the final copy into the asset is replaced by its effect on moto
+(`_copy_on`). Parts are sent to the presigned URLs the initialization returned, as the web app and the
+CLI send them. moto answers ListParts, AbortMultipartUpload and CompleteMultipartUpload for
 an upload id under ANY key; S3 binds an upload id to the key it was created under and answers
 NoSuchUpload for another key, so the client is wrapped to do the same (`_KeyBoundS3`).
 
@@ -141,6 +142,22 @@ class _Interleaved:
         return response
 
 
+def _copy_on(client):
+    """The final copy's effect, on moto: a new version of the destination with the body of the staged
+    object's current version, or False when the staged object is gone. These tests are about where a
+    file is staged; how the copy itself is made has its own tests."""
+    def copy(source_bucket, source_key, dest_bucket, dest_key, database_id, asset_id, extra_metadata=None,
+             source_head=None):
+        try:
+            client.copy_object(CopySource={"Bucket": source_bucket, "Key": source_key}, Bucket=dest_bucket,
+                               Key=dest_key, MetadataDirective="REPLACE",
+                               Metadata={"databaseid": database_id, "assetid": asset_id})
+        except ClientError:
+            return False
+        return True
+    return copy
+
+
 @pytest.fixture
 def env():
     with mock_aws(), ExitStack() as stack:
@@ -158,7 +175,7 @@ def env():
         s3 = _KeyBoundS3(client)
         p = lambda *a, **k: stack.enter_context(patch.object(*a, **k))  # noqa: E731
         p(uf, "s3", s3)
-        p(uf, "s3_resource", boto3.resource("s3", region_name=REGION))
+        p(uf, "copy_s3_object", side_effect=_copy_on(client))
         p(uf, "asset_upload_table", table)
         p(uf, "claims_and_roles", CLAIMS, create=True)
         p(uf, "check_user_rate_limit", return_value=True)
