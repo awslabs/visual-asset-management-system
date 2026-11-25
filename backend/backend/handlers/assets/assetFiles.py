@@ -2016,28 +2016,37 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, 
 
         # Build query kwargs using the table PK directly (no IndexName needed)
         # fileKey is the table sort key, so we can use it directly in the KeyConditionExpression
-        query_kwargs = {
-            'KeyConditionExpression': Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
-        }
+        version_key_condition = Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
 
-        # Add fileKey to key condition if provided (fileKey is the table sort key)
+        # A version entry's fileKey is the file's asset-relative path without a leading slash. An
+        # entry stored from a caller's file list before #1795 can carry one, so a single-file lookup
+        # (fileKey is the table sort key) reads the unslashed form first and the slashed form on a miss.
         if relativeFileKey:
-            query_kwargs['KeyConditionExpression'] = Key('databaseId:assetId:assetVersionId').eq(version_composite_key) & Key('fileKey').eq(relativeFileKey)
-
-        # Page to exhaustion: a version snapshot can hold more files than fit in one
-        # 1 MB query page, and a partial file list would misreport the version. A
-        # single-file lookup (relativeFileKey set) returns one item and never pages.
-        items = query_all_items(asset_version_files_table, **query_kwargs)
+            normalized_file_key = relativeFileKey.lstrip('/')
+            items = []
+            for stored_file_key in (normalized_file_key, '/' + normalized_file_key):
+                # A single-file lookup returns one item and never pages.
+                items = query_all_items(
+                    asset_version_files_table,
+                    KeyConditionExpression=version_key_condition & Key('fileKey').eq(stored_file_key))
+                if items:
+                    break
+        else:
+            # Page to exhaustion: a version snapshot can hold more files than fit in one
+            # 1 MB query page, and a partial file list would misreport the version.
+            items = query_all_items(asset_version_files_table, KeyConditionExpression=version_key_condition)
 
         # If no items found, return None
         if not items:
             return None
 
-        # Reconstruct the file versions structure
+        # Reconstruct the file versions structure. Every reader of these entries compares them with a
+        # path without its leading slash, so the key is handed out in that form whatever form it is
+        # stored in (#1795).
         files = []
         for item in items:
             file_info = {
-                'relativeKey': item.get('fileKey'),
+                'relativeKey': str(item.get('fileKey') or '').lstrip('/'),
                 'versionId': item.get('versionId'),
                 'size': item.get('size'),
                 'lastModified': item.get('lastModified'),
@@ -3526,7 +3535,8 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
             pk_prefix = f"{databaseId}:{assetId}:"
 
             for record in all_version_file_records:
-                record_file_key = record.get('fileKey', '')
+                # Compared without the leading slash an entry stored before #1795 can carry
+                record_file_key = str(record.get('fileKey') or '').lstrip('/')
 
                 # Only include records that match this file's relative path
                 if record_file_key != relative_path_for_lookup:
