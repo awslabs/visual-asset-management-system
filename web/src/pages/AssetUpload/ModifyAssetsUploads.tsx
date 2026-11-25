@@ -47,6 +47,7 @@ import { fetchAsset, fetchDatabase } from "../../services/APIService";
 import {
     getPreviewFileExtension,
     isPreviewExtensionAllowed,
+    parseAllowedExtensions,
 } from "../../utils/fileExtensionValidation";
 import { usePageTitle } from "../../hooks/usePageTitle";
 
@@ -393,10 +394,7 @@ export default function ModifyAssetsUploadsPage() {
     // Check if we're uploading to root path
     const isRootPath = destination === "/";
 
-    const hasRestrictions =
-        !!restrictFileUploadsToExtensions &&
-        restrictFileUploadsToExtensions.trim() !== "" &&
-        restrictFileUploadsToExtensions.toLowerCase() !== ".all";
+    const hasRestrictions = parseAllowedExtensions(restrictFileUploadsToExtensions) !== null;
 
     const nothingSelected = fileItems.length === 0 && (isRootPath ? !previewFile : true);
     const uploadDisabled =
