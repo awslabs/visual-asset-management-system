@@ -2766,7 +2766,7 @@ paths:
                             schema:
                                 type: string
                 "400":
-                    description: Invalid parameters, file too large for streaming, or unallowed file type.
+                    description: "Invalid parameters, file too large for streaming, or unallowed file type; or a path that names no file of this asset (`message` \"The file path does not name a file in this asset.\")."
                     content:
                         application/json:
                             schema:
@@ -2804,7 +2804,7 @@ paths:
                       $ref: '#/components/schemas/id_regex'
                 - name: "proxy+"
                   in: "path"
-                  description: "File path within the auxiliary preview bucket to stream. Can include subdirectories and filename."
+                  description: "The viewer data path {file}/preview/{data path}, for example scans/site.laz/preview/PotreeViewer/metadata.json. {file} names a file the asset holds, for folder and single-file assets, by its full S3 key (the key the file list returns) or by its path in the asset (the relativePath the file list returns). A path that starts with the key of a file the asset holds, followed by /preview/, is read as the full key; any other path as the path in the asset. URL-encode each segment and keep the slashes."
                   required: true
                   schema:
                     type: "string"
@@ -2861,7 +2861,7 @@ paths:
                                 type: string
                                 example: "no-cache, no-store"
                 "400":
-                    description: Invalid parameters or unallowed file type.
+                    description: "Invalid parameters or unallowed file type; or a path that names no file of this asset (`message` \"The file path does not name a file in this asset.\")."
                     content:
                         application/json:
                             schema:
@@ -2899,7 +2899,7 @@ paths:
                       $ref: '#/components/schemas/id_regex'
                 - name: "proxy+"
                   in: "path"
-                  description: "File path within the auxiliary preview bucket to check. Can include subdirectories and filename."
+                  description: "The viewer data path {file}/preview/{data path}, for example scans/site.laz/preview/PotreeViewer/metadata.json. {file} names a file the asset holds, for folder and single-file assets, by its full S3 key (the key the file list returns) or by its path in the asset (the relativePath the file list returns). A path that starts with the key of a file the asset holds, followed by /preview/, is read as the full key; any other path as the path in the asset. URL-encode each segment and keep the slashes."
                   required: true
                   schema:
                     type: "string"

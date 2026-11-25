@@ -761,11 +761,18 @@ Returns file metadata without the file body.
 
 **Request Parameters:**
 
-| Parameter    | Location | Type   | Required | Description                                         |
-| ------------ | -------- | ------ | -------- | --------------------------------------------------- |
-| `databaseId` | path     | string | Yes      | Database identifier.                                |
-| `assetId`    | path     | string | Yes      | Asset identifier.                                   |
-| `{proxy+}`   | path     | string | Yes      | The relative file path within the auxiliary bucket. |
+| Parameter    | Location | Type   | Required | Description                                                    |
+| ------------ | -------- | ------ | -------- | -------------------------------------------------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier.                                           |
+| `assetId`    | path     | string | Yes      | Asset identifier.                                              |
+| `{proxy+}`   | path     | string | Yes      | The viewer data path `{file}/preview/{data path}` (see below). |
+
+A file's viewer data lives in its own `preview/` folder, so the path is the file, then `/preview/`, then the data path a pipeline wrote (for example `scans/site.laz/preview/PotreeViewer/metadata.json`). The file part names a file the asset holds in either form, for folder and single-file assets:
+
+-   its full S3 key, the `key` the file list returns (`vams/a1/scans/site.laz` for an asset in a bucket registered under the base prefix `vams/`), the form the web viewers send for a file the list showed;
+-   its path in the asset, the file list's `relativePath` (`/scans/site.laz`).
+
+A path that starts with the key of a file the asset holds, followed by `/preview/`, is read as the full key, and any other path as the path in the asset. URL-encode each segment and keep the slashes, so a viewer that reads the files beside `metadata.json` can resolve them. A path that names no file of this asset is refused with `400` and the `message` `The file path does not name a file in this asset.`
 
 **Response:**
 
@@ -773,11 +780,12 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                   |
-| ------ | ----------------------------------------------------------------------------- |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable. |
-| `404`  | File not found.                                                               |
-| `500`  | Internal server error.                                                        |
+| Status | Description                                                                                                                                         |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters or unallowed file type, or the path names no file of this asset (`message` `The file path does not name a file in this asset.`). |
+| `403`  | Not authorized to stream this file, or the asset is not marked distributable.                                                                       |
+| `404`  | File not found.                                                                                                                                     |
+| `500`  | Internal server error.                                                                                                                              |
 
 ---
 
