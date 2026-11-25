@@ -14,7 +14,6 @@ themselves and pass it here, so the two answer identically.
 table and write no log. The caller audits and raises.
 """
 
-import os
 import time
 from typing import NamedTuple, Optional
 
@@ -72,12 +71,31 @@ def completion_refusal(upload_record: dict, database_id: str, asset_id: str, upl
     return None
 
 
+def file_name_has_extension(file_path: str, extension: str) -> bool:
+    """Whether the file's name ends with ``extension`` (lower-case, with its leading dot).
+
+    An extension may have several parts (``.tar.gz``), so the name is matched by its ending rather
+    than by its last suffix. The part of the name before the extension must hold a character other
+    than a dot, as for os.path.splitext: ``.pdf`` and ``..pdf`` have no extension. The same rule is
+    in web/src/utils/fileExtensionValidation.ts and tools/VamsCLI/vamscli/utils/file_processor.py.
+    """
+    name = file_path.rsplit('/', 1)[-1].lower()
+    # An entry that does not start with a dot or ends with one ('pdf', '..', '.tar.') names no
+    # extension and matches no file, as it never matched a last suffix.
+    if not extension.startswith('.') or extension.endswith('.') or not name.endswith(extension):
+        return False
+    return name[:-len(extension)].strip('.') != ''
+
+
 def validate_file_extension_against_database(file_path: str, allowed_extensions: str) -> tuple:
     """Validate file extension against database restrictions
 
+    A file is allowed when its name ends with one of the listed extensions, matched
+    case-insensitively by file_name_has_extension: `archive.tar.gz` matches `.tar.gz` and `.gz`.
+
     Args:
         file_path: The file path to validate
-        allowed_extensions: Comma-delimited list of allowed extensions (e.g., ".pdf,.jpg,.png")
+        allowed_extensions: Comma-delimited list of allowed extensions (e.g., ".pdf,.jpg,.tar.gz")
 
     Returns:
         Tuple of (is_valid, error_message)
@@ -95,11 +113,7 @@ def validate_file_extension_against_database(file_path: str, allowed_extensions:
     if ".all" in allowed_list:
         return True, None
 
-    # Extract file extension (case-insensitive)
-    file_extension = os.path.splitext(file_path)[1].lower()
-
-    # Validate extension
-    if file_extension not in allowed_list:
+    if not any(file_name_has_extension(file_path, ext) for ext in allowed_list):
         error_message = f"Database does not allow this file extension. Allowed extensions: {', '.join(allowed_list)}"
         return False, error_message
 

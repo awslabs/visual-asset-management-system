@@ -157,6 +157,10 @@ API keys provide an alternative authentication method for VAMS, enabling program
 
 The `api-key` commands manage keys for any user and require API-level access to the key management endpoints. The [`api-key user` sub-commands](#api-key-user-list) let any user manage their own keys without administrative access.
 
+:::note[Keys cannot create or extend keys]
+A profile signed in with an API key cannot run `api-key create`, `api-key user create`, or `api-key update` / `api-key user update` with `--expires-at`. The API answers `403` and the CLI reports `Permission Denied: Access forbidden. API keys cannot be created with an API key. ...` or `Permission Denied: Access forbidden. An API key's expiration cannot be changed with an API key. ...`. Run those commands from a profile signed in through your identity provider: `vamscli auth login -u <user>` on an Amazon Cognito deployment, or `vamscli auth login --user-id <user> --token-override-stdin` with a token from the external OAuth identity provider. `list`, `get`, `delete`, and `update` with only `--description` or `--is-active` work with a key.
+:::
+
 :::warning[API Key Security]
 The plaintext API key value is displayed only once, at creation time, and cannot be retrieved afterwards. Store it securely immediately. Only a SHA-256 hash of the key is retained in Amazon DynamoDB (encrypted at rest with AWS KMS). Expired keys are rejected at the authorizer level. A deleted or deactivated key loses access shortly afterward: VAMS briefly caches API key authorization, so the key can keep working for up to about 45 seconds (see [Deleting an API key](../../user-guide/api-keys.md#deleting-an-api-key)).
 :::
@@ -438,6 +442,8 @@ vamscli api-key create --name "GitHub Actions" --user-id ci-bot@example.com --de
 ```
 
 ### API key rotation
+
+Run rotation from a profile signed in through your identity provider, not with the key being rotated: a key cannot create its successor (see [Keys cannot create or extend keys](#api-key-management)).
 
 ```bash
 # Create a new key with the same user ID

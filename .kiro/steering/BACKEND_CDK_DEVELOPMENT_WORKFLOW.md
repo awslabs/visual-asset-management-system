@@ -699,11 +699,14 @@ The file-key validators (`RELATIVE_FILE_PATH`, `RELATIVE_FILE_PATH_ARRAY`, `DOWN
 `MAX_S3_OBJECT_KEY_BYTES` (1024, the Amazon S3 object-key limit) — bytes, not characters. The
 validator sees only the asset-relative part, so the handlers that resolve a key against the asset prefix
 re-check the RESOLVED key before their first S3 call and answer a generic `400` that does not echo the
-key: `streamAsset.py`, `streamAuxiliaryPreviewAsset.py`, `downloadAsset.py`, `uploadFile.py`
-`initialize_upload` (final and `temp-uploads/` key, in the pre-loop block so a refused batch creates no
-multipart upload) and `assetFiles.py` `create_folder` / `move_file` / `copy_file` (destination key).
-Every guard calls `common/validators.exceeds_s3_object_key_limit(key)` rather than re-implementing the
-byte comparison; an over-long key is a `400`, never an S3 `ClientError` reported as a `500` (issue #407).
+key: `streamAsset.py`, `streamAuxiliaryPreviewAsset.py`, `downloadAsset.py` and `assetFiles.py`
+`create_folder` / `move_file` / `copy_file` (destination key). `uploadFile.py` `initialize_upload` holds
+the final key to the upload bound `common/s3PathPatterns.max_uploaded_file_key_bytes(baseAssetsPrefix)`
+(998 at a bucket root; the per-upload `temp-uploads/{upload tag}/` staging key must fit too), in the
+pre-loop block so a refused batch creates no multipart upload, and its `400` names that bound
+(`File key is too long to upload: a file key, including its asset location, may be at most N bytes`).
+Every guard calls `common/validators.exceeds_s3_object_key_limit(key[, limit])` rather than
+re-implementing the byte comparison; an over-long key is a `400`, never an S3 `ClientError` reported as a `500` (issue #407).
 
 #### **Request/Response Model Strategy**:
 
@@ -957,6 +960,14 @@ is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-
     `claims_and_roles["apiKeyId"]` is the id of the key an API-key caller authenticated with (the
     authorizer's `vams:apiKeyId`), for a handler that decides by the key itself, and `None` for every
     other caller.
+-   **An API key cannot create a key or change an expiration.** A caller whose `authMethod` (from
+    `request_to_claims`, set by the authorizer's `vams:authMethod`) is `apiKey` is answered `403` on
+    API-key create (`POST`) and on any update that carries `expiresAt` (checked before the key is
+    read), in every scope, so a key cannot mint its successor or extend itself; the refusal runs in
+    addition to Tier 1, after `enforceAPI` has allowed the route. Reads, deletes and updates of only
+    `description` or `isActive` follow Tier 1, and JWT callers (Amazon Cognito or the external IdP)
+    and Lambda cross-calls are unaffected (issue #433,
+    `tests/handlers/auth/test_apiKeyService_api_key_callers.py`).
 -   **A temporary session key cannot mint or extend a key.** A temporary session key is an API key
     named with `TEMPORARY_SESSION_KEY_NAME_PREFIX` (`temporary-session-`, `common/constants.py`) that
     a backend component mints for one session through a Lambda cross-call. API-key create and update

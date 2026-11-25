@@ -578,6 +578,8 @@ Each entry in `files` is an object:
 
 A request accepts at most 1,000 files and 1,500 total parts across all files, and at most 10,000 parts per file; a request over any of these is refused with `400`. Because every part's presigned URL carries the file's key, a request whose estimated response is over 5 MiB is also refused with `400` ("Upload request too large; split the files across several requests") even inside those limits; this can happen when keys are long and use non-ASCII characters. Split such a request, or send fewer, larger parts. See [Upload request size limits](../troubleshooting/known-limitations.md#upload-request-size-limits).
 
+A file's key, which is its asset's location followed by its `relativeKey`, may be at most 998 bytes of UTF-8 in a bucket registered at its root, and the length of the bucket's base prefix less than that otherwise. The upload is staged under a longer key that must fit the 1,024-byte Amazon S3 limit. A longer key is refused with `400` (`VAMS General Error: File key is too long to upload: a file key, including its asset location, may be at most N bytes`, where N is the bound for the asset's bucket), and no multipart upload is created for any file in the request. See [Amazon S3 quotas](../additional/quotas.md#amazon-s3).
+
 **Response:**
 
 ```json
@@ -602,15 +604,15 @@ A request accepts at most 1,000 files and 1,500 total parts across all files, an
 
 **Error Responses:**
 
-| Status | Description                                                                                                                          |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, asset not found, blocked file extension or MIME type, or a request over a per-request limit described above.     |
-| `403`  | Not authorized to upload files to this asset.                                                                                        |
-| `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60). |
-| `500`  | Internal server error.                                                                                                               |
+| Status | Description                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, asset not found, a blocked file extension or one the database does not allow, a file key over the upload bound, or a request over a per-request limit described above. |
+| `403`  | Not authorized to upload files to this asset.                                                                                                                                              |
+| `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60).                                                       |
+| `500`  | Internal server error.                                                                                                                                                                     |
 
 :::info[Blocked File Types]
-For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked. The destination file name of a move, rename or copy gets the same extension check.
+For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. The destination file name of a move, rename or copy gets the same extension check. The blocked MIME type list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
 :::
 
 :::info[Single-file assets]

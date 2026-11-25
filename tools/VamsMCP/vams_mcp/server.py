@@ -3249,8 +3249,9 @@ if CONFIG.enable_writes:
 
         What could not be stopped comes back in `warnings` and `notAbortable` (one {resourceType, label,
         stageName, locator} per sub-process; in a group abort each carries the member's `executionId`).
-        The execution still reads ABORTED, so either array non-empty means compute is still running: do
-        NOT conclude that everything stopped."""
+        Either array non-empty means compute is still running: do NOT conclude that everything stopped.
+        A run that was not running answers a `message` naming its status, not "Execution aborted": do NOT
+        report it aborted."""
         return _unwrap_message_with_warnings(
             CLIENT.api.abort_execution(execution_id, group_id=group_id), siblings=("warnings", "notAbortable"))
 

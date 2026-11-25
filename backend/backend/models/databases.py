@@ -75,9 +75,9 @@ class CreateDatabaseRequestModel(BaseModel, extra='ignore'):
                         raise ValueError("Each extension must start with a dot (e.g., '.pdf')")
                     if len(ext) < 2:
                         raise ValueError("Each extension must have at least one character after the dot")
-                    # Check for valid characters (alphanumeric and dot only)
-                    if not all(c.isalnum() or c == '.' for c in ext):
-                        raise ValueError("Extensions may contain only letters, digits, and dots")
+                    # Letters, digits, '_' (.x_t) and '.' (a multi-part extension such as .tar.gz)
+                    if not all(c.isalnum() or c in '._' for c in ext):
+                        raise ValueError("Extensions may contain only letters, digits, underscores, and dots")
             
         (valid, message) = validate(validation_dict)
         if not valid:
@@ -191,9 +191,9 @@ class UpdateDatabaseRequestModel(BaseModel, extra='ignore'):
                         raise ValueError("Each extension must start with a dot (e.g., '.pdf')")
                     if len(ext) < 2:
                         raise ValueError("Each extension must have at least one character after the dot")
-                    # Check for valid characters (alphanumeric and dot only)
-                    if not all(c.isalnum() or c == '.' for c in ext):
-                        raise ValueError("Extensions may contain only letters, digits, and dots")
+                    # Letters, digits, '_' (.x_t) and '.' (a multi-part extension such as .tar.gz)
+                    if not all(c.isalnum() or c in '._' for c in ext):
+                        raise ValueError("Extensions may contain only letters, digits, underscores, and dots")
         
         if validation_dict:
             (valid, message) = validate(validation_dict)

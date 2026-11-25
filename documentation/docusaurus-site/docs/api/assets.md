@@ -214,6 +214,8 @@ Each entry in `files` is an object:
 | `file_size`   | integer | No       | File size in bytes. Either `file_size` or `num_parts` must be provided.               |
 | `num_parts`   | integer | No       | Number of multipart upload parts. Either `file_size` or `num_parts` must be provided. |
 
+A file's key, including its asset location, is held to the same bound as an upload: 998 bytes of UTF-8 in a bucket registered at its root, less the bucket's base prefix otherwise. A longer key is refused with `400` at the initialize stage. That check needs the asset's bucket, so a missing asset has already been created when it runs. See [Upload File](files.md#upload-file).
+
 ```json
 {
     "databaseId": "my-database",
@@ -373,7 +375,7 @@ Retrieves detailed information about a specific asset, including version informa
 
 `PUT /database/{databaseId}/assets/{assetId}`
 
-Updates the editable fields of an existing asset. Only the provided fields are updated; omitted fields and fields sent as `null` remain unchanged, so at least one field must carry a non-null value. An empty `tags` array clears the tag list, subject to the required tag types described for `tags` below.
+Updates the editable fields of an existing asset. Only the provided fields are updated; omitted fields and fields sent as `null` remain unchanged, so at least one field must carry a non-null value. An empty `tags` array clears the tag list, subject to the required tag types described for `tags` below. A change to `assetName` or `tags` is also authorized against the asset as it will be stored: the caller needs `GET` on the stored asset and `GET` and `PUT` on the changed one, or the request answers `403` and changes nothing.
 
 **Request Parameters:**
 
@@ -414,12 +416,12 @@ Updates the editable fields of an existing asset. Only the provided fields are u
 
 **Error Responses:**
 
-| Status | Description                             |
-| ------ | --------------------------------------- |
-| `400`  | Invalid parameters or validation error. |
-| `403`  | Not authorized to update this asset.    |
-| `404`  | Asset not found.                        |
-| `500`  | Internal server error.                  |
+| Status | Description                                                              |
+| ------ | ------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or validation error.                                  |
+| `403`  | Not authorized to update this asset, or to give it the new name or tags. |
+| `404`  | Asset not found.                                                         |
+| `500`  | Internal server error.                                                   |
 
 ---
 

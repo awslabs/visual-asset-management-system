@@ -484,6 +484,16 @@ SKIPPED_EXECUTION_LOG_MESSAGE = (
 # What the abort route answers (400) for a SKIPPED record, which has nothing to stop.
 SKIPPED_EXECUTION_ABORT_MESSAGE = "This execution was skipped and has nothing to abort."
 
+# What the abort route answers (200). "Execution aborted" whenever this call stopped a running execution,
+# whichever writer recorded ABORTED first. The not-running message when the execution was already
+# terminal, or finished on its own between the abort's read and its write. The suffix is added when the
+# abort still sent a stop request to a sub-process of a pipeline that did not finish on its own
+# (ABORT_RESWEPT_TERMINAL_STATUSES).
+EXECUTION_ABORTED_MESSAGE = "Execution aborted"
+EXECUTION_NOT_RUNNING_ABORT_MESSAGE = "Execution was not running (status {status}), so it was not aborted."
+EXECUTION_NOT_RUNNING_RESWEPT_SUFFIX = (
+    " The sub-processes of its pipelines that did not finish on their own were sent a stop request.")
+
 # Terminal pipeline-row statuses VAMS writes on a step it stopped without stopping the step's
 # sub-processes for certain: ABORTED by an abort, and ABORTED or TIMED_OUT by a read that observed the
 # run stopped outside VAMS (_mark_pipelines_for_reconciled_terminal). An abort sweeps these rows again;
@@ -1579,9 +1589,10 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         return authorization_error(body={'message': "Not Authorized"})
 
 
-def get_execution_main_row(execution_id):
+def get_execution_main_row(execution_id, consistent_read=False):
     """Fetch the single V2 main execution row by workflowExecutionId (PK), or None."""
-    return ea.read_execution_main_row(dynamodb.Table(workflow_execution_database_v2), execution_id)
+    return ea.read_execution_main_row(dynamodb.Table(workflow_execution_database_v2), execution_id,
+                                      consistent_read=consistent_read)
 
 
 def get_pipeline_execution_rows(execution_id):
@@ -1802,6 +1813,23 @@ def _abort_registered_sub_process(sub):
     logger.info(f"Registered sub-process of type '{resource_type}' cannot be aborted by VAMS: {locator}")
     return (f"Sub-process of type '{resource_type}' ({eo.display_identifier(locator)}) could not be "
             f"aborted: VAMS cannot stop this resource type; it may still be running.")
+
+
+def _sends_stop_request(sub):
+    """Whether `_abort_registered_sub_process` sends a stop request for this registration: an abortable
+    type that carries the locator its stop call addresses. Mirrors that dispatcher's locator checks."""
+    resource_type = sub.get("resourceType", "") or RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION
+    if resource_type == RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION:
+        return bool(sub.get("executionArn"))
+    if resource_type == RESOURCE_TYPE_BATCH_JOB:
+        return bool(sub.get("jobId") or sub.get("jobArn"))
+    if resource_type == RESOURCE_TYPE_DEADLINE_CLOUD_JOB:
+        return bool(sub.get("jobId") and sub.get("farmId") and sub.get("queueId"))
+    if resource_type == RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB:
+        return bool(sub.get("trainingJobArn"))
+    if resource_type == RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION:
+        return bool(sub.get("pipelineExecutionArn"))
+    return False
 
 
 def _not_abortable_entry(sub):
@@ -2130,7 +2158,12 @@ def abort_execution(event, execution_id):
     Repeating an abort is a supported operation and is the remedy for a sub-process whose
     asynchronous registration landed after the previous abort's last read: rows an earlier abort
     stamped ABORTED, and rows a read marked ABORTED or TIMED_OUT for a run stopped outside VAMS, are
-    swept again, while rows that finished on their own are left alone."""
+    swept again, while rows that finished on their own are left alone.
+
+    The response says "Execution aborted" whenever this call stopped a running execution, including when
+    another writer (the Step Functions status-change push for this call's own stop, say) recorded ABORTED
+    first. An execution that was not running (already terminal, or finished on its own between the read
+    and the guarded write) answers a 200 whose message names its status instead."""
     main_item = get_execution_main_row(execution_id)
     if not main_item:
         return validation_error(status_code=404, body={'message': "Execution not found"}, event=event)
@@ -2186,8 +2219,11 @@ def abort_execution(event, execution_id):
     # The same holds for a row a read marked ABORTED or TIMED_OUT for a run stopped outside VAMS: the
     # read stopped none of its sub-processes (ABORT_RESWEPT_TERMINAL_STATUSES).
     pre_terminal_pipelines = set()
+    # Stop requests this call sent to registered or discovered sub-processes.
+    stop_requests = 0
 
     def _stop_row_sub_processes(row):
+        nonlocal stop_requests
         saw_deadline_job = False
         for sub in row.get('registeredSubExecutions', []) or []:
             sub = sub or {}
@@ -2201,6 +2237,8 @@ def abort_execution(event, execution_id):
             # SageMaker training jobs / pipeline executions are stopped; a resource type with no stop
             # API surfaces a warning naming what was left running AND a structured notAbortable entry,
             # so the caller is not told the abort was complete when it was not.
+            if _sends_stop_request(sub):
+                stop_requests += 1
             warning = _abort_registered_sub_process(sub)
             if warning:
                 warnings.append(warning)
@@ -2237,6 +2275,7 @@ def abort_execution(event, execution_id):
             # No non-terminal job carries this execution's id: either it finished on its own or it
             # was never submitted. Both are fine, and neither leaves work running.
             return
+        stop_requests += 1
         ok, err = _cancel_deadline_job_reporting(farm_id, queue_id, job_id)
         if not ok:
             warnings.append(
@@ -2286,7 +2325,8 @@ def abort_execution(event, execution_id):
     # 4) Mark the main row ABORTED (unless it already reached a terminal state). The status read above
     # and the write below are separate calls, so the write carries the same terminal guard: an end-state
     # lambda that finishes the execution inside that window keeps its status instead of being reverted.
-    if main_item.get('executionStatus', '') not in TERMINAL_STATUSES:
+    prior_status = main_item.get('executionStatus', '')
+    if prior_status not in TERMINAL_STATUSES:
         main_item['executionStatus'] = ABORTED_STATUS
         if not main_item.get('executionStopDate'):
             main_item['executionStopDate'] = now
@@ -2319,7 +2359,29 @@ def abort_execution(event, execution_id):
             completed_at=main_item['executionStopDate'],
             execution_group_id=main_item.get('executionGroupId', ''))
 
-    logger.info(f"Aborted execution {execution_id}")
+    if aborted_here:
+        message = EXECUTION_ABORTED_MESSAGE
+        logger.info(f"Aborted execution {execution_id}")
+    else:
+        # Already terminal when read, or another writer recorded a terminal status before the guarded
+        # write. In the second case the local row now says ABORTED, so the stored status is read back,
+        # strongly consistent so that it is the status that refused the write.
+        if prior_status in TERMINAL_STATUSES:
+            final_status = prior_status
+        else:
+            final_status = (get_execution_main_row(execution_id, consistent_read=True) or {}).get(
+                'executionStatus') or "unknown"
+        if prior_status not in TERMINAL_STATUSES and final_status == ABORTED_STATUS:
+            # This call stopped the running execution, and another writer recorded ABORTED first: the
+            # Step Functions status-change push for this call's own stop, a concurrent abort, or a read
+            # that reconciled the stop. That writer announced the completion, so no event is sent here.
+            message = EXECUTION_ABORTED_MESSAGE
+            logger.info(f"Aborted execution {execution_id}; another writer recorded ABORTED first")
+        else:
+            message = EXECUTION_NOT_RUNNING_ABORT_MESSAGE.format(status=final_status)
+            if stop_requests:
+                message += EXECUTION_NOT_RUNNING_RESWEPT_SUFFIX
+            logger.info(f"Abort of execution {execution_id}: not running ({final_status}), status left as is")
     # AUDIT LOG: execution aborted — it stops a run mid-flight, so who stopped it is audit-worthy.
     log_actions(event, "workflowExecutionAbort", {
         "executionId": execution_id,
@@ -2329,7 +2391,7 @@ def abort_execution(event, execution_id):
     })
     # Include a "warnings" list only when a best-effort sub-process abort failed, and a "notAbortable"
     # list only when a registered sub-process is of a type VAMS cannot stop.
-    body = {'message': "Execution aborted"}
+    body = {'message': message}
     if warnings:
         body['warnings'] = warnings
     if not_abortable_subs:
