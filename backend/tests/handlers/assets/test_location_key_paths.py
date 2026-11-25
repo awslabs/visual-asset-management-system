@@ -30,6 +30,7 @@ os.environ.setdefault("SEND_EMAIL_FUNCTION_NAME", "test-send-email-function")
 os.environ.setdefault("PRESIGNED_URL_TIMEOUT_SECONDS", "3600")
 
 from backend.backend.handlers.assets import assetFiles  # noqa: F401,E402
+from backend.backend.handlers.assets import assetVersions as av  # noqa: E402
 from backend.backend.handlers.assets import uploadFile  # noqa: F401,E402
 from backend.tests.handlers.assets.test_uploadFile_preview_extension_init import (  # noqa: E402
     _asset as _upload_asset, _initialize_upload_env, _request)
@@ -321,6 +322,52 @@ class TestStream:
         assert response["statusCode"] == 400
         s3.get_object.assert_not_called()
         s3.head_object.assert_not_called()
+
+
+SINGLE_FILE = "p/inner.txt"
+
+
+@pytest.mark.unit
+class TestStoredVersionPathsOfASingleFileAsset:
+    """R2: a version record's relativeKey is a path in the asset, never a key. In a single-file asset ``p/inner.txt``
+    the companion entry whose path spells the location (``/p/inner.txt/x.obj``) is the key
+    ``p/inner.txt/p/inner.txt/x.obj``, not the companion ``p/inner.txt/x.obj``."""
+
+    @pytest.mark.parametrize("relative,expected", [
+        ("p/inner.txt/x.obj", "p/inner.txt/p/inner.txt/x.obj"),
+        ("x.obj", "p/inner.txt/x.obj"),
+        ("inner.txt", SINGLE_FILE),
+        ("inner.txt.previewFile.png", "p/inner.txt.previewFile.png"),
+    ])
+    def test_version_create_checks_the_key_the_path_names(self, relative, expected):
+        from models.assetsV3 import AssetFileVersionItemModel
+        client = MagicMock()
+        with patch.object(av, "s3_client", client), patch.object(av, "is_file_archived", return_value=False):
+            assert av.validate_s3_files_exist("bkt", SINGLE_FILE, [
+                AssetFileVersionItemModel(relativeKey=relative, versionId="v1")]) == []
+        assert client.head_object.call_args.kwargs["Key"] == expected
+
+    def test_a_revert_restores_the_companion_entry_the_path_names(self):
+        request = MagicMock(assetVersionId="1", revertMetadata=False, comment="")
+        copy = MagicMock(return_value="s3v-new")
+        files = [{"relativeKey": "p/inner.txt/x.obj", "versionId": "s3v1", "size": 1, "etag": "e"}]
+        with patch.object(av, "get_asset_with_permissions", return_value={"databaseId": "db1", "assetId": "a1"}), \
+                patch.object(av, "get_asset_s3_location", return_value=("bkt", SINGLE_FILE)), \
+                patch.object(av, "nested_locations_for", return_value=MagicMock(keep=lambda key: True)), \
+                patch.object(av, "get_asset_version_metadata", return_value={"assetVersionId": "1"}), \
+                patch.object(av, "get_asset_file_versions", return_value={"files": files}), \
+                patch.object(av, "reserve_next_asset_version", return_value="3"), \
+                patch.object(av, "does_file_version_exist", return_value=True), \
+                patch.object(av, "copy_s3_object_version", copy), \
+                patch.object(av, "delete_assetAuxiliary_files", MagicMock()), \
+                patch.object(av, "save_asset_file_versions", return_value=True), \
+                patch.object(av, "save_asset_metadata_version", return_value=True), \
+                patch.object(av, "stamp_asset_version_provenance", MagicMock()), \
+                patch.object(av, "finalize_asset_version", MagicMock()), \
+                patch.object(av, "send_subscription_email", MagicMock()), \
+                patch.object(av, "MAX_PARALLEL_S3_WORKERS", 1):
+            av.revert_asset_version("db1", "a1", request, {"tokens": ["tester"], "roles": []})
+        assert copy.call_args.args[1] == "p/inner.txt/p/inner.txt/x.obj"
 
 
 @pytest.mark.unit

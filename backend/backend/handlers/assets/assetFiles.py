@@ -47,7 +47,7 @@ from common.assetLocations import (
     NESTED_PATH_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations,
     _is_preview_of, aux_owner_filter, aux_scope, contains,
     fill_location_attributes, folder_listing_prefix, held_objects, in_folder, is_folder_location,
-    names_own_object, normalize_base_prefix, object_key_for, object_key_for_request, relative_path_in,
+    names_own_object, normalize_base_prefix, object_key_for_path, object_key_for_request, relative_path_in,
     viewer_data_prefix, viewer_data_scope,
 )
 from common.fileAttribution import nested_locations_of_asset
@@ -3968,7 +3968,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
     # A snapshot taken before nested assets were left out can name a nested asset's files; they are not listed
     nested = nested_locations_for(asset, bucket, key)
     versioned_files = [file_info for file_info in asset_file_versions.get('files', [])
-                       if not nested or nested.keep(object_key_for(key, file_info.get('relativeKey', '')) or '')]
+                       if not nested or nested.keep(object_key_for_path(key, file_info.get('relativeKey', '')) or '')]
     logger.info(f"Found {len(versioned_files)} files in version snapshot")
 
     if request_model.basic:
@@ -3979,7 +3979,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
 
         for file_info in versioned_files:
             relative_key = file_info.get('relativeKey', '')
-            full_file_key = object_key_for(key, relative_key)
+            full_file_key = object_key_for_path(key, relative_key)
 
             # Skip preview files — group them under their base file
             if is_preview_file(full_file_key):
@@ -4100,7 +4100,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
 
             def _check_permanently_deleted(relative_key_to_check: str) -> Tuple[str, bool]:
                 """Check if a single file has been permanently deleted from S3."""
-                full_key = object_key_for(key, relative_key_to_check)
+                full_key = object_key_for_path(key, relative_key_to_check)
                 try:
                     versions_response = s3_client.list_object_versions(
                         Bucket=bucket,
@@ -4131,7 +4131,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                         version_info = versioned_file_lookup[relative_key]
                         file_name = relative_key.rsplit('/', 1)[-1] if '/' in relative_key else relative_key
                         relative_path = '/' + relative_key.lstrip('/')
-                        full_s3_key = object_key_for(key, relative_key)
+                        full_s3_key = object_key_for_path(key, relative_key)
 
                         item = {
                             'fileName': file_name,
@@ -4156,7 +4156,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
         # Only preview files that are part of this version snapshot are considered
         version_preview_candidates = {}  # base file index -> [(preview relative key, lastModified, False)]
         for relative_key, version_info in versioned_file_lookup.items():
-            full_file_key = object_key_for(key, relative_key)
+            full_file_key = object_key_for_path(key, relative_key)
             if is_preview_file(full_file_key):
                 base_key_for_preview = get_base_file_for_preview(full_file_key)
                 if base_key_for_preview in base_files:

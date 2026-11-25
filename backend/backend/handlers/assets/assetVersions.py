@@ -32,7 +32,7 @@ from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResp
 from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_object
 from common.assetProvenance import ASSET_VERSION_STAMPED_FIELDS, stamp_asset_version_provenance
 from common.assetLocations import (
-    NestedLocations, contains, normalize_base_prefix, object_key_for, relative_path_in, viewer_data_scope,
+    NestedLocations, contains, normalize_base_prefix, object_key_for_path, relative_path_in, viewer_data_scope,
 )
 from common.fileAttribution import nested_locations_of_asset
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
@@ -516,7 +516,7 @@ def validate_s3_files_exist(bucket: str, prefix: str, files: List[AssetFileVersi
     invalid_files = []
     
     for file in files:
-        full_key = object_key_for(prefix, file.relativeKey)
+        full_key = object_key_for_path(prefix, file.relativeKey)
         
         try:
             # Check if file exists with specified version
@@ -1835,14 +1835,14 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
         invalid_files = validate_s3_files_exist(bucket, prefix, request_model.files)
         invalid_files.extend(file.relativeKey for file in request_model.files
                              if file.relativeKey not in invalid_files
-                             and not nested.keep(object_key_for(prefix, file.relativeKey) or ''))
+                             and not nested.keep(object_key_for_path(prefix, file.relativeKey) or ''))
         
         # Add valid files to version
         for file in request_model.files:
             if file.relativeKey not in invalid_files:
                 # Get additional metadata
                 try:
-                    full_key = object_key_for(prefix, file.relativeKey)
+                    full_key = object_key_for_path(prefix, file.relativeKey)
                     response = s3_client.head_object(
                         Bucket=bucket,
                         Key=full_key,
@@ -1959,7 +1959,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         (None, relative_key) when the file should be skipped."""
         relative_key = file['relativeKey']
         source_version_id = file['versionId']
-        full_key = object_key_for(prefix, relative_key)
+        full_key = object_key_for_path(prefix, relative_key)
         if not full_key or not nested.keep(full_key):
             return None, relative_key
 
@@ -2222,7 +2222,7 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     # A snapshot taken before nested assets were left out can name a nested asset's files; they are not shown
     nested = nested_locations_for(asset, bucket, prefix)
     snapshot_files = [file for file in file_versions.get('files', [])
-                      if not nested or nested.keep(object_key_for(prefix, file.get('relativeKey', '')) or '')]
+                      if not nested or nested.keep(object_key_for_path(prefix, file.get('relativeKey', '')) or '')]
     existing_version_ids = set()
     archived_keys = set()
 
@@ -2241,7 +2241,7 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     files = []
     for file in snapshot_files:
         # Construct full S3 key
-        full_key = object_key_for(prefix, file['relativeKey'])
+        full_key = object_key_for_path(prefix, file['relativeKey'])
 
         files.append(AssetVersionFileModel(
             relativeKey=file['relativeKey'],
