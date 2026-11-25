@@ -32,8 +32,3 @@ required-version = "==0.13.8"
 exclude-newer = "7 days"
 # Linux for the image; macOS so a developer machine can install the set to run the tests.
 environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'"]
-
-# The packages named below were uploaded less than seven days before this lock; they are the versions
-# the image already ships, so the cutoff is lifted for them. Remove each entry once its release is
-# older than seven days: numpy after 2026-11-23, tifffile after 2026-11-25.
-exclude-newer-package = { numpy = "2026-11-16T21:30:10Z", tifffile = "2026-11-18T03:35:18Z" }

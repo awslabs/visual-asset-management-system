@@ -35,7 +35,7 @@ exclude-newer = "7 days"
 environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'"]
 default-groups = []
 
-# The packages named below were uploaded less than seven days before this lock; they are the versions
-# the image already ships, so the cutoff is lifted for them. Remove each entry once its release is
-# older than seven days: numpy after 2026-11-23, aws-lambda-powertools after 2026-11-26.
-exclude-newer-package = { aws-lambda-powertools = "2026-11-19T12:13:18Z", numpy = "2026-11-16T21:30:10Z" }
+# The package named below was uploaded less than seven days before this lock; it is the version the
+# image already ships, so the cutoff is lifted for it. Remove the entry once its release is older than
+# seven days: aws-lambda-powertools 3.41.0 was uploaded at 2026-11-18T12:13Z, so after 2026-11-25T12:14Z.
+exclude-newer-package = { aws-lambda-powertools = "2026-11-19T12:13:18Z" }
