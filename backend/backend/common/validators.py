@@ -199,13 +199,27 @@ def validate_relative_file_path_array(name, values):
             return (valid, message)
     return (True, '')
 
+def starts_with_repeated_slash(value):
+    """True when a file path from a request starts with two or more '/'.
+
+    A leading '/' marks a file's path in the asset (common.assetLocations.object_key_for_request); a second
+    one would name a key with an empty segment, which VAMS never writes. The file routes refuse such a path
+    rather than read it as the path after the slashes."""
+    return isinstance(value, str) and value.startswith('//')
+
+def repeated_leading_slash_message(name):
+    """The refusal of a path that starts with two or more '/'; names the field, never the value."""
+    return name + " is invalid. Cannot start with more than one '/'."
+
 def validate_download_key_array(name, values):
     """Validate bulk download file keys.
 
     Accepts both asset-relative keys (leading '/', e.g. '/dir/file.txt') and
     full asset-prefixed keys (e.g. 'assetId/dir/file.txt'), matching the forms
     the single-file download key accepts. Rejects empty keys, non-strings,
-    '..' path traversal, and a key over the S3 object key byte limit.
+    '..' path traversal, a key that starts with two or more '/', and a key over
+    the S3 object key byte limit. models.assetsV3.validate_asset_file_path applies
+    it to every file path of the file routes.
     """
     if not isinstance(values, list):
         return (False, name + " must be an array of file keys")
@@ -214,6 +228,8 @@ def validate_download_key_array(name, values):
             return (False, name + " entries must be non-empty strings")
         if '..' in value:
             return (False, name + " is invalid. Cannot contain '..' path segments.")
+        if starts_with_repeated_slash(value):
+            return (False, repeated_leading_slash_message(name))
         if exceeds_s3_object_key_limit(value):
             return (False, _s3_object_key_limit_message(name))
     return (True, '')

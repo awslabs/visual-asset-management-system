@@ -768,7 +768,8 @@ class TestFileInfoSnapshotLookupKey:
         [
             ("/model.glb", "model.glb"),
             ("model.glb", "model.glb"),
-            ("//model.glb", "model.glb"),
+            # '//model.glb' is no longer an accepted spelling: the request models refuse a second
+            # leading slash (#1943)
             (f"{_ASSET}/model.glb", "model.glb"),
             # A leading slash marks a path in the asset: the subfolder named like the asset (#1943)
             (f"/{_ASSET}/model.glb", f"{_ASSET}/model.glb"),
@@ -776,7 +777,7 @@ class TestFileInfoSnapshotLookupKey:
             ("subdir/model.glb", "subdir/model.glb"),
             (f"{_ASSET}/subdir/model.glb", "subdir/model.glb"),
         ],
-        ids=["leading-slash", "no-leading-slash", "doubled-slash", "asset-prefixed",
+        ids=["leading-slash", "no-leading-slash", "asset-prefixed",
              "asset-id-folder-path", "nested", "nested-no-leading-slash",
              "nested-asset-prefixed"],
     )

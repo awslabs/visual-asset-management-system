@@ -13,7 +13,9 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import asset_authorization_object
-from common.validators import validate, exceeds_s3_object_key_limit
+from common.validators import (
+    validate, exceeds_s3_object_key_limit, repeated_leading_slash_message, starts_with_repeated_slash,
+)
 from common.assetLocations import normalize_base_prefix, object_key_for_request, relative_path_in
 from common.fileAttribution import nested_locations_of_asset
 from handlers.authz import CasbinEnforcer
@@ -189,6 +191,11 @@ def handle_head_request(event, claims_and_roles):
     # The path keeps the caller's form: a leading '/' marks a path in the asset (resolve_asset_file_path).
     # The validator reads a path with one, so it checks a copy that has it.
     validated_path = object_key if object_key.startswith('/') else '/' + object_key
+    # A second leading '/' would name a key with an empty segment: refused, as on the other file routes
+    if starts_with_repeated_slash(object_key):
+        message = repeated_leading_slash_message('assetFilePathKey')
+        logger.error(message)
+        return validation_error(body={'message': message}, event=event)
 
     logger.info("Validating parameters for HEAD request")
     validation_params = {
@@ -424,6 +431,17 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # The path keeps the caller's form: a leading '/' marks a path in the asset (resolve_asset_file_path).
         # The validator reads a path with one, so it checks a copy that has it.
         validated_path = object_key if object_key.startswith('/') else '/' + object_key
+        # A second leading '/' would name a key with an empty segment: refused, as on the other file routes
+        if starts_with_repeated_slash(object_key):
+            message = repeated_leading_slash_message('assetFilePathKey')
+            logger.error(message)
+            error_response = validation_error(body={'message': message}, event=event)
+            error_response['headers'].update({
+                'Access-Control-Allow-Headers': 'Range',
+                'Access-Control-Allow-Origin': '*',
+                'Cache-Control': 'no-cache, no-store',
+            })
+            return error_response
 
         logger.info("Validating parameters")
         validation_params = {

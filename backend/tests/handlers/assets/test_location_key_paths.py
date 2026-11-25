@@ -433,3 +433,86 @@ class TestWorkflowOutputWriteBack:
         assert po._ingestion_outcome(result) == (False, {"A1/out.las", "big.e57"})
         assert po._pending_ingestion_jobs(result) == {"big.e57": "job-1"}
         assert po._refused_write_back_reasons(result) == {"bad.las": po.NESTED_PATH_REFUSAL}
+
+
+DOUBLE_SLASH_VALUES = ["//cloud.las", "///A1/cloud.las", "//A1/"]
+
+
+def _model_refuses(model_class, **fields):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError) as e:
+        model_class(**fields)
+    return str(e.value)
+
+
+@pytest.mark.unit
+class TestARepeatedLeadingSlashIsRefused:
+    """L2 (#1943): a value that starts with two or more '/' is refused with a fixed 400 on every file route,
+    instead of being read as the path after the slashes. One leading '/' marks a path in the asset; a second
+    would name a key with an empty segment, which VAMS never writes. The refusal names the field, never the
+    value."""
+
+    @pytest.mark.parametrize("value", DOUBLE_SLASH_VALUES)
+    @pytest.mark.parametrize("model_name,field,extra", [
+        ("FileInfoRequestModel", "filePath", {}),
+        ("ArchiveFileRequestModel", "filePath", {}),
+        ("UnarchiveFileRequestModel", "filePath", {}),
+        ("DeleteFileRequestModel", "filePath", {}),
+        ("SetPrimaryFileRequestModel", "filePath", {"primaryType": ""}),
+        ("RevertFileVersionRequestModel", "filePath", {}),
+        ("CreateFolderRequestModel", "relativeKey", {}),
+        ("MoveFileRequestModel", "sourcePath", {"destinationPath": "/b.las"}),
+        ("CopyFileRequestModel", "destinationPath", {"sourcePath": "/a.las"}),
+    ])
+    def test_the_file_operation_models_refuse_it(self, model_name, field, extra, value):
+        import models.assetsV3 as m
+        if field == "relativeKey" and not value.endswith("/"):
+            value += "/"
+        message = _model_refuses(getattr(m, model_name), **{field: value, **extra})
+        assert "Cannot start with more than one '/'" in message
+        assert "cloud.las" not in message
+
+    @pytest.mark.parametrize("value", DOUBLE_SLASH_VALUES)
+    def test_upload_and_download_refuse_it(self, value):
+        import models.assetsV3 as m
+        assert "more than one '/'" in _model_refuses(m.UploadFileModel, relativeKey=value + "x", file_size=1)
+        assert "more than one '/'" in _model_refuses(
+            m.DownloadAssetRequestModel, downloadType="assetFile", key=value)
+        assert "more than one '/'" in _model_refuses(
+            m.DownloadAssetRequestModel, downloadType="assetFile", keys=["/ok.las", value])
+
+    @pytest.mark.parametrize("model_name,extra", [
+        ("GetFileMetadataRequestModel", {}),
+        ("CreateFileMetadataRequestModel", {"metadata": [
+            {"metadataKey": "k", "metadataValue": "v", "metadataValueType": "string"}]}),
+        ("UpdateFileMetadataRequestModel", {"metadata": [
+            {"metadataKey": "k", "metadataValue": "v", "metadataValueType": "string"}]}),
+        ("DeleteFileMetadataRequestModel", {"metadataKeys": ["k"]}),
+    ])
+    def test_the_file_metadata_models_refuse_it(self, model_name, extra):
+        import models.metadata as md
+        message = _model_refuses(getattr(md, model_name), filePath="//cloud.las", type="metadata", **extra)
+        assert "Cannot start with more than one '/'" in message
+        assert "cloud.las" not in message
+
+    def test_a_workflow_input_refuses_it(self):
+        from models.executions import ExecuteInputFileModel
+        message = _model_refuses(ExecuteInputFileModel, databaseId="db1", assetId="A1",
+                                 relativeFileKey="//cloud.las")
+        assert "more than one '/'" in message
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD"])
+    def test_the_stream_route_refuses_it_before_any_lookup(self, stream, method):
+        m, s3 = stream
+        response = _stream(m, "//cloud.las", method=method)
+        assert response["statusCode"] == 400
+        assert "cloud.las" not in response.get("body", "")
+        m.get_asset_details.assert_not_called()
+        s3.get_object.assert_not_called()
+        s3.head_object.assert_not_called()
+
+    @pytest.mark.parametrize("value", ["/cloud.las", "/A1/cloud.las", "A1/cloud.las", "/A1/"])
+    def test_control_one_leading_slash_or_none_is_accepted(self, value):
+        import models.assetsV3 as m
+        assert m.FileInfoRequestModel(filePath=value).filePath == value
+        assert m.DownloadAssetRequestModel(downloadType="assetFile", key=value).key == value

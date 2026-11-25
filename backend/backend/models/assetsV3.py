@@ -101,6 +101,7 @@ def validate_asset_file_path(field_name: str, value: str, new_object: bool = Fal
     same S3 key through resolve_asset_file_path — so the leading '/' is not
     required here. What is enforced is that the path cannot escape the asset
     prefix once combined with the asset base key: no '..' traversal segments, no
+    second leading slash ('//x' would name a key with an empty segment), no
     backslashes (a Windows-style separator S3 treats as a literal key character),
     no control characters, and a length within the S3 key limit. Spaces and
     unicode are legitimate file-name characters and stay accepted, so the charset
