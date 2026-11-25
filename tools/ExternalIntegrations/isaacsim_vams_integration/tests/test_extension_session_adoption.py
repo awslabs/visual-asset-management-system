@@ -271,3 +271,74 @@ def test_a_desktop_with_no_vams_session_carries_no_desktop_advice(extension, des
     extension._connector.list_databases = _raise(VamsAccessDeniedError(_REFUSED))
     extension._check_existing_session()
     assert extension._status_label.text == f"  Error: {_REFUSED} - {_NEUTRAL}"
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# A sign-in that lands after startup also starts the Content window connection
+# ---------------------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def content_calls(extension):
+    calls = []
+    extension._content_window_enabled = True
+    extension._start_content_connection = lambda: calls.append("start")
+    return calls
+
+
+def test_refresh_that_takes_over_a_late_sign_in_starts_the_content_window_connection(extension, content_calls,
+                                                                                      monkeypatch):
+    monkeypatch.setattr(extension_module, "ensure_future", lambda coroutine: coroutine.close())
+    extension._check_existing_session()
+    assert content_calls == []
+    extension._connector.signed_in = True
+    extension._load_databases()
+    assert content_calls == ["start"]
+    extension._load_databases()
+    assert content_calls == ["start"]
+
+
+def test_a_sign_in_that_lands_after_startup_is_taken_over_without_refresh(extension, content_calls, monkeypatch):
+    import asyncio
+
+    scheduled = []
+    monkeypatch.setattr(extension_module, "ensure_future", scheduled.append)
+    monkeypatch.setattr(extension_module, "SIGN_IN_WATCH_SECONDS", 0)
+    checks = []
+
+    def read_profile_token(profile, vamscli_path=None):
+        checks.append(profile)
+        if len(checks) == 2:
+            extension._connector.signed_in = True  # e.g. `vamscli auth login` in a terminal
+        return "vams_tok" if extension._connector.signed_in else None
+
+    monkeypatch.setattr(extension_module, "read_profile_token", read_profile_token)
+    extension._check_existing_session()
+    assert len(scheduled) == 1
+    extension._check_existing_session()
+    assert len(scheduled) == 1  # one watch at a time
+    asyncio.run(scheduled[0])
+    assert len(checks) == 2 and content_calls == ["start"]
+    assert extension._connector._authenticated is True
+    assert extension._databases == [Database(database_id="db1")]
+    assert extension._sign_in_watching is False
+
+
+def test_the_watch_stops_when_the_user_signs_in_in_the_window(extension, content_calls, monkeypatch):
+    import asyncio
+
+    scheduled = []
+    monkeypatch.setattr(extension_module, "ensure_future", scheduled.append)
+    monkeypatch.setattr(extension_module, "SIGN_IN_WATCH_SECONDS", 0)
+    monkeypatch.setattr(extension_module, "read_profile_token", lambda *a, **k: pytest.fail("checked after sign-in"))
+    extension._check_existing_session()
+    extension._connector._authenticated = True
+    asyncio.run(scheduled[0])
+    assert content_calls == []
+
+
+def test_no_watch_without_the_content_window_setting(extension, monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(extension_module, "ensure_future", scheduled.append)
+    extension._content_window_enabled = False
+    extension._check_existing_session()
+    assert scheduled == []

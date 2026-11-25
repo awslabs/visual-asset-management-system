@@ -1,0 +1,146 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package nvidia.omniverse.storage.filefolder.v1alpha;
+
+import "nvidia/omniverse/storage/fileobject/v1alpha/fileobject.proto";
+
+option go_package = "pb.api.nvidia.com/omniverse/storage/filefolder/v1alpha;storage";
+option java_multiple_files = true;
+option java_outer_classname = "FilefolderServiceProto";
+option java_package = "com.nvidia.omniverse.storage.filefolder.v1alpha";
+
+// The FileFolderService is the public API which consuming applications use
+// to perform operations on folders.
+service FileFolderService {
+  // Create a folder at the given resource address
+  rpc CreateFolder(CreateFolderRequest) returns (CreateFolderResponse);
+  // Determine if this address is within a namespace where folders are a native object, i.e. they can exist on their own.
+  // This has implications on whether folders disappear on the removal of the last object or not.
+  // For storages without native folders, some folders might disappear on their own when the last element is removed, i.e. when they were not created by a CreateFolder call.
+  // For storages with native folders, this will never be the case and all folders have to be removed by calling DeleteFolder.
+  rpc GetFolderMode(GetFolderModeRequest) returns (GetFolderModeResponse);
+  // List the content of the storage at the given resource address
+  // (-- api-linter: core::0136::verb-noun=disabled
+  //     aip.dev/not-precedent: A better name would be ListFolder --)
+  rpc List(ListRequest) returns (stream ListResponse);
+  // List the content of the storage at the given resource address, including resource identities and metadata
+  // (-- api-linter: core::0136::verb-noun=disabled
+  //     aip.dev/not-precedent: A better name would be ListStatFolder --)
+  rpc ListStat(ListStatRequest) returns (stream ListStatResponse);
+  // Delete a folder - this must fail if the folder is not empty
+  rpc DeleteFolder(DeleteFolderRequest) returns (DeleteFolderResponse);
+}
+
+// The ListRequest message defines the input parameters for the List() operation
+message ListRequest {
+  // The FolderAddress to list. The semantics are storage specific
+  FolderAddress folder = 1;
+}
+
+// The response of the list operation. This is a streaming response, where each message
+// may contain a size-bounded batch of ResourceInfo entries.
+message ListResponse {
+  // Batch of resource addresses that can be listed (i.e. folders) with List() and ListStat()
+  repeated FolderAddress subfolder_addresses = 1;
+  // Batch of addresses for file objects that can be subjected to Stat() and ReadFromAddress()
+  repeated string sub_resource_addresses = 2;
+}
+
+// The ListStatRequest message defines the input parameters for the ListStat() operation
+message ListStatRequest {
+  // The FolderAddress to list. The semantics are storage specific
+  FolderAddress folder = 1;
+  // If true, the service must include native metadata for returned file entries when FileObject native metadata
+  // is supported for those entries. This may require extra backend calls on storage systems whose native list
+  // operation does not return object metadata.
+  bool include_native_metadata = 2;
+}
+
+// The response of the list operation. This is a streaming response, where each message
+// may contain a size-bounded batch of ResourceInfo entries.
+message ListStatResponse {
+  // Batch of resource addresses that can be listed (i.e. folders)
+  repeated FolderAddress subfolder_addresses = 1;
+  // Batch of ListItem messages with the addresses, and optionally identities and metadata.
+  repeated ListItem entries = 2;
+}
+
+// Supply a FolderAddress for the Folder that is to be deleted
+message DeleteFolderRequest {
+  // Address of the folder to be deleted
+  FolderAddress folder = 1;
+}
+
+// The message struct for the response - the GRPC status will indicate if the operation succeeded
+message DeleteFolderResponse {}
+
+// The CreateFolderRequest message defines the input parameters for the CreateFolder() operation
+// (-- api-linter: core::0133::request-parent-required=disabled
+//     aip.dev/not-precedent: We allow simplified Create requests without parent field. --)
+// (-- api-linter: core::0133::request-resource-field=disabled
+//     aip.dev/not-precedent: We allow simplified Create requests without resource field. --)
+message CreateFolderRequest {
+  // The full address/path of the folder to create
+  FolderAddress folder = 1;
+}
+
+// The response of the create folder operation
+message CreateFolderResponse {}
+
+// Each entry in the ListResult delivers at least the ResourceAddress, optionally enriched with
+// the ResourceInfo to allow direct reads without an additional Stat()
+message ListItem {
+  // The resource address of the list item
+  string resource_address = 1;
+
+  // Optionally, the ResourceInfo for that file
+  optional fileobject.v1alpha.ResourceInfo resource_info = 2;
+}
+
+// To check how a storage works with empty folders, supply this request to the GetFolderMode function
+message GetFolderModeRequest {
+  // Different storages might have different interpretations how empty folders are treated, use this call if your client
+  // depends on an exact behavior. The assumption is that the folder mode does not change for sub-addresses, so call
+  // this with a top-level address for the whole storage subsystem.
+  FolderAddress folder = 1;
+}
+
+// Response of the GetFolderMode function
+message GetFolderModeResponse {
+  // Folder mode for the given address and all sub-addresses
+  FolderMode folder_mode = 1;
+}
+
+// The FolderAddress follows RFC 3986, the URI syntax. This defines how to resolve relative addresses and URIs to form new URIs
+message FolderAddress {
+  // The URI of the folder stored as a string
+  string uri = 1;
+}
+
+// FolderMode indicates how the storage system handles folder semantics,
+// particularly regarding empty folder persistence and lifecycle.
+enum FolderMode {
+  // The storage system did not fill out a specific value
+  FOLDER_MODE_UNSPECIFIED = 0;
+  // The storage system uses native folders. They can be created as empty and will stay around until deleted with delete_folder.
+  FOLDER_MODE_NATIVE = 1;
+  // The storage system does not allow empty folders (e.g. git). Instead of creating a folder upload a file which implicitly will create the folder.
+  FOLDER_MODE_NO_EMPTY = 2;
+  // It is possible to create empty folders by using create_folder, those will stay around until explicitly deleted. Implicit folders created via file upload might disappear when the file is deleted.
+  FOLDER_MODE_HYBRID = 3;
+}

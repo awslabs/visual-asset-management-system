@@ -135,7 +135,7 @@ The extension check applies only to the VAMS API. Files placed directly into Ama
 
 VAMS offers two paths. Federating an Amazon Cognito user pool with your identity provider is the lighter one and is the recommended starting point; bringing your own OAuth 2.0 provider without Amazon Cognito is the fallback for deployments that cannot use a Cognito user pool at all.
 
-**Amazon Cognito federation (SAML or OIDC).** VAMS keeps the Amazon Cognito user pool and adds your IdP as a federated provider, so Cognito-managed session tokens and the native username/password sign-in remain available:
+**Amazon Cognito federation (SAML or OIDC).** VAMS keeps the Amazon Cognito user pool and adds your IdP as a federated provider, so Amazon Cognito still issues the session tokens. The web login page then shows only a **Login with \{displayName\}** button that sends users to your IdP, with no username and password form. Native user pool accounts, including the initial administrator, keep their passwords and sign in with VamsCLI (`vamscli auth login -u <username>`, the sign-in VamsMCP and the connectors also use) instead of the web application:
 
 1. Keep `app.authProvider.useCognito.enabled: true`.
 2. Set `app.authProvider.useCognito.useSaml: true` **or** `useOidc: true` (they are mutually exclusive).

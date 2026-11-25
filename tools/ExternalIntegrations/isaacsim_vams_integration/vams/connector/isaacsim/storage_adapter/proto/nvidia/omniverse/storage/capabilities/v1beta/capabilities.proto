@@ -1,0 +1,70 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package nvidia.omniverse.storage.capabilities.v1beta;
+
+option go_package = "pb.api.nvidia.com/omniverse/storage/capabilities/v1beta;storage";
+option java_multiple_files = true;
+option java_outer_classname = "CapabilitiesProto";
+option java_package = "com.nvidia.omniverse.storage.capabilities.v1beta";
+
+// The CapabilitiesService is used to reflect on which services are implemented by this server.
+// Each service in turn exposes another service-specific capabilities query,
+// to read data from remote storage.
+service CapabilitiesService {
+  // Return the list of service API implemented by this service
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+  // Return a list of top level resource addresses that is suited for browsing this storage service by the user.
+  rpc ListTopLevelAddresses(ListTopLevelAddressesRequest) returns (ListTopLevelAddressesResponse);
+}
+
+// Empty message to call the ListServicesRequest.
+message ListServicesRequest {}
+
+// Response of the ListServices call
+message ListServicesResponse {
+  // List of services with details implemented by this Storage API server
+  repeated ServiceEntry services = 1;
+}
+
+// One Service is described via name and a list of versions supported by this server
+message ServiceEntry {
+  // The name of the service, e.g. fileobject
+  // (-- api-linter: core::0122::name-suffix=disabled
+  //     aip.dev/not-precedent: "service_name" is better than "service" --)
+  string service_name = 1;
+  // List of versions supported for this service, e.g. v1, v2alpha1, v2beta
+  repeated string service_versions = 2;
+}
+
+// Empty message to call the ListTopLevelAddresses method
+message ListTopLevelAddressesRequest {}
+
+// The List of top level resource addresses served by this service instance.
+// This is a convenience function to allow UI clients to explore the data exposed by this storage service, and does
+// not need to be complete. I.e. it could list a number of buckets configured, but still allow to access arbitrary
+// public buckets without needing to enumerate all of them.
+message ListTopLevelAddressesResponse {
+  // A list of top level resource addresses
+  repeated TopLevelAddressEntry items = 1;
+}
+
+// One TopLevelAddress
+message TopLevelAddressEntry {
+  // The root of a namespace. All resource addresses that start with this prefix are considered to be within this namespace
+  string top_level_address = 1;
+}
