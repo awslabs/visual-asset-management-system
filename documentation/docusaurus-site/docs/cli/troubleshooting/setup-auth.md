@@ -77,7 +77,7 @@ The installed VamsCLI version does not match the deployed VAMS API version, whic
 
 1. Update VamsCLI or the VAMS deployment so the versions align. See the [installation guide](../installation.md) for upgrade steps.
 2. To proceed despite the warning in interactive mode, confirm the prompt.
-3. To suppress the confirmation prompt in scripts, pass `--skip-version-check` to `vamscli setup` or `vamscli auth login`.
+3. To suppress the confirmation prompt in scripts, pass `--skip-version-check` to `vamscli setup` or `vamscli auth login`. `vamscli auth login` also goes on without the prompt when it reads a credential from stdin (`--password-stdin`, `--new-password-stdin` or `--token-override-stdin`) or runs with `--json-output`.
 
 :::tip
 The minimum supported VAMS API version is `2.2`. Connecting to an older deployment is not supported.
