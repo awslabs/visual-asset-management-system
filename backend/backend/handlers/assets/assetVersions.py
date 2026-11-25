@@ -628,6 +628,25 @@ def save_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
         return False
 
 
+def collapse_version_entries(items: List[Dict]) -> List[Dict]:
+    """The rows of an asset version's files, one per file, keyed by the path without its leading slash.
+
+    A version a file list created before #1795 can name one file both as '/a.txt' and 'a.txt' (D1),
+    and can hold a '/' row that names no file. The row stored without the slash wins, the first
+    one read otherwise, and a row that names no file is left out, so the version detail lists the
+    file once and a revert copies it once.
+    """
+    chosen: Dict[str, Dict] = {}
+    for item in items:
+        stored_key = str(item.get('fileKey') or '')
+        relative_key = stored_key.lstrip('/')
+        if not relative_key:
+            continue
+        if relative_key not in chosen or not stored_key.startswith('/'):
+            chosen[relative_key] = item
+    return list(chosen.values())
+
+
 def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
                             raise_errors: bool = False) -> Optional[Dict]:
     """Get file versions for a specific asset version
@@ -658,10 +677,10 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
             return None
 
         # Reconstruct the file versions structure. The key is handed out without its leading slash,
-        # the form new entries are stored in, so an entry a file list stored with the slash before
-        # #1795 reads the same way: in the version detail, a revert's skipped files and every lookup.
+        # the form new entries are stored in, once per file, so an entry a file list stored with the
+        # slash before #1795 reads the same way: in the version detail, a revert and every lookup.
         files = []
-        for item in items:
+        for item in collapse_version_entries(items):
             file_info = {
                 'relativeKey': str(item.get('fileKey') or '').lstrip('/'),
                 'versionId': item.get('versionId'),
@@ -2048,12 +2067,16 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
 
     #Send email for asset version change
     send_subscription_email(databaseId, assetId)
-    
+
+    # The files the new version stores: one entry per path without its leading slash, as
+    # save_asset_file_versions writes them
+    stored_file_count = len({str(f.get('relativeKey') or '').lstrip('/') for f in files_to_version} - {''})
+
     # Return response
     now = utc_now().isoformat()
     return AssetVersionOperationResponseModel(
         success=True,
-        message=f"Successfully reverted to version {request_model.assetVersionId} with {len(files_to_version)} files",
+        message=f"Successfully reverted to version {request_model.assetVersionId} with {stored_file_count} files",
         assetId=assetId,
         assetVersionId=new_assetVersionId,
         operation="revert",
