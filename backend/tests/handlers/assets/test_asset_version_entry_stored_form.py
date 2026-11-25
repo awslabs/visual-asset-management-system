@@ -58,9 +58,10 @@ def _entry(relative_key, version_id):
 @pytest.mark.unit
 class TestSaveAssetFileVersions:
     def test_each_entry_is_stored_without_its_leading_slash(self, table):
+        """Exactly one leading '/' is the path marker: '//c.txt' names '{location}/c.txt' and keeps its slashes."""
         assert av.save_asset_file_versions(DB, ASSET, "3", [
             _entry("/inner.txt", "v-1"), _entry("sub/b.txt", "v-2"), _entry("//c.txt", "v-3")]) is True
-        assert _stored(table) == [("db1:a1:3", "c.txt", "v-3"), ("db1:a1:3", "inner.txt", "v-1"),
+        assert _stored(table) == [("db1:a1:3", "//c.txt", "v-3"), ("db1:a1:3", "inner.txt", "v-1"),
                                   ("db1:a1:3", "sub/b.txt", "v-2")]
 
     def test_two_forms_of_one_file_are_one_entry(self, table):

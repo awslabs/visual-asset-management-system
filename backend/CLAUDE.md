@@ -526,15 +526,21 @@ backend/
     `file_path = "/" + raw_path.lstrip("/")`.
 
     **Exception: an asset version's file entries.** The asset file versions table's `fileKey`
-    (sort key, read back as `relativeKey`) is the asset-relative path WITHOUT the leading `/`
-    (`folder/file.txt`). `assetVersions.save_asset_file_versions` strips it whatever form the
-    caller sent, and `CreateAssetVersionRequestModel` refuses `/a.txt` and `a.txt` together as
-    duplicates. Entries a version built from a file list stored before #1795 can still carry
-    the slash and are not migrated, so every reader hands the key out and compares it with the
-    slash stripped on both sides (`str(fileKey).lstrip('/')`; the three `get_asset_file_versions`
-    helpers in `assetVersions.py`, `assetFiles.py` and `assetExportService.py` do it for their
-    callers), a sort-key lookup tries the unslashed form first and the slashed form on a miss,
-    and a delete uses the key the row is stored under.
+    (sort key, read back as `relativeKey`) is the asset-relative path WITHOUT its leading `/`
+    marker (`folder/file.txt`). Exactly one leading `/` is the marker, never every leading
+    `/`: `/x` and `x` name `{location}x`, while `//x` names `{location}/x`, the key with an empty
+    segment after the location, and is stored as `//x` (never `/x`, which legacy rows hold for
+    `{location}x`). `version_entry_key` (one `/` removed) is the compare and dedup key and
+    `stored_version_entry_key` the stored and handed-out form; `assetVersions.py`, `assetFiles.py`
+    and `assetExportService.py` each carry them (pinned equal by
+    `tests/handlers/assets/test_asset_version_entry_one_slash_rule.py`). `save_asset_file_versions`
+    stores that form whatever the caller sent, and `CreateAssetVersionRequestModel` refuses `/a.txt`
+    and `a.txt` together as duplicates and a path made only of `/`. Entries a version built from a
+    file list stored before #1795 can still carry the slash and are not migrated, so every
+    reader collapses and compares by `version_entry_key` (the three `get_asset_file_versions`
+    helpers do it for their callers; a row made only of `/` names no file), a sort-key lookup
+    tries the stored form first and the legacy `/`-prefixed form on a miss, and a delete uses the
+    key the row is stored under.
 
 14. **NEVER read only the first page of an S3 or DynamoDB listing when the full set is
     needed.** S3 `list_object_versions` / `list_objects_v2` and DynamoDB queries cap a

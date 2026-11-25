@@ -1226,9 +1226,10 @@ class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
             raise ValueError(message)
             
         # Check for duplicate keys if files provided. '/a.txt' and 'a.txt' name one file, which the
-        # version stores once, without the leading slash (#1795).
+        # version stores once (#1795); exactly one leading '/' marks a path, so '//a.txt' names another.
         if values.get('files'):
-            keys = [file.relativeKey.lstrip('/') for file in values.get('files')]
+            keys = [file.relativeKey[1:] if file.relativeKey.startswith('/') else file.relativeKey
+                    for file in values.get('files')]
             if len(keys) != len(set(keys)):
                 message = "Duplicate relative keys are not allowed"
                 logger.error(message)

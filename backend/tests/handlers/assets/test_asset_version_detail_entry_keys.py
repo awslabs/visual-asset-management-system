@@ -23,8 +23,9 @@ DB = "db1"
 ASSET = "a1"
 PREFIX = f"{ASSET}/"
 CLAIMS = {"tokens": ["alice"]}
-SHAPES = pytest.mark.parametrize("stored_key", ["/sub/inner.txt", "sub/inner.txt", "//sub/inner.txt"],
-                                 ids=["slash", "no-slash", "double-slash"])
+# '//sub/inner.txt' is not a third spelling: exactly one leading '/' marks a path, so it names the key with an
+# empty segment after the location (test_asset_version_entry_one_slash_rule.py)
+SHAPES = pytest.mark.parametrize("stored_key", ["/sub/inner.txt", "sub/inner.txt"], ids=["slash", "no-slash"])
 
 
 @pytest.fixture

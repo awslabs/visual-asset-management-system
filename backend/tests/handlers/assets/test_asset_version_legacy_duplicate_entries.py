@@ -36,7 +36,7 @@ class TestTheCollapse:
     def test_one_entry_per_file_and_none_for_the_root(self):
         rows = [{"fileKey": k} for k in ("/", "/-n.txt", "/a.txt", "-n.txt", "a.txt", "//b.txt", "/b.txt", "")]
         kept = [row["fileKey"] for row in af.collapse_version_entries(rows)]
-        assert kept == ["-n.txt", "a.txt", "//b.txt"]
+        assert kept == ["-n.txt", "a.txt", "//b.txt", "/b.txt"]
 
 
 @pytest.mark.unit
