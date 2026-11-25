@@ -118,7 +118,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Note: from v2.6.8 asset creation refuses an asset ID that another database uses (PR #1862), so this affects asset IDs that two databases shared before the update.
 -   Unarchiving an asset while its database holds a live asset with the same ID replaces that asset's record. Fixed in 2.7.0. (issue #369)
     -   Note: from v2.6.8 asset creation refuses an asset ID that an archived asset holds (PR #1862), so this affects an asset ID that was used again before the update.
--   The Potree and VEERUM viewers cannot load the viewer data of a file whose S3 key does not start with `{assetId}/`: a file of an asset in a bucket with a base prefix, external buckets included, of an asset created on an existing folder, or of an asset created from a single Amazon S3 object (its object and its companion files). The viewer's request for the data answers `404`. Fixed in 2.7.0. (issue #1855, PR #1937)
+-   The Potree and VEERUM viewers cannot load the viewer data of a file of an asset whose location is not the `{assetId}/` folder: an asset in a bucket with a base prefix, external buckets included, an asset created on an existing folder, and the files in the companion folder of an asset created from a single Amazon S3 object (that asset's own file loads, unless its key starts with `{assetId}/`). The viewer's request for the data answers `404`. Fixed in 2.7.0. (issue #1855, PR #1937)
 
 ### 2.6.7
 
