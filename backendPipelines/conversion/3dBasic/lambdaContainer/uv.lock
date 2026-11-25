@@ -14,9 +14,6 @@ supported-markers = [
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
-[options.exclude-newer-package]
-aws-lambda-powertools = "2026-11-19T12:13:18Z"
-
 [[package]]
 name = "3dbasic-lambda-pipeline"
 version = "0.1.0"
