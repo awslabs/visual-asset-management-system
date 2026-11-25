@@ -119,6 +119,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   Unarchiving an asset while its database holds a live asset with the same ID replaces that asset's record. Fixed in 2.7.0. (issue #369)
     -   Note: from v2.6.8 asset creation refuses an asset ID that an archived asset holds (PR #1862), so this affects an asset ID that was used again before the update.
 -   The Potree and VEERUM viewers cannot load the viewer data of a file of an asset whose location is not the `{assetId}/` folder: an asset in a bucket with a base prefix, external buckets included, an asset created on an existing folder, and the files in the companion folder of an asset created from a single Amazon S3 object (that asset's own file loads, unless its key starts with `{assetId}/`). The viewer's request for the data answers `404`. Fixed in 2.7.0. (issue #1855, PR #1937)
+-   The final copy of an upload or a workflow output smaller than 8 MiB is sent again when Amazon S3 answers it with a retryable error, such as `503 SlowDown`, even when S3 had already stored the file. On a versioned asset bucket the file then gets a second, identical version. If the retries fail too, the upload reports the file as failed ("Failed to copy file to final location") and the workflow run is recorded as failed, although the first attempt stored the file. Fixed in 2.7.0. (issue #1848, PR #1925)
 
 ### 2.6.7
 
