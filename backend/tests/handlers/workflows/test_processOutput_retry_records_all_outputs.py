@@ -74,6 +74,16 @@ LARGE = "big.e57"
 THRESHOLD = 100
 
 
+def repeat_safe_copy_on(s3):
+    """The upload finalize copy (common.s3.copy_s3_object_repeat_safe, #1848) sent on this test's
+    moto client, so every write of the run lands in the bucket the test reads back."""
+    def copy(source_bucket, source_key, dest_bucket, dest_key, extra_args, write_token, source_size,
+             source_version_id=None, **_ignored):
+        return s3.copy_object(CopySource={"Bucket": source_bucket, "Key": source_key}, Bucket=dest_bucket,
+                              Key=dest_key, **extra_args).get("VersionId")
+    return copy
+
+
 class _Killed(BaseException):
     """The Lambda runtime ending an attempt at its timeout."""
 
@@ -342,7 +352,7 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
         p(uf, "log_file_upload")
         p(uf, "update_asset_attributes")
         p(uf, "s3", s3)
-        p(uf.s3_resource.meta, "client", s3)
+        p(uf, "copy_s3_object_repeat_safe", new=repeat_safe_copy_on(s3))
         # One move at a time, so the mid-move kill lands on the first output deterministically.
         p(uf, "MAX_PARALLEL_S3_WORKERS", 1)
         p(uf, "LARGE_FILE_THRESHOLD_BYTES", THRESHOLD)

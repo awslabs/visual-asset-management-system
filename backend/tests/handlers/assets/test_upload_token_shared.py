@@ -1,14 +1,19 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""One upload token key and one identity helper for the two "a landed object wins" deciders (#1125
-on #1123).
+"""One upload token key and one identity helper for the three "a landed object wins" deciders (#1125
+on #1123, and #1848).
 
 The large object copy engine (P2b) and the Download as Zip archive (P4) both decide whether a
 multipart upload landed by the identity of THAT upload, never by presence or size: each records a
 fresh token on its job row, stamps it on CreateMultipartUpload as object metadata, and later
 compares the key's current object with the row. Both now use ``common.s3MetadataKeys``'s
 ``VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY`` and ``is_own_upload_object``.
+
+The third writer is the final copy of an upload or workflow output (#1848): ``uploadFile.copy_s3_object``
+stamps a fresh token per copy, and ``common.s3.copy_s3_object_repeat_safe`` decides by the same helper
+whether a copy that answered a retryable error had landed. Each writer compares only its own value, so
+none of the three can take another's object for its own.
 
 Also pins zipArchive mode 2 (a zipArchive run writing a large archive into an asset): the archive is a
 workflow output, so it reaches the asset through the copy engine, whose landed decision is the
@@ -181,6 +186,66 @@ class TestEngineLandedObjectVersion:
         row = {k: v for k, v in self.ROW.items() if k != "destUploadToken"}
         assert loc.landed_object_version(s3, row) == (False, "")
         s3.head_object.assert_not_called()
+
+
+def _shipped_s3():
+    # tests/mocks/common/s3.py shadows common.s3 on the test path; load the shipped module by path.
+    import importlib.util
+    import os
+    import sys
+    backend = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend"))
+    if backend not in sys.path:
+        sys.path.insert(0, backend)
+    spec = importlib.util.spec_from_file_location("_shipped_common_s3_token_shared",
+                                                  os.path.join(backend, "common", "s3.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _attempt_interval():
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    return now, now
+
+
+@pytest.mark.unit
+class TestUploadFinalCopyIsTheThirdWriter:
+    """The final copy of an upload or workflow output stamps the shared key and decides by the shared
+    helper (#1848)."""
+
+    def test_the_upload_copy_stamps_the_shared_key_with_the_shared_helper(self, monkeypatch):
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        from backend.backend.handlers.assets import uploadFile as uf
+        shipped = _shipped_s3()
+        assert uf.VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY == keys.VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY
+        assert shipped.VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY == keys.VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY
+        assert shipped.is_own_upload_object.__module__ == loc.is_own_upload_object.__module__ \
+            == "common.s3MetadataKeys"
+
+    @pytest.mark.parametrize("current_token", ["eng-tok", "zip-tok", ""])
+    def test_another_writers_token_at_the_key_is_not_the_uploads_landing(self, monkeypatch, current_token):
+        # The engine's or the archive's object at the key, or one with no token: the upload's copy is
+        # not confirmed and is sent again.
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        shipped = _shipped_s3()
+        s3 = MagicMock()
+        s3.head_object.return_value = _head(metadata={TOKEN_KEY: current_token} if current_token else {},
+                                            version="null")
+        failed = ClientError({"Error": {"Code": "SlowDown"}, "ResponseMetadata": {"HTTPStatusCode": 503}},
+                             "CopyObject")
+        assert shipped._landed_version(s3, "b", "a1/x.glb", "upload-tok", failed,
+                                       *_attempt_interval()) == (False, None)
+
+    def test_the_uploads_own_token_is_its_landing(self, monkeypatch):
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        shipped = _shipped_s3()
+        s3 = MagicMock()
+        s3.head_object.return_value = _head(metadata={TOKEN_KEY: "upload-tok"}, version="v7")
+        failed = ClientError({"Error": {"Code": "SlowDown"}, "ResponseMetadata": {"HTTPStatusCode": 503}},
+                             "CopyObject")
+        assert shipped._landed_version(s3, "b", "a1/x.glb", "upload-tok", failed,
+                                       *_attempt_interval()) == (True, "v7")
 
 
 # --------------------------------------------------------------------------------------------- #

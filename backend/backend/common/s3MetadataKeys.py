@@ -60,14 +60,17 @@ VAMS_STATUS_METADATA_KEY = "vams-status"
 VAMS_STATUS_ARCHIVED = "archived"
 VAMS_STATUS_DELETED = "deleted"
 
-# VAMS_COPY_UPLOAD_TOKEN: the per-job upload token a VAMS writer records on its job row and stamps
-#   on its multipart upload, so it can tell the object its own upload created from any earlier object
-#   at the same key (is_own_upload_object below; never presence or size). Two writers use it: the
-#   large object copy engine (handlers/assets/largeObjectCopy.py prepare, destUploadToken,
-#   common/largeObjectCopy.landed_object_version) and the zipArchive container of Download as Zip
+# VAMS_COPY_UPLOAD_TOKEN: the per-write token a VAMS writer stamps on the object it creates, so it can
+#   tell the object its own write created from any earlier object at the same key
+#   (is_own_upload_object below; never presence or size). Three writers use it: the large object copy
+#   engine (handlers/assets/largeObjectCopy.py prepare, destUploadToken, on its multipart upload;
+#   common/largeObjectCopy.landed_object_version), the zipArchive container of Download as Zip
 #   (archiveUploadToken, common/zipDownloads.landed_archive; mirrored in
-#   backendPipelines/utility/zipArchive/container/zip_archive_pipeline/runner.py). System-owned (``vams-``
-#   prefix): not indexed.
+#   backendPipelines/utility/zipArchive/container/zip_archive_pipeline/runner.py), and the final copy
+#   of an upload or workflow output (handlers/assets/uploadFile.copy_s3_object, a fresh token per copy;
+#   common/s3.copy_s3_object_repeat_safe looks for it after a failed attempt, so a copy that landed is
+#   never written again). Each writer compares only its own value. Other copies of a file can carry
+#   an earlier token forward, which never equals a new one. System-owned (``vams-`` prefix): not indexed.
 VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY = "vams-copyuploadtoken"
 
 

@@ -444,8 +444,15 @@ no central partition helper in the backend — these four rules are the contract
     `copy_s3_object()` is the one copy path: a managed copy by the destination-Region
     client, or a streamed GET→PUT when `VAMS_LAMBDAS_IN_VPC` is `true` and the
     Regions differ, since an S3 interface endpoint does not serve cross-Region
-    `CopyObject`. Ratchet: `backend/tests/handlers/databases/test_buckets_listing_region.py`;
-    mock parity: `backend/tests/common/test_s3_region_routing.py`.
+    `CopyObject`. The final copy of an upload or workflow output goes through
+    `copy_s3_object_repeat_safe()` instead (#1848): below 8 MiB each attempt is one
+    request on the one-attempt client (`S3_ASSET_SINGLE_ATTEMPT_CLIENT_CONFIG`, a
+    recorded Rule 6 departure), and after a retryable error it checks by the
+    caller's fresh `vams-copyuploadtoken` whether the attempt landed before it
+    copies again, so a throttled copy S3 already stored is not written twice.
+    Ratchet: `backend/tests/handlers/databases/test_buckets_listing_region.py`;
+    mock parity: `backend/tests/common/test_s3_region_routing.py`; the repeat-safe
+    copy: `backend/tests/common/test_s3_repeat_safe_copy.py`.
 
     **S3 Transfer Acceleration is decided in `common.s3`, never in a handler.** A
     bucket row with `isAccelerated: true` (BOOL, missing is false) makes the router
