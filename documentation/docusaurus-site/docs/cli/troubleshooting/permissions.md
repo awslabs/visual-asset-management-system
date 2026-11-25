@@ -69,13 +69,13 @@ vamscli auth status
 
 ### Invalid Role Data
 
-**Symptoms:** `Invalid Role Data: roleName contains invalid characters`.
+**Symptoms:** `Invalid Role Data: Invalid role data: ...`, followed by the API's validation message naming `roleName` or `description`.
 
 **Cause:** The role data fails backend validation.
 
 **Resolution:**
 
--   Use only alphanumeric characters, hyphens, and underscores in role names. Avoid `@`, `#`, `$`, and other special characters.
+-   Use a role name of 1-256 characters made of letters, numbers, spaces, hyphens (`-`), periods (`.`), and underscores (`_`). Any other character, such as `@`, `#`, `$`, `/`, or `:`, is rejected. Spaces before and after the name are removed before it is checked and saved.
 -   Keep descriptions to 256 characters or fewer.
 
 ```bash

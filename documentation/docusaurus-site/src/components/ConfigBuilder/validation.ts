@@ -3232,6 +3232,25 @@ const CORE_RULES: Rule[] = [
             "app.authProvider.presignedUrlTimeoutSeconds should be a whole number of seconds between 1 and 604800 (7 days, the longest an Amazon S3 presigned URL can be signed for). With another value the presigned URLs VAMS returns for downloads, streams, uploads and exports fail.",
     },
 
+    // ----- Cognito token timeout
+    // (config.ts: "credTokenTimeoutSeconds should be a whole") -----
+    {
+        id: "cred-token-timeout-range",
+        severity: "warning",
+        fieldPaths: ["app.authProvider.useCognito.credTokenTimeoutSeconds"],
+        // getConfig() warns only with Amazon Cognito enabled, the only case that builds the web app
+        // client, and reads the value as the client does, as Number() does.
+        appliesWhen: (c) => {
+            if (!g(c, "app.authProvider.useCognito.enabled")) return false;
+            const t = g(c, "app.authProvider.useCognito.credTokenTimeoutSeconds");
+            if (!t) return false; // getConfig() falls back to the environment variable or 3600
+            const n = Number(t);
+            return !Number.isInteger(n) || n < 300 || n > 86400 || n % 60 !== 0;
+        },
+        message:
+            "app.authProvider.useCognito.credTokenTimeoutSeconds should be a whole number of minutes, in seconds, from 300 to 86400: 5 minutes to 1 day (the Amazon Cognito limit), in whole minutes (the VAMS web app client sets the lifetimes in minutes). With another value the synthesis stops at the web app client.",
+    },
+
     // ----- IP ranges (config.ts: "Validate IP ranges configuration") -----
     {
         // An unset value is backfilled to []; any other value that is not an array is rejected,
