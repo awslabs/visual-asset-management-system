@@ -48,6 +48,9 @@ jest.mock("fs", () => {
 const ENV_KEY = "CRED_TOKEN_TIMEOUT_SECONDS";
 const savedEnv = process.env[ENV_KEY];
 
+/** A config.json in the shape of the commercial template. */
+type ConfigJson = typeof commercialTemplate;
+
 /** Removes the key from config.json, so the environment variable is the source consulted. */
 const KEY_ABSENT = Symbol("key absent");
 
@@ -58,7 +61,7 @@ const KEY_ABSENT = Symbol("key absent");
 function resolve(
     value: unknown,
     context: Record<string, unknown> = {},
-    mutate: (config: any) => void = () => undefined
+    mutate: (config: ConfigJson) => void = () => undefined
 ): () => Config.Config {
     const config = JSON.parse(JSON.stringify(commercialTemplate));
     config.env.region = "us-east-1";
@@ -83,7 +86,7 @@ function resolve(
 function run(
     value: unknown,
     context: Record<string, unknown> = {},
-    mutate: (config: any) => void = () => undefined
+    mutate: (config: ConfigJson) => void = () => undefined
 ) {
     const load = resolve(value, context, mutate);
     const captured: string[] = [];
@@ -116,7 +119,7 @@ const COERCIBLE = [" 3600", "3600 ", "1800\n", "3600.0", "3.6e3", "+3600", "0x0E
 const NOT_A_NUMBER: unknown[] = ["abc", "1h", true, "   "];
 
 /** External OAuth IdP mode: Amazon Cognito off, so no web app client reads the value. */
-function externalIdp(config: any) {
+function externalIdp(config: ConfigJson) {
     config.app.authProvider.useCognito.enabled = false;
     // The same complete provider block as additionalTokenAudiences.test.ts.
     Object.assign(config.app.authProvider.useExternalOAuthIdp, {
@@ -198,14 +201,14 @@ describe("credTokenTimeoutSeconds from config.json", () => {
         }
     );
 
-    test.each(NOT_A_NUMBER.map((v) => [v]))(
+    test.each(NOT_A_NUMBER.map((v): [unknown] => [v]))(
         "%p is not a number of seconds: warns and resolves unchanged",
         (v) => {
             expectWarned(run(v), String(v));
         }
     );
 
-    test.each(COERCIBLE.map((v) => [v]))(
+    test.each(COERCIBLE.map((v): [unknown] => [v]))(
         "%p reads as a whole number of minutes in range: no warning, resolves unchanged",
         (v) => {
             const result = run(v);
@@ -286,14 +289,18 @@ const builderRule = (value: unknown, cognitoEnabled = true) => {
 };
 
 describe("ConfigBuilder mirror of the token timeout warning", () => {
-    test.each([[299], [-60], [86401], [3601], [3600.5], ...NOT_A_NUMBER.map((v) => [v])])(
-        "fires for %p",
-        (v) => {
-            expect(builderRule(v)).toBeDefined();
-        }
-    );
+    test.each<[unknown]>([
+        [299],
+        [-60],
+        [86401],
+        [3601],
+        [3600.5],
+        ...NOT_A_NUMBER.map((v): [unknown] => [v]),
+    ])("fires for %p", (v) => {
+        expect(builderRule(v)).toBeDefined();
+    });
 
-    test.each([
+    test.each<[unknown]>([
         [3600],
         [300],
         [86400],
@@ -302,7 +309,7 @@ describe("ConfigBuilder mirror of the token timeout warning", () => {
         [null],
         [undefined],
         [0],
-        ...COERCIBLE.map((v) => [v]),
+        ...COERCIBLE.map((v): [unknown] => [v]),
     ])("stays silent for %p", (v) => {
         expect(builderRule(v)).toBeUndefined();
     });
@@ -338,21 +345,28 @@ describe("the warned range is the range the web app client accepts", () => {
         return Template.fromStack(stack);
     };
 
-    test.each([[300], [3600], [86400], ["1800"], ...COERCIBLE.map((v) => [v])])(
-        "%p builds the client",
-        (v) => {
-            const template = buildClient(v);
-            template.hasResourceProperties("AWS::Cognito::UserPoolClient", {
-                IdTokenValidity: Number(v) / 60,
-                AccessTokenValidity: Number(v) / 60,
-            });
-        }
-    );
+    test.each<[unknown]>([
+        [300],
+        [3600],
+        [86400],
+        ["1800"],
+        ...COERCIBLE.map((v): [unknown] => [v]),
+    ])("%p builds the client", (v) => {
+        const template = buildClient(v);
+        template.hasResourceProperties("AWS::Cognito::UserPoolClient", {
+            IdTokenValidity: Number(v) / 60,
+            AccessTokenValidity: Number(v) / 60,
+        });
+    });
 
-    test.each([[299], [240], [86401], [86460], [3601], ...NOT_A_NUMBER.map((v) => [v])])(
-        "%p, which getConfig() warns about, is refused by the client",
-        (v) => {
-            expect(() => buildClient(v)).toThrow();
-        }
-    );
+    test.each<[unknown]>([
+        [299],
+        [240],
+        [86401],
+        [86460],
+        [3601],
+        ...NOT_A_NUMBER.map((v): [unknown] => [v]),
+    ])("%p, which getConfig() warns about, is refused by the client", (v) => {
+        expect(() => buildClient(v)).toThrow();
+    });
 });

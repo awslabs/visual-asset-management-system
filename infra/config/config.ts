@@ -1786,7 +1786,8 @@ export function getConfig(app: cdk.App): Config {
                 `number of minutes, in seconds, from ${COGNITO_TOKEN_MIN_VALIDITY_SECONDS} to ` +
                 `${COGNITO_TOKEN_MAX_VALIDITY_SECONDS}: 5 minutes to 1 day (the Amazon Cognito limit), in ` +
                 `whole minutes (the VAMS web app client sets the lifetimes in minutes). ` +
-                `Got: '${String(credTokenTimeout)}'. With this value the synthesis stops at the web app client.`
+                `Got: '${String(credTokenTimeout)}'. ` +
+                `With this value the synthesis stops at the web app client.`
         );
     }
 
