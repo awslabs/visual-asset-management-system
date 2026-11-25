@@ -317,6 +317,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Assets** Uploads of the same file to one asset that complete at the same time each store a version of the file. They shared one staged copy, so most or all of them failed with `Upload ID mismatch.` ([#1928](https://github.com/awslabs/visual-asset-management-system/issues/1928))
+    -   Note: each upload is now staged in its own folder under `temp-uploads/`, so a file key uploaded through VAMS can be at most 998 bytes in a bucket registered at its root (1,011 before), less the bucket's base prefix otherwise. A longer key is refused when the upload starts.
 -   **CDK** An asset bucket registration keeps its ID when its `baseAssetsPrefix` is written with or without the trailing `/`, deployments with many registrations no longer re-create IDs, and a registration removed from the configuration is marked retired instead of staying active: its assets still resolve, and it is no longer the default bucket, matched by bucket sync or offered for a new database ([#1889](https://github.com/awslabs/visual-asset-management-system/issues/1889))
     -   Note: a deployment that already holds two registrations for one bucket and prefix keeps both. The one its assets reference answers lookups and the deployment logs the other; nothing is deleted.
 -   **Backend** Workflow template bodies and run data go to the one bucket registration flagged as the VAMS default, and two flagged registrations of one bucket under different prefixes now stop with an error instead of silently using the stale prefix ([#1890](https://github.com/awslabs/visual-asset-management-system/issues/1890))

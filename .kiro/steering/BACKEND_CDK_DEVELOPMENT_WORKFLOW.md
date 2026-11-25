@@ -693,7 +693,7 @@ The file-key validators (`RELATIVE_FILE_PATH`, `RELATIVE_FILE_PATH_ARRAY`, `DOWN
 validator sees only the asset-relative part, so the handlers that resolve a key against the asset prefix
 re-check the RESOLVED key before their first S3 call and answer a generic `400` that does not echo the
 key: `streamAsset.py`, `streamAuxiliaryPreviewAsset.py`, `downloadAsset.py`, `uploadFile.py`
-`initialize_upload` (final and `temp-uploads/` key, in the pre-loop block so a refused batch creates no
+`initialize_upload` (final and per-upload `temp-uploads/{upload tag}/` staging key, in the pre-loop block so a refused batch creates no
 multipart upload) and `assetFiles.py` `create_folder` / `move_file` / `copy_file` (destination key).
 Every guard calls `common/validators.exceeds_s3_object_key_limit(key)` rather than re-implementing the
 byte comparison; an over-long key is a `400`, never an S3 `ClientError` reported as a `500` (issue #407).

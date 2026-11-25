@@ -261,6 +261,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 
 **Key fixes:**
 
+-   **Concurrent uploads of one file** — Uploads of the same file to one asset that complete at the same time each store a version of the file, instead of most or all failing with `Upload ID mismatch.`. Each upload is staged in its own folder, so an uploaded file key can be at most 998 bytes at a bucket's root (1,011 before). (issue #1928)
 -   **Bucket registration identity** — A registration keeps its ID when its prefix is written with or without the trailing `/`, and one removed from the configuration is retired rather than left active: its assets still resolve, and it is no longer the default bucket or offered for a new database. (issue #1889)
 -   **One default bucket registration** — Two registrations flagged as the default bucket, such as two prefixes of one bucket, stop workflow runs with an error instead of sending run data under the stale prefix. (issue #1890)
 -   **Registrations by ID everywhere** — Bucket sync, indexing, triggers, compliance, reindexing and large-file uploads identify a registration by its ID; the execution detail's `renderedConfigLocation` adds `bucketId` and `relativeKey`. (issue #1891)

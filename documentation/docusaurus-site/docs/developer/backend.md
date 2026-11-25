@@ -499,6 +499,7 @@ from common.s3PathPatterns import (
     PREVIEW_FILE_PATTERN,             # '.previewFile.' marker substring
     ALLOWED_PREVIEW_FILE_EXTENSIONS,  # ('.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.bmp')
     TEMPORARY_UPLOAD_PREFIX,          # 'temp-uploads/'
+    staged_upload_key,                # an upload's staging key: '{base}temp-uploads/{upload tag}/{final key}'
     PREVIEW_PREFIX,                   # 'previews/' (asset bucket)
     PIPELINES_PREFIX,                 # 'pipelines/' (workflow run I/O in the default bucket)
     AUXILIARY_PREVIEW_PREFIX,         # 'preview/' (auxiliary bucket, singular)
