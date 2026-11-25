@@ -23,6 +23,10 @@ API keys grant the same level of access as the associated user. Treat API keys w
 The user ID specified during API key creation must already have at least one VAMS role assigned. You cannot create an API key for a user with no roles.
 :::
 
+:::note[An API key cannot create or extend keys]
+A request authenticated with an API key cannot create an API key or change a key's expiration date, whatever its user's roles grant; VAMS answers `403`. Create, rotate and extend keys while signed in through your identity provider (Amazon Cognito, or the external OAuth identity provider): in the web app, or from a CLI or MCP session signed in as your user rather than with a key. A key can still list keys, change a description, deactivate, reactivate and delete keys, so a script can revoke its own key; a reactivated key still stops working at its stored expiration date.
+:::
+
 ### Admin and self-service modes
 
 The API Key Management page operates in two modes, depending on which API routes your roles grant access to:
@@ -101,7 +105,7 @@ vamscli assets list --database-id my-database
 :::
 
 :::tip[CI/CD best practices]
-For CI/CD pipelines, create a dedicated VAMS user with a role that has only the minimum permissions required by the pipeline. Set an expiration date on the API key and rotate it regularly.
+For CI/CD pipelines, create a dedicated VAMS user with a role that has only the minimum permissions required by the pipeline. Set an expiration date on the API key and rotate it regularly. The pipeline's key cannot create its replacement or extend itself, so run the rotation as a user signed in through your identity provider.
 :::
 
 ---
@@ -162,14 +166,14 @@ Deleting an API key is permanent and cannot be undone. Applications or scripts u
 
 Follow these recommendations to maintain the security of your VAMS API keys:
 
-| Practice                            | Description                                                                                     |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Set expiration dates                | Always set an expiration date on API keys, especially for CI/CD pipelines and automation.       |
-| Use least-privilege users           | Associate API keys with users that have only the minimum permissions required for the use case. |
-| Rotate keys regularly               | Create new keys and decommission old ones on a regular schedule.                                |
-| Never commit keys to source control | Store API keys in secrets managers (such as AWS Secrets Manager) or CI/CD secret variables.     |
-| Monitor key usage                   | Review the API Key Management page periodically to identify unused or expired keys.             |
-| Deactivate compromised keys         | Set a compromised key to **Inactive** right away (takes up to about 45 seconds) and replace it. |
+| Practice                            | Description                                                                                                                                     |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Set expiration dates                | Always set an expiration date on API keys, especially for CI/CD pipelines and automation.                                                       |
+| Use least-privilege users           | Associate API keys with users that have only the minimum permissions required for the use case.                                                 |
+| Rotate keys regularly               | Create new keys and decommission old ones on a regular schedule, signed in through your identity provider (a key cannot create or extend keys). |
+| Never commit keys to source control | Store API keys in secrets managers (such as AWS Secrets Manager) or CI/CD secret variables.                                                     |
+| Monitor key usage                   | Review the API Key Management page periodically to identify unused or expired keys.                                                             |
+| Deactivate compromised keys         | Set a compromised key to **Inactive** right away (takes up to about 45 seconds) and replace it.                                                 |
 
 :::warning[Audit logging]
 All API key operations (creation, update, deletion) are recorded in the VAMS audit log. Administrators can review these logs in Amazon CloudWatch to track who created, modified, or deleted API keys.
