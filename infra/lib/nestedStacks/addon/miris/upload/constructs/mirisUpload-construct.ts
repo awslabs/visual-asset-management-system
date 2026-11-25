@@ -583,8 +583,9 @@ export class MirisUploadConstruct extends Construct {
                 {
                     id: "AwsSolutions-IAM5",
                     reason:
-                        "A run's nested-locations object sits under that run's auxiliary path, keyed by its " +
-                        "execution id, known only at run time; the container only reads that one object name.",
+                        "Nested-locations objects are keyed per workflow execution, known only at run time, " +
+                        "under the fixed pipelines/miris-upload/nested-locations/ prefix of this deployment's " +
+                        "auxiliary bucket; the container only reads them.",
                     appliesTo: [{ regex: MIRIS_NESTED_LOCATIONS_OBJECT_REGEX }],
                 },
                 {

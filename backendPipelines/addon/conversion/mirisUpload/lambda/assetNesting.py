@@ -8,9 +8,9 @@ fingerprint and the container's listing, download and root choice. `normalize_lo
 `_is_preview_of` and `contains` repeat the backend's rule, because a pipeline function cannot
 import `backend/`; `tests/test_miris_upload_location_rule_matches_core.py` holds them to it.
 
-The locations are written to an object under the run's auxiliary path, and only its URI travels on
-the state machine input and in the job's command, which AWS Batch and Amazon ECS limit to a few
-kilobytes.
+The locations are written to an object under the pipeline's own prefix of the auxiliary bucket,
+keyed by the workflow execution, and only its URI travels on the state machine input and in the job's
+command, which AWS Batch and Amazon ECS limit to a few kilobytes.
 """
 
 import json
@@ -22,8 +22,9 @@ LOCATION_INDEX_NAME = "AssetLocationGSI"
 PREVIEW_FILE_PATTERN = ".previewFile."
 # The pages of the location index read for one asset root, as the backend's MAX_NESTED_LOCATION_PAGES.
 MAX_NESTED_LOCATION_PAGES = 50
-# The object under the run's auxiliary path that holds the nested locations.
-NESTED_LOCATIONS_OBJECT_NAME = "nested-locations.json"
+# The auxiliary-bucket prefix of the nested-locations objects, one per workflow execution. A fixed
+# prefix rather than the run's auxiliary path, which carries a workflow's job name when one is set.
+NESTED_LOCATIONS_PREFIX = "pipelines/miris-upload/nested-locations"
 
 
 def normalize_location(key: Optional[str]) -> str:
@@ -102,12 +103,17 @@ def _object_location(s3_uri):
 
 
 def write_nested_locations(s3_client, aux_uri, locations):
-    """Write `locations` to the nested-locations object under the run's auxiliary path `aux_uri`
-    and return its s3:// URI, or '' without writing when there are none."""
+    """Write `locations` to `{NESTED_LOCATIONS_PREFIX}/<executionId>.json` in the auxiliary bucket of
+    the run's auxiliary path `aux_uri` (`s3://<bucket>/pipelines/<job name>/<executionId>/`) and
+    return its s3:// URI, or '' without writing when there are none."""
     if not locations:
         return ""
-    uri = aux_uri.rstrip("/") + "/" + NESTED_LOCATIONS_OBJECT_NAME
-    bucket, key = _object_location(uri)
+    bucket, aux_key = _object_location(aux_uri)
+    execution_id = aux_key.rstrip("/").rsplit("/", 1)[-1]
+    if not aux_key.startswith("pipelines/") or not execution_id or execution_id in (".", ".."):
+        raise ValueError(f"The auxiliary path names no workflow execution: {aux_uri!r}")
+    key = f"{NESTED_LOCATIONS_PREFIX}/{execution_id}.json"
+    uri = f"s3://{bucket}/{key}"
     s3_client.put_object(
         Bucket=bucket, Key=key, ContentType="application/json",
         Body=json.dumps({"nestedLocations": list(locations)}).encode("utf-8"))

@@ -16,7 +16,7 @@ OWN = ("scene.usda", "mat.usdc")
 NESTED_FILES = ("parts/bolt.usda", "parts/steel.png", "scans/scan.usdz", "scans/scan.usdz.previewFile.png")
 NESTED_LOCATIONS = [f"{ROOT}parts/", f"{ROOT}scans/scan.usdz"]
 NESTED_OBJECT = {"bucketName": AUX_BUCKET,
-                 "objectKey": "pipelines/miris-upload/E1/nested-locations.json"}
+                 "objectKey": "pipelines/miris-upload/nested-locations/E1.json"}
 GRAPH = {"scene.usda": {"mat.usdc"}}
 
 

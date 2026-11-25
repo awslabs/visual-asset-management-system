@@ -336,7 +336,7 @@ describe("Miris add-on in static mode with the upload pipeline", () => {
         expect(actionsOf(writes[0])).toEqual(["s3:PutObject"]);
         const [written] = nestedObject(UPLOAD_EXECUTE_HANDLER, "s3:PutObject");
         expect(written).toMatch(
-            /AssetAuxiliaryBucket[A-Za-z0-9]*\.?Arn\W.*\/pipelines\/miris-upload\/\*\/nested-locations\.json$/
+            /AssetAuxiliaryBucket[A-Za-z0-9]*\.?Arn\W.*\/pipelines\/miris-upload\/nested-locations\/\*$/
         );
         expect(nestedObject(UPLOAD_GATE_HANDLER, "s3:GetObject")).toEqual([written]);
     });

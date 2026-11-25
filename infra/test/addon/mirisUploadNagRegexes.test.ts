@@ -112,13 +112,17 @@ describe("Miris upload IAM5 suppression patterns", () => {
             false,
         ],
         ...[
+            ["<AssetAuxiliaryBucket81B76230.Arn>/pipelines/miris-upload/nested-locations/*", true],
             [
                 "<AssetAuxiliaryBucket81B76230.Arn>/pipelines/miris-upload/*/nested-locations.json",
-                true,
+                false,
             ],
-            ["<AssetAuxiliaryBucket81B76230.Arn>/pipelines/miris-upload/*/other.json", false],
-            ["<AssetAuxiliaryBucket81B76230.Arn>/pipelines/*/nested-locations.json", false],
-            ["<AssetBucket1D025086.Arn>/pipelines/miris-upload/*/nested-locations.json", false],
+            [
+                "<AssetAuxiliaryBucket81B76230.Arn>/pipelines/miris-upload/nested-locations/../*",
+                false,
+            ],
+            ["<AssetAuxiliaryBucket81B76230.Arn>/pipelines/*/nested-locations/*", false],
+            ["<AssetBucket1D025086.Arn>/pipelines/miris-upload/nested-locations/*", false],
         ].map(([arn, accepted]) => [[MIRIS_NESTED_LOCATIONS_OBJECT_REGEX], arn, accepted]),
         ...[
             ["<AssetBucket1D025086.Arn>/pipelines/*/ambiguous_root.json", true],

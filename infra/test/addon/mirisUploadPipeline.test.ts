@@ -15,7 +15,7 @@ import { Template } from "aws-cdk-lib/assertions";
 import {
     MIRIS_DEPENDENCY_MANIFEST_PREFIX,
     MIRIS_NESTED_LOCATIONS_OBJECT_KEYS,
-    MIRIS_NESTED_LOCATIONS_OBJECT_NAME,
+    MIRIS_NESTED_LOCATIONS_PREFIX,
 } from "../../lib/nestedStacks/addon/miris/upload/lambdaBuilder/mirisUploadFunctions";
 import { SynthResult } from "../support/templateSynth";
 import {
@@ -328,19 +328,17 @@ describe("Miris upload IAM", () => {
         const resources = [reads[0].Resource].flat();
         expect(resources).toHaveLength(1);
         expect(SynthResult.flatten(resources[0])).toMatch(
-            /AssetAuxiliaryBucket[A-Za-z0-9]*\.?Arn\W.*\/pipelines\/miris-upload\/\*\/nested-locations\.json$/
+            /AssetAuxiliaryBucket[A-Za-z0-9]*\.?Arn\W.*\/pipelines\/miris-upload\/nested-locations\/\*$/
         );
     });
 
-    test("the nested-locations object is the one the pipeline writes", () => {
+    test("the nested-locations prefix is the one the pipeline writes under", () => {
         const source = fs.readFileSync(
             path.join(PIPELINE_DIR, "lambda", "assetNesting.py"),
             "utf-8"
         );
-        expect(source).toContain(
-            `NESTED_LOCATIONS_OBJECT_NAME = "${MIRIS_NESTED_LOCATIONS_OBJECT_NAME}"`
-        );
-        expect(source).toContain('aux_uri.rstrip("/") + "/" + NESTED_LOCATIONS_OBJECT_NAME');
+        expect(source).toContain(`NESTED_LOCATIONS_PREFIX = "${MIRIS_NESTED_LOCATIONS_PREFIX}"`);
+        expect(MIRIS_NESTED_LOCATIONS_OBJECT_KEYS).toBe(`${MIRIS_NESTED_LOCATIONS_PREFIX}/*`);
     });
 
     test("the manifest prefix is the one the container writes under", () => {

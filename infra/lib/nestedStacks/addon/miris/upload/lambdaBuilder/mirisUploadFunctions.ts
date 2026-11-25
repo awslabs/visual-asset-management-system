@@ -55,17 +55,17 @@ export const MIRIS_DEPENDENCY_MANIFEST_PREFIX_OBJECT_REGEX =
     "/^Resource::<[A-Za-z0-9]*AssetAuxiliaryBucket[A-Za-z0-9]*\\.Arn>/pipelines/miris-upload/manifests/\\*$/g";
 
 /**
- * Object name of the nested-locations list under a run's auxiliary path. Mirrors
- * NESTED_LOCATIONS_OBJECT_NAME in backendPipelines/addon/conversion/mirisUpload/lambda/assetNesting.py.
+ * Auxiliary-bucket prefix of the nested-locations objects, one per workflow execution. Mirrors
+ * NESTED_LOCATIONS_PREFIX in backendPipelines/addon/conversion/mirisUpload/lambda/assetNesting.py.
  */
-export const MIRIS_NESTED_LOCATIONS_OBJECT_NAME = "nested-locations.json";
+export const MIRIS_NESTED_LOCATIONS_PREFIX = "pipelines/miris-upload/nested-locations";
 
-/** The nested-locations objects of this pipeline's runs, under its runs' auxiliary paths. */
-export const MIRIS_NESTED_LOCATIONS_OBJECT_KEYS = `pipelines/miris-upload/*/${MIRIS_NESTED_LOCATIONS_OBJECT_NAME}`;
+/** The nested-locations objects of this pipeline's runs. */
+export const MIRIS_NESTED_LOCATIONS_OBJECT_KEYS = `${MIRIS_NESTED_LOCATIONS_PREFIX}/*`;
 
-/** IAM5 `appliesTo` pattern for a grant on the runs' nested-locations objects, and nothing wider. */
+/** IAM5 `appliesTo` pattern for a grant on the nested-locations prefix, and nothing wider. */
 export const MIRIS_NESTED_LOCATIONS_OBJECT_REGEX =
-    "/^Resource::<[A-Za-z0-9]*AssetAuxiliaryBucket[A-Za-z0-9]*\\.Arn>/pipelines/miris-upload/\\*/nested-locations\\.json$/g";
+    "/^Resource::<[A-Za-z0-9]*AssetAuxiliaryBucket[A-Za-z0-9]*\\.Arn>/pipelines/miris-upload/nested-locations/\\*$/g";
 
 /** IAM5 `appliesTo` pattern for a grant on the claim prefix of the auxiliary bucket, and nothing wider. */
 export const MIRIS_CLAIM_PREFIX_OBJECT_REGEX =
@@ -110,7 +110,7 @@ function suppressCdkNagClaimPrefixWildcard(fun: lambda.Function) {
     );
 }
 
-/** Suppresses the IAM5 finding for a grant on the runs' nested-locations objects. */
+/** Suppresses the IAM5 finding for a grant on the nested-locations prefix. */
 export function suppressCdkNagNestedLocationsObject(construct: Construct) {
     NagSuppressions.addResourceSuppressions(
         construct,
@@ -118,8 +118,8 @@ export function suppressCdkNagNestedLocationsObject(construct: Construct) {
             {
                 id: "AwsSolutions-IAM5",
                 reason:
-                    "A run's nested-locations object sits under that run's auxiliary path, keyed by its execution id, " +
-                    "known only at run time; the grant names the one object name under this pipeline's runs.",
+                    "Nested-locations objects are keyed per workflow execution, known only at run time, under the " +
+                    "fixed pipelines/miris-upload/nested-locations/ prefix of this deployment's auxiliary bucket.",
                 appliesTo: [{ regex: MIRIS_NESTED_LOCATIONS_OBJECT_REGEX }],
             },
         ],
@@ -127,7 +127,7 @@ export function suppressCdkNagNestedLocationsObject(construct: Construct) {
     );
 }
 
-/** A grant of `actions` on the runs' nested-locations objects of the auxiliary bucket. */
+/** A grant of `actions` on the nested-locations prefix of the auxiliary bucket. */
 export function nestedLocationsObjectStatement(
     storageResources: storageResources,
     actions: string[]

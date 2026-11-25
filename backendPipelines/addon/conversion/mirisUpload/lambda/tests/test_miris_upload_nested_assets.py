@@ -20,6 +20,9 @@ os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
 ROOT = "vams/data/a1/"
 AUX = "s3://vams-aux-bucket/pipelines/miris-upload/exec-aaaa1111/"
+# The run's nested-locations object, under the pipeline's own prefix and keyed by the execution id.
+NESTED_KEY = "pipelines/miris-upload/nested-locations/exec-aaaa1111.json"
+NESTED = "s3://vams-aux-bucket/" + NESTED_KEY
 
 
 class IndexTable:
@@ -115,19 +118,41 @@ def test_the_nested_locations_round_trip_through_the_runs_auxiliary_path():
     s3 = FakeS3()
     uri = assetNesting.write_nested_locations(s3, AUX, [f"{ROOT}parts/"])
 
-    assert uri == AUX + "nested-locations.json"
+    assert uri == NESTED
     assert assetNesting.read_nested_locations(s3, uri) == [f"{ROOT}parts/"]
     assert assetNesting.read_nested_locations(s3, "") == []
 
+
+
+@pytest.mark.parametrize("aux", [
+    "s3://vams-aux-bucket/pipelines/miris-upload/exec-aaaa1111/",
+    "s3://vams-aux-bucket/pipelines/my-custom-job/exec-aaaa1111/",
+    "s3://vams-aux-bucket/pipelines/my-custom-job/exec-aaaa1111",
+], ids=["registered-workflow", "workflow-job-name", "no-trailing-slash"])
+def test_the_object_sits_under_the_pipelines_own_prefix_whatever_the_job_name(aux):
+    import assetNesting
+
+    s3 = FakeS3()
+    assert assetNesting.write_nested_locations(s3, aux, [f"{ROOT}parts/"]) == NESTED
+    assert list(s3.objects) == [("vams-aux-bucket", NESTED_KEY)]
+
+
+@pytest.mark.parametrize("aux", ["s3://vams-aux-bucket/", "s3://vams-aux-bucket/pipelines/x/../", "not-a-uri"],
+                         ids=["no-execution", "dot-dot", "not-s3"])
+def test_an_auxiliary_path_without_an_execution_id_is_refused(aux):
+    import assetNesting
+
+    with pytest.raises(Exception):
+        assetNesting.write_nested_locations(FakeS3(), aux, [f"{ROOT}parts/"])
 
 @pytest.mark.parametrize("body", [b"not json", b'{"nestedLocations": "x"}', b"[1]"])
 def test_a_nested_locations_object_that_is_not_a_list_of_locations_is_refused(body):
     import assetNesting
 
     s3 = FakeS3()
-    s3.objects[("vams-aux-bucket", "pipelines/miris-upload/exec-aaaa1111/nested-locations.json")] = (body, '"e"')
+    s3.objects[("vams-aux-bucket", NESTED_KEY)] = (body, '"e"')
     with pytest.raises(Exception):
-        assetNesting.read_nested_locations(s3, AUX + "nested-locations.json")
+        assetNesting.read_nested_locations(s3, NESTED)
 
 @pytest.mark.parametrize("key, held", [
     (f"{ROOT}parts/bolt.usd", True),
@@ -191,7 +216,7 @@ class FakeS3Copy(FakeS3):
     def __init__(self, other):
         super().__init__()
         self.objects = {k: v for k, v in other.objects.items()
-                        if not k[1].startswith("locks/") and not k[1].endswith("nested-locations.json")}
+                        if not k[1].startswith("locks/") and not k[1].startswith("pipelines/miris-upload/nested-locations/")}
 
 
 # --- vamsExecute ------------------------------------------------------------------------------
@@ -206,25 +231,25 @@ def handler(monkeypatch):
     return importlib.reload(vamsExecuteMirisUpload)
 
 
-def _resolved():
+def _resolved(aux=AUX):
     return {
         "assetId": "a1", "databaseId": "db1",
         "inputS3AssetFilePath": f"s3://b/{ROOT}scene.usda",
         "outputS3AssetFilesPath": f"s3://b/{ROOT}", "outputS3AssetPreviewPath": "",
-        "outputS3AssetMetadataPath": "", "inputOutputS3AssetAuxiliaryFilesPath": AUX,
+        "outputS3AssetMetadataPath": "", "inputOutputS3AssetAuxiliaryFilesPath": aux,
         "inputMetadataS3Location": "", "inputConfigurationS3Location": "s3://b/cfg.json",
         "orchestrationEventPrefix": "", "manifestUsed": True, "inputVersionId": "",
         "inputFiles": [{"assetId": "a1", "bucket": "b", "assetRootS3Key": ROOT}],
     }
 
 
-def _execute(handler, index_rows, page_size=100_000):
+def _execute(handler, index_rows, page_size=100_000, aux=AUX):
     table = IndexTable(index_rows, page_size=page_size)
     table.get_item = MagicMock(return_value={"Item": {"assetName": "Pump", "isDistributable": True}})
     gate_reply = {"StatusCode": 200, "Payload": MagicMock(
         read=lambda: json.dumps({"gate": "proceed", "claimFingerprint": "f" * 64}).encode())}
     s3 = FakeS3()
-    with patch.object(handler.manifestHelper, "resolve_pipeline_inputs", return_value=_resolved()), \
+    with patch.object(handler.manifestHelper, "resolve_pipeline_inputs", return_value=_resolved(aux)), \
          patch.object(handler, "_asset_table", return_value=table), \
          patch.object(handler, "s3_client", s3), \
          patch.object(handler, "sfn_client") as sfn, \
@@ -244,11 +269,22 @@ def test_vams_execute_writes_the_nested_locations_and_hands_on_only_their_uri(ha
     response, gate_body, open_payload, _, s3 = _execute(handler, [_row(f"{ROOT}parts/")])
 
     assert response["statusCode"] == 200
-    uri = AUX + "nested-locations.json"
+    uri = NESTED
     assert gate_body["nestedLocationsS3Uri"] == uri and open_payload["nestedLocationsS3Uri"] == uri
     assert "nestedLocations" not in gate_body and "nestedLocations" not in open_payload
     assert assetNesting.read_nested_locations(s3, uri) == [f"{ROOT}parts/"]
 
+
+
+def test_a_workflow_job_name_does_not_move_the_nested_locations_object(handler):
+    import assetNesting
+
+    custom = "s3://vams-aux-bucket/pipelines/miris-upload-nightly/exec-aaaa1111/"
+    response, gate_body, open_payload, _, s3 = _execute(handler, [_row(f"{ROOT}parts/")], aux=custom)
+
+    assert response["statusCode"] == 200
+    assert gate_body["nestedLocationsS3Uri"] == NESTED == open_payload["nestedLocationsS3Uri"]
+    assert assetNesting.read_nested_locations(s3, NESTED) == [f"{ROOT}parts/"]
 
 def test_an_asset_with_no_nested_asset_hands_on_no_uri_and_writes_nothing(handler):
     _, gate_body, open_payload, _, s3 = _execute(handler, [])
@@ -288,12 +324,13 @@ def _construct(monkeypatch, **overrides):
                        "arn:aws:secretsmanager:us-west-2:123456789012:secret:miris-integration-key-AbCdEf")
     import constructPipeline
     construct = importlib.reload(constructPipeline)
-    bucket = "vams-core-prod-us-west-2-stora-assetbucket1d025086-jvkbmwej1q35"
-    run = "pipelines/miris-upload/6dcaefd1aa2842178da97a7845642ff7"
+    # Made-up names of the same length as a deployment's, so the size test measures the real bound.
+    bucket = "vams-core-demo-us-east-1-stora-assetbucket0a1b2c3d-abcdefghij12"
+    run = "pipelines/miris-upload/0123456789abcdef0123456789abcdef"
     event = {
         "jobName": "miris-upload-a1b2c3d4", "inputS3AssetFilePath": f"s3://{bucket}/{ROOT}scene.usda",
-        "inputVersionId": "rlarEJgQBB8jgaohLUEdbjiJC1WRGudQ",
-        "inputOutputS3AssetAuxiliaryFilesPath": f"s3://vams-core-prod-us-west-2--assetauxiliarybucket81b7-e4cbujs1aga0/{run}/",
+        "inputVersionId": "ExampleVersionId0123456789abcdef",
+        "inputOutputS3AssetAuxiliaryFilesPath": f"s3://vams-core-demo-us-east-1--assetauxiliarybucket0a1b-abcdefghij12/{run}/",
         "outputS3AssetFilesPath": f"s3://{bucket}/{run}/output/files/",
         "outputS3AssetMetadataPath": f"s3://{bucket}/{run}/output/metadata/",
         "inputConfigurationS3Location": f"s3://{bucket}/{run}/config.json",
@@ -304,8 +341,7 @@ def _construct(monkeypatch, **overrides):
 
 
 @pytest.mark.parametrize("given, expected", [
-    (AUX + "nested-locations.json",
-     {"bucketName": "vams-aux-bucket", "objectKey": "pipelines/miris-upload/exec-aaaa1111/nested-locations.json"}),
+    (NESTED, {"bucketName": "vams-aux-bucket", "objectKey": NESTED_KEY}),
     ("", {}),
     (None, {}),
 ], ids=["object", "none", "absent"])
@@ -324,8 +360,8 @@ ECS_TASK_OVERRIDES_LIMIT = 8192
 
 def test_the_definition_stays_within_the_ecs_override_limit_whatever_is_nested(monkeypatch):
     with_object = _construct(monkeypatch, nestedLocationsS3Uri=(
-        "s3://vams-core-prod-us-west-2--assetauxiliarybucket81b7-e4cbujs1aga0/pipelines/miris-upload/"
-        "6dcaefd1aa2842178da97a7845642ff7/nested-locations.json"))
+        "s3://vams-core-demo-us-east-1--assetauxiliarybucket0a1b-abcdefghij12/pipelines/miris-upload/nested-locations/"
+        "0123456789abcdef0123456789abcdef.json"))
 
     # The command is a JSON string inside the overrides' JSON, so every quote is escaped once more.
     assert len(json.dumps([with_object])) < ECS_TASK_OVERRIDES_LIMIT // 2
