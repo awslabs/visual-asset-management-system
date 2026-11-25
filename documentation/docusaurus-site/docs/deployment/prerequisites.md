@@ -12,7 +12,7 @@ The following software must be installed on the machine used to build and deploy
 | Docker                     | Latest stable                      | Container builds for AWS Lambda layers and pipelines                                                               |
 | Git                        | Latest stable                      | Cloning the repository; the frontend install also clones the viewer repositories listed under Network requirements |
 | Node.js                    | 22.0.0 (`web/.nvmrc` pins 22.22.3) | Frontend build tooling, AWS CDK CLI                                                                                |
-| npm                        | 11.10.0                            | Package management for frontend and infrastructure. Node.js 22 bundles npm 10; install npm 11 separately           |
+| npm                        | 11.10.0 (npm 11 only, not npm 12)  | Package management for frontend and infrastructure. Node.js 22 bundles npm 10; install npm 11 separately           |
 | Node Version Manager (nvm) | Latest stable                      | Ensures the correct Node.js version is active                                                                      |
 | AWS CLI                    | v2 (latest)                        | AWS account authentication and resource management                                                                 |
 | AWS CDK CLI                | Pinned in `infra/package.json`     | Infrastructure-as-code deployment; run it as `npx cdk` from `infra/` so the pinned version is used                 |
@@ -25,19 +25,26 @@ python --version   # 3.12+
 docker --version
 git --version
 node --version     # v22.0.0 or later; `nvm use` in the web/ directory selects v22.22.3
-npm --version      # 11.10.0 or later
+npm --version      # 11.10.0 or later, below 12
 nvm --version
 aws --version      # aws-cli/2.x
 cd infra && npx cdk --version   # the version pinned in infra/package.json
 ```
 
-Node.js 22 ships with npm 10, and the `package.json` files declare `engine-strict` with `npm >=11.10.0`, so `npm install` fails with `EBADENGINE` until npm 11 is installed. nvm keeps a separate npm per Node.js version, so install it after `nvm use` (the `.nvmrc` is in the `web/` directory):
+The supported npm range is `>=11.10.0 <12`: npm 11, from 11.10.0 on. The `package.json` files declare it in `engines.npm` and the `.npmrc` files set `engine-strict`, so `npm install` and `npm ci` stop with `EBADENGINE` under any npm outside that range:
+
+-   **npm 10**, which Node.js 22 ships with, does not honor the `min-release-age` setting in the `.npmrc` files.
+-   **npm 12** blocks dependency install scripts, among them those of `esbuild` and `@parcel/watcher`, unless an `allowScripts` entry approves them. VAMS has not approved or tested any, so builds are supported on npm 11 only until that is done.
+
+nvm keeps a separate npm per Node.js version, so install npm 11 after `nvm use` (the `.nvmrc` is in the `web/` directory). Install `npm@11`, not `npm@latest`:
 
 ```bash
 cd web && nvm use
 npm install -g npm@11
-npm --version      # 11.10.0 or later
+npm --version      # 11.10.0 or later, below 12
 ```
+
+npm 11.21 and later print an `install scripts not yet covered by allowScripts` warning for `esbuild` and `@parcel/watcher`; the warning is expected, and npm 11 still runs those scripts.
 
 :::
 
