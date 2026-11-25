@@ -37,6 +37,7 @@ OWN_KEY_ID = "11111111-1111-4111-8111-111111111111"
 OTHER_KEY_ID = "22222222-2222-4222-8222-222222222222"
 SESSION_KEY_ID = "33333333-3333-4333-8333-333333333333"
 MISSING_KEY_ID = "44444444-4444-4444-8444-444444444444"
+DEACTIVATED_KEY_ID = "55555555-5555-4555-8555-555555555555"
 SESSION_REFUSAL = "API keys cannot be created or updated with a temporary session key"
 # The messages are part of the contract: api/auth.md quotes them and the CLI prints them.
 API_KEY_CALLER_CREATE_REFUSAL = ("API keys cannot be created with an API key. "
@@ -96,6 +97,7 @@ RECORDS = {
     OWN_KEY_ID: _record(OWN_KEY_ID, "ci-rotation"),
     OTHER_KEY_ID: _record(OTHER_KEY_ID, "nightly-export"),
     SESSION_KEY_ID: _record(SESSION_KEY_ID, f"{TEMPORARY_SESSION_KEY_NAME_PREFIX}edh-probe"),
+    DEACTIVATED_KEY_ID: dict(_record(DEACTIVATED_KEY_ID, "paused-export"), isActive="false"),
 }
 
 
@@ -249,6 +251,18 @@ class TestAnApiKeyCanStillReadAndRevoke:
         assert table.update_item.call_args.kwargs["Key"] == {"apiKeyId": OWN_KEY_ID}
         assert _written_fields(table)["isActive"] == "false"
         assert "expiresAt" not in _written_fields(table)
+
+    @pytest.mark.parametrize("path", [ADMIN_KEY, USER_KEY], ids=SCOPES)
+    def test_it_reactivates_a_key_without_moving_its_expiration(self, monkeypatch, path):
+        # Allowed by the owner's ruling: reactivation does not renew a key, which still stops
+        # authenticating at its stored expiresAt.
+        response, table, _audit = _run(monkeypatch, API_KEY_CALLER, "PUT", path.format(id=DEACTIVATED_KEY_ID),
+                                       {"isActive": "true"}, api_key_id=DEACTIVATED_KEY_ID)
+        assert response["statusCode"] == 200
+        assert table.update_item.call_args.kwargs["Key"] == {"apiKeyId": DEACTIVATED_KEY_ID}
+        assert _written_fields(table)["isActive"] == "true"
+        assert "expiresAt" not in _written_fields(table)
+        assert RECORDS[DEACTIVATED_KEY_ID]["expiresAt"] == STORED_EXPIRY
 
     def test_it_changes_a_description(self, monkeypatch):
         response, table, _audit = _run(monkeypatch, API_KEY_CALLER, "PUT", USER_KEY.format(id=OTHER_KEY_ID),
