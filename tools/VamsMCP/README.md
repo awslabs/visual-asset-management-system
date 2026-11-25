@@ -690,6 +690,10 @@ execution's group membership rather than selecting a group to re-run. It reads
 each input file at the version the original launch pinned (a `versionId` someone
 chose) and every other file at its current version; an execution recorded before
 versions were pinned re-runs every file on its current version.
+`abort_execution` answers `message` "Execution aborted" only when it stopped the
+run; an execution that was not running answers a `message` that says so and
+names its status (`SUCCEEDED`, `FAILED`, `ABORTED` or `TIMED_OUT`, or `unknown`
+when the record is gone).
 `abort_execution` returns `warnings` and `notAbortable` beside `message` when a
 registered sub-process could not be stopped: each `notAbortable` entry
 (`resourceType`, `label`, `stageName`, `locator`) is compute of a type VAMS has no

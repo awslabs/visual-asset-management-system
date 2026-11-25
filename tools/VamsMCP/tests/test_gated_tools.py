@@ -304,6 +304,16 @@ def test_abort_execution_aborts_a_single_run(gated):
     client.api.abort_execution.assert_called_once_with("e1", group_id=None)
 
 
+def test_abort_execution_relays_the_not_running_message_of_a_finished_run(gated):
+    """Issue #344: the handler says a finished run was not aborted. The tool returns that sentence
+    unchanged, with its siblings, and adds no "aborted" claim of its own."""
+    server, client = gated
+    not_running = "Execution was not running (status SUCCEEDED), so it was not aborted."
+    client.api.abort_execution.return_value = {"message": not_running, "warnings": ["w1"]}
+    result = server.abort_execution("e1")
+    assert result == {"message": not_running, "warnings": ["w1"]}
+
+
 def test_abort_execution_forwards_warnings_and_not_abortable(gated):
     """D5 (Pattern 7). An abort that left a sub-process running answers `message` with two sibling
     arrays, `warnings` and `notAbortable`. A string `message` is not an envelope, so plain unwrapping

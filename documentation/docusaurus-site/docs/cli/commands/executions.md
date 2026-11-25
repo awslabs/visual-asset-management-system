@@ -381,8 +381,13 @@ vamscli execution abort my-execution-id --group-id batch-2026-01 --yes
 vamscli execution abort my-execution-id --group-id batch-2026-01 --yes --json-output
 ```
 
-A single abort reports `message` and, when a registered sub-process could not be stopped, two
-sibling arrays: `warnings` (free text, one sentence per sub-process) and `notAbortable` -- one
+A single abort reports `message`, which is `Execution aborted` only when the call stopped the
+execution. An execution that was not running keeps its status, and the command prints the API's
+message naming that status (`Execution was not running (status SUCCEEDED), so it was not aborted.`).
+The command exits `0` in both cases. See
+[Abort a workflow execution](../../api/workflows.md#abort-a-workflow-execution) for the full wording.
+When a registered sub-process could not be stopped, the report also carries two sibling arrays:
+`warnings` (free text, one sentence per sub-process) and `notAbortable` -- one
 `{resourceType, label, stageName, locator}` entry per registered sub-process of a type VAMS has no
 stop API for (an externally owned pipeline's own job, for example). The execution still reads
 `ABORTED`; a non-empty `notAbortable` means that compute keeps running until its owner's heartbeat or
