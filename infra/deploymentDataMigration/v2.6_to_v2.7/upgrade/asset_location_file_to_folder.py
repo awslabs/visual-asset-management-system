@@ -60,7 +60,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from typing import Callable, Dict, Iterator, List, NamedTuple, Optional, Set, Tuple
+from typing import Callable, Dict, FrozenSet, Iterator, List, NamedTuple, Optional, Set, Tuple
 
 from botocore.exceptions import ClientError
 
@@ -73,6 +73,8 @@ CONVERSION_ATTRIBUTE = 'assetLocationConversion'
 COPY_DONE_ATTRIBUTE = 'assetLocationCopyRecordsMovedAt'
 LOCATION_BUCKET_ATTRIBUTE = 'locationBucket'
 LOCATION_KEY_ATTRIBUTE = 'locationKey'
+# A bucket registration that left the deployment configuration (common.bucketRegistrations).
+REGISTRATION_RETIRED_ATTRIBUTE = 'retired'
 ARCHIVED_SUFFIX = '#deleted'
 PREVIEW_FILE_PATTERN = '.previewFile.'
 
@@ -88,7 +90,7 @@ CONVERSION_MODES = (MODE_IN_PLACE, MODE_APPEND_SLASH, MODE_MOVE, MODE_INCLUDE_SI
 
 # Refusals that only an operator decision resolves (a resolution, or work by hand); the run still exits 0.
 LAYOUT_REFUSALS = ('parent-is-root', 'siblings', 'shared-parent', 'location-in-use', 'location-conflict',
-                   'path-collision', 'move-blocked', 'include-siblings-blocked')
+                   'path-collision', 'move-blocked', 'include-siblings-blocked', 'registration-retired')
 # Outcomes that make the run exit non-zero: re-run once the cause is resolved.
 FAILURE_OUTCOMES = ('folder-keys-pending', 'unreadable', 'changed', 'record-clash', 'errors', 'pending')
 
@@ -146,12 +148,11 @@ def normalize_location(key: Optional[str]) -> str:
 
 
 def normalize_base_prefix(base_assets_prefix: Optional[str]) -> str:
-    """A registration's base prefix as a folder ('' for the bucket root)."""
-    base = (base_assets_prefix or '').strip()
-    if base in ('', '/'):
-        return ''
-    base = base.lstrip('/')
-    return base if base.endswith('/') else base + '/'
+    """A registration's base prefix as a folder ('' for the bucket root), as the backend's
+    common.assetLocations.normalize_base_prefix: slashes at either end dropped, one trailing '/' added. The
+    rows of one duplicate group (``duplicateOfBucketId``: 'assets', 'assets/', 'assets//') get one prefix."""
+    trimmed = (base_assets_prefix or '').strip('/')
+    return f"{trimmed}/" if trimmed else ''
 
 
 def _file_name(location: str) -> str:
@@ -531,6 +532,7 @@ class Context(NamedTuple):
     locations: Dict[str, BucketLocations]            # bucket name -> its stored locations
     candidate_keys: Dict[str, Set[str]]              # bucket name -> file keys of every candidate row
     resolutions: Dict[Tuple[str, str], Dict[str, str]]
+    retired: FrozenSet[str] = frozenset()            # bucketIds of retired registrations
 
 
 def load_resolutions(path: Optional[str]) -> Dict[Tuple[str, str], Dict[str, str]]:
@@ -613,6 +615,11 @@ def plan_candidate(s3_client, context: Context, candidate: Candidate, dry_run: b
     bucket, base = context.registrations.get(candidate.bucket_id, ('', ''))
     if not bucket:
         return Plan('unreadable', detail='the asset bucket is not registered in the S3 asset buckets table')
+    if candidate.bucket_id in context.retired:
+        return Plan('registration-retired', detail=(
+            'the asset bucket registration is retired (it left the deployment configuration); nothing in its '
+            'bucket is read or written. Put it back in the configuration (it keeps its bucketId) and run again, '
+            'or leave the asset single-file'))
     base = normalize_base_prefix(base)
     try:
         own = exact_versions(s3_client, bucket, key)
@@ -1358,10 +1365,14 @@ def read_context(dynamodb_client, cfg: Dict, resolutions: Dict) -> Tuple[Context
     """Pass 1: the bucket registrations, every stored location per bucket name (live and archived rows) and
     the candidate rows, sorted. Returns ``(context, candidates, rows scanned)``."""
     registrations = {}
+    retired = set()
     for item in _paginate(dynamodb_client.scan, TableName=cfg['s3_asset_buckets_storage_table_name'],
-                          ProjectionExpression='bucketId, bucketName, baseAssetsPrefix'):
+                          ProjectionExpression='bucketId, bucketName, baseAssetsPrefix, #retired',
+                          ExpressionAttributeNames={'#retired': REGISTRATION_RETIRED_ATTRIBUTE}):
         if _s(item, 'bucketId') and _s(item, 'bucketName'):
             registrations[_s(item, 'bucketId')] = (_s(item, 'bucketName'), _s(item, 'baseAssetsPrefix'))
+            if (item.get(REGISTRATION_RETIRED_ATTRIBUTE) or {}).get('BOOL') is True:
+                retired.add(_s(item, 'bucketId'))
     locations: Dict[str, BucketLocations] = {}
     candidate_keys: Dict[str, Set[str]] = {}
     candidates = []
@@ -1381,7 +1392,7 @@ def read_context(dynamodb_client, cfg: Dict, resolutions: Dict) -> Tuple[Context
             if bucket and location and not location.endswith('/'):
                 candidate_keys.setdefault(bucket, set()).add(location)
     candidates.sort(key=lambda c: (c.database_id, c.asset_id))
-    return Context(registrations, locations, candidate_keys, resolutions), candidates, scanned
+    return Context(registrations, locations, candidate_keys, resolutions, frozenset(retired)), candidates, scanned
 
 
 def _execute(dynamodb_client, s3_client, cfg: Dict, context: Context, candidate: Candidate, plan: Plan,
