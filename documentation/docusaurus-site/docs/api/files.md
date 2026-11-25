@@ -250,7 +250,7 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 `DELETE /database/{databaseId}/assets/{assetId}/deleteFile`
 
-Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files.
+Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files. It also removes the file's metadata, attributes and version records, so the asset's versions no longer list the file.
 
 :::danger[Irreversible Operation]
 This permanently deletes the file and all its versions. Consider using [Archive File](#archive-file) for soft-deletion instead.
