@@ -165,8 +165,11 @@ def validate_guid(name, value):
         return (False, name + " is invalid. Must follow the regexp "+execution_id_pattern)
     return (True, '')
 
-def exceeds_s3_object_key_limit(value):
-    """True when the UTF-8 encoding of value is longer than an S3 object key may be.
+
+def exceeds_s3_object_key_limit(value, limit=MAX_S3_OBJECT_KEY_BYTES):
+    """True when the UTF-8 encoding of value is longer than an S3 object key may be, or than
+    `limit` bytes when a caller holds a key to a lower bound derived from that limit (upload
+    initialize: common/s3PathPatterns.max_uploaded_file_key_bytes).
 
     The one predicate for the S3 object-key limit. The path validators below apply it to the
     asset-relative part a request carries; the asset handlers (stream, download, upload initialize,
@@ -174,7 +177,7 @@ def exceeds_s3_object_key_limit(value):
     added, before their first S3 call. Measured in bytes, not characters: a 350-character key of
     3-byte characters is over the limit.
     """
-    return len(value.encode('utf-8')) > MAX_S3_OBJECT_KEY_BYTES
+    return len(value.encode('utf-8')) > limit
 
 def _s3_object_key_limit_message(name):
     return name + " exceeds the maximum S3 object key length of " + str(MAX_S3_OBJECT_KEY_BYTES) + " bytes"

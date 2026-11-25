@@ -66,6 +66,8 @@ vamscli file upload --json-input @upload-config.json --json-output
 
 :::note[Upload Limits]
 Files are split into parts and grouped into upload sequences. Each sequence is limited to 50 files, 1,000 total parts, and 3 GB; an individual file is limited to 1,000 parts with a 5 GB maximum part size. VamsCLI creates additional sequences automatically, so the total number of files is unbounded (for example, 200 files become 4 sequences of 50). The backend rate-limits upload initialization to 20 sequences per user per minute, which VamsCLI handles with exponential backoff. Files are chunked at 150 MB for files under 15 GB and at 1 GB for larger files. Zero-byte files are supported and created at completion.
+
+A file's key, including its asset location, may be at most 998 bytes of UTF-8 in a bucket registered at its root, and the length of the bucket's base prefix less than that otherwise. The backend refuses an upload sequence that holds a longer key before any of its files is sent. The command lists the file under failed files and exits non-zero; `--verbose` shows the reason, `VAMS General Error: File key is too long to upload: a file key, including its asset location, may be at most N bytes`, where N is the bound for the asset's bucket. See [Amazon S3 quotas](../../additional/quotas.md#amazon-s3).
 :::
 
 :::warning[Per-File Part Limit]
