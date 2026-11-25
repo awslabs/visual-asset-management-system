@@ -26,7 +26,7 @@ With the `content_window` setting on, VAMS appears in the Isaac Sim **Content** 
 -   **Access**: everything listed and read goes through the VAMS API as you, so you see what your VAMS role allows. Files download straight from their presigned VAMS URLs.
 -   **When it connects**: as soon as the extension has a sign-in, on an EDH Workstations desktop or anywhere else. A sign-in the VAMS CLI profile already holds when Isaac Sim starts (the desktop's session sign-in, or an earlier `vamscli auth login`) is taken over at startup. Without one, sign in under **Authentication** in the **VAMS Connector** window; a sign-in made outside Isaac Sim after it started (a desktop sign-in that finishes late, or `vamscli auth login` in a terminal) is found within 30 seconds, or at once with **Refresh Databases**.
 -   **How it runs**: the extension starts a small adapter (`vams/connector/isaacsim/storage_adapter/`) with the VAMS CLI's Python, listening on `127.0.0.1` only, and registers it with the Content window. The adapter holds no credential: each request carries your own VAMS CLI sign-in, which the extension reads from the CLI profile when Isaac Sim asks for it; an expired Cognito sign-in is renewed then with the profile's refresh token, as `vamscli auth refresh` does. The Content window keeps its entries in your `omniverse.toml`; the VAMS entry is removed again, and the adapter stopped, when you sign out or close Isaac Sim, and an entry left by a session that did not close cleanly is removed at the next sign-in.
--   **Requirements**: Isaac Sim 6.1 or later (Kit 110.2+), and `grpcio` and `protobuf` in the VAMS CLI's environment: `pip install --require-hashes --only-binary :all: -r locks/storage/requirements.lock` with that environment's `pip` (a hashed export of `locks/storage/uv.lock`, which the CI dependency audit checks). Without them, or on Isaac Sim 5.1, the VAMS Connector window works as before and the Isaac Sim log says why the Content window entry was not added.
+-   **Requirements**: Isaac Sim 6.1 or later (Kit 110.2+), VAMS CLI 2.7.0 or later, and `grpcio` and `protobuf` in the VAMS CLI's environment: `pip install --require-hashes --only-binary :all: -r locks/storage/requirements.lock` with that environment's `pip` (a hashed export of `locks/storage/uv.lock`, which the CI dependency audit checks). Without them, or on Isaac Sim 5.1, the VAMS Connector window works as before and the Isaac Sim log says why the Content window entry was not added.
 -   **Limits**: the database list is read when the connection is made, so a database created later appears after the next sign-in. A folder shows changes made elsewhere when it is opened again, not live. Folders show no modification date (the Omniverse Storage API carries no date for folders; the Content window shows 1970-01-01).
 -   **Turning it on**: the connection is off unless `content_window` is `true`, because the Content window keeps its connections in your `omniverse.toml` and the VAMS entry is written there while the connection is on. The EDH Workstations `isaacsim` desktop image installs the dependencies and turns it on.
 
@@ -75,7 +75,7 @@ The Execute view offers **Run** only for the files that pass the input-file filt
 -   **NVIDIA Isaac Sim 5.1 or 6.2** (other Isaac Sim 6.x releases are untested)
 -   **Python 3.10+** for the extension (included with Isaac Sim), and **Python 3.12+** for the VAMS CLI's own environment
 -   **VAMS CLI** installed and configured (see below)
--   For the optional Content window connection: **Isaac Sim 6.1 or later**, and `grpcio` and `protobuf` in the VAMS CLI's environment (see [Content window connection](#content-window-connection-optional-isaac-sim-61))
+-   For the optional Content window connection: **Isaac Sim 6.1 or later**, **VAMS CLI 2.7.0 or later** (from the same VAMS release as the connector), and `grpcio` and `protobuf` in the VAMS CLI's environment (see [Content window connection](#content-window-connection-optional-isaac-sim-61))
 
 ### VAMS CLI Setup
 
@@ -187,12 +187,14 @@ folders = ["/path/to/kit-exts"]
 
 To browse VAMS in the Isaac Sim **Content** window as well (see [Content Window Connection](#content-window-connection-isaac-sim-61)), after installing the extension:
 
-1.  Install `grpcio` and `protobuf` into the **VAMS CLI's** environment (not Isaac Sim's bundled Python) from the connector's hashed lock, with that environment's `pip`. The environment needs Python 3.12 or later, as the VAMS CLI does:
+1.  Check that the VAMS CLI is 2.7.0 or later, then install `grpcio` and `protobuf` into the **VAMS CLI's** environment (not Isaac Sim's bundled Python) from the connector's hashed lock, with that environment's `pip`. The environment needs Python 3.12 or later, as the VAMS CLI does. The storage adapter sends each request with the signed-in user's own token through the VAMS CLI's API client, which an earlier VAMS CLI cannot do: with one, VAMS appears in the Content window with nothing under it, and no log names the cause. Install the VAMS CLI from the same VAMS release as the connector:
 
     ```bash
     # Linux and macOS
+    ~/vamscli-venv/bin/vamscli --version    # VamsCLI version 2.7.0 or later
     ~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
     # Windows
+    %USERPROFILE%\vamscli-venv\Scripts\vamscli --version
     %USERPROFILE%\vamscli-venv\Scripts\pip install --require-hashes --only-binary :all: -r C:\path\to\kit-exts\vams.connector.isaacsim\locks\storage\requirements.lock
     ```
 
