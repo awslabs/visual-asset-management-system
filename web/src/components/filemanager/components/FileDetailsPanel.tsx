@@ -978,9 +978,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
             // Construct the relative path for the new folder
             let relativeKey;
 
-            // If we're at the root level
+            // If we're at the root level. The path keeps its leading "/", so the API reads it as a
+            // path in the asset: a folder named like the asset's location ("A1/" in an asset stored
+            // at "A1/") is the new folder "A1/A1/", never the asset's own folder (#1943)
             if (selectedItem.relativePath === "/") {
-                relativeKey = `${newFolderName}/`;
+                relativeKey = `/${newFolderName}/`;
             } else {
                 // If we're in a subfolder, use the selected item's relativePath
                 // Make sure it ends with a slash

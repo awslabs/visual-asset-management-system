@@ -42,12 +42,14 @@ jest.mock("../../../visualizerPlugin/core/viewableExtensions", () => ({
 }));
 jest.mock("../../../visualizerPlugin/components/EyeIconSvg", () => ({ EYE_ICON_SVG: null }));
 jest.mock("../../metadata/FileMetadata", () => ({ __esModule: true, default: () => null }));
+// The name the stand-in create-folder modal submits; a test may set another
+let mockNewFolderName = "new-folder";
 jest.mock("../modals/CreateFolderModal", () => ({
     CreateFolderModal: ({ visible, onSubmit, submitError }: any) =>
         visible ? (
             <div data-testid="create-folder-modal">
                 <span data-testid="create-folder-error">{submitError}</span>
-                <button onClick={() => onSubmit("new-folder")}>Submit folder</button>
+                <button onClick={() => onSubmit(mockNewFolderName)}>Submit folder</button>
             </div>
         ) : null,
 }));
@@ -256,6 +258,29 @@ describe("FileDetailsPanel — request failures", () => {
             relativeKey: "/optimized/new-folder/",
         });
         expect(screen.getByTestId("create-folder-modal")).toBeInTheDocument();
+    });
+
+    it("sends a root folder named like the asset as a path in the asset (#1943)", async () => {
+        // In an asset stored at "a1/", the folder "a1" at the root is "a1/a1/". Without its leading
+        // "/" the path "a1/" is the asset's own folder key, which the API reads as that key.
+        mockNewFolderName = "a1";
+        createFolder.mockResolvedValue([false, "stop here"]);
+        try {
+            renderPanel(root);
+
+            await userEvent.click(screen.getByRole("button", { name: "Asset Operations" }));
+            await userEvent.click(await screen.findByText("Create Sub-Folder"));
+            await userEvent.click(screen.getByRole("button", { name: "Submit folder" }));
+
+            await waitFor(() => expect(createFolder).toHaveBeenCalled());
+            expect(createFolder).toHaveBeenCalledWith({
+                databaseId: "db1",
+                assetId: "a1",
+                relativeKey: "/a1/",
+            });
+        } finally {
+            mockNewFolderName = "new-folder";
+        }
     });
 
     it("treats an empty create-folder reply as a failure", async () => {
