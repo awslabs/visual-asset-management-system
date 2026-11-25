@@ -1,0 +1,438 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package nvidia.omniverse.storage.fileobject.v1beta;
+
+import "nvidia/omniverse/storage/fileobject/v1beta/fileobject.proto";
+
+option go_package = "pb.api.nvidia.com/omniverse/storage/fileobject/v1beta;storage";
+option java_multiple_files = true;
+option java_outer_classname = "FileobjectServiceProto";
+option java_package = "com.nvidia.omniverse.storage.fileobject.v1beta";
+
+// The FileObjectService is the public API which consuming applications use
+// to read data from remote storage.
+service FileObjectService {
+  // Recursively enumerate all data objects below the given resource address,
+  // including direct children and descendants at any depth.
+  // (-- api-linter: core::0136::verb-noun=disabled
+  //     aip.dev/not-precedent: A better name would have been EnumerateFileObjects --)
+  rpc Enumerate(EnumerateRequest) returns (stream EnumerateResponse);
+
+  // Stat a single ResourceAddress, check if it exists and return the ResourceIdentity
+  // (-- api-linter: core::0136::verb-noun=disabled
+  //     aip.dev/not-precedent: A better name would have been StatFileObject --)
+  rpc Stat(StatRequest) returns (StatResponse);
+
+  // Read the binary data of a specific data object instance, providing the ResourceIdentity
+  // (-- api-linter: core::0131::synonyms=disabled
+  //     aip.dev/not-precedent: In storage, we use Read and Write instead of Get and Create. --)
+  // (-- api-linter: core::0136::verb-noun=disabled
+  //     aip.dev/not-precedent: A better name would have been GetFileObject --)
+  rpc Read(ReadRequest) returns (stream ReadResponse);
+
+  // Read the binary data of a data object currently stored at a specific location, providing a ResourceAddress
+  // (-- api-linter: core::0131::synonyms=disabled
+  //     aip.dev/not-precedent: In storage, we use Read and Write instead of Get and Put --)
+  // (-- api-linter: core::0136::prepositions=disabled
+  //     aip.dev/not-precedent: ReadAddress is not the same as ReadFromAddress. --)
+  // (-- api-linter: core::0136::verb-noun=disabled
+  //     aip.dev/not-precedent: With prepositions disallowed, what should be a name for this function? --)
+  rpc ReadFromAddress(ReadFromAddressRequest) returns (stream ReadFromAddressResponse);
+
+  // Call this before trying to Write something to determine which size intervals of files are supposed to be
+  // written with which type of WriteRequest. This is to predetermine the response of the service to the
+  // Write() call with a given data object size.
+  // (-- api-linter: core::0131::synonyms=disabled
+  //     aip.dev/not-precedent: We use Fetch to not call it Get. The "name" resource thing doesn't resonate here. --)
+  rpc FetchWriteTypeInfo(FetchWriteTypeInfoRequest) returns (FetchWriteTypeInfoResponse);
+
+  // Write a file object into the storage, sending first a URL to write to and then one or more data chunks
+  // (-- api-linter: core::0136::verb-noun=disabled
+  //     aip.dev/not-precedent: A better name would be CreateFileObject --)
+  rpc Write(stream WriteRequest) returns (stream WriteResponse);
+
+  // Optionally, call CompleteRedirectUpload to retrieve the ResourceInfo for the data object uploaded to the HTTP server
+  rpc CompleteRedirectUpload(CompleteRedirectUploadRequest) returns (CompleteRedirectUploadResponse);
+
+  // Get the presigned URL that allows one to upload a single part of the multipart upload.
+  rpc UploadPart(UploadPartRequest) returns (UploadPartResponse);
+
+  // Completes a multipart upload by assembling previously uploaded parts.
+  rpc CompleteMultipartUpload(CompleteMultipartUploadRequest) returns (CompleteMultipartUploadResponse);
+
+  // Aborts a multipart upload. The storage consumed by any previously uploaded parts will be eventually
+  // freed. However, if any part uploads are currently in progress, it might be necessary to abort a given
+  // multipart upload multiple times in order to completely free all storage consumed by all parts.
+  // Moreover, certain backends may have specific policies on garbage collection or lifetime policies
+  // which pertain to these abandoned parts which are outside the scope of this API.
+  rpc AbortMultipartUpload(AbortMultipartUploadRequest) returns (AbortMultipartUploadResponse);
+
+  // Delete a file object on storage. Semantics are dependent on the lifecycle configured on the backend storage.
+  // (-- api-linter: core::0136::verb-noun=disabled
+  //     aip.dev/not-precedent: A better name would be DeleteFileObject --)
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+}
+
+// The EnumerateRequest message defines the input parameters for the Enumerate() operation
+message EnumerateRequest {
+  // The ResourceAddress of the enumerable location. The address format is storage specific.
+  string resource_address = 1;
+}
+
+// The response of the enumerate operation. This is a streaming response, where each message
+// may contain a size-bounded batch of AddressInfo entries.
+message EnumerateResponse {
+  // Batch of AddressInfo messages with the metadata and resource addresses of descendant data objects.
+  repeated AddressInfo items = 1;
+}
+
+// The StatRequest message defines the input parameters for the Stat() operation
+message StatRequest {
+  // The ResourceAddress to stat and check for existence. The semantics are storage specific
+  string resource_address = 1;
+}
+
+// The response of the enumerate operation - a single ResourceInfo in case the data object was found
+message StatResponse {
+  // Single ResourceInfo, if found
+  ResourceInfo resource_info = 1;
+}
+
+// The ReadRequest message defines the input parameters for the Read() operation
+message ReadRequest {
+  // The ResourceIdentity as returned by a prior Stat or Enumerate call
+  ResourceIdentity resource_identity = 1;
+  // Optionally, a preference on how the data is to be delivered. For simple clients wanting to avoid
+  // the multipart complexity the server might offer to stream instead.
+  optional DownloadPreference download_preference = 2;
+}
+
+// The ReadResponse message is used to indicate to the client how to retrieve the binary data object.
+message ReadResponse {
+  // If the object is found, the storage service will always first send a metadata message describing the data object,
+  // and then either reply with one or more Chunk messages containing the binary data, which the client has to assemble,
+  // or send a single Redirect message to instruct the client fetching the data from the redirect location.
+  oneof reply_type {
+    // First message to be returned, the metadata of the data object
+    Metadata metadata = 1;
+
+    // One or more Chunks containing the bytes of the data object
+    Chunk chunk = 2;
+
+    // Instead of Chunks, the storage service might instruct the client to query the redirect location for the data
+    Redirect redirect = 3;
+  }
+}
+
+// The ReadFromAddressRequest message defines the input parameters for the ReadFromAddress() operation
+message ReadFromAddressRequest {
+  // The ResourceAddress pointing to a potentially mutable storage location
+  string resource_address = 1;
+  // Optionally, a preference on how the data is to be delivered. For simple clients wanting to avoid
+  // the multipart complexity the server might offer to stream instead.
+  optional DownloadPreference download_preference = 2;
+}
+
+// The ReadFromAddressResponse message is used to indicate to the client how to retrieve the binary data object, and to provide metadata and the
+// ResourceIdentity of the object stored at the requested address at the moment of execution.
+message ReadFromAddressResponse {
+  // If the object is found, the storage service will always first send a metadata message describing the data object,
+  // and then either reply with one or more Chunk messages containing the binary data, which the client has to assemble,
+  // or send a single Redirect message to instruct the client fetching the data from the redirect location.
+  oneof reply_type {
+    // First message to be returned, the ResourceIdentity and the Metadata of the data object
+    ResourceInfo resource_info = 1;
+
+    // One or more Chunks containing the bytes of the data object
+    Chunk chunk = 2;
+
+    // Instead of Chunks, the storage service might instruct the client to query the redirect location for the data
+    Redirect redirect = 3;
+  }
+}
+
+// Sending the request on what size intervals the given resource address supports
+message FetchWriteTypeInfoRequest {
+  // Specify the resource_address at which the data will be uploaded.
+  string destination_resource_address = 1;
+}
+
+// The reply of the WriteTypeInfo delivers a list of intervals with a method
+message WriteTypeForSizeInterval {
+  // The minimum data object size for which this upload method is recommended
+  uint64 minimum_data_object_size = 1;
+  // The maximum data object size, it must be smaller than the maximum size for this upload method to be recommended
+  uint64 maximum_data_object_size = 2;
+  // The upload method preferred for this size interval. Note that the client does not need to specify the method,
+  // the service will select it automatically based on the size intervals. The client only needs to specify the
+  // upload method if it wants to leave the recommended way.
+  UploadPreference preferred_upload_method = 3;
+}
+
+// The response of the FetchWriteTypeInfo call
+message FetchWriteTypeInfoResponse {
+  // A non-empty list of data object size intervals with their preferred method.
+  repeated WriteTypeForSizeInterval write_type_intervals = 1;
+}
+
+// The Write operation's parameter message
+message WriteRequest {
+  // As the first message, send the destination address, then follow up with one or more data chunks if the server
+  // did not already respond with a WriteResponse indicating a redirect to another server is desired.
+  oneof write_request_type {
+    // First to send, the parameters for the Write operation
+    WriteParameters params = 1;
+
+    // A chunk, size is chosen by the client
+    Chunk chunk = 2;
+  }
+}
+
+// The parameters for the Write operation itself
+message WriteParameters {
+  // Where to write to
+  string destination_resource_address = 1;
+
+  // Optionally, supply a ResourceIdentity for optimistic locking - only when the version referenced is still head the write operation will succeed.
+  optional ResourceIdentity previous_version = 2;
+
+  // The client must supply the size of the data object along with the write request, which can help
+  // the service instance to decide if redirection or multipart upload is recommended.
+  uint64 data_object_size = 3;
+
+  // Optionally, the client can specify the desired way of the service reacting to the Write request. This is useful for testing the various
+  // modes, but can also help in keeping client code simple in getting away with just implementing one of the multiple options.
+  // Note that the service is not required to respect this, so check in production code how the storage service behaves.
+  optional UploadPreference upload_preference = 4;
+
+  // If set to true, the Write operation will fail with ALREADY_EXISTS when a resource already exists at
+  // the destination address. This is the create-only counterpart to previous_version: it guards against
+  // silently overwriting a concurrent write at an address the client expected to be empty.
+  // Mutually exclusive with previous_version: setting both on the same request causes the server to
+  // respond with INVALID_ARGUMENT. Unset (or false) preserves pre-feature behavior (last-writer-wins for
+  // the conflict case).
+  optional bool fail_if_exists = 5;
+}
+
+// Properties of a write request, over HTTP.
+message WriteRedirectProperties {
+  // Presigned URL to use for uploading an object.
+  string redirect_target_url = 1;
+
+  // HTTP method to use for uploading part via the `redirect_target_url`.
+  UploadMethod method = 2;
+
+  // A list of additional headers to supply within the upload request.
+  repeated Header additional_headers = 3;
+
+  // List of names from the HTTP headers returned from `presigned_url` HTTP operation that are required
+  // to be used as parameter to "CompleteRedirectUpload".
+  repeated string completion_header_names = 4;
+}
+
+// This empty message is used by the service to acknowledge that the client should continue streaming data
+// via WriteRequest/Chunk messages. It is not required that the client waits for the recept of this message
+// to start streaming, that would only increase write latency, but if this message is not received it
+// should also stop uploading chunks and rather follow the redirect.
+// To prevent this from happening, use the FetchWriteTypeInfo() method upfront to find out the likely response of the
+// service on the WriteRequest sent.
+message WriteChunksAccepted {}
+
+// The response of the Write operation
+message WriteResponse {
+  // The WriteResponse indicates whether a Redirect should be done (pre-signed URL), or if the stream of chunks
+  // successfully completed and has created a new data object.
+  oneof write_response_type {
+    // This message type indicates the client should (continue) streaming the data in chunks via the gRPC socket
+    WriteChunksAccepted write_chunks_accepted = 1;
+
+    // This returns the ResourceIdentity of the data object just written. In case of concurrent writes, this is the only
+    // way to identify the version just uploaded, because the next Stat request might already deliver a new one (or the previous one, in
+    // case of eventually consistent storages). Additionally, metadata is returned to allow filling a stat cache.
+    ResourceInfo resource_info = 2;
+
+    // There are two different redirection types for write, it could be a simple pre-signed URL redirect to upload
+    // to an HTTP server, or it could be the start of a multipart upload operation.
+    // The client receives this message with the information on which HTTP server to upload to, together with the
+    // method to use and additional headers to set for the write operation to succeed.
+    WriteRedirectProperties write_redirect = 3;
+
+    // When the storage service decided it wants the client to use multipart upload, it will already have created
+    // a multipart upload, and instructs the client to continue the upload using the MultiPartUpload functions with
+    // this reply.
+    CreateMultipartUploadResponse multipart_upload = 4;
+  }
+}
+
+// Complete Redirect Upload
+// When a write operation has been performed via a redirected upload to a presigned URL, the client can obtain the
+// ResourceInfo including the ResourceIdentity of the just uploaded data object via this call.
+// Note that calling this is optional and only to provide the client with the requested metadata.
+message CompleteRedirectUploadRequest {
+  // Resource address of the multipart upload.
+  string destination_resource_address = 1;
+
+  // A list of additional headers requested by the service via the completion_header_names property, and gathered from the
+  // response of the HTTP put/post upload of the data.
+  repeated Header additional_headers = 2;
+}
+
+// Complete redirect upload response.
+message CompleteRedirectUploadResponse {
+  // This returns the ResourceIdentity of the data object just written alongside the data object's metadata.
+  ResourceInfo resource_info = 1;
+}
+
+// Create multipart upload response.
+message CreateMultipartUploadResponse {
+  // ID that identifies this multipart upload operation.
+  string upload_id = 1;
+
+  // These are the values for the first part upload, all additional parts need to be requested by calls to
+  // UploadPart.
+  WriteRedirectProperties first_part_write_redirect = 2;
+
+  // Optionally, a maximal number of parts the client is allowed to create. The server might refuse to create more upload parts.
+  optional uint32 maximum_parts_number = 3;
+
+  // Optionally, a minimum part size that is required to be selected by the client for the multipart upload to not fail
+  optional uint64 minimum_size_per_part = 4;
+
+  // Optionally, a maximum size that should not be exceeded by the client. The server might refuse larger parts.
+  optional uint64 maximum_size_per_part = 5;
+}
+
+// Upload part request.
+message UploadPartRequest {
+  // ID that identifies this multipart upload operation.
+  string upload_id = 1;
+
+  // Resource address of the multipart upload.
+  string destination_resource_address = 2;
+
+  // Sequential part number, starting from 0. Upon `CompleteMultipartUpload()` operation, parts will be assembled in order.
+  uint32 part_number = 3;
+
+  // If more than one part should be uploaded, specify the count of redirect URLs that should be generated
+  // by the service. They will be in consecutive order starting with part_number.
+  optional uint32 part_count = 4;
+}
+
+// Upload part response.
+message UploadPartResponse {
+  // The client receives this message with the information on which HTTP server to upload to, together with the
+  // method to use and additional headers to set for the write operation to succeed.
+  repeated WriteRedirectProperties part_write_redirects = 1;
+}
+
+// Completed upload part.
+message CompletedUploadPart {
+  // Sequential part number, upon `CompleteMultipartUpload()` operation, parts will be assembled in order.
+  // See `UploadPartRequest`.
+  uint32 part_number = 1;
+
+  // List of HTTP headers gathered from `UploadPartResponse` and the HTTP operation on the presigned URL.
+  //
+  // Note this is not a map<string, string>, as RFC2616 states:
+  //   Multiple message-header fields with the same field-name MAY be present in a message if and only if
+  //   the entire field-value for that header field is defined as a comma-separated list [i.e., #(values)].
+  //   It MUST be possible to combine the multiple header fields into one "field-name: field-value" pair,
+  //   without changing the semantics of the message, by appending each subsequent field-value to the first,
+  //   each separated by a comma. The order in which header fields with the same field-name are received is
+  //   therefore significant to the interpretation of the combined field value, and thus a proxy MUST NOT
+  //   change the order of these field values when a message is forwarded.
+  //
+  // In order to support this and not make it overly complex for the clients, HTTP headers are just passed
+  // back to the service as-is, which maybe repeated in the HTTP response to the `UploadPart()` operation.
+  repeated Header headers = 2;
+}
+
+// Complete multipart upload request.
+message CompleteMultipartUploadRequest {
+  // ID that identifies this multipart upload operation.
+  string upload_id = 1;
+
+  // Resource address of the multipart upload.
+  string destination_resource_address = 2;
+
+  // List of all `CompletedUploadPart` parts to complete and assemble object.
+  repeated CompletedUploadPart parts = 3;
+}
+
+// Complete multipart upload response.
+message CompleteMultipartUploadResponse {
+  // This returns the ResourceIdentity of the data object just written alongside the data object's metadata.
+  ResourceInfo resource_info = 1;
+}
+
+// Abort multipart upload request.
+message AbortMultipartUploadRequest {
+  // ID that identifies this multipart upload operation.
+  string upload_id = 1;
+
+  // Resource address of the multipart upload.
+  string destination_resource_address = 2;
+}
+
+// Abort multipart upload response. As abort operations are not returning status information it is not possible
+// for the client to determine if the abort was successful (or if there was anything to abort).
+message AbortMultipartUploadResponse {}
+
+// Delete operation request.
+message DeleteRequest {
+  // Resource address to delete.
+  string resource_address = 1;
+  // Optionally specify the resource identity of the previous version at the given address. Delete will fail if this is no
+  // longer the latest version.
+  optional v1beta.ResourceIdentity previous_version = 2;
+}
+
+// Delete operation response.
+message DeleteResponse {}
+
+// An enum for the different modes the client can request downloads for.
+enum DownloadPreference {
+  // DOWNLOAD_PREFERENCE_UNSPECIFIED to detect unset values.
+  DOWNLOAD_PREFERENCE_UNSPECIFIED = 0;
+  // Specify DOWNLOAD_PREFERENCE_BODY to ask the server to deliver the data directly as Chunk messages.
+  DOWNLOAD_PREFERENCE_BODY = 1;
+  // Specify DOWNLOAD_PREFERENCE_REDIRECT to force the server to produce a redirect if possible.
+  DOWNLOAD_PREFERENCE_REDIRECT = 2;
+}
+
+// An enum for the different modes the client can request when calling write
+enum UploadPreference {
+  // UPLOAD_PREFERENCE_UNSPECIFIED to detect unset values.
+  UPLOAD_PREFERENCE_UNSPECIFIED = 0;
+  // Specify UPLOAD_PREFERENCE_BODY to ask the server to deliver the data directly as Chunk messages.
+  UPLOAD_PREFERENCE_BODY = 1;
+  // Specify UPLOAD_PREFERENCE_REDIRECT to force the server to produce a redirect if possible.
+  UPLOAD_PREFERENCE_REDIRECT = 2;
+  // Specify UPLOAD_PREFERENCE_MULTIPART to force the server to start a multipart upload with the Write call
+  UPLOAD_PREFERENCE_MULTIPART = 3;
+}
+
+// An enum for the different methods the client can be asked to use for the upload operation.
+enum UploadMethod {
+  // UPLOAD_METHOD_UNSPECIFIED to detect unset values.
+  UPLOAD_METHOD_UNSPECIFIED = 0;
+  // Specify UPLOAD_METHOD_POST to ask the client to deliver the data to the given URL with a POST method
+  UPLOAD_METHOD_POST = 1;
+  // Specify UPLOAD_METHOD_PUT to ask the client to deliver the data to the given URL with a PUT method
+  UPLOAD_METHOD_PUT = 2;
+}

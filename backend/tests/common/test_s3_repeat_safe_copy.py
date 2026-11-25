@@ -829,10 +829,18 @@ class TestBotocoreParity:
             standard.ThrottledRetryableChecker._THROTTLED_ERROR_CODES)
 
     def test_the_backoff_is_botocores(self, s3env):
-        from botocore.configprovider import NEW_RETRIES_ENABLED
+        import botocore
+        from botocore import configprovider
         from botocore.retries import standard
-        if NEW_RETRIES_ENABLED:
-            pytest.skip("botocore's opt-in AWS_NEW_RETRIES_2026 schedule is not the default this mirrors")
+        # botocore's new retry behaviour scales the base by error class and reads x-amz-retry-after,
+        # which single_request_copy_backoff does not mirror. Fail, never skip, so the gap is seen.
+        remirror = ("re-mirror single_request_copy_backoff and the retryable sets in common/s3.py from "
+                    "botocore/retries/standard.py ExponentialBackoff.delay_amount, then update this test")
+        assert getattr(configprovider, "DEFAULT_NEW_RETRIES", False) is False, \
+            f"botocore {botocore.__version__} defaults to its new retry behaviour: {remirror}"
+        assert getattr(configprovider, "NEW_RETRIES_ENABLED", True) is False, (
+            "botocore's new retry behaviour is on (AWS_NEW_RETRIES_2026=true, or this botocore has no "
+            f"NEW_RETRIES_ENABLED gate): unset AWS_NEW_RETRIES_2026, or {remirror}")
         for value in (0.0, 0.37, 1.0):
             backoff = standard.ExponentialBackoff(random=lambda value=value: value)
             for attempt in range(8):

@@ -1,0 +1,91 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package nvidia.omniverse.storage.fileobject.v1alpha;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "pb.api.nvidia.com/omniverse/storage/fileobject/v1alpha;storage";
+option java_multiple_files = true;
+option java_outer_classname = "FileobjectProto";
+option java_package = "com.nvidia.omniverse.storage.fileobject.v1alpha";
+
+// The Chunk message is used to transport a part of the data object stored.
+// Type is bytes, with an application specific encoding that is not interpreted by the storage service
+message Chunk {
+  // The (partial) data object itself
+  bytes chunk = 1;
+}
+
+// The Metadata message contains all metadata of a data object.
+// The fields have presence bits to help the client protect against invalid messages using wrong defaults.
+// Zero trust policy requires the client checking the presence of fields.
+//
+// Some fields are optional to be sent by a properly implemented Storage Service.
+message Metadata {
+  // Total size of data object in bytes
+  optional uint64 data_object_size = 1;
+  // Timestamp (UTC) of the last modification of the object. Exact semantics and precision are storage-type specific. This field may be omitted.
+  optional google.protobuf.Timestamp last_modified_timestamp = 2;
+  // Native storage metadata attached to this data object version and returned by APIs that expose FileObject metadata.
+  // This FileObject-native metadata is distinct from standalone MetadataService user metadata and may include
+  // storage-service-generated entries that were not supplied by the client, such as a backend ETag.
+  // Empty or absent native_metadata is not a support signal. Clients should query
+  // FileObjectService.GetNativeMetadataSupport for the resource address before relying on this field.
+  map<string, google.protobuf.Value> native_metadata = 3;
+}
+
+// HTTP header
+message Header {
+  // name of header case-insensitive
+  string name = 1;
+  // value of header
+  string value = 2;
+}
+
+// On receiving a redirect message, the storage service client has to retrieve the data object from the URL given
+message Redirect {
+  // URL that can be used to retrieve the data object
+  string redirect_target_url = 1;
+  // Method type to access, case-insensitive
+  string method = 2 [deprecated = true];
+  // Pack of headers that client should use to access cloud storage
+  repeated Header additional_headers = 3;
+}
+
+// The AddressInfo messages are produced by the Enumerate() function and contain information about sub-resource-addresses found
+message AddressInfo {
+  // Resource address of the child object
+  string resource_address = 1;
+  // Some metadata of the object stored currently at that address
+  Metadata metadata = 2;
+}
+
+// The ResourceInfo message contains the information about a single data object as retrieved by Stat() or Enumerate()
+message ResourceInfo {
+  // The ResourceIdentity of the data object, which can be used to download the data via Read()
+  ResourceIdentity resource_identity = 1;
+  // The Metadata of the data object
+  Metadata metadata = 2;
+}
+
+// The ResourceIdentity message is used to transport all information required by the storage service to perform a Read() operation of that object at a later point in time
+message ResourceIdentity {
+  // Storage service specific data that is delivered by ResourceInfo messages, and used by Read() operations
+  string encoded_identity = 1;
+}
