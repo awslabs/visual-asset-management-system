@@ -1199,6 +1199,100 @@ class TestIndexReadyReadsThroughTheBoundedLookup:
 
 
 @pytest.mark.unit
+class TestIndexReadyAfterATransientReadError:
+    """A throttled or timed-out marker read never holds a ready index as not ready for longer than
+    common.ssmParameters' back-off window: the failure is not cached, a container that read the index
+    ready keeps that answer, and a cold container reads again once the window has passed. A marker
+    Parameter Store reports missing is still not ready for INDEX_READY_CACHE_TTL_SECONDS."""
+
+    NAME = TestIndexReady.NAME
+    TABLE = TestIndexReady.TABLE
+
+    @pytest.fixture
+    def parameter_store(self, monkeypatch):
+        """The shared common.ssmParameters, which index_ready reads through, on a fake clock with an
+        empty back-off window, over a stub Parameter Store. index_ready uses the same clock."""
+        monkeypatch.setenv("VAMS_RESOURCE_PARAM_PREFIX", TestIndexReady.PREFIX)
+        helper = sys.modules["common.ssmParameters"]
+        clock = install_clock(helper, FakeClock(), monkeypatch)
+        monkeypatch.setattr(helper, "_failed_reads", 0)
+        monkeypatch.setattr(helper, "_retry_after", 0.0)
+        monkeypatch.setattr(helper, "_ssm_client", None)
+        stub = ParameterStoreStub()
+        monkeypatch.setattr(boto3, "client", lambda service, *a, **k: stub if service == "ssm" else MagicMock())
+        monkeypatch.setattr(al, "logger", RecordingLogger())
+        monkeypatch.setattr(helper, "logger", RecordingLogger())
+        return types.SimpleNamespace(stub=stub, clock=clock, helper=helper)
+
+    def _complete(self):
+        return json.dumps({"version": 1, "status": "complete", "assetTable": self.TABLE})
+
+    def _ready(self, state):
+        return al.index_ready(self.TABLE, clock=state.clock.monotonic)
+
+    def test_a_throttled_read_after_a_ready_answer_keeps_it(self, parameter_store):
+        state = parameter_store
+        state.stub.values[self.NAME] = self._complete()
+        assert self._ready(state) is True
+
+        state.stub.fault = always(lambda: client_error("ThrottlingException"))
+        state.clock.advance(al.INDEX_READY_CACHE_TTL_SECONDS + 1)
+        assert self._ready(state) is True, "a throttled marker read made a ready index not ready"
+        assert state.helper._in_backoff_window()
+
+        # Inside the back-off window: no read, the ready answer still holds.
+        calls = len(state.stub.calls)
+        assert self._ready(state) is True
+        assert len(state.stub.calls) == calls, "a check inside the back-off window read Parameter Store"
+
+    def test_a_cold_throttled_read_is_read_again_once_the_window_passes(self, parameter_store):
+        state = parameter_store
+        state.stub.fault = always(lambda: client_error("ThrottlingException"))
+        assert self._ready(state) is False
+        assert state.helper._in_backoff_window()
+
+        calls = len(state.stub.calls)
+        assert self._ready(state) is False
+        assert len(state.stub.calls) == calls, "a check inside the back-off window read Parameter Store"
+
+        # Parameter Store recovers. The next check after the window reads the marker again, long
+        # before INDEX_READY_CACHE_TTL_SECONDS has passed.
+        state.stub.fault = None
+        state.stub.values[self.NAME] = self._complete()
+        state.clock.advance(state.helper.BACKOFF_MAX_SECONDS + 1)
+        assert state.helper.BACKOFF_MAX_SECONDS + 1 < al.INDEX_READY_CACHE_TTL_SECONDS
+        assert not state.helper._in_backoff_window()
+        assert self._ready(state) is True, "a throttled read was cached as not ready past the back-off window"
+        assert len(state.stub.calls) == calls + 1
+
+    def test_a_missing_marker_is_still_not_ready_for_the_cache_ttl(self, parameter_store):
+        state = parameter_store
+        assert self._ready(state) is False
+        calls = len(state.stub.calls)
+        assert calls == 1
+
+        state.stub.values[self.NAME] = self._complete()
+        state.clock.advance(al.INDEX_READY_CACHE_TTL_SECONDS - 1)
+        assert self._ready(state) is False
+        assert len(state.stub.calls) == calls, "a missing marker's answer was not cached"
+        state.clock.advance(2)
+        assert self._ready(state) is True
+
+    def test_access_denied_is_not_ready_for_the_cache_ttl(self, parameter_store):
+        # Not transient: no back-off window opens and a later read would be refused the same way.
+        state = parameter_store
+        state.stub.values[self.NAME] = self._complete()
+        assert self._ready(state) is True
+        state.stub.fault = always(lambda: client_error("AccessDeniedException"))
+        state.clock.advance(al.INDEX_READY_CACHE_TTL_SECONDS + 1)
+        assert self._ready(state) is False
+        calls = len(state.stub.calls)
+        state.clock.advance(al.INDEX_READY_CACHE_TTL_SECONDS - 1)
+        assert self._ready(state) is False
+        assert len(state.stub.calls) == calls
+
+
+@pytest.mark.unit
 class TestIndexForAFileNamedLikeAPreview:
     """A single-file location named like a preview (`scan.previewFile.png`) owns its own key, its companion
     folder and its own previews, also when a single file `scan` beside it would claim the key as its preview:
