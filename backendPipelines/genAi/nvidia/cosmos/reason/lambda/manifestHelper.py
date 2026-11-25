@@ -130,11 +130,14 @@ METADATA_SCHEMA_VERSION_GROUPED = 2
 
 
 def _normalize_file_key(file_key):
-    """Asset-relative file keys are stored with a single leading slash ('/folder/a.glb'). Accepts
-    either form so callers can pass a manifest relativePath verbatim."""
+    """Asset-relative file keys are stored with a leading slash ('/folder/a.glb'). Accepts either form
+    so callers can pass a manifest relativePath verbatim: a slash is added only when the key has none.
+    Repeated leading slashes are kept, as VAMS writes them: '//a.glb' is the file whose key has an
+    empty segment right after the asset's folder, another file than '/a.glb'."""
     if not file_key:
         return "/"
-    return "/" + str(file_key).lstrip("/")
+    file_key = str(file_key)
+    return file_key if file_key.startswith("/") else "/" + file_key
 
 
 def get_asset_file_record(envelope, database_id, asset_id, file_key):

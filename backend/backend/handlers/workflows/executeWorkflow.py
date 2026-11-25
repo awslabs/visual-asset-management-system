@@ -846,8 +846,10 @@ def _expand_asset_selections(order, grouped, asset_records):
                 truncated.append((label, None, False))
                 continue
             if is_folder_location(root):
+                # Exactly one leading '/' marks the path, so '//' is the folder of the keys with an empty
+                # segment after the location ('A1//'), not the whole asset (#1977)
                 files, omitted, exact = _list_selection_files(
-                    bucket, root_prefix + selection.lstrip("/"), root_prefix, limit)
+                    bucket, root_prefix + selection[1:], root_prefix, limit)
             else:
                 files, omitted, exact = _list_selection_files(
                     bucket, folder_listing_prefix(root, selection), root_prefix, limit, location=root,

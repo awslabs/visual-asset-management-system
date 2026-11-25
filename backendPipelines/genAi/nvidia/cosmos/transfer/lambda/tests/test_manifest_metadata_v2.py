@@ -106,6 +106,18 @@ class TestRecordAccessors:
         rec = mh.get_asset_file_record(_v2_envelope(), "db1", "assetA", "clips/in.mp4")
         assert rec["metadata"]["COSMOS_TRANSFER_PROMPT"] == "make it snow"
 
+    def test_an_empty_segment_path_reads_its_own_record(self):
+        # #1977: '//in.mp4' is the file whose key has an empty segment after the asset's folder
+        # (A1//in.mp4), another file than '/in.mp4'; VAMS keys their records apart, and so does the read.
+        env = {"schemaVersion": 2, "assets": [{
+            "databaseId": "db1", "assetId": "assetA", "assetData": {},
+            "files": [{"fileKey": "/in.mp4", "metadata": {"P": "root"}},
+                      {"fileKey": "//in.mp4", "metadata": {"P": "empty-segment"}}]}]}
+        assert mh.get_asset_file_record(env, "db1", "assetA", "//in.mp4")["metadata"] == {"P": "empty-segment"}
+        assert mh.get_asset_file_record(env, "db1", "assetA", "/in.mp4")["metadata"] == {"P": "root"}
+        assert mh.get_asset_file_record(env, "db1", "assetA", "in.mp4")["metadata"] == {"P": "root"}
+        assert mh.resolved_file_key({"inputFiles": [{"relativePath": "//in.mp4"}]}) == "//in.mp4"
+
     def test_get_asset_file_record_absent(self):
         assert mh.get_asset_file_record(_v2_envelope(), "db1", "assetA", "/nope.mp4") is None
         assert mh.get_asset_file_record(_v2_envelope(), "dbX", "assetX", "/") is None
