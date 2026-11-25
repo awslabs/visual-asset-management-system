@@ -2596,10 +2596,9 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         
         affected_files.append(file_path)
         
-        # Delete metadata for the main file (not a folder since we checked earlier)
-        # Extract relative path from file_path (remove leading slash if present)
-        relative_path = file_path.lstrip('/')
-        delete_file_metadata(databaseId, assetId, relative_path)
+        # Delete metadata for the main file (not a folder since we checked earlier), keyed by the
+        # file's listed path whichever form the request named it by
+        delete_file_metadata(databaseId, assetId, _relative_to_location(base_key, full_key))
 
     # Clean up version snapshot records in DynamoDB for deleted files
     delete_file_version_records(databaseId, assetId, affected_files)
@@ -3096,9 +3095,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     source_aux, source_keep = viewer_data_scope(databaseId, source_key)
     copy_auxiliary_files(source_aux, viewer_data_prefix(effective_dest_db, dest_key), keep=source_keep)
 
-    # Copy metadata and attributes to the destination (merge with existing)
-    source_rel = source_path.lstrip('/')
-    dest_rel = dest_path.lstrip('/')
+    # Copy metadata and attributes to the destination (merge with existing), keyed by the files'
+    # listed paths whichever form the request named them by
+    source_rel = _relative_to_location(source_base_key, source_key)
+    dest_rel = _relative_to_location(dest_base_key, dest_key)
     actual_dest_asset = dest_asset_id if is_cross_asset else assetId
     metadata_copied = _copy_file_metadata_to_destination(
         databaseId, assetId, source_rel,
@@ -3259,9 +3259,10 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     source_aux, source_keep = viewer_data_scope(databaseId, source_key)
     move_auxiliary_files(source_aux, viewer_data_prefix(databaseId, dest_key), keep=source_keep)
 
-    # Move metadata and attributes: copy to new path (merge), then delete from old path
-    source_rel = source_path.lstrip('/')
-    dest_rel = dest_path.lstrip('/')
+    # Move metadata and attributes: copy to new path (merge), then delete from old path, keyed by the
+    # files' listed paths whichever form the request named them by
+    source_rel = _relative_to_location(base_key, source_key)
+    dest_rel = _relative_to_location(base_key, dest_key)
     metadata_moved = _copy_file_metadata_to_destination(
         databaseId, assetId, source_rel,
         databaseId, assetId, dest_rel

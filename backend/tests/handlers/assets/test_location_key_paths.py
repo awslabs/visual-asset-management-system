@@ -156,6 +156,7 @@ class TestFileOperationsOnTheSubfolderFile:
         af.delete_file("db1", "A1", "/A1/cloud.las", False, True, CLAIMS)
         assert _versions(af.test_client, SUB_FILE) == []
         assert _live(af.test_client, ROOT_FILE) and len(_versions(af.test_client, ROOT_FILE)) == 1
+        assert af.metadata_deleted == ["/A1/cloud.las"]
 
     def test_a_prefix_archive_of_the_subfolder_leaves_the_root_file(self, af):
         response = af.archive_file("db1", "A1", "/A1/", True, CLAIMS)
@@ -179,6 +180,17 @@ class TestFileOperationsOnTheSubfolderFile:
         from models.assetsV3 import CreateFolderRequestModel
         af.create_folder("db1", "A1", CreateFolderRequestModel(relativeKey="/A1/new/"), CLAIMS)
         assert _live(af.test_client, "A1/A1/new/") and not _live(af.test_client, "A1/new/")
+
+    @pytest.mark.parametrize("source,dest", [(SUB_FILE, "A1/A1/moved.las"), ("/A1/cloud.las", "/A1/moved.las")])
+    def test_a_move_keys_the_metadata_by_the_moved_files_listed_paths(self, af, source, dest):
+        """The metadata copy names the files by their listed paths, whichever form the request used."""
+        af.move_file("db1", "A1", source, dest, CLAIMS)
+        assert af.metadata_copied == [("/A1/cloud.las", "/A1/moved.las")]
+
+    @pytest.mark.parametrize("path", [SUB_FILE, "/A1/cloud.las"])
+    def test_a_delete_keys_the_metadata_by_the_files_listed_path(self, af, path):
+        af.delete_file("db1", "A1", path, False, True, CLAIMS)
+        assert af.metadata_deleted == ["/A1/cloud.las"]
 
 
 @pytest.mark.unit
