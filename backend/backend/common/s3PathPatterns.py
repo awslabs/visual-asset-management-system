@@ -85,13 +85,11 @@ AUXILIARY_PREVIEW_PREFIX = "preview/"
 #
 #   ``{baseAssetsPrefix}temp-uploads/{upload tag}/{final key}``
 #
-# so concurrent uploads of one file path never share a staged object: before
-# #1928 every upload of a path staged at the one key
-# ``{baseAssetsPrefix}temp-uploads/{final key}``, the completions overwrote each
-# other's staged file, and a completion that found another upload's file there
-# deleted it. The upload tag is UPLOAD_STAGING_TAG_LENGTH hex characters of the
-# SHA-256 of the upload id: a fixed length, and shorter than the upload id
-# itself, because the whole staging key must fit the 1,024-byte S3 key limit.
+# so concurrent uploads of one file path never share a staged object, and a
+# completion that refuses its staged object deletes only its own upload's file.
+# The upload tag is UPLOAD_STAGING_TAG_LENGTH hex characters of the SHA-256 of
+# the upload id: a fixed length, and shorter than the upload id itself, because
+# the whole staging key must fit the 1,024-byte S3 key limit.
 # The folder costs a file key UPLOAD_STAGING_TAG_LENGTH + 1 bytes against that
 # limit; together with the prefix, an uploaded file's final key can be at most
 # 1024 - len(baseAssetsPrefix) - 26 bytes (998 at the bucket root). The tag only
