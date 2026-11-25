@@ -414,7 +414,7 @@ All data in transit is encrypted using TLS:
 
 #### REST API TLS Security Policy
 
-A security policy is a predefined combination of minimum TLS version and cipher suites that Amazon API Gateway offers during the TLS handshake. VAMS sets one on the REST API resource itself, so it applies to the default `execute-api` endpoint the API serves from rather than only to a custom domain name.
+A security policy is a predefined combination of minimum TLS version and cipher suites that Amazon API Gateway offers during the TLS handshake. VAMS sets one on the REST API resource itself, so it applies to the default `execute-api` endpoint the API serves from rather than only to a custom domain name. It governs connections made to API Gateway; a request that reaches the API through the Amazon CloudFront distribution at `/api/*` negotiates TLS with CloudFront first (see [Amazon CloudFront Viewer TLS](#amazon-cloudfront-viewer-tls)).
 
 | Deployment                                               | Security policy                          | TLS versions accepted |
 | -------------------------------------------------------- | ---------------------------------------- | --------------------- |
@@ -430,6 +430,19 @@ The GovCloud mode, which AWS European Sovereign Cloud deployments also enable fo
 Changing a security policy takes about 15 minutes to propagate. The API remains invocable while its status is `UPDATING`. To see which TLS version and cipher a client negotiated, use the `$context.tlsVersion` and `$context.cipherSuite` variables in the API access logs.
 
 The optional REST API custom domain (`app.api.apiGatewayRest.customDomain`) is a Regional custom domain name with the same security policy and endpoint access mode in the commercial partition, and the `TLS_1_2` policy in the GovCloud mode, so the minimum version is TLS 1.2 on the custom domain as well. Its certificate is an AWS Certificate Manager certificate in the deployment Region.
+
+#### Amazon CloudFront Viewer TLS
+
+The Amazon CloudFront security policy sets the minimum TLS version and the ciphers CloudFront offers to viewers. Which policy applies depends on the domain the distribution serves:
+
+| Web domain                                                           | Security policy             | TLS versions accepted              |
+| -------------------------------------------------------------------- | --------------------------- | ---------------------------------- |
+| Default `*.cloudfront.net` domain (`customDomain.enabled: false`)    | `TLSv1`, set by CloudFront  | TLS 1.3, TLS 1.2, TLS 1.1, TLS 1.0 |
+| Custom domain with an ACM certificate (`customDomain.enabled: true`) | `TLSv1.2_2021`, set by VAMS | TLS 1.3, TLS 1.2                   |
+
+On the default domain the distribution uses the CloudFront certificate, and CloudFront always applies the `TLSv1` policy there; a distribution cannot raise that floor. VAMS therefore sets the security policy only when `app.useCloudFront.customDomain` supplies a certificate.
+
+The policy covers every path on the distribution, including the API at `/api/*`. On the default domain a client can therefore reach the API through the web URL at TLS 1.0, while the `execute-api` endpoint and the REST API custom domain keep the TLS 1.2 floor described in [REST API TLS Security Policy](#rest-api-tls-security-policy). To refuse TLS 1.1 and TLS 1.0 on the web application and on `/api/*`, configure a custom domain (see [Amazon CloudFront](../deployment/configuration-reference.md#amazon-cloudfront-appusecloudfront) in the configuration reference). The GovCloud mode (AWS GovCloud (US) and the AWS European Sovereign Cloud) refuses `app.useCloudFront.enabled`; those deployments serve the web application from the Application Load Balancer instead.
 
 The following bucket policy statement is applied to every Amazon S3 bucket in VAMS:
 
@@ -811,7 +824,7 @@ The following recommendations should be reviewed with your organization's securi
 5. **Configure IP restrictions** — Consider configuring IP range restrictions using `authorizerOptions.allowedIpRanges` in the [deployment configuration](../deployment/configuration-reference.md) to limit API access to known networks.
 6. **Configure presigned URL network restrictions** — For production deployments where asset access should be restricted to specific networks, configure `assetBuckets.presignedUrlNetworkRestrictions` with `allowedIpRanges` (IPv4/IPv6 CIDR blocks) or `allowedVpceIds` (Amazon S3 VPC endpoint IDs). These restrictions limit presigned URL access to the specified networks through bucket policy deny statements applied to the VAMS-created asset and auxiliary buckets.
 7. **Enable KMS encryption** — For production deployments, enable customer-managed KMS encryption (`useKmsCmkEncryption.enabled: true`) for all storage resources.
-8. **Use CloudFront with custom TLS** — When using Amazon CloudFront, consider configuring a custom domain with your own TLS certificate rather than the default CloudFront domain.
+8. **Use CloudFront with custom TLS** — When using Amazon CloudFront, consider configuring a custom domain with your own TLS certificate rather than the default CloudFront domain. The default domain accepts TLS 1.0 and later; a custom domain accepts TLS 1.2 and later ([Amazon CloudFront Viewer TLS](#amazon-cloudfront-viewer-tls)).
 9. **Review Content Security Policy** — The CSP is dynamically generated based on deployment configuration. Review the generated policy headers for compliance with your organization's standards.
 10. **Enable audit logging review** — Regularly review audit logs in Amazon CloudWatch for suspicious activity patterns such as repeated authorization failures or unusual file download volumes.
 11. **Restrict constraint management to trusted administrators** — The constraint management routes (`/auth/constraints`, `/auth/constraints/{constraintId}`, `/auth/constraintsTemplateImport`) allow a role to define the authorization policy itself. A role with this access can grant access to any resource, comparable to holding AWS Identity and Access Management (IAM) policy-editing permissions. In the default deployment these routes are granted only to the `admin` role. Do not delegate `api` access to these routes to general or untrusted roles, and treat changes to who can manage constraints as privileged administrative changes. Auth changes are recorded in the Auth Changes audit log group for review.
