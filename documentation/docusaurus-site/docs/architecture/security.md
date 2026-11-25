@@ -107,6 +107,8 @@ When Amazon Cognito is not available, VAMS supports external OAuth identity prov
 
 VAMS supports API key authentication for machine-to-machine access. API keys are stored as SHA-256 hashes in the `ApiKeyStorageTable`. The custom authorizer validates incoming API keys by hashing them and comparing against stored hashes, caching each key's record per key for `API_KEY_CACHE_TTL` (15 seconds). A key that is not found is cached as a negative result for the same lifetime, so repeated requests presenting an invalid key do not re-query the table.
 
+The authorizer marks a request it authenticated with an API key (`vams:authMethod` is `apiKey` in the authorizer context; a token cannot set the `vams:` keys). The API key service refuses such a caller an API key create and any change to a key's expiration with `403`, whatever its roles grant, so a leaked key cannot mint its successor or extend itself. Reads, deletes, deactivation and description changes stay open to a key. Users signed in through the deployment's identity provider create and extend keys.
+
 An API key whose name starts with the reserved prefix `temporary-session-` is a temporary session key: a short-lived key that a VAMS backend component mints on a user's behalf, through a Lambda cross-call, for one session. A caller that authenticates with a temporary session key cannot create or update API keys and receives `403`, so a session credential cannot outlive its session through a key of its own making. The API key service refuses a key name that carries the prefix with `400` unless the request is a Lambda cross-call, so no key a user creates passes for a temporary session key.
 
 ## Custom Lambda Authorizer
