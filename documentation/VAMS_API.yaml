@@ -1921,7 +1921,7 @@ paths:
                     type: "boolean"
         put:
             summary: "Update an asset's editable fields."
-            description: "Update an asset's editable fields (assetName, description, isDistributable, tags). Omitted fields and fields sent as null remain unchanged, so at least one field must carry a non-null value; an empty tags array clears the tag list, subject to the required tag types in scope."
+            description: "Update an asset's editable fields (assetName, description, isDistributable, tags). Omitted fields and fields sent as null remain unchanged, so at least one field must carry a non-null value; an empty tags array clears the tag list, subject to the required tag types in scope. A change to assetName or tags is also authorized against the asset as it will be stored: the caller needs GET on the stored asset and GET and PUT on the changed one, or the request answers 403 and changes nothing."
             requestBody:
                 required: true
                 content:
@@ -1942,7 +1942,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update asset.
+                    description: Not authorized to update asset, or to give it the new name or tags.
                     content:
                         application/json:
                             schema:
