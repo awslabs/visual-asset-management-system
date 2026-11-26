@@ -81,4 +81,3 @@ class TestBothFormsOfOneFileKeyItsOwnRecords:
     @pytest.mark.parametrize("location,value,keyed", CASES)
     def test_the_route_keys_the_records_by_the_files_listed_path(self, method, location, value, keyed):
         assert _keyed_path(method, location, value) == keyed
-
