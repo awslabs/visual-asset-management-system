@@ -1357,7 +1357,7 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
     if not new_asset_id_regex.fullmatch(asset_id):
         logger.error(
             f"Bucket sync cannot create asset {asset_id!r}: the last character must be "
-            "a letter, digit, underscore, dot, comma, apostrophe or hyphen"
+            "a letter, digit, underscore, comma, apostrophe or hyphen"
         )
         return None
     holders = database_asset_id_rows(database_id, asset_id)

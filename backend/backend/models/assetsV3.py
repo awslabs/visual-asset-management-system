@@ -220,7 +220,7 @@ def validate_ascii_asset_id(value: str) -> str:
         raise ValueError(message)
     if not new_asset_id_regex.fullmatch(value):
         message = ("Asset identifier must end with a letter, digit, underscore, "
-                   "dot, comma, apostrophe or hyphen")
+                   "comma, apostrophe or hyphen")
         logger.error(message)
         raise ValueError(message)
     return value
