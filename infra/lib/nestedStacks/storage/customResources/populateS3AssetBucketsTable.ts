@@ -650,7 +650,9 @@ def lambda_handler(event, context):
                 ? { syncCreatedQueueUrl: record.syncCreatedQueueUrl }
                 : {}),
             defaultSyncDatabaseId: record.defaultSyncDatabaseId,
-            ...(record.kmsKeyArn ? { bucketKmsKeyArn: record.kmsKeyArn } : {}),
+            ...(record.kmsKeyArn || record.registrationKmsKeyArn
+                ? { bucketKmsKeyArn: record.kmsKeyArn || record.registrationKmsKeyArn }
+                : {}),
         }));
 
     // Create the custom resource provider
