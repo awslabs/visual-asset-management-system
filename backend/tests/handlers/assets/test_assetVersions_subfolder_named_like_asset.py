@@ -26,6 +26,11 @@ ATTRIBUTE_TABLE = "attr-table"
 VERSIONS_TABLE = "meta-versions-table"
 
 
+def _record(*parts):
+    """A composite record key, databaseId:assetId[:filePath]."""
+    return ":".join(parts)
+
+
 def _typed(row):
     return {k: {"S": v} for k, v in row.items()}
 
@@ -36,8 +41,8 @@ def _current_rows(table_name):
     rows = []
     for path, value in (("/A1/cloud.las", "subfolder-file"), ("/cloud.las", "root-file")):
         rows.append(_typed({
-            "databaseId:assetId:filePath": f"{DB}:{ASSET}:{path}",
-            "databaseId:assetId": f"{DB}:{ASSET}",
+            "databaseId:assetId:filePath": _record(DB, ASSET, path),
+            "databaseId:assetId": _record(DB, ASSET),
             f"{kind}Key": "k",
             f"{kind}Value": value,
             f"{kind}ValueType": "string",
@@ -53,8 +58,6 @@ class _Client:
         self.deletes = {}
 
     def get_paginator(self, _name):
-        client = self
-
         class _Pages:
             def paginate(self, **kwargs):
                 result = MagicMock()
@@ -124,5 +127,5 @@ class TestAVersionOfTheSubfolderFileKeepsItsOwnRecords:
         restored = sorted(
             (table, item["databaseId:assetId:filePath"]["S"])
             for table, items in client.puts.items() for item in items)
-        assert restored == [(ATTRIBUTE_TABLE, f"{DB}:{ASSET}:/A1/cloud.las"),
-                            (METADATA_TABLE, f"{DB}:{ASSET}:/A1/cloud.las")]
+        assert restored == [(ATTRIBUTE_TABLE, _record(DB, ASSET, "/A1/cloud.las")),
+                            (METADATA_TABLE, _record(DB, ASSET, "/A1/cloud.las"))]
