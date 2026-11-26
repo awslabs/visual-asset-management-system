@@ -135,10 +135,10 @@ class TestCounting:
     def test_the_shared_count(self):
         assert av.count_version_files(["x", "/x", "//x", "/", "//", "", None]) == 2
 
-    def test_a_revert_copies_each_resolvable_file_once_and_skips_a_double_slash_entry(self, aws, monkeypatch):
-        """D2: the revert resolves an entry's object with every leading '/' dropped, so a stored '//x.txt' would
-        copy '{location}x.txt' a second time. It is skipped and reported until that resolution follows the
-        one-slash rule (PR #1965)."""
+    def test_a_revert_copies_each_file_once_with_its_own_key(self, aws, monkeypatch):
+        """The revert resolves an entry's object with exactly one leading '/' dropped (#1977): a stored
+        '//x.txt' copies '{location}/x.txt', 'x.txt' and the legacy '/y.txt' their plain keys. (#1938 skipped
+        a '//x.txt' entry until this resolution followed the one-slash rule.)"""
         monkeypatch.setattr(av, "asset_file_versions_table", _versions_table(ROWS))
         copies = []
 
@@ -160,9 +160,10 @@ class TestCounting:
                 patch.object(av, "finalize_asset_version"), \
                 patch.object(av, "send_subscription_email"):
             response = av.revert_asset_version(DB, ASSET, request, {"tokens": ["alice"]})
-        assert sorted(copies) == [(f"{PREFIX}x.txt", "v-plain"), (f"{PREFIX}y.txt", "v-legacy")]
-        assert response.skippedFiles == ["//x.txt"]
-        assert response.message == "Successfully reverted to version 1 with 2 files"
+        assert sorted(copies) == [(f"{PREFIX}/x.txt", "v-empty-segment"), (f"{PREFIX}x.txt", "v-plain"),
+                                  (f"{PREFIX}y.txt", "v-legacy")]
+        assert not response.skippedFiles
+        assert response.message == "Successfully reverted to version 1 with 3 files"
 
 
 @pytest.mark.unit
@@ -173,17 +174,10 @@ class TestTheRequestRules:
 
     @pytest.mark.parametrize("keys", [("//x",), ("/x", "//x"), ("//x", "x"), ("///x",)],
                              ids=["alone", "with-slash-x", "with-x", "three-slashes"])
-    def test_a_path_starting_with_two_slashes_is_refused(self, keys):
-        """D2: create resolves an entry's object with every leading '/' dropped, so '//x' would be checked and
-        recorded against '{location}x'. Refused with one fixed message until PR #1965 moves that resolution."""
-        with pytest.raises(ValidationError) as refused:
-            self._model(*keys)
-        assert [e["msg"] for e in refused.value.errors()] == ["relativeKey cannot start with two slashes"]
-
-    def test_the_refusal_echoes_no_input(self):
-        with pytest.raises(ValidationError) as refused:
-            self._model("//secret-name.txt")
-        assert "secret-name" not in str(refused.value)
+    def test_a_path_starting_with_two_slashes_is_its_own_file(self, keys):
+        """#1977: '//x' is the key with an empty segment after the location, another file than '/x' and 'x'.
+        (#1938 refused it until the version handler resolved entries by the one-slash rule.)"""
+        assert [f.relativeKey for f in self._model(*keys).files] == list(keys)
 
     @pytest.mark.parametrize("keys", [("x", "/x"), ("/x", "x")])
     def test_one_file_named_twice_is_still_refused(self, keys):
@@ -201,29 +195,31 @@ class TestTheRequestRules:
 
 @pytest.mark.unit
 class TestTheCreateRoute:
-    """D2, through `POST .../createVersion`: a file list naming '//x' answers 400 before a version is reserved."""
+    """#1977: a file list naming '/x.txt' and '//x.txt' checks and records each against its own object."""
 
-    def _post(self, monkeypatch, files):
-        import json
-        reserve = MagicMock(return_value="2")
-        save = MagicMock(return_value=True)
-        monkeypatch.setattr(av, "claims_and_roles", {"tokens": ["alice"], "roles": ["admin"]}, raising=False)
-        monkeypatch.setattr(av, "reserve_next_asset_version", reserve)
-        monkeypatch.setattr(av, "save_asset_file_versions", save)
-        event = {"pathParameters": {"databaseId": DB, "assetId": ASSET}, "queryStringParameters": {},
-                 "body": json.dumps({"comment": "c", "files": files}),
-                 "requestContext": {"http": {"method": "POST", "path": f"/database/{DB}/assets/{ASSET}/createVersion"}}}
-        response = av.handle_create_version(event, None)
-        return response, reserve, save
+    def test_each_file_is_checked_and_saved_with_its_own_key(self, aws, monkeypatch):
+        table = _versions_table([])
+        monkeypatch.setattr(av, "asset_file_versions_table", table)
+        heads = []
 
-    @pytest.mark.parametrize("files", [
-        [{"relativeKey": "/x.txt", "versionId": "v-plain"}, {"relativeKey": "//x.txt", "versionId": "v-plain"}],
-        [{"relativeKey": "//x.txt", "versionId": "v-empty-segment"}],
-    ], ids=["with-the-plain-file", "alone"])
-    def test_it_answers_400_and_uses_no_version_number(self, monkeypatch, files):
-        response, reserve, save = self._post(monkeypatch, files)
-        assert response["statusCode"] == 400
-        assert "relativeKey cannot start with two slashes" in response["body"]
-        assert "x.txt" not in response["body"]
-        reserve.assert_not_called()
-        save.assert_not_called()
+        def _head(Bucket, Key, VersionId):
+            heads.append((Key, VersionId))
+            return {"ContentLength": 1, "LastModified": MagicMock(isoformat=lambda: "2026-11-26T00:00:00+00:00"),
+                    "ETag": '"e"', "VersionId": VersionId}
+
+        request = av.CreateAssetVersionRequestModel(comment="c", files=[
+            {"relativeKey": "/x.txt", "versionId": "v-plain"}, {"relativeKey": "//x.txt", "versionId": "v-empty"}])
+        with patch.object(av, "get_asset_with_permissions", return_value={"assetId": ASSET}), \
+                patch.object(av, "get_asset_s3_location", return_value=("bucket", PREFIX)), \
+                patch.object(av, "nested_locations_for", return_value=MagicMock(keep=lambda key: True)), \
+                patch.object(av, "is_file_archived", return_value=False), \
+                patch.object(av.s3_client, "head_object", side_effect=_head), \
+                patch.object(av, "reserve_next_asset_version", return_value="2"), \
+                patch.object(av, "save_asset_metadata_version", return_value=True), \
+                patch.object(av, "stamp_asset_version_provenance"), \
+                patch.object(av, "finalize_asset_version"), \
+                patch.object(av, "send_subscription_email"):
+            av.create_asset_version(DB, ASSET, request, {"tokens": ["alice"]})
+        assert {key for key, _ in heads} == {f"{PREFIX}x.txt", f"{PREFIX}/x.txt"}
+        assert sorted((i["fileKey"], i["versionId"]) for i in table.scan()["Items"]) == [
+            ("//x.txt", "v-empty"), ("x.txt", "v-plain")]

@@ -538,10 +538,9 @@ backend/
     and `assetExportService.py` each carry them (pinned equal by
     `tests/handlers/assets/test_asset_version_entry_one_slash_rule.py`). `save_asset_file_versions`
     stores that form whatever the caller sent, and `CreateAssetVersionRequestModel` refuses `/a.txt`
-    and `a.txt` together as duplicates and a path made only of `/`. Until the version handler resolves
-    an entry's object by the same rule (it calls `object_key_for`, which drops every `/`), create
-    refuses a path starting with `//` and revert skips a stored `//x` entry; the location-key work
-    (PR #1965) lifts both. Entries a version built from a
+    and `a.txt` together as duplicates and a path made only of `/`. Create, revert, the latest-files
+    snapshot and every snapshot lookup resolve an entry by the same rule (`object_key_for_path`, which
+    drops one `/`), so a stored `//x` is `{location}/x` (#1977). Entries a version built from a
     file list stored before #1795 can still carry the slash and are not migrated, so every
     reader collapses and compares by `version_entry_key` (the three `get_asset_file_versions`
     helpers do it for their callers; a row made only of `/` names no file), a sort-key lookup
