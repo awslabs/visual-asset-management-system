@@ -178,6 +178,7 @@ If you receive a 403 Forbidden error or cannot see expected data, check both aut
 
     - Does the user's role have a constraint on the correct object type (for example, `asset`, `database`)?
     - Does the criteria match the specific resource? Check `databaseId`, `assetName`, or other filter fields.
+    - For an asset rename or tag change, does the criteria also match the asset under its new name or tags? The update needs `GET` on the asset as stored and `GET` and `PUT` on the asset as it will be stored, so a role with asset `PUT` but no asset `GET` cannot rename or retag an asset (see [Permissions Model](../concepts/permissions-model.md)).
     - Is there a **deny** constraint that overrides the allow?
 
 3. **Check role assignment:**

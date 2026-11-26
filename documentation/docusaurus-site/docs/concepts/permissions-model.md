@@ -45,6 +45,8 @@ The orchestration UI (Pipelines, Workflows, Executions pages) additionally imple
 
 Tier 2 determines whether the user's role is allowed to perform the specific operation on the specific data entity. It checks the HTTP method against the entity's attributes (such as `databaseId`, `assetName`, `tags`). This tier uses the data object types listed in the [Object types and constraint fields](#object-types-and-constraint-fields) section.
 
+An asset update that changes the asset's `assetName` or `tags` is checked on the asset as stored and as it will be stored: `GET` on the stored asset, and `GET` and `PUT` on the changed asset. A user therefore cannot leave a constraint written on the asset name or tags by renaming or retagging the asset, or rename or retag it into a form they cannot read.
+
 ## Core concepts
 
 ### Users
