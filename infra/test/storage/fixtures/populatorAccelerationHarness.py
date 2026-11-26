@@ -36,6 +36,16 @@ class FakeTable:
     def put_item(self, Item):
         self.items.append(Item)
 
+    def update_item(self, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues,
+                    ConditionExpression=None):
+        # The populator's merge write: the item it would store is the key plus every SET field.
+        item = dict(Key)
+        set_part = UpdateExpression.partition(" REMOVE ")[0]
+        for assignment in set_part[len("SET "):].split(", "):
+            name, value = assignment.split(" = ")
+            item[ExpressionAttributeNames[name]] = ExpressionAttributeValues[value]
+        self.items.append(item)
+
 
 class FakeS3:
     def __init__(self, region, accelerate_response, calls):

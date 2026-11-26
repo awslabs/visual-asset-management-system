@@ -52,23 +52,38 @@ class FakeBucketsTable:
         return response
 
     def put_item(self, Item):
+        # Recorded so a case can tell a whole-item replace from a merge of the owned fields.
         self.calls.append({"op": "put", "bucketId": Item["bucketId"], "sortKey": Item[SORT_KEY]})
         self.items[(Item["bucketId"], Item[SORT_KEY])] = dict(Item)
 
-    def update_item(self, Key, UpdateExpression, ConditionExpression, ExpressionAttributeNames,
-                    ExpressionAttributeValues):
-        self.calls.append({"op": "update", "bucketId": Key["bucketId"], "sortKey": Key[SORT_KEY]})
+    def update_item(self, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues,
+                    ConditionExpression=None):
+        # A conditional update is the retire update (the row must still exist); an unconditional one is
+        # the merge write of a configured row, which creates the row when it is missing.
+        op = "retire" if ConditionExpression else "write"
+        self.calls.append({"op": op, "bucketId": Key["bucketId"], "sortKey": Key[SORT_KEY]})
         key = (Key["bucketId"], Key[SORT_KEY])
         if key not in self.items:
-            raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
-        item = self.items[key]
-        item[ExpressionAttributeNames["#retired"]] = ExpressionAttributeValues[":true"]
-        item[ExpressionAttributeNames["#isDefault"]] = ExpressionAttributeValues[":false"]
-        item[ExpressionAttributeNames["#retiredAt"]] = ExpressionAttributeValues[":at"]
+            if ConditionExpression:
+                raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+            self.items[key] = {"bucketId": Key["bucketId"], SORT_KEY: Key[SORT_KEY]}
+        apply_update(self.items[key], UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues)
 
     def delete_item(self, **kwargs):
         self.calls.append({"op": "delete"})
         raise AssertionError("the populator never deletes a registration row")
+
+
+def apply_update(item, expression, names, values):
+    """Apply a `SET #a = :a, ... [REMOVE #b, ...]` update expression to an item, as DynamoDB does."""
+    set_part, _, remove_part = expression.partition(" REMOVE ")
+    if not set_part.startswith("SET "):
+        raise AssertionError(f"unexpected update expression: {expression}")
+    for assignment in set_part[len("SET "):].split(", "):
+        name, value = assignment.split(" = ")
+        item[names[name]] = values[value]
+    for name in remove_part.split(", ") if remove_part else []:
+        item.pop(names[name], None)
 
 
 class FakeAssetTable:
@@ -110,9 +125,11 @@ def row(bucket_id, name, prefix, sort_prefix=None, **extra):
     return item
 
 
-def bucket(name, prefix, default=False):
-    return {"bucketName": name, "prefix": prefix, "bucketRegion": "us-east-1", "isDefault": default,
-            "tagSyncedObjects": True}
+def bucket(name, prefix, default=False, **extra):
+    entry = {"bucketName": name, "prefix": prefix, "bucketRegion": "us-east-1", "isDefault": default,
+             "tagSyncedObjects": True}
+    entry.update(extra)
+    return entry
 
 
 def run_case(source, stored, buckets, request_type="Update", referenced=(), asset_fail=False,
@@ -161,12 +178,20 @@ def run_case(source, stored, buckets, request_type="Update", referenced=(), asse
                 "baseAssetsPrefix": item.get("baseAssetsPrefix"),
                 "isDefault": item.get("isDefault"),
                 "retired": item.get("retired"),
+                "retiredAt": item.get("retiredAt"),
                 "duplicateOfBucketId": item.get("duplicateOfBucketId"),
+                "source": item.get("source"),
+                "defaultSyncDatabaseId": item.get("defaultSyncDatabaseId"),
+                "bucketKmsKeyArn": item.get("bucketKmsKeyArn"),
+                "isAccelerated": item.get("isAccelerated"),
             }
             for item in buckets_table.items.values()
         ),
         key=lambda r: (r["bucketId"], r["sortKey"]),
     )
+    # Every stored item as it is after the run, for the cases that check an attribute the populator
+    # does not own is left in place.
+    outcome["items"] = {item["bucketId"] + "|" + item[SORT_KEY]: item for item in buckets_table.items.values()}
     outcome["calls"] = buckets_table.calls
     outcome["assetCalls"] = asset_table.calls
     return outcome
@@ -235,6 +260,74 @@ def main():
             [bucket("c", "/", default=True)],
         ),
         "twoEntriesOnePair": run_case(source, [], [bucket("b", "assets"), bucket("b", "assets/")]),
+        # #1978: the configured row is merged, not replaced. An attribute the populator does not own
+        # (a later release's layout field) stays; the row gains source, the fallback database and the
+        # declared key; owned fields the configuration no longer gives are removed.
+        "mergeKeepsUnowned": run_case(
+            source,
+            [row("id-a", "b", "assets/", isDefault=True, assetLayout="{assetId}", isAccelerated=True,
+                 bucketKmsKeyArn="arn:aws:kms:us-east-1:111111111111:key/old")],
+            [bucket("b", "assets/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        "upgradeGainsFields": run_case(
+            source,
+            [row("id-a", "b", "assets/", isDefault=True), row("id-r", "c", "/", retired=True,
+                                                              retiredAt="2026-01-01T00:00:00Z")],
+            [bucket("b", "assets/", default=True, defaultSyncDatabaseId="db1",
+                    bucketKmsKeyArn="arn:aws:kms:us-east-1:111111111111:key/k1")],
+        ),
+        # A registration added at run time is never matched, rewritten or retired.
+        "runtimeRowSurvives": run_case(
+            source,
+            [row("id-a", "b", "a/", isDefault=True),
+             row("id-rt", "r", "rt/", source="runtime", status="active", createdBy="admin",
+                 defaultSyncDatabaseId="dbr")],
+            [bucket("b", "a/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        "runtimeRowSamePair": run_case(
+            source,
+            [row("id-rt", "b", "a/", source="runtime", status="active")],
+            [bucket("b", "a/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        # A configured prefix that equals or nests with a stored row the configuration does not include
+        # fails the deployment before anything is written.
+        "nestedInRetired": run_case(
+            source,
+            [row("id-old", "b", "assets/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "assets/team1/", defaultSyncDatabaseId="db1")],
+        ),
+        "retiredNestedInConfigured": run_case(
+            source,
+            [row("id-old", "b", "assets/team1/", retired=True)],
+            [bucket("b", "assets/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        "retiredRootOverlaps": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True)],
+            [bucket("b", "x/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        "nestedInRowBeingRetired": run_case(
+            source,
+            [row("id-old", "b", "old/", isDefault=True)],
+            [bucket("b", "old/new/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        "nestedInRuntimeRow": run_case(
+            source,
+            [row("id-rt", "b", "rt/", source="runtime", status="pending")],
+            [bucket("b", "rt/sub/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        "siblingPrefixesDoNotOverlap": run_case(
+            source,
+            [row("id-old", "b", "assets/", retired=True), row("id-o", "o", "assets/team1/", retired=True)],
+            [bucket("b", "assets2/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        "deleteSkipsOverlapCheck": run_case(
+            source,
+            [row("id-old", "b", "assets/", retired=True)],
+            [bucket("b", "assets/team1/", default=True, defaultSyncDatabaseId="db1")],
+            request_type="Delete",
+        ),
     }
     print(json.dumps(results))
 

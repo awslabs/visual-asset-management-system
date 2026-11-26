@@ -64,6 +64,19 @@ RETIRED_AT_FIELD = 'retiredAt'
 # spelling changed. It names the row that answers lookups by name and prefix (the primary).
 DUPLICATE_OF_FIELD = 'duplicateOfBucketId'
 REPORT_FIELD_MAX_CHARS = 1000
+# Where a row came from: 'static' for a row this function writes from the configuration, 'runtime'
+# for a registration added at run time. A runtime row is never matched, rewritten or retired here.
+SOURCE_FIELD = 'source'
+SOURCE_STATIC = 'static'
+SOURCE_RUNTIME = 'runtime'
+# The attributes a deployment owns on a row it writes from the configuration. Each is set from the
+# configuration, or removed when the configuration does not give it; any other attribute of the row
+# is left as it is.
+OWNED_FIELDS = (
+    'bucketName', 'baseAssetsPrefix', 'isVersioningEnabled', 'isDefault', 'bucketRegion',
+    'bucketAccountId', 'isAccelerated', 'tagSyncedObjects', 'syncCreatedQueueUrl', DUPLICATE_OF_FIELD,
+    SOURCE_FIELD, 'defaultSyncDatabaseId', 'bucketKmsKeyArn', RETIRED_FIELD, RETIRED_AT_FIELD,
+)
 
 def s3_client_for_region(region):
     """An S3 client for the bucket's Region. A bucket in another Region answers GetBucketVersioning
@@ -95,22 +108,86 @@ def registration_pair(item):
         prefix = prefix if prefix is not None else stored_prefix
     return bucket_name, canonical_prefix(prefix)
 
+def is_runtime(item):
+    """Whether a row is a registration added at run time rather than from the configuration."""
+    return item.get(SOURCE_FIELD) == SOURCE_RUNTIME
+
 def get_existing_entries(table_name):
-    """Every stored row, grouped by registration pair (bucket name, canonical prefix). The scan is
-    paged to the end, so a table larger than one page does not re-mint the ids of later rows."""
+    """The stored rows: the configuration's rows grouped by registration pair (bucket name, canonical
+    prefix), and the runtime rows, which are kept apart so they are never matched or retired. The
+    scan is paged to the end, so a table larger than one page does not re-mint the ids of later rows."""
     table = dynamodb.Table(table_name)
     groups = {}
+    runtime_rows = []
     scan_kwargs = {}
     while True:
         response = table.scan(**scan_kwargs)
         for item in response.get('Items') or []:
             if not item.get('bucketId'):
                 continue
+            if is_runtime(item):
+                runtime_rows.append(item)
+                continue
             groups.setdefault(registration_pair(item), []).append(item)
         if 'LastEvaluatedKey' not in response:
             break
         scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
-    return groups
+    return groups, runtime_rows
+
+def prefixes_overlap(first, second):
+    """Whether two canonical prefixes of one bucket can hold the same object: equal, one inside the
+    other, or either is the bucket root."""
+    if first == '/' or second == '/':
+        return True
+    return first == second or first.startswith(second) or second.startswith(first)
+
+def stored_overlap_error(configured_pairs, existing_groups, runtime_rows):
+    """The failure message for the first configured registration whose prefix equals or nests with
+    the prefix of a stored row of the same bucket that the configuration does not include (a retired
+    row, a row this deployment retires, or a runtime row), or None. Assets of that row keep its
+    bucketId and their locations under its prefix, so a second registration over the same objects
+    would leave a file with two owners."""
+    unmatched = [row for pair, rows in existing_groups.items() if pair not in configured_pairs
+                 for row in rows]
+    unmatched.extend(runtime_rows)
+    for bucket_name, prefix in sorted(configured_pairs):
+        for row in sorted(unmatched, key=lambda r: str(r.get('bucketId'))):
+            other_name, other_prefix = registration_pair(row)
+            if other_name != bucket_name or not prefixes_overlap(prefix, other_prefix):
+                continue
+            if is_runtime(row):
+                state, way_out = 'added at run time', ''
+            elif row.get(RETIRED_FIELD) is True:
+                state, way_out = 'retired', ', or configure ' + other_prefix + ' again in place of this entry'
+            else:
+                state, way_out = 'no longer configured', ', or keep ' + other_prefix + ' in the configuration in place of this entry'
+            return (
+                "Configuration Error: bucket " + str(bucket_name) + " cannot be registered under the prefix " +
+                prefix + ": it overlaps the prefix " + other_prefix + " of the stored registration " +
+                str(row.get('bucketId')) + " (" + state + "), and two registrations of one bucket cannot hold "
+                "the same objects. Choose a prefix that does not overlap " + other_prefix + way_out +
+                ". See 'Overlapping bucket registrations' in the external bucket setup guide."
+            )
+    return None
+
+def write_owned_fields(table, key, item):
+    """Write a configured row: SET every owned field the item carries and REMOVE every owned field it
+    does not, leaving any other attribute of a stored row in place (merge, not replace). Creates the
+    row when it does not exist."""
+    names, values, sets, removes = {}, {}, [], []
+    for index, field in enumerate(OWNED_FIELDS):
+        name = '#f' + str(index)
+        names[name] = field
+        if field in item:
+            values[':v' + str(index)] = item[field]
+            sets.append(name + ' = :v' + str(index))
+        else:
+            removes.append(name)
+    expression = 'SET ' + ', '.join(sets)
+    if removes:
+        expression += ' REMOVE ' + ', '.join(removes)
+    table.update_item(Key=key, UpdateExpression=expression, ExpressionAttributeNames=names,
+                      ExpressionAttributeValues=values)
 
 def referenced_bucket_ids(bucket_ids, asset_table_name, asset_bucket_index):
     """The ids among bucket_ids that at least one asset row names: one Query of one item per id on
@@ -277,9 +354,21 @@ def lambda_handler(event, context):
         # A registration is matched on its bucket name and canonical prefix, read from the stored
         # rows, so a prefix whose spelling changed ('assets' to 'assets/') keeps its bucketId.
         logger.info(f"Scanning table {table_name} for existing entries...")
-        existing_groups = get_existing_entries(table_name)
+        existing_groups, runtime_rows = get_existing_entries(table_name)
         logger.info(f"Existing registrations: {sum(len(rows) for rows in existing_groups.values())} rows "
-                    f"for {len(existing_groups)} bucket name and prefix pairs")
+                    f"for {len(existing_groups)} bucket name and prefix pairs, and {len(runtime_rows)} "
+                    "rows added at run time")
+
+        # A configured prefix may not overlap a stored registration of the same bucket that the
+        # configuration does not include. Checked before any row is written, on Create and Update only,
+        # so a Delete (and the cleanup after a rollback) is never blocked.
+        if request_type in ('Create', 'Update'):
+            overlap = stored_overlap_error(
+                {(b.get('bucketName'), canonical_prefix(b.get('prefix'))) for b in buckets},
+                existing_groups, runtime_rows)
+            if overlap:
+                logger.error(overlap)
+                raise Exception(overlap)
 
         # Process each bucket
         table = dynamodb.Table(table_name)
@@ -355,8 +444,9 @@ def lambda_handler(event, context):
             if is_accelerated and event.get('RequestType') in ('Create', 'Update'):
                 verify_transfer_acceleration(bucket_name, bucket_region)
 
-            # Create or update the record in DynamoDB. put_item replaces the whole item, so a row
-            # that was retired and is configured again loses the retired flag here.
+            # Create or update the record in DynamoDB. Only the owned fields are written, so an
+            # attribute something else stored on the row stays; a row that was retired and is
+            # configured again loses the retired flag here, because the item does not carry it.
             for row_key in rows_to_write:
                 item = {
                     'bucketId': row_key['bucketId'],
@@ -382,7 +472,16 @@ def lambda_handler(event, context):
                 # request for the files already at a bucketExistingKey.
                 if bucket.get('syncCreatedQueueUrl'):
                     item['syncCreatedQueueUrl'] = bucket['syncCreatedQueueUrl']
-                table.put_item(Item=item)
+                item[SOURCE_FIELD] = SOURCE_STATIC
+                # The registration's fallback database for bucket sync, and the bucket's customer
+                # managed key when one is configured, so code that serves a registration reads them
+                # from the row.
+                if bucket.get('defaultSyncDatabaseId'):
+                    item['defaultSyncDatabaseId'] = bucket['defaultSyncDatabaseId']
+                if bucket.get('bucketKmsKeyArn'):
+                    item['bucketKmsKeyArn'] = bucket['bucketKmsKeyArn']
+                write_owned_fields(table, {'bucketId': row_key['bucketId'], SORT_KEY: row_key[SORT_KEY]},
+                                   {k: v for k, v in item.items() if k not in ('bucketId', SORT_KEY)})
             logger.info(f"Successfully added/updated record for bucket: {bucket_name} (region: {bucket_region}, versioning: {is_versioning_enabled}, default: {is_default})")
 
         # Rows whose registration left the configuration are retired, never deleted. Only on Create
@@ -494,6 +593,8 @@ def lambda_handler(event, context):
             ...(record.syncCreatedQueueUrl
                 ? { syncCreatedQueueUrl: record.syncCreatedQueueUrl }
                 : {}),
+            defaultSyncDatabaseId: record.defaultSyncDatabaseId,
+            ...(record.kmsKeyArn ? { bucketKmsKeyArn: record.kmsKeyArn } : {}),
         }));
 
     // Create the custom resource provider

@@ -39,7 +39,12 @@ interface Row {
     baseAssetsPrefix: string | null;
     isDefault: boolean | null;
     retired: boolean | null;
+    retiredAt: string | null;
     duplicateOfBucketId: string | null;
+    source: string | null;
+    defaultSyncDatabaseId: string | null;
+    bucketKmsKeyArn: string | null;
+    isAccelerated: boolean | null;
 }
 
 interface CaseResult {
@@ -47,6 +52,7 @@ interface CaseResult {
     error: string | null;
     data: Record<string, string> | null;
     rows: Row[];
+    items: Record<string, Record<string, unknown>>;
     calls: { op: string; bucketId?: string; sortKey?: string; start?: unknown }[];
     assetCalls: { index: string; key: string; value: string; limit: number | null }[];
 }
@@ -108,8 +114,10 @@ beforeAll(() => {
     fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// The merge write of a configured row, the retire update, and a whole-item put (never expected).
+const writes = (result: CaseResult) => result.calls.filter((call) => call.op === "write");
+const updates = (result: CaseResult) => result.calls.filter((call) => call.op === "retire");
 const puts = (result: CaseResult) => result.calls.filter((call) => call.op === "put");
-const updates = (result: CaseResult) => result.calls.filter((call) => call.op === "update");
 const rowOf = (result: CaseResult, bucketId: string) =>
     result.rows.filter((row) => row.bucketId === bucketId);
 
@@ -124,7 +132,7 @@ describe("registration matching", () => {
             baseAssetsPrefix: "assets/",
             isDefault: true,
         });
-        expect(puts(result)).toEqual([{ op: "put", bucketId: "id-a", sortKey: "b:assets" }]);
+        expect(writes(result)).toEqual([{ op: "write", bucketId: "id-a", sortKey: "b:assets" }]);
     });
 
     test("a doubled trailing slash is the same registration, written with one slash", () => {
@@ -242,6 +250,147 @@ describe("two rows for one registration", () => {
         const result = results.duplicatesRetiredTogether;
         expect(rowOf(result, "id-a")[0]).toMatchObject({ retired: true, isDefault: false });
         expect(rowOf(result, "id-b")[0]).toMatchObject({ retired: true, isDefault: false });
+    });
+});
+
+describe("record fields and the merge write (#1978)", () => {
+    test("a configured row is merged, never replaced: an attribute the populator does not own stays", () => {
+        const result = results.mergeKeepsUnowned;
+        expect(result.ok).toBe(true);
+        expect(puts(result)).toEqual([]);
+        expect(writes(result)).toEqual([{ op: "write", bucketId: "id-a", sortKey: "b:assets/" }]);
+        expect(result.items["id-a|b:assets/"]).toMatchObject({
+            assetLayout: "{assetId}",
+            source: "static",
+            defaultSyncDatabaseId: "db1",
+            isDefault: true,
+        });
+        // Owned fields the configuration no longer gives are removed, as the whole-item write did.
+        expect(result.items["id-a|b:assets/"]).not.toHaveProperty("isAccelerated");
+        expect(result.items["id-a|b:assets/"]).not.toHaveProperty("bucketKmsKeyArn");
+    });
+
+    test("an existing row gains source, the fallback database and the key; ids and retired rows are unchanged", () => {
+        const result = results.upgradeGainsFields;
+        expect(result.ok).toBe(true);
+        expect(rowOf(result, "id-a")[0]).toMatchObject({
+            sortKey: "b:assets/",
+            source: "static",
+            defaultSyncDatabaseId: "db1",
+            bucketKmsKeyArn: "arn:aws:kms:us-east-1:111111111111:key/k1",
+            retired: null,
+        });
+        expect(rowOf(result, "id-r")[0]).toMatchObject({
+            retired: true,
+            retiredAt: "2026-01-01T00:00:00Z",
+        });
+        expect(updates(result)).toEqual([]);
+        expect(result.rows.map((row) => row.bucketId)).toEqual(["id-a", "id-r"]);
+    });
+
+    test("a returning row loses retired and retiredAt", () => {
+        const result = results.retiredReturns;
+        expect(result.rows[0]).toMatchObject({ retired: null, retiredAt: null, source: "static" });
+    });
+
+    test("a row added at run time survives a deployment unchanged", () => {
+        const result = results.runtimeRowSurvives;
+        expect(result.ok).toBe(true);
+        expect(result.items["id-rt|r:rt/"]).toEqual({
+            bucketId: "id-rt",
+            "bucketName:baseAssetsPrefix": "r:rt/",
+            bucketName: "r",
+            baseAssetsPrefix: "rt/",
+            isDefault: false,
+            source: "runtime",
+            status: "active",
+            createdBy: "admin",
+            defaultSyncDatabaseId: "dbr",
+        });
+        expect(result.calls.filter((call) => call.bucketId === "id-rt")).toEqual([]);
+        expect(result.data?.RetiredRegistrations).toBe("");
+    });
+
+    test("a configured entry is never matched to a runtime row of the same bucket and prefix", () => {
+        const result = results.runtimeRowSamePair;
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("overlaps the prefix a/ of the stored registration id-rt");
+        expect(result.error).toContain("added at run time");
+        expect(result.calls.filter((call) => call.op !== "scan")).toEqual([]);
+    });
+});
+
+describe("overlap with stored registrations (#1978)", () => {
+    test("a configured prefix nested in a retired registration's prefix fails before any write", () => {
+        const result = results.nestedInRetired;
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain(
+            "bucket b cannot be registered under the prefix assets/team1/: it overlaps the prefix assets/ " +
+                "of the stored registration id-old (retired)"
+        );
+        expect(result.error).toContain("Choose a prefix that does not overlap assets/");
+        expect(result.error).toContain("Overlapping bucket registrations");
+        expect(result.calls.filter((call) => call.op !== "scan")).toEqual([]);
+        expect(result.rows.map((row) => row.bucketId)).toEqual(["id-c", "id-old"]);
+    });
+
+    test.each([
+        ["retiredNestedInConfigured", "assets/", "assets/team1/", "retired"],
+        ["retiredRootOverlaps", "x/", "/", "retired"],
+        ["nestedInRowBeingRetired", "old/new/", "old/", "no longer configured"],
+        ["nestedInRuntimeRow", "rt/sub/", "rt/", "added at run time"],
+    ])("%s fails naming both prefixes", (name, configured, stored, state) => {
+        const result = results[name];
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain(
+            `under the prefix ${configured}: it overlaps the prefix ${stored} `
+        );
+        expect(result.error).toContain(`(${state})`);
+        expect(result.calls.filter((call) => call.op !== "scan")).toEqual([]);
+    });
+
+    test("prefixes that only share leading characters, and other buckets, do not overlap", () => {
+        const result = results.siblingPrefixesDoNotOverlap;
+        expect(result.ok).toBe(true);
+        expect(writes(result)).toHaveLength(1);
+    });
+
+    test("a Delete event is never blocked by the check", () => {
+        expect(results.deleteSkipsOverlapCheck.ok).toBe(true);
+    });
+});
+
+describe("custom resource properties", () => {
+    test("each record carries its fallback database, and its key only when one is declared", () => {
+        s3AssetBucketRecords.length = 0;
+        const app = newTestApp();
+        const stack = new cdk.Stack(app, "PropsStack", {
+            env: { account: "111111111111", region: "us-east-1" },
+        });
+        const table = new dynamodb.Table(stack, "S3AssetBucketsStorageTable", {
+            partitionKey: { name: "bucketId", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "bucketName:baseAssetsPrefix", type: dynamodb.AttributeType.STRING },
+        });
+        addS3AssetBucket(s3.Bucket.fromBucketArn(stack, "A", "arn:aws:s3:::vams-a"), "/", "dba");
+        addS3AssetBucket(
+            s3.Bucket.fromBucketArn(stack, "B", "arn:aws:s3:::vams-b"),
+            "data/",
+            "dbb",
+            "222222222222",
+            "arn:aws:kms:us-east-1:222222222222:key/k1"
+        );
+        createPopulateS3AssetBucketsTableCustomResource(stack, "Populate", table);
+        const resources = Object.values(
+            Template.fromStack(stack).findResources("AWS::CloudFormation::CustomResource")
+        );
+        expect(resources).toHaveLength(1);
+        const buckets = JSON.parse((resources[0] as any).Properties.buckets);
+        expect(
+            buckets.map((b: any) => [b.bucketName, b.defaultSyncDatabaseId, b.bucketKmsKeyArn])
+        ).toEqual([
+            ["vams-a", "dba", undefined],
+            ["vams-b", "dbb", "arn:aws:kms:us-east-1:222222222222:key/k1"],
+        ]);
     });
 });
 
