@@ -54,7 +54,7 @@ class TestARevert:
         copies = []
         saved = []
 
-        def _copy(source_bucket, source_key, source_version_id, dest_bucket, dest_key):
+        def _copy(source_bucket, source_key, source_version_id, dest_bucket, dest_key, change_user_id=None):
             copies.append((source_key, source_version_id))
             return f"new-{source_version_id}"
 

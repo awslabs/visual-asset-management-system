@@ -35,6 +35,11 @@ from common.assetLocations import (
     NestedLocations, contains, normalize_base_prefix, object_key_for, relative_path_in, viewer_data_scope,
 )
 from common.fileAttribution import nested_locations_of_asset
+from common.s3MetadataKeys import (
+    CHANGE_PROVENANCE_METADATA_KEYS, VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_FILE_REVERT, VAMS_CHANGE_SOURCE_METADATA_KEY, VAMS_CHANGE_USER_ID_METADATA_KEY,
+    replace_metadata_copy_args,
+)
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
@@ -537,20 +542,35 @@ def validate_s3_files_exist(bucket: str, prefix: str, files: List[AssetFileVersi
     return invalid_files
 
 def copy_s3_object_version(source_bucket: str, source_key: str, source_version_id: str, 
-                          dest_bucket: str, dest_key: str) -> Optional[str]:
+                          dest_bucket: str, dest_key: str, change_user_id: Optional[str] = None) -> Optional[str]:
     """Copy a specific version of an S3 object
     
+    The new version keeps the source version's metadata and is stamped as a file revert
+    (fileRevert, the acting user and the source version), so its history does not show the
+    change source of the version it was copied from.
+
     Args:
         source_bucket: Source bucket name
         source_key: Source object key
         source_version_id: Source object version ID
         dest_bucket: Destination bucket name
         dest_key: Destination object key
+        change_user_id: Acting user id; None records "SYSTEM_USER"
         
     Returns:
         New version ID if successful, None otherwise
     """
     try:
+        source_head = s3_client.head_object(Bucket=source_bucket, Key=source_key, VersionId=source_version_id)
+        # Every provenance key is restated, so none of the source version's values carry forward
+        metadata = dict(source_head.get('Metadata') or {})
+        metadata.update({key: "" for key in CHANGE_PROVENANCE_METADATA_KEYS})
+        metadata.update({
+            VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_FILE_REVERT,
+            VAMS_CHANGE_USER_ID_METADATA_KEY: change_user_id or "SYSTEM_USER",
+            VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY: source_version_id,
+        })
+
         # Copy the object with the specified version using managed transfer for large files
         s3_resource.meta.client.copy(
             CopySource={
@@ -560,9 +580,12 @@ def copy_s3_object_version(source_bucket: str, source_key: str, source_version_i
             },
             Bucket=dest_bucket,
             Key=dest_key,
-            # Grant the bucket owner full control so a version written into a
-            # cross-account asset bucket is owned/readable by that account.
-            ExtraArgs={'ACL': 'bucket-owner-full-control'}
+            ExtraArgs={
+                **replace_metadata_copy_args(source_head, metadata),
+                # Grant the bucket owner full control so a version written into a
+                # cross-account asset bucket is owned/readable by that account.
+                'ACL': 'bucket-owner-full-control'
+            }
         )
         
         # Get the new version ID by checking the object after copy
@@ -2059,7 +2082,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
             # Copy the file version to make it current
             new_version_id = copy_s3_object_version(
                 bucket, full_key, source_version_id,
-                bucket, full_key
+                bucket, full_key, change_user_id=username
             )
 
             if not new_version_id:
