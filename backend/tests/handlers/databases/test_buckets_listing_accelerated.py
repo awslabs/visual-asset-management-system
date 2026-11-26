@@ -15,6 +15,17 @@ import pytest
 from backend.backend.handlers.databases.databaseService import get_buckets
 
 
+# A caller allowed to read every registration (Tier 2 `bucket` GET), so these tests see the projection.
+READER = {"tokens": ["reader"]}
+
+
+@pytest.fixture(autouse=True)
+def _bucket_reader():
+    with patch("backend.backend.handlers.databases.databaseService.CasbinEnforcer") as enforcer:
+        enforcer.return_value.enforce.return_value = True
+        yield enforcer
+
+
 def _scan_response(rows):
     def typed(value):
         if isinstance(value, bool):
@@ -38,7 +49,7 @@ def _row(name, **extra):
 def _list(rows):
     with patch("backend.backend.handlers.databases.databaseService.dbClient") as db:
         db.scan.return_value = _scan_response(rows)
-        return get_buckets({}, {})
+        return get_buckets({}, READER)
 
 
 @pytest.mark.unit
@@ -77,7 +88,7 @@ class TestBucketsListingIsAccelerated:
         ]
         with patch("backend.backend.handlers.databases.databaseService.dbClient") as db:
             db.scan.return_value = {"Items": typed}
-            result = get_buckets({}, {})
+            result = get_buckets({}, READER)
         assert [i.isAccelerated for i in result.Items] == [False, False]
 
     def test_field_survives_serialization_and_other_fields_are_unchanged(self):
@@ -92,4 +103,6 @@ class TestBucketsListingIsAccelerated:
             "bucketRegion": "us-west-2",
             "bucketAccountId": "123456789012",
             "isAccelerated": True,
+            "source": "static",
+            "status": "active",
         }

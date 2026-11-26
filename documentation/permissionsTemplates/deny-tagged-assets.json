@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Deny Tagged Asset Editing",
-        "description": "Overlay template that denies editing (PUT/POST/DELETE) of assets with a specific tag. Apply on top of an existing role to create exceptions. DENY always overrides ALLOW.",
+        "description": "Overlay template that denies editing (PUT/POST/DELETE) of assets with a specific tag. Apply on top of an existing role to create exceptions. DENY always overrides ALLOW. Like every shipped template it also allows read of asset bucket registrations.",
         "version": "1.0"
     },
     "variables": [
@@ -28,6 +28,14 @@
                 { "action": "POST", "type": "deny" },
                 { "action": "DELETE", "type": "deny" }
             ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-buckets",
+            "description": "Allow read of every asset bucket registration, as every shipped template does, so a role keeps its bucket listing. It grants no route",
+            "objectType": "bucket",
+            "criteriaAnd": [{ "field": "bucketId", "operator": "contains", "value": ".*" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
         }
     ]
 }

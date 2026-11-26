@@ -44,6 +44,8 @@ def enforcer(monkeypatch):
     monkeypatch.setattr(handler, 'create_database', MagicMock(
         return_value=handler.CreateDatabaseResponseModel(
             databaseId=VALID_BODY['databaseId'], message='Database created successfully')))
+    # The chosen bucket's own check reads the registration table (test_createDatabase_bucket_choice.py).
+    monkeypatch.setattr(handler, 'bucket_choice_allowed', lambda casbin_enforcer, bucket_id: True)
     return instance
 
 

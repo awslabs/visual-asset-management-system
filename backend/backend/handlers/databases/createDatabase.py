@@ -10,7 +10,12 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.apiRoutes import API_DATABASE
-from common.bucketRegistrations import is_retired
+from common.bucketRegistrations import (
+    BUCKET_NOT_AVAILABLE_MESSAGE,
+    bucket_authorization_object,
+    choosable_registration,
+    is_retired,
+)
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -58,7 +63,7 @@ def create_database(request_model: CreateDatabaseRequestModel):
         # A retired registration (it left the configuration) is not offered for a new database, so it
         # is refused here as an unknown one.
         if not bucket_response.get('Items') or all(is_retired(item) for item in bucket_response['Items']):
-            raise VAMSGeneralErrorResponse("Bucket ID not found")
+            raise VAMSGeneralErrorResponse(BUCKET_NOT_AVAILABLE_MESSAGE)
         
         # Create database with put_item and conditional expression
         # This will fail atomically if database already exists
@@ -92,6 +97,19 @@ def create_database(request_model: CreateDatabaseRequestModel):
     except Exception as e:
         logger.exception(f"Error creating database: {e}")
         raise VAMSGeneralErrorResponse("Error creating database")
+
+def bucket_choice_allowed(casbin_enforcer, bucket_id) -> bool:
+    """Whether the caller may put a new database on `bucket_id`: the registration exists, is active,
+    and the caller may read it (Tier 2 `bucket` GET, which writes the authorization audit record when
+    it refuses). Only the API path checks it; bucket sync creates its databases through
+    create_database() directly."""
+    from boto3.dynamodb.conditions import Key
+    response = dynamodb.Table(s3_asset_buckets_table).query(KeyConditionExpression=Key('bucketId').eq(bucket_id))
+    registration = choosable_registration(response.get('Items') or [])
+    if registration is None:
+        return False
+    return casbin_enforcer.enforce(bucket_authorization_object(registration), "GET")
+
 
 #######################
 # Lambda Handler
@@ -154,6 +172,11 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             }
             if not casbin_enforcer.enforce(database, "POST"):
                 return authorization_error()
+
+            # Tier 2 on the chosen bucket. An unknown, retired or unreadable bucket id gets one answer,
+            # so the answer does not tell them apart.
+            if not bucket_choice_allowed(casbin_enforcer, request_model.defaultBucketId):
+                return validation_error(body={'message': BUCKET_NOT_AVAILABLE_MESSAGE}, event=event)
 
             # Process request
             response = create_database(request_model)

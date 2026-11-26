@@ -14,7 +14,14 @@ from common.constants import STANDARD_JSON_RESPONSE
 from common.apiRoutes import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
 from common.validators import validate
 from common.dynamodb import validate_pagination_info, to_update_expr
-from common.bucketRegistrations import is_retired
+from common.bucketRegistrations import (
+    BUCKET_NOT_AVAILABLE_MESSAGE,
+    bucket_authorization_object,
+    choosable_registration,
+    is_retired,
+    registration_source,
+    registration_state,
+)
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
@@ -330,10 +337,12 @@ def update_database(database_id, update_data, claims_and_roles=None, event=None)
         if not casbin_enforcer.enforce(database, "PUT"):
             raise DatabaseAccessDeniedError("Access denied")
         
-        # If defaultBucketId is being updated, verify it exists. A retired registration (it left the
-        # configuration) is not offered for a database, so moving a database onto one is refused as an
-        # unknown id, as create refuses it. A database already on it keeps it: the edit form sends the
-        # current id with every update, and refusing it would block editing the other fields.
+        # If defaultBucketId is being updated, verify it exists. Moving a database onto a bucket also
+        # needs it to be active (a retired registration left the configuration) and the caller to be
+        # allowed to read it (Tier 2 `bucket` GET); the three refusals give one answer, as create's do,
+        # so the answer does not tell them apart. A database already on its bucket keeps it: the edit
+        # form sends the current id with every update, and refusing it would block editing the other
+        # fields.
         if 'defaultBucketId' in update_data and update_data['defaultBucketId'] is not None:
             buckets_table = dynamodb.Table(s3_asset_buckets_table)
             bucket_response = buckets_table.query(
@@ -341,8 +350,13 @@ def update_database(database_id, update_data, claims_and_roles=None, event=None)
             )
             items = bucket_response.get('Items') or []
             moving = update_data['defaultBucketId'] != database.get('defaultBucketId')
-            if not items or (moving and all(is_retired(item) for item in items)):
-                raise VAMSGeneralErrorResponse("Bucket ID not found")
+            if not items:
+                raise VAMSGeneralErrorResponse(BUCKET_NOT_AVAILABLE_MESSAGE)
+            if moving:
+                registration = choosable_registration(items)
+                if registration is None or not casbin_enforcer.enforce(
+                        bucket_authorization_object(registration), "GET"):
+                    raise VAMSGeneralErrorResponse(BUCKET_NOT_AVAILABLE_MESSAGE)
         
         updates = {
             field: update_data[field]
@@ -632,20 +646,19 @@ def delete_database_handler(event, path_parameters, claims_and_roles):
 
 
 def get_buckets(query_params, claims_and_roles=None):
-    """Get all S3 bucket configurations with pagination.
+    """Get the S3 bucket registrations the caller may read, with pagination.
 
-    Authorization is Tier 1 only. `bucket` is not one of the constraint objectTypes, so no
-    per-bucket constraint can be authored and this listing applies no entity-level filter: a role
-    that holds the api route receives every registered bucket. The route grant is therefore the
-    whole gate, and the shipped permission templates and the seeded default role constraints grant
-    it to administrator roles alone. A deployment rewrites the seeded default role constraints, but
-    it does not reconcile constraints authored within it, so a role built from an earlier template
-    keeps its grant until that constraint is re-authored or the template re-imported.
-
-    `claims_and_roles` is accepted for call-shape parity with the other listings in this module;
-    there is no entity-level check for it to run.
+    Both tiers apply: the route (Tier 1, in lambda_handler) and, per row, a `bucket` GET check on the
+    registration (Tier 2). A row is returned only when the caller may read it, so a role without a
+    `bucket` constraint gets an empty list. The filter applies to each scanned page, so a page can
+    hold fewer rows than its size; NextToken still continues the scan. Each refused row writes the
+    authorization audit record.
     """
     try:
+        casbin_enforcer = None
+        if claims_and_roles and len(claims_and_roles.get("tokens") or []) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+
         # Parse query parameters
         request_model = GetBucketsRequestModel(
             maxItems=int(query_params.get('maxItems', 10000)),
@@ -680,6 +693,11 @@ def get_buckets(query_params, claims_and_roles=None):
             if is_retired(deserialized_document):
                 continue
 
+            # Tier 2: the row is listed only when the caller may read the registration.
+            if not (casbin_enforcer is not None and len(claims_and_roles["tokens"]) > 0
+                    and casbin_enforcer.enforce(bucket_authorization_object(deserialized_document), "GET")):
+                continue
+
             # Convert to model
             bucket_model = BucketModel(
                 bucketId=deserialized_document.get('bucketId'),
@@ -688,7 +706,9 @@ def get_buckets(query_params, claims_and_roles=None):
                 isDefault=bool(deserialized_document.get('isDefault', False)),
                 bucketRegion=deserialized_document.get('bucketRegion') or None,
                 bucketAccountId=deserialized_document.get('bucketAccountId') or None,
-                isAccelerated=deserialized_document.get('isAccelerated') is True
+                isAccelerated=deserialized_document.get('isAccelerated') is True,
+                source=registration_source(deserialized_document),
+                status=registration_state(deserialized_document)
             )
             items.append(bucket_model)
 
