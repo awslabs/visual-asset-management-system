@@ -89,6 +89,8 @@ def create_database(request_model: CreateDatabaseRequestModel):
             raise VAMSGeneralErrorResponse("Database already exists")
         logger.exception(f"Error creating database: {e}")
         raise VAMSGeneralErrorResponse("Error creating database")
+    except VAMSGeneralErrorResponse:
+        raise
     except Exception as e:
         logger.exception(f"Error creating database: {e}")
         raise VAMSGeneralErrorResponse("Error creating database")
