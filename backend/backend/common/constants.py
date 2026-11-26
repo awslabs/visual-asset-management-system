@@ -265,6 +265,7 @@ CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES = [
     'complianceCascade',
     'complianceBinding',
     'auditLog',
+    'bucket',
 ]
 
 ALLOWED_CONSTRAINT_OPERATORS = [
@@ -310,6 +311,13 @@ CORE_PERMISSION_CONSTRAINT_FIELDS = {
             # auditLog: the audit log group key. Matched with the usual operators, not a closed
             # enum, so a group registered later needs no change here.
             "auditLogGroup": "",
+
+            # bucket: an asset bucket registration (one bucket and prefix). Checked on the bucket
+            # routes only, never on asset or file operations.
+            "bucketId": "",
+            "bucketName": "",
+            "bucketRegion": "",
+            "source": "",
 
             "object__type": "",
             "route__path": "",
@@ -394,6 +402,13 @@ CORE_CONSTRAINT_OBJECT_TYPE_FIELDS = {
     # databaseId field can be added without changing a stored auditLog constraint.
     "auditLog": {"label": "Audit Log", "fields": [
         {"label": "Audit Log Group", "value": "auditLogGroup"}]},
+    # An asset bucket registration. source is "static" (from the deployment's configuration) or
+    # "runtime" (added at run time).
+    "bucket": {"label": "Bucket", "fields": [
+        {"label": "Bucket ID", "value": "bucketId"},
+        {"label": "Bucket Name", "value": "bucketName"},
+        {"label": "Bucket Region", "value": "bucketRegion"},
+        {"label": "Source", "value": "source"}]},
 }
 
 _MERGED_CONSTRAINT_CONSTANTS = merge_constraint_extensions(

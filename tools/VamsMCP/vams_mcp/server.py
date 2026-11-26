@@ -954,9 +954,9 @@ def get_database(database_id: str, include_deleted: bool = False) -> results.Dat
 def list_buckets(
     max_items: Optional[int] = None, starting_token: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Use before create_database to pick a default_bucket_id. Rows carry the bucket id, name,
-    `bucketRegion`, `isAccelerated` (S3 Transfer Acceleration on) and, for another account's bucket,
-    `bucketAccountId`.
+    """Use before create_database to pick a default_bucket_id; lists only buckets the user may read.
+    Rows: bucket id, name, `bucketRegion`, `isAccelerated` (S3 Transfer Acceleration on), `source`,
+    `status` and, for another account's bucket, `bucketAccountId`.
     BOUNDED: `truncated`: pass `NextToken` as `starting_token`."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_buckets(params=params),

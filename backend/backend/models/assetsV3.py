@@ -1190,7 +1190,23 @@ class AssetFileVersionItemModel(BaseModel, extra='ignore'):
 
     @validator('relativeKey')
     def validate_relative_key(cls, v):
-        return validate_asset_file_path('relativeKey', v)
+        v = validate_asset_file_path('relativeKey', v)
+        # The version stores the path without its leading slash (#1795), so a path made only of
+        # slashes names no file it could store.
+        if not v.lstrip('/'):
+            message = "relativeKey must name a file"
+            logger.error(message)
+            raise ValueError(message)
+        # Exactly one leading slash marks a path, so '//x' names the key with an empty segment after
+        # the asset's location ('{location}/x'). The version handler still resolves an entry's object
+        # with every leading slash dropped (common.assetLocations.object_key_for), which would check and
+        # record '{location}x' under it, so such a path is refused until the location-key work (PR #1965)
+        # moves that resolution to the one-slash rule and lifts this refusal.
+        if v.startswith('//'):
+            message = "relativeKey cannot start with two slashes"
+            logger.error(message)
+            raise ValueError(message)
+        return v
 
 class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new asset version"""
@@ -1202,7 +1218,9 @@ class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('comment', pre=True, allow_reuse=True)(trim_name)
     
-    @root_validator
+    # Skipped when a field failed: the field's message is then the one answer, so a refused entry in
+    # `files` is not also reported as a missing file list.
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         # If not using latest files, ensure file list is provided
         if not values.get('useLatestFiles') and (not values.get('files') or len(values.get('files')) == 0):
@@ -1216,9 +1234,11 @@ class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
             logger.error(message)
             raise ValueError(message)
             
-        # Check for duplicate keys if files provided
+        # Check for duplicate keys if files provided. '/a.txt' and 'a.txt' name one file, which the
+        # version stores once (#1795); exactly one leading '/' marks a path, so '//a.txt' names another.
         if values.get('files'):
-            keys = [file.relativeKey for file in values.get('files')]
+            keys = [file.relativeKey[1:] if file.relativeKey.startswith('/') else file.relativeKey
+                    for file in values.get('files')]
             if len(keys) != len(set(keys)):
                 message = "Duplicate relative keys are not allowed"
                 logger.error(message)

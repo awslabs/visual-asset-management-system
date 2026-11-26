@@ -252,9 +252,26 @@ describe("seeded basicReadOnly asset export grant", () => {
         expect(constraint.routeValuesOr).toEqual([]);
     });
 
-    it("is the last core constraint, so adding it moved no earlier core custom resource", () => {
-        // The seed custom resource ids are index-based; the add-on items follow the core items.
+    it("is followed only by later core items, so adding it moved no earlier core custom resource", () => {
+        // The seed custom resource ids are index-based; the add-on items follow the core items, and
+        // each core item is appended after the one added before it.
         const ids = constraints.map((c) => c.id);
-        expect(ids[ids.length - 1]).toEqual("allow_export_api");
+        expect(ids.slice(-2)).toEqual(["allow_export_api", "allow_all_buckets"]);
+    });
+});
+
+describe("seeded basicReadOnly bucket read (#1978)", () => {
+    it("is the last core constraint and reads every registration", () => {
+        const ids = constraints.map((c) => c.id);
+        expect(ids[ids.length - 1]).toEqual("allow_all_buckets");
+        const bucketRead = SOURCE.slice(
+            SOURCE.indexOf("initial_${roleNameIDClean}_allow_all_buckets")
+        );
+        expect(bucketRead).toMatch(/field: \{\s*S: "bucketId"/);
+        expect(bucketRead).toMatch(/permission: \{\s*S: "GET"/);
+        expect(bucketRead).toMatch(/objectType: \{\s*S: "bucket"/);
+        expect(bucketRead.slice(0, bucketRead.indexOf('S: "bucket"'))).not.toMatch(
+            /S: "(PUT|POST|DELETE)"/
+        );
     });
 });

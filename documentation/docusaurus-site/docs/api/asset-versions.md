@@ -97,7 +97,7 @@ GET /database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}
 
 ### Response
 
-Returns a single version object with full details including file listings.
+Returns a single version object with full details including file listings. Each file's `relativeKey` is its path in the asset without its leading `/` (`models/a.glb`), whichever form the version was created with.
 
 ### Error responses
 
@@ -134,7 +134,7 @@ POST /database/{databaseId}/assets/{assetId}/createVersion
 | `files`          | array   | No       | Explicit list of files and their S3 versions to include. Required unless `useLatestFiles` is `true`. |
 | `versionAlias`   | string  | No       | Human-readable version alias (up to 64 characters).                                                  |
 
-Provide either `useLatestFiles` set to `true` or a non-empty `files` list; the two are mutually exclusive. Each entry in `files` is an object with `relativeKey`, `versionId` (S3 version ID), and an optional `isArchived` flag.
+Provide either `useLatestFiles` set to `true` or a non-empty `files` list; the two are mutually exclusive. Each entry in `files` is an object with `relativeKey`, `versionId` (S3 version ID), and an optional `isArchived` flag. A `relativeKey` is the file's path in the asset, with or without its leading `/` (`/models/a.glb` and `models/a.glb` name the same file). The version stores the path without that `/`, so its file list shows `models/a.glb`. A request whose `files` name the same file twice (with and without the slash), name a path made only of `/`, or name a path that starts with `//` answers `400`.
 
 ### Request body example
 

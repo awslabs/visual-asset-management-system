@@ -493,7 +493,7 @@ export function storageResourcesBuilder(
             (b) => b && b.isDefault
         );
         // Add to global array with default prefix '/'
-        s3AssetBuckets.addS3AssetBucket(
+        const createdBucketRecord = s3AssetBuckets.addS3AssetBucket(
             assetBucket,
             "/",
             config.app.assetBuckets.defaultNewBucketSyncDatabaseId,
@@ -504,6 +504,12 @@ export function storageResourcesBuilder(
             Config.createdBucketAccelerated(config.app.assetBuckets),
             config.app.assetBuckets.tagSyncedObjects !== false
         );
+        // The registration row records the key that encrypts the bucket. It is the deployment's own
+        // key, which the roles already use, so it is not added as kmsKeyArn (that drives the grants of
+        // external keys).
+        if (config.app.useKmsCmkEncryption.enabled && kmsEncryptionKey) {
+            createdBucketRecord.registrationKmsKeyArn = kmsEncryptionKey.keyArn;
+        }
     }
 
     //Load external buckets based on configuration

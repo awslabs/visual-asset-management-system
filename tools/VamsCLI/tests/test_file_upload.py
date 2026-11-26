@@ -929,6 +929,52 @@ class TestFileUploadCommandJSONHandling:
         finally:
             Path(tmp_path).unlink()
 
+    def test_upload_json_output_names_each_sequence(self, cli_runner, file_command_mocks):
+        """Each sequence result's sequence_number is the upload manager's sequence_id (#1988)."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+            tmp.write(b"test content")
+            tmp_path = tmp.name
+
+        try:
+            with file_command_mocks as mocks:
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': ''
+                }
+
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
+                    # The shape UploadManager.upload_all returns: a completed and a failed sequence.
+                    mock_run.return_value = {
+                        "overall_success": False,
+                        "total_files": 2,
+                        "successful_files": 1,
+                        "failed_files": 1,
+                        "total_size": 24,
+                        "total_size_formatted": "24B",
+                        "upload_duration": 1.0,
+                        "average_speed": 24.0,
+                        "average_speed_formatted": "24B/s",
+                        "sequence_results": [
+                            {"sequence_id": 1, "successful_files": ["a.txt"], "failed_files": []},
+                            {"sequence_id": 2, "error": "boom", "successful_files": [],
+                             "failed_files": ["b.txt"]},
+                        ]
+                    }
+
+                    result = cli_runner.invoke(cli, [
+                        'file', 'upload',
+                        '-d', 'test-db',
+                        '-a', 'test-asset',
+                        '--json-output',
+                        '--hide-progress',
+                        tmp_path
+                    ])
+
+                    output_json = json.loads(result.output.strip())
+                    assert [s["sequence_number"] for s in output_json["sequence_results"]] == [1, 2]
+        finally:
+            Path(tmp_path).unlink()
+
 
 class TestFileUploadCommandEdgeCases:
     """Test edge cases and error handling for file upload commands."""

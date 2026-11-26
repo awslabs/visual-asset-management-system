@@ -33,7 +33,7 @@ def _upload_result(asynchronous=True):
         "overall_success": True, "total_files": 2, "successful_files": 2, "failed_files": 0,
         "total_size": 12, "total_size_formatted": "12B", "upload_duration": 1.0,
         "average_speed": 12.0, "average_speed_formatted": "12B/s",
-        "sequence_results": [{"sequence_number": 1, "successful_files": 2, "failed_files": [],
+        "sequence_results": [{"sequence_id": 1, "successful_files": 2, "failed_files": [],
                               "completion_result": {"uploadId": UPLOAD, "overallSuccess": True,
                                                     "largeFileAsynchronousHandling": asynchronous}}],
     }

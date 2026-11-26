@@ -1,22 +1,20 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""GET /buckets is scoped to administrator roles by its api route grant alone.
+"""GET /buckets is gated by its api route grant (Tier 1) and filtered per registration (Tier 2).
 
-`bucket` is not one of ALLOWED_CONSTRAINT_OBJECT_TYPES, so no per-bucket constraint can be authored
-and the listing applies no entity-level filter: whoever holds the api route sees every registered
-bucket. The route grant is therefore the whole gate, which is why the grant itself is asserted here
-— in the shipped permission templates and in the seeded default role constraints — rather than only
-the handler behaviour. The listing's only consumers are the database create/edit surfaces (web
-`CreateDatabase.tsx` via `APIService.fetchBuckets`, `vamscli database list-buckets` and its bucket
-picker, the MCP `list_buckets` tool).
+The route is granted to administrator roles: the shipped permission templates and the seeded default
+role constraints are asserted here, not only the handler behaviour. Each listed row then needs a GET
+on the `bucket` object type (#1978): `bucketId`, `bucketName`, `bucketRegion` and `source` of the
+row. The listing's only consumers are the database create/edit surfaces (web `CreateDatabase.tsx` via
+`APIService.fetchBuckets`, `vamscli database list-buckets` and its bucket picker, the MCP
+`list_buckets` tool).
 
-The pagination assertions belong here for the same reason: the listing reads maxItems / pageSize /
-startingToken from its query parameters, and a listing that reads them from the wrong argument
-serves a fixed page and re-serves page one forever with no error to notice.
+The pagination assertions belong here because the listing reads maxItems / pageSize / startingToken
+from its query parameters, and a listing that reads them from the wrong argument serves a fixed page
+and re-serves page one forever with no error to notice.
 
-Guards FIX-066 (S2-BACKEND-142): with no per-bucket constraint type available, the api route
-grant is the whole gate on this listing, so the grant is what has to be asserted.
+Guards FIX-066 (S2-BACKEND-142): the route grant stays the first gate, so the grant is asserted.
 """
 
 import base64
@@ -131,7 +129,7 @@ def _allowing_enforcer(mock_casbin):
 
 @pytest.mark.unit
 class TestBucketsListingTier1Scoping:
-    """GET /buckets: the api route grant is the only gate, and the listing is unfiltered."""
+    """GET /buckets: the api route grant is the first gate, and each row needs a bucket read."""
 
     def test_the_shared_pagination_helper_defaults_to_a_larger_page(self):
         # Control for the Limit assertions below: the shared helper seeds an absent pageSize from
@@ -150,8 +148,9 @@ class TestBucketsListingTier1Scoping:
     @patch("backend.backend.handlers.databases.databaseService.dbClient")
     @patch("backend.backend.handlers.databases.databaseService.CasbinEnforcer")
     def test_a_role_holding_the_route_receives_every_registered_bucket(self, mock_casbin, mock_db):
-        # An administrator role: its api criterion matches /buckets, so Tier 1 allows. The REST
-        # event carries no query string, so this also covers the null-parameters case.
+        # An administrator role: its api criterion matches /buckets, so Tier 1 allows, and its bucket
+        # constraint allows every row. The REST event carries no query string, so this also covers
+        # the null-parameters case.
         enforcer = _allowing_enforcer(mock_casbin)
         mock_db.scan.return_value = _two_buckets()
 
@@ -159,18 +158,20 @@ class TestBucketsListingTier1Scoping:
 
         assert response["statusCode"] == 200
         items = json.loads(response["body"])["Items"]
-        # Two buckets in, two buckets out: the listing is NOT filtered per bucket. This is the
-        # control that fails if a per-bucket enforce() block is ever (re)introduced — `bucket` is
-        # not a constraint objectType, so such a check denies every row.
         assert len(items) == 2
         assert {i["bucketName"] for i in items} == {
             "vams-created-asset-bucket",
             "team-b-imported-bucket",
         }
         assert {i["bucketId"] for i in items} == {BUCKET_ID, OTHER_BUCKET_ID}
-        # Tier 1 is the only enforcement on this route; no object-level check is attempted.
         enforcer.enforceAPI.assert_called_once()
-        enforcer.enforce.assert_not_called()
+        # One Tier 2 read check per row, on the registration's bucket object.
+        assert [c.args for c in enforcer.enforce.call_args_list] == [
+            ({"object__type": "bucket", "bucketId": BUCKET_ID, "bucketName": "vams-created-asset-bucket",
+              "bucketRegion": "", "source": "static"}, "GET"),
+            ({"object__type": "bucket", "bucketId": OTHER_BUCKET_ID, "bucketName": "team-b-imported-bucket",
+              "bucketRegion": "", "source": "static"}, "GET"),
+        ]
         # A caller that asks for no page size gets the listing's own default, not the shared
         # max-items default that validate_pagination_info would otherwise seed.
         assert mock_db.scan.call_args.kwargs["Limit"] == DEFAULT_PAGE_SIZE
