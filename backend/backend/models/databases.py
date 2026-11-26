@@ -238,6 +238,11 @@ class BucketModel(BaseModel, extra='ignore'):
     # Whether S3 Transfer Acceleration is on for the bucket (#1610), as the row records it. A row
     # without the attribute reads as false, so a client's boolean check stays total.
     isAccelerated: bool = False
+    # Where the registration came from: "static" (the deployment's configuration; also a row written
+    # before the field existed) or "runtime" (added at run time), and its state
+    # (common.bucketRegistrations.registration_state): "active", "retired", "pending" or "disabled".
+    source: str = "static"
+    status: str = "active"
 
 class GetBucketsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing buckets"""

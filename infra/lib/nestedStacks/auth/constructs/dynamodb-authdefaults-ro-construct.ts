@@ -1475,8 +1475,6 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                     S: "api",
                 },
             },
-            // Last of the core items: the custom resource ids are index-based, so a core item
-            // added here moves no earlier core resource (only the add-on items after it).
             {
                 entityType: {
                     S: "constraint",
@@ -1538,6 +1536,70 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                 },
                 objectType: {
                     S: "api",
+                },
+            },
+            // Last of the core items: the custom resource ids are index-based, so a core item
+            // added here moves no earlier core resource (only the add-on items after it).
+            // Read of every asset bucket registration. The role holds no route that lists buckets,
+            // so it changes nothing today; a route granted later lists every bucket, as for admin.
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: `initial_${roleNameIDClean}_allow_all_buckets`,
+                },
+                constraintId: {
+                    S: `initial_${roleNameIDClean}_allow_all_buckets`,
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "bucketId",
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}_all_buckets`,
+                                },
+                                operator: {
+                                    S: "contains",
+                                },
+                                value: {
+                                    S: ".*",
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow GET on all asset bucket registrations for basic read only",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-get-all-buckets`,
+                                },
+                                permission: {
+                                    S: "GET",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: `${roleNameIDClean}-allow-all-buckets`,
+                },
+                objectType: {
+                    S: "bucket",
                 },
             },
             ...addonReadOnlyDefaultConstraints(props.config, roleName, roleNameIDClean),

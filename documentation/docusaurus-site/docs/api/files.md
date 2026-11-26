@@ -255,6 +255,8 @@ Permanently deletes a file from the asset. This removes all versions of the file
 
 When Amazon S3 does not delete every version of every file under a prefix, the request returns `400`. The files that were deleted lose their metadata, attributes, version records and auxiliary data, and the remaining files keep theirs, so the delete can be retried. When Amazon S3 does not delete every version of a single file, or its previews cannot be listed, the request returns `400` and the file keeps its previews, auxiliary data and records. When the file is deleted but one of its previews is not, the request returns `400`: the file loses its metadata, version records and auxiliary data, the preview that was kept keeps its version records, and deleting the file again removes it.
 
+A `filePath` of `/` names the top-level asset folder, and so does a folder (`isPrefix` `true`) whose path resolves to the asset's own location folder: for an asset stored at `a1/`, both `/a1/` and `a1/` resolve to it. These requests return `400` with a `message` that contains `Cannot delete the top-level asset folder`, and nothing is deleted. A subfolder named like the asset is deleted by its full key, `/a1/a1/`. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
+
 :::danger[Irreversible Operation]
 This permanently deletes the file and all its versions. Consider using [Archive File](#archive-file) for soft-deletion instead.
 :::
@@ -294,11 +296,11 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                              |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, file not found, or Amazon S3 did not delete every version of the file or of every file under the prefix. |
-| `403`  | Not authorized to delete files in this asset.                                                                                                                            |
-| `500`  | Internal server error.                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                          |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, the top-level asset folder, file not found, or Amazon S3 did not delete every version of the file or of every file under the prefix. |
+| `403`  | Not authorized to delete files in this asset.                                                                                                                                                        |
+| `500`  | Internal server error.                                                                                                                                                                               |
 
 ---
 
@@ -307,6 +309,8 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 `DELETE /database/{databaseId}/assets/{assetId}/archiveFile`
 
 Soft-deletes a file by creating an S3 delete marker. The file can be restored using [Unarchive File](#unarchive-file).
+
+A `filePath` of `/`, or a folder (`isPrefix` `true`) whose path resolves to the asset's own location folder, such as `/a1/` or `a1/` for an asset stored at `a1/`, returns `400` with a `message` that contains `Cannot archive the top-level asset folder`, and nothing is archived. A subfolder named like the asset is archived by its full key, `/a1/a1/`. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
 
 **Request Parameters:**
 
@@ -341,11 +345,11 @@ Soft-deletes a file by creating an S3 delete marker. The file can be restored us
 
 **Error Responses:**
 
-| Status | Description                                                |
-| ------ | ---------------------------------------------------------- |
-| `400`  | Invalid parameters, or file not found or already archived. |
-| `403`  | Not authorized to archive files in this asset.             |
-| `500`  | Internal server error.                                     |
+| Status | Description                                                                            |
+| ------ | -------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, the top-level asset folder, or file not found or already archived. |
+| `403`  | Not authorized to archive files in this asset.                                         |
+| `500`  | Internal server error.                                                                 |
 
 ---
 

@@ -2552,6 +2552,10 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
 
+    # A prefix that resolves to the location folder itself is the top-level asset folder
+    if is_prefix and is_folder_location(base_key) and full_key == base_key:
+        raise VAMSGeneralErrorResponse("Cannot delete the top-level asset folder")
+
     # In a single-file asset a folder is selected by asset-relative path (a folder named like the
     # file also holds the companion entry listed inside it)
     folder = None
@@ -2753,6 +2757,10 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
 
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+
+    # A prefix that resolves to the location folder itself is the top-level asset folder
+    if is_prefix and is_folder_location(base_key) and full_key == base_key:
+        raise VAMSGeneralErrorResponse("Cannot archive the top-level asset folder")
 
     # In a single-file asset a folder is selected by asset-relative path (a folder named like the
     # file also holds the companion entry listed inside it)
