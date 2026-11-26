@@ -1377,6 +1377,25 @@ describe("the v2.6 to v2.7 assetLocationFileToFolder step", () => {
         expect(readme).toContain("`AbortIncompleteMultipartUpload`");
     });
 
+    it("reads a path in the asset by one leading slash, as the backend's object_key_for_path does", () => {
+        // '//x' is the key with an empty segment after the location; stripping every '/' made it 'x' (#1977)
+        const mirror = module.slice(module.indexOf("def object_key_for_path("));
+        expect(mirror.slice(0, mirror.indexOf("\ndef "))).toContain("relative = relative[1:]");
+        const shipped = backend("common/assetLocations.py");
+        const backendPath = shipped.slice(shipped.indexOf("def object_key_for_path("));
+        expect(backendPath.slice(0, backendPath.indexOf("\ndef "))).toContain(
+            "relative = relative[1:]"
+        );
+        for (const use of [
+            "if object_key_for_path(target, old) in keys_with_versions",
+            "return object_key_for_path(target, old) in target_keys",
+            "if legacy_form(old) is not None:",
+        ]) {
+            expect(module).toContain(use);
+        }
+        expect(module).not.toMatch(/target \+ old\.lstrip\('\/'\)|old\.lstrip\('\/'\)\] =/);
+    });
+
     it("ships with no resolutions, so a copied config never moves a file", () => {
         expect(config.asset_location_file_to_folder_resolutions).toBeNull();
         expect(config.dry_run).toBe(true);

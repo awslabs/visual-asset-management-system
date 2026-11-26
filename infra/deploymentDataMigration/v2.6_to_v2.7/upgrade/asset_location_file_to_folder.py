@@ -53,8 +53,11 @@ follow the stream re-sync them. A search document at an old path is not removed 
 no file there); the report names each such document id. A dry run counts what it would move and touch.
 
 The location rules below mirror ``backend/backend/common/assetLocations.py`` (``contains``,
-``relative_path_in``, ``object_key_for``, ``locations_share_key``); the step runs on an operator machine and
-does not import backend code.
+``relative_path_in``, ``object_key_for``, ``object_key_for_path``, ``locations_share_key``); the step runs on an
+operator machine and does not import backend code. Every path it derives or reads back is a path in the asset
+with exactly one leading ``/`` as the marker, as the backend reads a stored path: ``//x`` names the key with an
+empty segment right after the location, never ``x``, and a record form without the leading ``/`` exists only
+for a path with exactly one (``legacy_form``).
 """
 
 import bisect
@@ -222,21 +225,41 @@ def relative_path_in(location: Optional[str], object_key: Optional[str]) -> Opti
 
 def object_key_for(location: Optional[str], relative_path: Optional[str]) -> Optional[str]:
     loc = normalize_location(location)
+    relative = (relative_path or '').lstrip('/')
+    if loc and not loc.endswith('/') and relative and (
+            relative == loc or relative.startswith(loc + '/') or _is_preview_of(loc, relative)):
+        return relative
+    return object_key_for_path(loc, relative)
+
+
+def object_key_for_path(location: Optional[str], relative_path: Optional[str]) -> Optional[str]:
+    """The key a path in the asset names, the path read only as a path: exactly one leading ``/`` is dropped, so
+    ``//x`` is ``{folder}/x``, and a path that spells one of the location's keys is not taken as that key."""
+    loc = normalize_location(location)
     if not loc:
         return None
-    relative = (relative_path or '').lstrip('/')
+    relative = relative_path or ''
+    if relative.startswith('/'):
+        relative = relative[1:]
     if loc.endswith('/'):
         return loc + relative
     if not relative:
         return None
-    if relative == loc or relative.startswith(loc + '/') or _is_preview_of(loc, relative):
-        return relative
     name = _file_name(loc)
     for body, preview in ((relative, ''), _split_preview(relative)):
         segments = body.split('/')
         if all(segment == name for segment in segments):
             return loc + '/'.join([''] + [name] * (len(segments) - 1)) + preview
     return loc + '/' + relative
+
+
+def legacy_form(path: str) -> Optional[str]:
+    """The form a record written before paths carried their leading ``/`` keys ``path`` by: the path without
+    it. Only a path with exactly one leading ``/`` has one: ``x`` is ``/x``, while ``//x`` (an empty segment)
+    has none, since ``/x`` is the path of another file."""
+    if path.startswith('/') and not path.startswith('//'):
+        return path[1:]
+    return None
 
 
 _ONE_KEY, _PREFIX, _PREVIEWS = 'key', 'prefix', 'previews'
@@ -334,7 +357,7 @@ def search_paths(file_key: str, target: str, moves: Dict[str, str], keys: Set[st
 def path_collisions(target: str, moves: Dict[str, str], keys_with_versions: Set[str]) -> List[str]:
     """The old paths that name another stored key under the folder rules of ``target``: a record left there
     would describe that key, and a record moved away could not be told from one written for it."""
-    return sorted(old for old in moves if target + old.lstrip('/') in keys_with_versions)
+    return sorted(old for old in moves if object_key_for_path(target, old) in keys_with_versions)
 
 
 #######################
@@ -1173,7 +1196,8 @@ class RecordMover:
                 self._outcome('all tables', old, new, 'left', 'the old path names a file in the new location')
                 continue
             forms[old] = new
-            forms[old.lstrip('/')] = new.lstrip('/')
+            if legacy_form(old) is not None:
+                forms[legacy_form(old)] = legacy_form(new) if legacy_form(new) is not None else new
             self.counts['search-stale'] += 1
             self.report(dict(self.base, part='search', **{'from': old, 'to': new},
                              action='the search document at the old path is not removed',
@@ -1234,7 +1258,7 @@ class RecordMover:
         """Replace the S3 version ids of ``path`` (old to new) in its version records and history."""
         if not version_map:
             return
-        forms = (path, path.lstrip('/'))
+        forms = (path,) + ((legacy_form(path),) if legacy_form(path) is not None else ())
         for form in forms:
             self.move_vectors(form, form, version_map)
 
@@ -1543,7 +1567,7 @@ def _execute(dynamodb_client, s3_client, cfg: Dict, context: Context, candidate:
         target_keys = keys
 
         def guard(old: str) -> bool:
-            return target + old.lstrip('/') in target_keys
+            return object_key_for_path(target, old) in target_keys
 
         mover.move_paths(moves, guard)
     if failures() != errors_before:
