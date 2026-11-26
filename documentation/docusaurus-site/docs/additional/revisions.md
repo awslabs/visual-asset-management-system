@@ -115,6 +115,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Note: A path with a leading `/` is always the path in the asset; a path without one that starts with the asset's location key is the full key. The licensed VEERUM viewer's point cloud loading gets the same fix.
 -   **Sign-in with Amazon Cognito federation** — The [FAQ](../troubleshooting/faq.md#how-do-i-connect-vams-to-my-existing-authentication-system), [API authentication](../api/authentication.md), [configuration reference](../deployment/configuration-reference.md), [deployment](../deployment/deploy-the-solution.md) and [getting started](../user-guide/getting-started.mdx) pages say that with SAML or OIDC federation the web login page shows only the federated button, and that native user pool accounts, including the initial administrator, sign in with VamsCLI. (issue #652)
 -   **File page version lookup** — A file opened from the file manager before its version loaded is looked up once, a failed lookup is not repeated, and a late answer for a file left behind no longer replaces the file opened since. (issue #519)
+-   **File page Preview option** — The file page offers the Preview option for any file that has a preview file, whichever of the file and the asset details loads first, and a version opened from the file's versions list keeps it. (issue #1673)
 
 **Other changes:**
 
