@@ -327,6 +327,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **CLI** The `vamscli asset-version create` help example that uses `--files` now includes `--no-use-latest-files`, without which the example fails ([#1941](https://github.com/awslabs/visual-asset-management-system/issues/1941))
 -   **CLI** `vamscli file upload` and `vamscli sync file push` print why each failed file was not stored (a permission denial, a file key over the upload bound, a refusal at completion, a part Amazon S3 did not accept) instead of the file name alone, and `--json-output` lists the reasons per upload sequence under `failed_file_errors`. ([#1072](https://github.com/awslabs/visual-asset-management-system/issues/1072))
 -   **Assets** Uploads of the same file to one asset that complete at the same time each store a version of the file. They shared one staged copy, so most or all of them failed with `Upload ID mismatch.` ([#1928](https://github.com/awslabs/visual-asset-management-system/issues/1928))
     -   Note: each upload is now staged in its own folder under `temp-uploads/`, so a file key uploaded through VAMS can be at most 998 bytes in a bucket registered at its root (1,011 before), less the bucket's base prefix otherwise. A longer key is refused when the upload starts, with a message that names the limit. ([#1928](https://github.com/awslabs/visual-asset-management-system/issues/1928))
