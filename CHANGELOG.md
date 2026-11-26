@@ -931,6 +931,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Pipelines** Image to 3D decodes its input images as PNG or JPEG only: a file of another format is refused when the job validates its input, whatever the file is named, before any model loads. The Stable3DGen image installs pillow 13.0.0, and no longer installs gradio and the 28 packages only gradio needs; gradio is used only by Stable3DGen's demo app, which the pipeline does not run. ([#1863](https://github.com/awslabs/visual-asset-management-system/issues/1863))
 -   **Backend tests** The Physna add-on tests' `handlers.auth` stub carries `AUTH_METHOD_JWT` and `AUTH_METHOD_API_KEY`, so a backend test run that collects the Physna tests before another test imports `customLogging.auditLogging` (for example `tests/handlers` alone) no longer fails at collection. ([#1451](https://github.com/awslabs/visual-asset-management-system/issues/1451))
 -   **Backend tests** The audit log search service tests take their timestamps when each test runs instead of when the module is imported, so a backend test run that reaches them more than about 1,000 seconds after collection no longer fails. ([#1752](https://github.com/awslabs/visual-asset-management-system/issues/1752))
+-   **Pipelines** The 3D Preview Thumbnail `finite_points` docstring says what the function returns and when it raises, instead of describing the earlier empty-preview defect. ([#1518](https://github.com/awslabs/visual-asset-management-system/issues/1518))
 
 ### Known Outstanding Issues
 
