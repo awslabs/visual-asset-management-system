@@ -146,7 +146,8 @@ describe("Add Files page", () => {
             expect.objectContaining({
                 databaseId: "db1",
                 assetId: "a1",
-                prefix: "scene/",
+                // The destination as its path in the asset; the API drops its one leading "/" (#1977)
+                prefix: "/scene/",
                 includeArchived: true,
             })
         );
