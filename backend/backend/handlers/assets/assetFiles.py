@@ -3475,17 +3475,10 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
     nested = nested_locations_for(asset, bucket, base_key)
     refuse_nested_key(nested, full_key, "File not found.")
 
-    # Get the relative path for comparison with fileKey in version records.
-    # fileKey is stored as the path relative to the asset prefix (e.g., "model.glb"
-    # or "subfolder/model.glb"), while file_path may include the assetId prefix and
-    # may or may not carry a leading slash. Strip the base_key prefix from the
-    # resolved key to get the same relative path format.
-    relative_path_for_lookup = full_key
-    if not is_folder_location(base_key):
-        relative_path_for_lookup = relative_path_in(base_key, full_key) or full_key
-    elif base_key and relative_path_for_lookup.startswith(base_key):
-        relative_path_for_lookup = relative_path_for_lookup[len(base_key):]
-    relative_path_for_lookup = relative_path_for_lookup.lstrip('/')
+    # The key version records are compared by (version_entry_key): the file's path in the asset with
+    # exactly one leading '/' dropped, 'x' for '{location}x' and '/x' for '{location}/x' (#1977).
+    listed_path = relative_path_in(base_key, full_key) if base_key else None
+    relative_path_for_lookup = version_entry_key(listed_path if listed_path is not None else full_key)
     
     # Get object metadata
     metadata = get_s3_object_metadata(bucket, full_key, include_versions)
@@ -3529,7 +3522,8 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
             # Change-history records for this asset, keyed by (filePath, versionId),
             # for in-memory per-version lookup. filePath uses a leading slash.
             history_map = query_asset_version_history_map(databaseId, assetId)
-            history_path_key = normalize_history_file_path(relative_path_for_lookup)
+            # The history ledger keys a file by its listed path ('//x' for '{location}/x')
+            history_path_key = '/' + relative_path_for_lookup
 
             # Query the GSI to get all version file records for this database+asset
             all_version_file_records = []

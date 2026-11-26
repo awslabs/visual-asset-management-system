@@ -447,7 +447,9 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
             if key.endswith('/') or not contains(location, key) or (nested and not nested.keep(key)):
                 continue
 
-            relative_key = relative_path_in(location, key).lstrip('/')
+            # Stored form (stored_version_entry_key): 'x' for '{location}x', '//x' for '{location}/x', so
+            # the two are two entries (#1977)
+            relative_key = stored_version_entry_key(relative_path_in(location, key))
             result.append({
                 'relativeKey': relative_key,
                 'key': key,
@@ -480,7 +482,7 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
                 if key.endswith('/') or not contains(location, key) or (nested and not nested.keep(key)):
                     continue
 
-                relative_key = relative_path_in(location, key).lstrip('/')
+                relative_key = stored_version_entry_key(relative_path_in(location, key))
                 # Most recent content version behind the delete marker (if any).
                 candidates = content_versions_by_key.get(key, [])
                 latest_content = max(candidates, key=lambda v: v['LastModified'], default=None)

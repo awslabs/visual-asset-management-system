@@ -207,17 +207,18 @@ def resolve_asset_file_key(asset_base_key: str, raw_key: Optional[str]) -> str:
 
 
 def asset_relative_key(final_key: str, asset_base_key: str) -> str:
-    """The key relative to the asset prefix, without a leading slash.
+    """The file's path in the asset (leading ``/``), the path an asset-version snapshot is searched by.
 
-    This is how ``fileKey`` / ``relativeKey`` is matched in asset-version snapshot records.
+    The snapshot lookup reads it with exactly one leading ``/`` dropped (``version_entry_key``), so
+    ``{prefix}/x`` (``//x``) and ``{prefix}x`` (``/x``) are two files (#1977). A key outside the asset's
+    prefix is returned as it is.
     """
     if asset_base_key and not is_folder_location(asset_base_key):
-        return (relative_path_in(asset_base_key, final_key) or final_key).lstrip('/')
+        return relative_path_in(asset_base_key, final_key) or final_key
     prefix = asset_prefix(asset_base_key)
-    relative = final_key
-    if relative.startswith(prefix):
-        relative = relative[len(prefix):]
-    return relative.lstrip('/')
+    if final_key.startswith(prefix):
+        return '/' + final_key[len(prefix):]
+    return final_key
 
 
 #######################

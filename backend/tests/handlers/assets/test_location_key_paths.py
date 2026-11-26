@@ -305,7 +305,7 @@ class TestStream:
         event["pathParameters"]["proxy"] = "/A1/cloud.las"
         event["queryStringParameters"] = {"assetVersionId": "2"}
         m.lambda_handler(event, None)
-        m.resolve_file_version_from_asset_version.assert_called_once_with("db1", "asset1", "2", "A1/cloud.las")
+        m.resolve_file_version_from_asset_version.assert_called_once_with("db1", "asset1", "2", "/A1/cloud.las")
 
     @pytest.mark.parametrize("method", ["GET", "HEAD"])
     @pytest.mark.parametrize("asset_exists", [True, False])
@@ -470,6 +470,19 @@ class TestAnEmptySegmentKeyIsReachableByItsPath:
         assert m.DownloadAssetRequestModel(downloadType="assetFile", key=value).key == value
         assert m.DownloadAssetRequestModel(downloadType="assetFile", keys=[value]).keys
         assert resolve_asset_file_key(LOCATION, value) == expected
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD"])
+    @pytest.mark.parametrize("proxy,searched", [("//cloud.las", "//cloud.las"), ("/cloud.las", "/cloud.las"),
+                                                (EMPTY_SEGMENT_FILE, "//cloud.las")])
+    def test_a_version_pin_searches_the_snapshot_by_the_files_own_path(self, stream, method, proxy, searched):
+        # #1977 Part C: the snapshot lookup drops one leading '/', so '//cloud.las' finds its own entry
+        m, s3 = stream
+        m.resolve_file_version_from_asset_version = MagicMock(return_value="v-pinned")
+        event = _rest_event({"Range": "bytes=0-9"}, method=method)
+        event["pathParameters"]["proxy"] = proxy
+        event["queryStringParameters"] = {"assetVersionId": "2"}
+        m.lambda_handler(event, None)
+        m.resolve_file_version_from_asset_version.assert_called_once_with("db1", "asset1", "2", searched)
 
     @pytest.mark.parametrize("method", ["GET", "HEAD"])
     @pytest.mark.parametrize("proxy,expected", [("//cloud.las", EMPTY_SEGMENT_FILE), ("/cloud.las", ROOT_FILE)])

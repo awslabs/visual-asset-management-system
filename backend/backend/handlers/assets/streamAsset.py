@@ -143,9 +143,10 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
 
 
 def relative_file_key_in(asset_base_key: str, object_key: str) -> str:
-    """The key a version snapshot records for a resolved file key: its path in the asset without the
-    leading '/' (common.assetLocations.relative_path_in)."""
-    return (relative_path_in(asset_base_key, object_key) or object_key).lstrip('/')
+    """The path a version snapshot is searched by for a resolved file key: its path in the asset
+    (common.assetLocations.relative_path_in), which the snapshot lookup reads with exactly one leading '/'
+    dropped (assetVersions.version_entry_key), so '{location}/x' ('//x') is not '{location}x' ('/x')."""
+    return relative_path_in(asset_base_key, object_key) or object_key
 
 def held_by_nested_asset(asset_bucket, asset_base_key, object_key) -> bool:
     """Whether a resolved key is held by another asset's location nested in this asset's location: it is

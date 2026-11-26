@@ -12,5 +12,21 @@
  * stored at "A1/", the snapshot path "A1/cloud.las" names the file in the subfolder "A1/" (key
  * "A1/A1/cloud.las"), not the root file "A1/cloud.las" (#1943). The API decides what the path names.
  */
-export const versionFilePath = (relativeKey: unknown): string =>
-    "/" + String(relativeKey ?? "").replace(/^\/+/, "");
+export const versionFilePath = (relativeKey: unknown): string => {
+    const key = String(relativeKey ?? "");
+    // Exactly one leading "/" is dropped first, as the API reads a path: "x" and a legacy "/x" are "/x", and
+    // "//x" (the key with an empty segment after the location, "A1//x") stays "//x" (#1977)
+    return "/" + (key.startsWith("/") ? key.slice(1) : key);
+};
+
+/**
+ * The form a snapshot stores a file's key in, and the form a file of the asset is matched against a
+ * snapshot in: exactly one leading "/" dropped, then "/" put back when the path still starts with one. So
+ * "x", "/x" (a legacy entry, or a file the file list shows at "/x") are "x", and "//x" is "//x", another
+ * file (#1977). Mirrors the backend's assetVersions.stored_version_entry_key.
+ */
+export const storedVersionEntryKey = (path: unknown): string => {
+    const value = String(path ?? "");
+    const key = value.startsWith("/") ? value.slice(1) : value;
+    return key.startsWith("/") ? "/" + key : key;
+};
