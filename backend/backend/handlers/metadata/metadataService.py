@@ -674,7 +674,7 @@ def file_record_path(database_id: str, asset_id: str, file_path: str) -> str:
     file panel, without one); the request models keep the form the caller sent. The path names a key by the
     rule of the file routes (``AssetFilePaths.request_key_for``: a leading ``/`` marks a path in the asset,
     never a full key) and the records are keyed by that key's listed path, so both forms of one file name the
-    same records, and ``/{location}x`` keys the file of a subfolder named like the location (#1943). When the
+    same records, and ``/{location}x`` keys the file of a subfolder named like the location. When the
     asset or its location cannot be read, or the path names no key the location holds, the path is used as
     given with a leading slash, so existence and authorization stay with the caller's checks."""
     given = file_path if file_path.startswith('/') else '/' + file_path

@@ -2252,7 +2252,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         delete_file_metadata(databaseId, assetId, relative_path)
 
     # Clean up version snapshot records in DynamoDB for deleted files, by their listed paths: a request
-    # that names a file by its full key must not delete the records of the file listed at that path (#1912)
+    # that names a file by its full key must not delete the records of the file listed at that path
     delete_file_version_records(databaseId, assetId, deleted_paths)
 
     # Send email for asset file change
@@ -2725,7 +2725,7 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     copy_auxiliary_files(aux_source[0], aux_dest, *aux_source[1:])
 
     # Copy metadata and attributes to the destination (merge with existing); both files are keyed by the
-    # path they are listed at, whichever form the request named them by (#1912)
+    # path they are listed at, whichever form the request named them by
     source_rel = relative_path_of(source_paths, source_key, source_path).lstrip('/')
     dest_rel = relative_path_of(dest_paths, dest_key, dest_path).lstrip('/')
     actual_dest_asset = dest_asset_id if is_cross_asset else assetId
@@ -2885,7 +2885,7 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     )
 
     # Move metadata and attributes: copy to new path (merge), then delete from old path, keyed by the
-    # paths the files are listed at, whichever form the request named them by (#1912)
+    # paths the files are listed at, whichever form the request named them by
     source_rel = relative_path_of(paths, source_key, source_path).lstrip('/')
     dest_rel = relative_path_of(paths, dest_key, dest_path).lstrip('/')
     metadata_moved = _copy_file_metadata_to_destination(

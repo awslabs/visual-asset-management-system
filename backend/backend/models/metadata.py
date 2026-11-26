@@ -838,7 +838,7 @@ class GetFileMetadataRequestModel(BaseModel, extra='ignore'):
         from common.validators import validate
 
         # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a path
-        # without one is the file's full key when the asset holds it (metadataService.file_record_path, #1943).
+        # without one is the file's full key when the asset holds it (metadataService.file_record_path).
         # The validator reads a path with a leading slash, so it checks a copy that has one.
         file_path = values.get('filePath')
         validated_path = '/' + file_path if file_path and not file_path.startswith('/') else file_path
@@ -873,7 +873,7 @@ class CreateFileMetadataRequestModel(BaseModel, extra='ignore'):
         from common.validators import validate
         
         # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a path
-        # without one is the file's full key when the asset holds it (metadataService.file_record_path, #1943).
+        # without one is the file's full key when the asset holds it (metadataService.file_record_path).
         # The validator reads a path with a leading slash, so it checks a copy that has one.
         file_path = values.get('filePath')
         validated_path = '/' + file_path if file_path and not file_path.startswith('/') else file_path
@@ -926,7 +926,7 @@ class UpdateFileMetadataRequestModel(BaseModel, extra='ignore'):
         from common.validators import validate
         
         # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a path
-        # without one is the file's full key when the asset holds it (metadataService.file_record_path, #1943).
+        # without one is the file's full key when the asset holds it (metadataService.file_record_path).
         # The validator reads a path with a leading slash, so it checks a copy that has one.
         file_path = values.get('filePath')
         validated_path = '/' + file_path if file_path and not file_path.startswith('/') else file_path
@@ -976,7 +976,7 @@ class DeleteFileMetadataRequestModel(BaseModel, extra='ignore'):
         from common.validators import validate
         
         # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a path
-        # without one is the file's full key when the asset holds it (metadataService.file_record_path, #1943).
+        # without one is the file's full key when the asset holds it (metadataService.file_record_path).
         # The validator reads a path with a leading slash, so it checks a copy that has one.
         file_path = values.get('filePath')
         validated_path = '/' + file_path if file_path and not file_path.startswith('/') else file_path

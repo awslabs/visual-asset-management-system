@@ -361,7 +361,7 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
 
                 # Sent as the file's path in the asset, with a leading '/', so the upload handler reads it
                 # as a path and never as one of the asset's keys: an output written into a subfolder named
-                # like the asset's location lands in that subfolder (#1943). The results are read back
+                # like the asset's location lands in that subfolder. The results are read back
                 # without the '/' (_result_relative_key).
                 file_name = "/" + file_name.lstrip("/")
             else:
@@ -579,7 +579,7 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
             
             # Add filePath and type for file metadata/attributes. The path is the file's path in the
             # asset, sent with a leading '/' so the metadata service reads it as a path and never as one
-            # of the asset's keys (a file in a subfolder named like the location keeps its own records, #1943)
+            # of the asset's keys (a file in a subfolder named like the location keeps its own records)
             if file_path:
                 request_body['filePath'] = "/" + file_path.lstrip("/")
                 request_body['type'] = metadata_type

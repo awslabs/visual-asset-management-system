@@ -201,7 +201,7 @@ class AssetFilePaths:
 
         A value with a leading ``/`` is the file's path in the asset (one ``/`` dropped), never a full key, so
         ``/{location}x`` is the file ``{location}{location}x`` of a subfolder named like the location, and in a
-        single-file asset ``/{file key}/x`` is the companion entry ``{file key}/{file key}/x`` (#1943). A value
+        single-file asset ``/{file key}/x`` is the companion entry ``{file key}/{file key}/x``. A value
         without one is the file's full key when it is a key under the location folder (single file: under
         ``{file key}/``) or, for the listed object, the location key itself; any other value is the path in the
         asset."""
