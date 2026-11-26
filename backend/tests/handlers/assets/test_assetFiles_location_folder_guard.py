@@ -7,7 +7,8 @@ subfolder, including one named like the asset, still deletes and archives.
 
 Layout (bucket `vams-guard`, versioned): asset `A` (database db1) at `A/` holds `x.txt`, `sub/y.txt` and a
 root subfolder named like the asset, `A/z.txt` (key `A/A/z.txt`). Asset `A2` (db1) sits below a parent
-folder, at `base/A2/`, and holds `x.txt` and `sub/y.txt`.
+folder, at `base/A2/`, and holds `x.txt` and `sub/y.txt`. Asset `M` (db1) was created from one object: its
+location `m/model.glb` is not a folder, so the guard does not apply, and its companion folder holds `sub/n.txt`.
 """
 
 import sys
@@ -35,9 +36,12 @@ fa = sys.modules['common.fileAttribution']
 BUCKET = "vams-guard"
 A_KEYS = ("A/x.txt", "A/sub/y.txt", "A/A/z.txt")
 A2_KEYS = ("base/A2/x.txt", "base/A2/sub/y.txt")
+M_KEYS = ("m/model.glb", "m/model.glb/sub/n.txt")
+ALL_KEYS = A_KEYS + A2_KEYS + M_KEYS
 ROWS = {
     "A": asset_row("db1", "A", "reg-1", "A/", BUCKET),
     "A2": asset_row("db1", "A2", "reg-1", "base/A2/", BUCKET),
+    "M": asset_row("db1", "M", "reg-1", "m/model.glb", BUCKET),
 }
 CLAIMS = {"tokens": ["tester"], "roles": []}
 DELETE_REFUSAL = ": Cannot delete the top-level asset folder"
@@ -70,7 +74,7 @@ def af(monkeypatch):
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket=BUCKET)
         client.put_bucket_versioning(Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"})
-        for key in A_KEYS + A2_KEYS:
+        for key in ALL_KEYS:
             client.put_object(Bucket=BUCKET, Key=key, Body=b"v1")
             client.put_object(Bucket=BUCKET, Key=key, Body=b"v2")
         monkeypatch.setattr(al, "index_ready", lambda name: True)
@@ -144,25 +148,53 @@ class TestAPrefixThatNamesTheLocationFolderIsRefused:
 class TestARealSubfolderStillDeletesAndArchives:
     def test_a_subfolder_delete_removes_only_its_files(self, af):
         af.delete_file("db1", "A", "/sub/", True, True, CLAIMS)
-        assert _version_keys(af.test_client) == sorted(set(A_KEYS + A2_KEYS) - {"A/sub/y.txt"})
+        assert _version_keys(af.test_client) == sorted(set(ALL_KEYS) - {"A/sub/y.txt"})
 
     def test_a_subfolder_archive_archives_only_its_files(self, af):
         af.archive_file("db1", "A", "/sub/", True, CLAIMS)
-        assert _live_keys(af.test_client) == sorted(set(A_KEYS + A2_KEYS) - {"A/sub/y.txt"})
-        assert _version_keys(af.test_client) == sorted(A_KEYS + A2_KEYS)
+        assert _live_keys(af.test_client) == sorted(set(ALL_KEYS) - {"A/sub/y.txt"})
+        assert _version_keys(af.test_client) == sorted(ALL_KEYS)
 
     def test_the_subfolder_named_like_the_asset_deletes_by_its_full_key(self, af):
         af.delete_file("db1", "A", "/A/A/", True, True, CLAIMS)
-        assert _version_keys(af.test_client) == sorted(set(A_KEYS + A2_KEYS) - {"A/A/z.txt"})
+        assert _version_keys(af.test_client) == sorted(set(ALL_KEYS) - {"A/A/z.txt"})
 
     def test_the_subfolder_named_like_the_asset_archives_by_its_full_key(self, af):
         af.archive_file("db1", "A", "/A/A/", True, CLAIMS)
-        assert _live_keys(af.test_client) == sorted(set(A_KEYS + A2_KEYS) - {"A/A/z.txt"})
+        assert _live_keys(af.test_client) == sorted(set(ALL_KEYS) - {"A/A/z.txt"})
 
     def test_a_subfolder_of_an_asset_below_a_parent_folder_deletes(self, af):
         af.delete_file("db1", "A2", "/sub/", True, True, CLAIMS)
-        assert _version_keys(af.test_client) == sorted(set(A_KEYS + A2_KEYS) - {"base/A2/sub/y.txt"})
+        assert _version_keys(af.test_client) == sorted(set(ALL_KEYS) - {"base/A2/sub/y.txt"})
 
     def test_a_single_file_delete_is_unchanged(self, af):
         af.delete_file("db1", "A", "/x.txt", False, True, CLAIMS)
-        assert _version_keys(af.test_client) == sorted(set(A_KEYS + A2_KEYS) - {"A/x.txt"})
+        assert _version_keys(af.test_client) == sorted(set(ALL_KEYS) - {"A/x.txt"})
+
+    def test_a_single_file_archive_is_unchanged(self, af):
+        af.archive_file("db1", "A", "/x.txt", False, CLAIMS)
+        assert _live_keys(af.test_client) == sorted(set(ALL_KEYS) - {"A/x.txt"})
+        assert _version_keys(af.test_client) == sorted(ALL_KEYS)
+
+
+@pytest.mark.unit
+class TestASingleObjectAssetIsNotGuarded:
+    """The object's own key is the location here, so a request naming the object resolves to the location key
+    and must still act on the object."""
+
+    def test_the_object_deletes_by_its_path(self, af):
+        af.delete_file("db1", "M", "/model.glb", False, True, CLAIMS)
+        assert _version_keys(af.test_client) == sorted(set(ALL_KEYS) - {"m/model.glb"})
+
+    def test_the_object_archives_by_its_path(self, af):
+        af.archive_file("db1", "M", "/model.glb", False, CLAIMS)
+        assert _live_keys(af.test_client) == sorted(set(ALL_KEYS) - {"m/model.glb"})
+        assert _version_keys(af.test_client) == sorted(ALL_KEYS)
+
+    def test_a_companion_subfolder_deletes_with_a_prefix(self, af):
+        af.delete_file("db1", "M", "/sub/", True, True, CLAIMS)
+        assert _version_keys(af.test_client) == sorted(set(ALL_KEYS) - {"m/model.glb/sub/n.txt"})
+
+    def test_a_companion_subfolder_archives_with_a_prefix(self, af):
+        af.archive_file("db1", "M", "/sub/", True, CLAIMS)
+        assert _live_keys(af.test_client) == sorted(set(ALL_KEYS) - {"m/model.glb/sub/n.txt"})
