@@ -120,6 +120,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Zero-byte uploads complete** — An upload whose files are all zero bytes, or a batch of only empty files inside a larger upload, completes instead of staying In Progress. (issue #787)
 -   **File page version lookup** — A file opened from the file manager before its version loaded is looked up once, a failed lookup is not repeated, and a late answer for a file left behind no longer replaces the file opened since. (issue #519)
 -   **File page Preview option** — The file page offers the Preview option for any file that has a preview file, whichever of the file and the asset details loads first, and a version opened from the file's versions list keeps it. (issue #1673)
+-   **Role-name rule** — The [permissions](../user-guide/permissions.md#creating-a-custom-role) user guide, the CLI troubleshooting page and the API reference give the role-name rule the API applies: 1-256 characters of letters, numbers, spaces, hyphens, periods and underscores. (issue #378)
 -   **A folder delete that names the whole asset** — A permanent delete or archive of a folder whose path resolves to the asset's own location folder, such as `/a1/` for an asset stored at `a1/`, is refused like `/` instead of deleting or archiving every file in the asset. A root subfolder named like the asset is deleted or archived by its full key, `/a1/a1/`, from the CLI or API. (issue #1943, PR #2005)
 
 **Other changes:**
