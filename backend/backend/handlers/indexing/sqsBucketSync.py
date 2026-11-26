@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Tuple
 from botocore.exceptions import ClientError
 from botocore.config import Config as BotoConfig
 from boto3.dynamodb.conditions import Key
-from common.validators import validate
+from common.validators import object_name_regex, validate
 from common.eventLogSummary import event_log_summary
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
@@ -1251,10 +1251,38 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict, 
         return None
 
 
+# The longest assetName and description an asset takes (CreateAssetRequestModel)
+AUTO_CREATED_ASSET_NAME_MAX_LENGTH = 256
+AUTO_CREATED_ASSET_DESCRIPTION_MAX_LENGTH = 256
+# What stands in for each folder-name character the asset name rule refuses
+AUTO_CREATED_ASSET_NAME_REPLACEMENT = "_"
+
+
+def auto_created_asset_name(asset_id: str) -> str:
+    """The name of the asset bucket sync creates for the first-level folder `asset_id` (#1813).
+
+    The asset ID is the folder name, which the asset ID rule (`filename_pattern`) admits with commas,
+    apostrophes and non-ASCII letters; the asset name rule (`object_name_pattern`) refuses those. The folder
+    name is not trusted to satisfy the name rule: each character the rule refuses is replaced by `_`, one for
+    one, so `site,a` is named `site_a` and a name the rule accepts is kept as it is.
+    """
+    name = "".join(character if object_name_regex.fullmatch(character) else AUTO_CREATED_ASSET_NAME_REPLACEMENT
+                   for character in asset_id)
+    return name[:AUTO_CREATED_ASSET_NAME_MAX_LENGTH]
+
+
+def auto_created_asset_description(asset_id: str) -> str:
+    """The description of the asset bucket sync creates for `asset_id`, cut to the description limit."""
+    return f"Auto-created asset for {asset_id}"[:AUTO_CREATED_ASSET_DESCRIPTION_MAX_LENGTH]
+
+
 def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optional[str]:
     """
     Create a new asset
-    
+
+    The asset ID is the folder name; the name and description are derived from it to the asset rules
+    (`auto_created_asset_name`, `auto_created_asset_description`).
+
     Args:
         bucket_id: The bucket ID
         database_id: The database ID
@@ -1272,13 +1300,15 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
     holders = database_asset_id_rows(database_id, asset_id)
     if holders:
         raise AssetIdInUseError(asset_id, holders)
+    asset_name = auto_created_asset_name(asset_id)
+    description = auto_created_asset_description(asset_id)
     try:
         # Create asset request model
         request_model = CreateAssetRequestModel(
             databaseId=database_id,
             assetId=asset_id,
-            assetName=asset_id,
-            description=f"Auto-created asset for {asset_id}",
+            assetName=asset_name,
+            description=description,
             isDistributable=True,
             tags=[]
         )
@@ -1293,8 +1323,8 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         new_asset = {
             'databaseId': database_id,
             'assetId': asset_id,
-            'assetName': asset_id,
-            'description': f"Auto-created asset for {asset_id}",
+            'assetName': request_model.assetName,
+            'description': request_model.description,
             'isDistributable': True,
             'tags': [],
             'bucketId': bucket_id
