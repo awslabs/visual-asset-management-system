@@ -30,6 +30,7 @@ import {
 } from "../api/queries";
 import { resolvePipelineParams } from "./resolveTemplate";
 import { LAUNCH_OUTCOME_UNKNOWN_MESSAGE } from "../api/executions";
+import { assetFilePath } from "../../../utils/assetFilePath";
 import type {
     Workflow,
     WorkflowSystemConfig,
@@ -264,10 +265,11 @@ const arityViolation = (arity: string, count: number): string | null => {
 
 /**
  * The selected entries a later step is certain to receive, one per input row the run stores. The run
- * keeps one row per database, asset and normalized file key (a single leading slash), and a later
- * step's manifest starts from those rows, so two versions or two spellings of one file reach it as
- * ONE entry; its filters are applied to the normalized key. Mirrors
- * executionValidation._later_step_selection_entries.
+ * keeps one row per database, asset and normalized file key (a leading slash added when missing,
+ * executionRecords.normalize_file_key), and a later step's manifest starts from those rows, so two
+ * versions or two spellings of one file reach it as ONE entry; its filters are applied to the
+ * normalized key. "//x" (a key with an empty segment after the asset's folder) and "/x" are two files
+ * and stay two entries (#1977). Mirrors executionValidation._later_step_selection_entries.
  */
 function laterStepSelectionEntries(
     inputs: ExecuteInputFile[],
@@ -275,7 +277,7 @@ function laterStepSelectionEntries(
 ): ExecuteInputFile[] {
     const entries = new Map<string, ExecuteInputFile>();
     for (const file of inputs) {
-        const key = "/" + (file.relativeFileKey || "").replace(/^\/+/, "");
+        const key = assetFilePath(file.relativeFileKey);
         const identity = JSON.stringify([file.databaseId, file.assetId, key]);
         if (!entries.has(identity)) entries.set(identity, { ...file, relativeFileKey: key });
     }

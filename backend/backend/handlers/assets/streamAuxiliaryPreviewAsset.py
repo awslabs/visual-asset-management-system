@@ -5,6 +5,7 @@ import os
 import boto3
 import json
 import base64
+from typing import Optional
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
@@ -138,15 +139,20 @@ def resolve_aux_preview_key(database_id: str, location_key: str, file_path: str)
     full_key = not in_asset and _is_full_key(location, stripped)
     auxiliary_key = not in_asset and not full_key and stripped.startswith(
         f"{db}/{location}" if location.endswith("/") else f"{db}/{location}/")
+    if not _empty_segment_after_location(location, db, raw, in_asset, full_key, auxiliary_key):
+        raise VAMSGeneralErrorResponse(NOT_PART_OF_ASSET)
     if location.endswith("/"):
         if full_key:
-            return f"{db}/{stripped}"
-        if auxiliary_key:
-            return stripped
-        return f"{db}/{location}{stripped}"
+            aux_key = f"{db}/{stripped}"
+        elif auxiliary_key:
+            aux_key = stripped
+        else:
+            # Exactly one leading '/' is the path marker: '//x' is the file '{location}/x' (#1977)
+            aux_key = f"{db}/{location}{raw[1:] if in_asset else raw}"
+        return _confined(db, location, aux_key)
     if auxiliary_key:
-        return stripped
-    path = "/" + stripped
+        return _confined(db, location, stripped)
+    path = raw if in_asset else "/" + stripped
     # A full key's file part is at least the location key, which may itself hold a "/preview/" segment
     start = len(location) + 1 if full_key else 1
     while True:
@@ -156,8 +162,42 @@ def resolve_aux_preview_key(database_id: str, location_key: str, file_path: str)
         resolve = object_key_for if full_key else object_key_for_path
         object_key = resolve(location, path[:index])
         if object_key is not None and contains(location, object_key):
-            return f"{db}/{object_key}{path[index:]}"
+            return _confined(db, location, f"{db}/{object_key}{path[index:]}", file_key=object_key)
         start = index + 1
+
+
+def _empty_segment_after_location(location: str, db: str, raw: str, in_asset: bool, full_key: bool,
+                                  auxiliary_key: bool) -> bool:
+    """Whether a path's '//', if any, is the one empty segment a file path may have: right after the asset's
+    location, so the file is the key '{location}/x' (a folder) or '{file key}//x' (a single file) whose path in
+    the asset is '//x' (#1977). The validator has already refused '///', a second '//' and a '//' anywhere but
+    the start of a path in the asset."""
+    if "//" not in raw:
+        return True
+    if in_asset:
+        return raw.startswith("//")
+    base = location if location.endswith("/") else location + "/"
+    if full_key:
+        return raw.startswith(base + "/")
+    if auxiliary_key:
+        return raw.startswith(f"{db}/{base}/")
+    return False
+
+
+def _confined(db: str, location: str, aux_key: str, file_key: Optional[str] = None) -> str:
+    """The auxiliary key, after a last check that it stays inside the asset: under the asset's database prefix,
+    with a file part the asset's location holds (``file_key`` when the caller resolved it, else the whole rest,
+    which a folder location or a single file's ``{file key}/`` prefix holds), and no ``.`` or ``..`` segment.
+    Any other key is refused with the fixed message."""
+    prefix = f"{db}/"
+    rest = aux_key[len(prefix):] if aux_key.startswith(prefix) else None
+    if rest is None or any(segment in ("..", ".") for segment in rest.split("/")):
+        raise VAMSGeneralErrorResponse(NOT_PART_OF_ASSET)
+    held = contains(location, file_key) if file_key is not None else (
+        contains(location, rest) if location.endswith("/") else rest.startswith(location + "/"))
+    if not held:
+        raise VAMSGeneralErrorResponse(NOT_PART_OF_ASSET)
+    return aux_key
 
 
 def handle_head_request(event, claims_and_roles):

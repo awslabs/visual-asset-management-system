@@ -355,7 +355,10 @@ namespace VamsConnector.Services
             }
             
             var file = fileItem.GetFile();
-            var fileKey = Uri.EscapeDataString(file.RelativePath.TrimStart('/'));
+            // The file's path in the asset, leading '/' included and encoded, as the VAMS file page links it:
+            // the web reads '//x' (a key with an empty segment after the asset's folder) as its own file and
+            // '/x' as another one, so no slash is trimmed
+            var fileKey = Uri.EscapeDataString(file.RelativePath);
             
             // New format: <base_url>#/databases/<databaseId>/assets/<assetId>/file/<fileKey>
             return $"{webBaseUrl}#/databases/{Uri.EscapeDataString(fileItem.DatabaseId)}/assets/{Uri.EscapeDataString(fileItem.AssetId)}/file/{fileKey}";

@@ -134,10 +134,17 @@ def iso_seconds_since(iso_timestamp: str) -> float:
 
 
 def normalize_file_key(file_key: str) -> str:
-    """Return an asset-relative key with exactly one leading slash."""
+    """Return an asset-relative key with a leading slash, adding one only when it has none.
+
+    One leading ``/`` marks a path in the asset (``common.assetLocations.object_key_for_request``), so
+    ``//x`` is the path of the key with an empty segment right after the asset's location (``A1//x``) and
+    ``/x`` the path of ``A1/x``. Repeated slashes are kept, so the two files keep their own input rows,
+    manifest entries and metadata records (#1977). Mirrored by the web wizard's
+    ``laterStepSelectionEntries`` (``assetFilePath``) and by the pipelines' vendored
+    ``manifestHelper._normalize_file_key``."""
     if not file_key:
         return "/"
-    return "/" + file_key.lstrip("/")
+    return file_key if file_key.startswith("/") else "/" + file_key
 
 
 def workflow_composite_key(workflow_database_id: str, workflow_id: str) -> str:

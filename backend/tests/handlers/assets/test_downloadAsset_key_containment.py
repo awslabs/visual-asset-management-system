@@ -92,31 +92,31 @@ def _signed_keys(m):
 class TestDownloadKeyContainment:
     """FIX-008 -- the escape itself."""
 
-    def test_single_path_rejects_sibling_prefix_escape(self):
-        """FIX-008: single-key download of a prefix-sharing sibling must be refused.
-
-        Asserting the refusal alone is not enough -- generate_presigned_url must
-        never have been reached, otherwise a URL was already minted (and audit
-        logged) before the error surfaced.
-        """
+    def test_single_path_reads_a_sibling_prefix_key_inside_the_asset(self):
+        """FIX-008, with #1943: a key that shares the base key's characters is read as a path inside this
+        asset, so the URL signed is for a key the asset holds, never the sibling object."""
         m = _wire(_load(), UNSLASHED_BASE)
         request = _parse({'downloadType': 'assetFile', 'key': ESCAPE_KEY})
+
+        m.download_asset_file('db1', 'asset1', request)
+
+        assert _signed_keys(m) == [f"{UNSLASHED_BASE}/{ESCAPE_KEY}"]
+        assert ESCAPE_KEY not in _signed_keys(m)
+
+    def test_single_path_refuses_a_parent_segment_before_signing(self):
+        """A key with a '..' segment names no key of the asset; no URL is minted."""
+        m = _wire(_load(), UNSLASHED_BASE)
+        request = _parse({'downloadType': 'assetFile', 'key': '/x/y'})
+        request.key = '/../pfxOTHER/secret.txt'
 
         with pytest.raises(m.VAMSGeneralErrorResponse):
             m.download_asset_file('db1', 'asset1', request)
 
-        assert m.s3.generate_presigned_url.call_count == 0, (
-            f"a presigned URL was generated for keys {_signed_keys(m)}"
-        )
+        assert m.s3.generate_presigned_url.call_count == 0
 
-    def test_bulk_path_rejects_sibling_prefix_escape(self):
-        """FIX-008: the bulk path must refuse the escape per-entry, not per-request.
-
-        A rejected bulk key is a soft failure (success=False on that entry), so the
-        assertion is on the entry. The legitimate key in the same request is the
-        control: it must still be signed, which proves the rejection is targeted
-        rather than the whole request failing.
-        """
+    def test_bulk_path_reads_a_sibling_prefix_key_inside_the_asset(self):
+        """FIX-008, with #1943: per entry, a prefix-sharing key is signed inside this asset, never as the
+        sibling object; the legitimate key in the same request is signed as before."""
         m = _wire(_load(), UNSLASHED_BASE)
         request = _parse({'downloadType': 'assetFile', 'keys': ['/pfx', ESCAPE_KEY]})
 
@@ -124,11 +124,10 @@ class TestDownloadKeyContainment:
 
         by_key = {f.key: f for f in response.files}
         assert by_key['/pfx'].success is True
-        assert by_key[ESCAPE_KEY].success is False
-        assert by_key[ESCAPE_KEY].downloadUrl is None
         assert ESCAPE_KEY not in _signed_keys(m), (
-            f"the escaping key was signed; signed keys were {_signed_keys(m)}"
+            f"the sibling object was signed; signed keys were {_signed_keys(m)}"
         )
+        assert set(_signed_keys(m)) <= {UNSLASHED_BASE, f"{UNSLASHED_BASE}/{ESCAPE_KEY}"}
 
 
 @pytest.mark.unit
@@ -191,14 +190,14 @@ class TestPermittedKeyShapesUnchanged:
 
     @pytest.mark.parametrize("raw_key", ['assets/pfx.bak', ESCAPE_KEY])
     def test_a_single_file_asset_signs_no_key_that_only_shares_its_characters(self, raw_key):
+        """#1943: such a key is a path in the asset's companion folder, so only a key the asset holds is signed."""
         m = _wire(_load(), UNSLASHED_BASE)
 
-        with pytest.raises(m.VAMSGeneralErrorResponse):
-            m.download_asset_file('db1', 'asset1', _parse({'downloadType': 'assetFile', 'key': raw_key}))
+        m.download_asset_file('db1', 'asset1', _parse({'downloadType': 'assetFile', 'key': raw_key}))
 
-        assert m.s3.generate_presigned_url.call_count == 0
+        assert _signed_keys(m) == [f"{UNSLASHED_BASE}/{raw_key}"]
 
-    @pytest.mark.parametrize("raw_key,relative", [('/pfx', 'pfx'), ('/dir/f.glb', 'dir/f.glb')])
+    @pytest.mark.parametrize("raw_key,relative", [('/pfx', '/pfx'), ('/dir/f.glb', '/dir/f.glb')])
     def test_a_single_file_asset_version_pin_uses_the_asset_relative_key(self, raw_key, relative):
         m = _wire(_load(), UNSLASHED_BASE)
         m.resolve_file_version_from_asset_version = MagicMock(return_value='v-pinned')
@@ -229,8 +228,9 @@ class TestVersionPinInvariance:
 
         m.download_asset_file('db1', 'asset1', request)
 
+        # The file's path in the asset; the snapshot lookup drops one leading '/' (#1977)
         m.resolve_file_version_from_asset_version.assert_called_once_with(
-            'db1', 'asset1', '2', 'dir/f.glb')
+            'db1', 'asset1', '2', '/dir/f.glb')
         params = m.s3.generate_presigned_url.call_args.kwargs['Params']
         assert params['Key'] == 'assets/pfx/dir/f.glb'
         assert params['VersionId'] == 'v-pinned'
@@ -246,7 +246,7 @@ class TestVersionPinInvariance:
         m.download_asset_file('db1', 'asset1', request)
 
         m.resolve_file_version_from_asset_version.assert_called_once_with(
-            'db1', 'asset1', '7', 'dir/f.glb')
+            'db1', 'asset1', '7', '/dir/f.glb')
         assert m.s3.generate_presigned_url.call_args.kwargs['Params']['VersionId'] == 'v-alias'
 
 

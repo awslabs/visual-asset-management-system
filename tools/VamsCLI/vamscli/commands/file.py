@@ -372,7 +372,7 @@ def upload_status(ctx: click.Context, database_id: str, asset_id: str, upload_id
               help='Upload as asset preview (single file only; .png, .jpg, .jpeg, .svg, .gif, .webp or .bmp, '
                    'at most 5 MiB)')
 @click.option('--asset-location', default='/',
-              help='Base asset location (default: "/")')
+              help='Folder path in the asset to upload into, with a leading "/" (default: "/")')
 @click.option('--recursive', is_flag=True,
               help='Include subdirectories when uploading directory')
 @click.option('--parallel-uploads', type=int, default=DEFAULT_PARALLEL_UPLOADS,

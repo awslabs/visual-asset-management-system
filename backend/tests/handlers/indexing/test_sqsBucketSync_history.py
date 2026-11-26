@@ -133,3 +133,36 @@ class TestBuildHistoryRecord:
         assert rec["changeAssetFilePathFrom"] == "old/x.glb"
         assert rec["changeAssetFileVersionFrom"] == "srcver-9"
         assert "changeWorkflowId" not in rec  # blank string skipped
+
+
+@pytest.mark.unit
+class TestAnEmptySegmentFileHasItsOwnHistoryPath:
+    """#1977: the history ledger keys 'A1//x.las' (listed '//x.las') apart from 'A1/x.las' ('/x.las')."""
+
+    @pytest.mark.parametrize("path, expected", [
+        ("//x.las", "//x.las"), ("/x.las", "/x.las"), ("x.las", "/x.las"), ("", "/"), ("/sub//y.las", "/sub//y.las")])
+    def test_the_rule_adds_a_slash_only_when_missing(self, path, expected):
+        from common.s3MetadataKeys import normalize_history_file_path
+        assert normalize_history_file_path(path) == expected
+
+    @pytest.mark.parametrize("relative_path, expected", [("//x.las", "db:A1://x.las"), ("/x.las", "db:A1:/x.las")])
+    def test_the_record_is_keyed_by_the_listed_path(self, relative_path, expected):
+        m = _load()
+        rec = m.build_history_record("db", "A1", relative_path, "v1", {}, None)
+        assert rec["databaseId:assetId:filePath"] == expected
+
+    def test_the_ledger_check_reads_the_listed_path(self):
+        m = _load()
+        table = MagicMock()
+        table.get_item.return_value = {}
+        with patch.object(m, "asset_file_version_history_table", table):
+            m.version_already_synced("db", "A1", "//x.las", "v1")
+        assert table.get_item.call_args.kwargs["Key"]["databaseId:assetId:filePath"] == "db:A1://x.las"
+
+    @pytest.mark.parametrize("object_key, expected", [("A1//x.las", "//x.las"), ("A1/x.las", "/x.las"),
+                                                      ("vams/A1//sub/y.las", "//sub/y.las")])
+    def test_a_key_found_by_its_first_folder_keeps_its_path(self, object_key, expected):
+        m = _load()
+        prefix = "vams/" if object_key.startswith("vams/") else ""
+        assert m._sync_file_path(object_key, prefix, "A1") == expected
+        assert m.relative_path_for_key("other/", object_key, prefix, "A1", m.RESOLVED_BY_FAST_PATH) == expected

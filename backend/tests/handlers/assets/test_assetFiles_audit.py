@@ -116,8 +116,9 @@ class TestFileInfoRecords:
 
         return read
 
-    @pytest.mark.parametrize("requested", [
-        "/models/a.glb", "custom/location/models/a.glb", "/custom/location/models/a.glb"])
+    # '/custom/location/models/a.glb' is a path in the asset (#1943): the file of a subfolder named like the
+    # location, not this file, so it is not a form of this file's request
+    @pytest.mark.parametrize("requested", ["/models/a.glb", "custom/location/models/a.glb"])
     def test_every_form_of_a_request_records_the_listed_path(self, info, requested):
         call = info(requested)
         assert call.args[1] == "fileInfoGet"

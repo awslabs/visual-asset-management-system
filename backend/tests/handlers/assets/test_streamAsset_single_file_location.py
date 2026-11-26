@@ -74,7 +74,8 @@ class TestStreamSingleFileAsset:
         event["pathParameters"]["proxy"] = "pump.glb"
         event["queryStringParameters"] = {"assetVersionId": "2"}
         m.lambda_handler(event, None)
-        m.resolve_file_version_from_asset_version.assert_called_once_with("db1", "asset1", "2", "pump.glb")
+        # The file's path in the asset; the snapshot lookup drops one leading "/" (#1977)
+        m.resolve_file_version_from_asset_version.assert_called_once_with("db1", "asset1", "2", "/pump.glb")
 
     def test_control_a_folder_asset_streams_the_joined_key(self, stream):
         m, s3 = stream

@@ -3,7 +3,9 @@
 
 """A prefix delete or archive whose path resolves to the asset's own location folder names the whole
 asset, so it is refused like the top-level folder `/` and nothing in the bucket changes (#1943). A real
-subfolder, including one named like the asset, still deletes and archives.
+subfolder, including one named like the asset, still deletes and archives. A path with a leading `/` is a
+path in the asset (PR #1965), so `/A/` is the subfolder named like the asset (`A/A/`), not the location
+folder, and the `//` folder (`A//`, keys with an empty segment after the location, #1977) is a subfolder too.
 
 Layout (bucket `vams-guard`, versioned): asset `A` (database db1) at `A/` holds `x.txt`, `sub/y.txt` and a
 root subfolder named like the asset, `A/z.txt` (key `A/A/z.txt`). Asset `A2` (db1) sits below a parent
@@ -99,8 +101,7 @@ def af(monkeypatch):
 @pytest.mark.unit
 class TestAPrefixThatNamesTheLocationFolderIsRefused:
     @pytest.mark.parametrize("asset_id,path", [
-        ("A", "/A/"), ("A", "/A"), ("A", "A/"), ("A", "A"),
-        ("A2", "/base/A2/"), ("A2", "/base/A2"), ("A2", "base/A2/"),
+        ("A", "A/"), ("A", "A"), ("A2", "base/A2/"), ("A2", "base/A2"),
     ])
     def test_a_prefix_delete_is_refused_and_no_version_is_removed(self, af, asset_id, path):
         before = _state(af.test_client)
@@ -111,8 +112,7 @@ class TestAPrefixThatNamesTheLocationFolderIsRefused:
         assert _state(af.test_client) == before
 
     @pytest.mark.parametrize("asset_id,path", [
-        ("A", "/A/"), ("A", "/A"), ("A", "A/"), ("A", "A"),
-        ("A2", "/base/A2/"), ("A2", "/base/A2"), ("A2", "base/A2/"),
+        ("A", "A/"), ("A", "A"), ("A2", "base/A2/"), ("A2", "base/A2"),
     ])
     def test_a_prefix_archive_is_refused_and_nothing_is_archived(self, af, asset_id, path):
         before = _state(af.test_client)
@@ -138,9 +138,9 @@ class TestAPrefixThatNamesTheLocationFolderIsRefused:
         monkeypatch.setattr(af, "get_asset_with_permissions", deny)
         before = _state(af.test_client)
         with pytest.raises(af.VAMSAuthorizationDeniedResponse):
-            af.delete_file("db1", "A", "/A/", True, True, CLAIMS)
+            af.delete_file("db1", "A", "A/", True, True, CLAIMS)
         with pytest.raises(af.VAMSAuthorizationDeniedResponse):
-            af.archive_file("db1", "A", "/A/", True, CLAIMS)
+            af.archive_file("db1", "A", "A/", True, CLAIMS)
         assert _state(af.test_client) == before
 
 
@@ -155,13 +155,31 @@ class TestARealSubfolderStillDeletesAndArchives:
         assert _live_keys(af.test_client) == sorted(set(ALL_KEYS) - {"A/sub/y.txt"})
         assert _version_keys(af.test_client) == sorted(ALL_KEYS)
 
-    def test_the_subfolder_named_like_the_asset_deletes_by_its_full_key(self, af):
-        af.delete_file("db1", "A", "/A/A/", True, True, CLAIMS)
+    @pytest.mark.parametrize("path", ["A/A/", "/A/", "/A"], ids=["full-key", "path", "path-no-slash"])
+    def test_the_subfolder_named_like_the_asset_deletes_by_its_full_key_or_its_path(self, af, path):
+        af.delete_file("db1", "A", path, True, True, CLAIMS)
         assert _version_keys(af.test_client) == sorted(set(ALL_KEYS) - {"A/A/z.txt"})
 
-    def test_the_subfolder_named_like_the_asset_archives_by_its_full_key(self, af):
-        af.archive_file("db1", "A", "/A/A/", True, CLAIMS)
+    @pytest.mark.parametrize("path", ["A/A/", "/A/"], ids=["full-key", "path"])
+    def test_the_subfolder_named_like_the_asset_archives_by_its_full_key_or_its_path(self, af, path):
+        af.archive_file("db1", "A", path, True, CLAIMS)
         assert _live_keys(af.test_client) == sorted(set(ALL_KEYS) - {"A/A/z.txt"})
+
+    def test_a_path_that_repeats_a_parent_folder_names_no_folder_of_the_asset(self, af):
+        """'/base/A2/' is the path of 'base/A2/base/A2/', which holds nothing: answered as a missing folder."""
+        before = _state(af.test_client)
+        with pytest.raises(af.VAMSGeneralErrorResponse) as raised:
+            af.delete_file("db1", "A2", "/base/A2/", True, True, CLAIMS)
+        assert "Cannot delete the top-level asset folder" not in str(raised.value)
+        assert _state(af.test_client) == before
+
+    def test_the_empty_segment_folder_deletes_and_archives(self, af):
+        """#1977: '//' resolves to 'A//', not to the location folder 'A/'."""
+        af.test_client.put_object(Bucket=BUCKET, Key="A//w.txt", Body=b"w")
+        af.archive_file("db1", "A", "//", True, CLAIMS)
+        assert _live_keys(af.test_client) == sorted(ALL_KEYS)
+        af.delete_file("db1", "A", "//", True, True, CLAIMS)
+        assert _version_keys(af.test_client) == sorted(ALL_KEYS)
 
     def test_a_subfolder_of_an_asset_below_a_parent_folder_deletes(self, af):
         af.delete_file("db1", "A2", "/sub/", True, True, CLAIMS)

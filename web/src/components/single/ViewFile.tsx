@@ -915,18 +915,10 @@ function ViewFileForAsset() {
             return;
         }
 
-        // Get the relative path from the file key
-        // The key format is typically: assetId/relativePath
-        // We need to extract just the relativePath part
-        const keyParts = singleFileInfo.key.split("/");
-        // Remove the first part (assetId) if it matches
-        let relativePath = singleFileInfo.key;
-        if (keyParts.length > 1 && keyParts[0] === assetId) {
-            relativePath = keyParts.slice(1).join("/");
-        }
-
-        // Encode the path for URL
-        const encodedPath = encodeURIComponent(relativePath);
+        // The URL keeps the file part it names the file by (its path in the asset, or its key); only the
+        // version changes. A URL without one names the file by its key. No path is derived from the key
+        // here: the API reads either form (#1943)
+        const encodedPath = encodeURIComponent(urlFilePath || singleFileInfo.key);
 
         // Build the new URL with version query parameter
         const newUrl = `/databases/${databaseId}/assets/${encodeURIComponent(
@@ -967,6 +959,7 @@ function ViewFileForAsset() {
         navigate,
         location.pathname,
         location.search,
+        urlFilePath,
         location.state,
     ]);
 
@@ -1336,6 +1329,7 @@ function ViewFileForAsset() {
                                                     databaseId={databaseId!}
                                                     assetId={assetId!}
                                                     filePath={singleFileInfo.key}
+                                                    linkFilePath={urlFilePath || undefined}
                                                     fileName={singleFileInfo.filename}
                                                     currentVersionId={singleFileInfo.versionId}
                                                     onVersionRevert={handleVersionRevert}

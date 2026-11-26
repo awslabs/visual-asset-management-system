@@ -1220,14 +1220,8 @@ class AssetFileVersionItemModel(BaseModel, extra='ignore'):
             logger.error(message)
             raise ValueError(message)
         # Exactly one leading slash marks a path, so '//x' names the key with an empty segment after
-        # the asset's location ('{location}/x'). The version handler still resolves an entry's object
-        # with every leading slash dropped (common.assetLocations.object_key_for), which would check and
-        # record '{location}x' under it, so such a path is refused until the location-key work (PR #1965)
-        # moves that resolution to the one-slash rule and lifts this refusal.
-        if v.startswith('//'):
-            message = "relativeKey cannot start with two slashes"
-            logger.error(message)
-            raise ValueError(message)
+        # the asset's location ('{location}/x'), which the version handler resolves by the same rule
+        # (common.assetLocations.object_key_for_path) and stores as '//x' (#1977).
         return v
 
 class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):

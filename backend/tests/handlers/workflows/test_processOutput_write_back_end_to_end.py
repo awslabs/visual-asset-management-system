@@ -148,8 +148,9 @@ class TestWriteBackEndToEnd:
         assert ingestion[0]["statusCode"] == 200, ingestion[0].get("body")
         body = json.loads(ingestion[0]["body"])
         assert body["overallSuccess"] is True
+        # Each output is sent, and answered, as its path in the asset with a leading '/'
         assert {r["relativeKey"] for r in body["fileResults"] if r["success"]} == {
-            o["Key"][len(FILES_PREFIX):] for o in LISTINGS[listing]}
+            "/" + o["Key"][len(FILES_PREFIX):] for o in LISTINGS[listing]}
 
     def test_the_run_ends_as_the_outputs_require(self, workflow_database_id, listing):
         resp, _ingestion, m = _run(workflow_database_id, LISTINGS[listing])

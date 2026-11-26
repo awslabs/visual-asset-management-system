@@ -699,3 +699,16 @@ class TestThePageBudgetSpansTheAssetsOfOnePage:
         assert [asset['assetid'] for asset in exported] == ["asset-a", "asset-b"], exported
         assert all(asset['files_truncated'] is False for asset in exported), exported
         assert page_state['lastCompletedPosition'] == 1, page_state
+
+
+@pytest.mark.unit
+class TestAnEmptySegmentKeyIsExportedAtItsOwnPath:
+    def test_the_export_lists_each_key_at_the_path_that_names_it(self):
+        """#1977: '{prefix}/x.glb' (an empty segment right after the asset's folder) is exported at '//x.glb',
+        not at '/x.glb', the path of '{prefix}x.glb'."""
+        m = _load_asset_export_service()
+        s3 = _FakeS3({_PREFIX: [f"{_PREFIX}x.glb", f"{_PREFIX}/x.glb"]})
+        with patch.object(m, "s3_client", s3):
+            files = m.list_s3_files("bucket-name", _PREFIX)
+        assert sorted((f['key'], f['relativePath']) for f in files) == [
+            (f"{_PREFIX}/x.glb", "//x.glb"), (f"{_PREFIX}x.glb", "/x.glb")]

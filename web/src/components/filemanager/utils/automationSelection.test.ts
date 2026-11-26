@@ -274,3 +274,22 @@ describe("automationDisabledReason", () => {
         ).toMatch(/cannot be processed/);
     });
 });
+
+describe("a file whose key has an empty segment after the asset's folder (#1977)", () => {
+    it("is sent by its own path, never collapsed onto the other file's", () => {
+        const item = {
+            relativePath: "//cloud.las",
+            keyPrefix: "asset-1//cloud.las",
+            isFolder: false,
+        } as any;
+        const files = deriveAutomationInputFiles({
+            databaseId: "db1",
+            assetId: "asset-1",
+            isMultiSelect: false,
+            selectedItems: [item],
+            selectedItem: item,
+            isFolder: false,
+        } as any);
+        expect(files.map((f) => f.relativeFileKey)).toEqual(["//cloud.las"]);
+    });
+});

@@ -170,6 +170,37 @@ class TestSelectiveUnarchive:
         assert put_item["filePath"] == "/a.txt"
         assert put_item["changeUserId"] == "tester"
 
+    @pytest.mark.parametrize("recorded_path", ["//x.txt", "/x.txt"], ids=["current-form", "pre-2.7.0-form"])
+    def test_an_empty_segment_file_is_restored_from_either_record_form(self, recorded_path):
+        """D5 (#1977): an archive before 2.7.0 recorded 'a1//x.txt' under '/x.txt'; this release records it
+        under '//x.txt'. Either record restores the file, and only by its own marker's VersionId."""
+        m = _load()
+        m.get_asset_archive_marker_versions = MagicMock(return_value={recorded_path: {"m-empty"}})
+        m.asset_file_version_history_table = MagicMock()
+        s3 = self._paginator(m, [
+            {"Key": "a1//x.txt", "VersionId": "m-empty", "IsLatest": True},
+            {"Key": "a1/x.txt", "VersionId": "m-plain", "IsLatest": True},  # archived on its own
+        ])
+
+        restored = m.unarchive_multi_assetFiles({"Key": "a1/"}, "bucket", "db1", "a1", "tester")
+
+        assert restored == 1
+        s3.delete_object.assert_called_once_with(Bucket="bucket", Key="a1//x.txt", VersionId="m-empty")
+        assert m.asset_file_version_history_table.put_item.call_args.kwargs["Item"]["filePath"] == "//x.txt"
+
+    def test_the_old_form_record_of_the_other_file_restores_nothing(self):
+        """'/x.txt' holds a1/x.txt's marker; a1//x.txt's own marker is not in it."""
+        m = _load()
+        m.get_asset_archive_marker_versions = MagicMock(return_value={"/x.txt": {"m-plain"}})
+        m.asset_file_version_history_table = MagicMock()
+        s3 = self._paginator(m, [
+            {"Key": "a1//x.txt", "VersionId": "m-empty", "IsLatest": True},
+            {"Key": "a1/x.txt", "VersionId": "m-plain", "IsLatest": True},
+        ])
+
+        assert m.unarchive_multi_assetFiles({"Key": "a1/"}, "bucket", "db1", "a1", "tester") == 1
+        s3.delete_object.assert_called_once_with(Bucket="bucket", Key="a1/x.txt", VersionId="m-plain")
+
     def test_no_provenance_restores_nothing(self):
         m = _load()
         m.get_asset_archive_marker_versions = MagicMock(return_value={})

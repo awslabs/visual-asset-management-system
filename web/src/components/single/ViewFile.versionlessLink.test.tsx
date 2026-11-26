@@ -258,3 +258,29 @@ describe("ViewFile link without a version", () => {
         expect(currentUrl).toBe(`${FILE_ROUTE}/a.glb?version=v-a.glb`);
     });
 });
+
+describe("ViewFile link that names the file by its path in the asset (#1943)", () => {
+    // "/assetA/cloud.las" is the file in the subfolder "assetA/" of an asset stored at "assetA/" (key
+    // "assetA/assetA/cloud.las"). The page sends the link's path as it is, and the API decides what it
+    // names; the version sync keeps that path in the URL rather than one derived from the file's key.
+    const SUBFOLDER_LINK = `${FILE_ROUTE}/${encodeURIComponent("/assetA/cloud.las")}`;
+
+    it("looks the file up by the link's path, leading slash included", async () => {
+        await openAt(SUBFOLDER_LINK);
+
+        expect(
+            fetchFileInfo.mock.calls.map(([args]: [{ fileKey: string }]) => args.fileKey)
+        ).toEqual(["/assetA/cloud.las"]);
+    });
+
+    it("keeps the link's path in the URL when it writes the version", async () => {
+        await openAt(SUBFOLDER_LINK);
+
+        expect(currentUrl).toMatch(
+            new RegExp(`^${FILE_ROUTE}/(%2F|/)assetA(%2F|/)cloud\\.las\\?version=`)
+        );
+        expect(decodeURIComponent(currentUrl.split("/file/")[1].split("?")[0])).toBe(
+            "/assetA/cloud.las"
+        );
+    });
+});
