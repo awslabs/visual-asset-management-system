@@ -313,9 +313,17 @@ def _ingestion_outcome(result):
     file_results = result.get('fileResults')
     if not isinstance(file_results, list):
         return all_succeeded, None
-    ingested = {entry.get('relativeKey', '') for entry in file_results
+    ingested = {_result_relative_key(entry) for entry in file_results
                 if isinstance(entry, dict) and entry.get('success')}
     return all_succeeded, ingested
+
+
+def _result_relative_key(entry):
+    """A file-ingestion result's relativeKey in the form this step keys its outputs by: no leading '/'.
+
+    The completion echoes each file's relativeKey as it was sent, and an asset file is sent with a
+    leading '/' (process_external_upload)."""
+    return (entry.get('relativeKey') or '').lstrip('/')
 
 
 def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None, file_base_execution_path_extension="/", source_bucket=None, mfa_enabled=None):
@@ -350,6 +358,12 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
                 # Insert the output base-execution path extension before the file's own filename,
                 # keeping the pipeline's output folder structure ahead of it.
                 file_name = ope.apply_output_path_extension(file_name, extension)
+
+                # Sent as the file's path in the asset, with a leading '/', so the upload handler reads it
+                # as a path and never as one of the asset's keys: an output written into a subfolder named
+                # like the asset's location lands in that subfolder (#1943). The results are read back
+                # without the '/' (_result_relative_key).
+                file_name = "/" + file_name.lstrip("/")
             else:
                 # For other upload types (like assetPreview), just use the filename
                 file_name = os.path.basename(file_key)
