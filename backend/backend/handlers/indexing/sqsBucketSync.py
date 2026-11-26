@@ -40,7 +40,7 @@ from common.s3PathPatterns import (
     AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment,
 )
 from common.s3 import is_object_version_archived, region_routing_s3_client
-from common.bucketRegistrations import REGISTRATION_DUPLICATE_OF_FIELD, active_registrations
+from common.bucketRegistrations import REGISTRATION_DUPLICATE_OF_FIELD, active_registrations, find_registration
 from common.indexerEvents import BUCKET_ID_STAMP_FIELD
 from common.vamsObjectTags import emit_bucket_sync_count, tag_synced_version, tagging_enabled
 from models.common import AssetLocationInUseError
@@ -132,7 +132,9 @@ except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
-if not database_id:
+# A function deployed for one registration (ASSET_BUCKET_NAME set) always has its fallback database in
+# the environment; the registration row carries it too (defaultSyncDatabaseId), and the row's value wins.
+if asset_bucket_name and not database_id:
     raise Exception('databaseId not configured')
 
 # This function's own name, used to recognize the ObjectCreated event of a metadata stamp copy an
@@ -525,6 +527,51 @@ def get_bucket_id(bucket_name: str, prefix: str) -> Optional[str]:
     except Exception as e:
         logger.exception(f"Error getting bucket ID: {e}")
         return None
+
+def registrations_of_bucket_name(bucket_name: str) -> List[Dict]:
+    """Every registration row of one bucket (bucketNameGSI, paged), cached for the cache's TTL. A read
+    that fails is logged and answers [] (the record is then skipped and still forwarded, as when
+    get_bucket_id finds nothing)."""
+    cache_key = f"registrations:{bucket_name}"
+    cached = s3_buckets_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        table = dynamodb.Table(s3_asset_buckets_table)
+        query_kwargs = {'IndexName': "bucketNameGSI", 'KeyConditionExpression': Key('bucketName').eq(bucket_name)}
+        rows = []
+        while True:
+            response = table.query(**query_kwargs)
+            rows.extend(response.get('Items', []))
+            if 'LastEvaluatedKey' not in response:
+                break
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    except Exception as e:
+        logger.exception(f"Error reading the registrations of bucket {bucket_name}: {e}")
+        return []
+    s3_buckets_cache.set(cache_key, rows)
+    return rows
+
+
+def registration_for_key(bucket_name: str, object_key: str) -> Optional[Dict]:
+    """The registration an object belongs to: the active registration of its bucket with the longest
+    prefix that holds the key (common.bucketRegistrations.find_registration), or None."""
+    registration = find_registration(bucket_name, object_key, registrations_of_bucket_name(bucket_name))
+    if registration and registration.get('bucketId'):
+        s3_buckets_cache.set(f"{registration['bucketId']}:versioning",
+                             registration.get('isVersioningEnabled', False))
+    return registration
+
+
+def default_sync_database_id(bucket_id: str) -> Optional[str]:
+    """The registration's fallback database for bucket sync: the row's `defaultSyncDatabaseId`, or this
+    function's DEFAULT_DATABASE_ID for a row that does not carry it yet."""
+    row = get_bucket_info_from_bucket_id(bucket_id) if bucket_id else None
+    value = (row or {}).get('defaultSyncDatabaseId') if isinstance(row, dict) else None
+    if isinstance(value, str) and value:
+        return value
+    return database_id or None
+
 
 def is_versioning_enabled(bucket_id: str) -> bool:
     """
@@ -1070,6 +1117,9 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
         logger.info(f"Cache hit for database for bucket registration {bucket_id}")
         return None if cached_db_id == ARCHIVED_DATABASE_CACHE_VALUE else cached_db_id
     
+    # The registration's fallback database, read from its row.
+    fallback_database_id = default_sync_database_id(bucket_id)
+
     # The databases assigned to this registration: their defaultBucketId is its bucketId.
     matching_databases = [db for db in lookup_databases(bucket_id) if db.get('defaultBucketId') == bucket_id]
 
@@ -1081,21 +1131,25 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
         logger.info(f"Using database {only_db_id}, the one database assigned to bucket {bucket_name} prefix {prefix}")
         database_cache.set(cache_key, only_db_id)
         return only_db_id
-    default_db = next((db for db in matching_databases if db['databaseId'] == database_id), None)
+    default_db = next((db for db in matching_databases if db['databaseId'] == fallback_database_id), None)
     if default_db:
-        logger.info(f"Using default database {database_id} for bucket {bucket_name} prefix {prefix}")
+        logger.info(f"Using default database {fallback_database_id} for bucket {bucket_name} prefix {prefix}")
         database_cache.set(cache_key, default_db['databaseId'])
         return default_db['databaseId']
     if matching_databases:
         logger.info(f"{len(matching_databases)} databases are assigned to bucket {bucket_name} prefix {prefix} "
-                    f"and the default sync database {database_id} is not one of them; using the bucket's "
+                    f"and the default sync database {fallback_database_id} is not one of them; using the bucket's "
                     "auto-generated database")
+    if not fallback_database_id:
+        logger.error(f"Bucket registration {bucket_id} ({bucket_name} prefix {prefix}) has no fallback database "
+                     "(defaultSyncDatabaseId); no database is created for it")
+        return None
     
     # No matching database found - need to create one
     # Generate unique database ID based on bucket and prefix
     prefix_for_hash = prefix.rstrip('/') if prefix else 'root'
     prefix_hash = hashlib.md5(f"{bucket_name}:{prefix_for_hash}".encode()).hexdigest()[:8] # nosec B324
-    unique_db_id = f"{database_id}-{prefix_hash}"
+    unique_db_id = f"{fallback_database_id}-{prefix_hash}"
     
     # Check cache for this specific database ID
     db_cache_key = f"database:{unique_db_id}"
@@ -2390,7 +2444,15 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
         # A missing bucket record (registration race / transient lookup failure) skips
         # VAMS-side processing but still forwards to the indexers — the file indexer
         # resolves bucket details independently via the object's S3 metadata.
-        bucket_id = get_bucket_id(bucket_name, prefix)
+        # A function deployed for one registration reads it by its configured bucket and prefix; one
+        # that serves any registration finds it by bucket name and the longest prefix holding the key.
+        if asset_bucket_name:
+            bucket_id = get_bucket_id(bucket_name, prefix)
+        else:
+            registration = registration_for_key(bucket_name, object_key)
+            bucket_id = (registration or {}).get('bucketId')
+            if bucket_id:
+                prefix = normalize_base_prefix(registration.get('baseAssetsPrefix')) or "/"
         if not bucket_id:
             logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping processing but forwarding to indexers")
             return False, True, f"No bucket ID found for {bucket_name} with prefix {prefix}"

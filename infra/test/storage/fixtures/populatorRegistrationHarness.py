@@ -52,23 +52,38 @@ class FakeBucketsTable:
         return response
 
     def put_item(self, Item):
+        # Recorded so a case can tell a whole-item replace from a merge of the owned fields.
         self.calls.append({"op": "put", "bucketId": Item["bucketId"], "sortKey": Item[SORT_KEY]})
         self.items[(Item["bucketId"], Item[SORT_KEY])] = dict(Item)
 
-    def update_item(self, Key, UpdateExpression, ConditionExpression, ExpressionAttributeNames,
-                    ExpressionAttributeValues):
-        self.calls.append({"op": "update", "bucketId": Key["bucketId"], "sortKey": Key[SORT_KEY]})
+    def update_item(self, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues,
+                    ConditionExpression=None):
+        # A conditional update is the retire update (the row must still exist); an unconditional one is
+        # the merge write of a configured row, which creates the row when it is missing.
+        op = "retire" if ConditionExpression else "write"
+        self.calls.append({"op": op, "bucketId": Key["bucketId"], "sortKey": Key[SORT_KEY]})
         key = (Key["bucketId"], Key[SORT_KEY])
         if key not in self.items:
-            raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
-        item = self.items[key]
-        item[ExpressionAttributeNames["#retired"]] = ExpressionAttributeValues[":true"]
-        item[ExpressionAttributeNames["#isDefault"]] = ExpressionAttributeValues[":false"]
-        item[ExpressionAttributeNames["#retiredAt"]] = ExpressionAttributeValues[":at"]
+            if ConditionExpression:
+                raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+            self.items[key] = {"bucketId": Key["bucketId"], SORT_KEY: Key[SORT_KEY]}
+        apply_update(self.items[key], UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues)
 
     def delete_item(self, **kwargs):
         self.calls.append({"op": "delete"})
         raise AssertionError("the populator never deletes a registration row")
+
+
+def apply_update(item, expression, names, values):
+    """Apply a `SET #a = :a, ... [REMOVE #b, ...]` update expression to an item, as DynamoDB does."""
+    set_part, _, remove_part = expression.partition(" REMOVE ")
+    if not set_part.startswith("SET "):
+        raise AssertionError(f"unexpected update expression: {expression}")
+    for assignment in set_part[len("SET "):].split(", "):
+        name, value = assignment.split(" = ")
+        item[names[name]] = values[value]
+    for name in remove_part.split(", ") if remove_part else []:
+        item.pop(names[name], None)
 
 
 class FakeAssetTable:
@@ -88,6 +103,37 @@ class FakeAssetTable:
 
     def scan(self, **kwargs):
         raise AssertionError("the populator never scans the asset table")
+
+
+STACK_ID = "arn:aws:cloudformation:us-east-1:111111111111:stack/vams-core-storage/aaaa"
+PARENT_ID = "arn:aws:cloudformation:us-east-1:111111111111:stack/vams-core/bbbb"
+
+
+class FakeCloudFormation:
+    """DescribeStacks of the stack holding the resource (nested, its ParentId the core stack) and of its
+    parent. `statuses` maps a stack id to its status; `error` makes every call raise."""
+
+    def __init__(self, statuses, error=None, nested=True):
+        self.statuses = statuses
+        self.error = error
+        self.nested = nested
+        self.calls = []
+
+    def describe_stacks(self, StackName):
+        self.calls.append(StackName)
+        if self.error:
+            raise ClientError({"Error": {"Code": self.error}}, "DescribeStacks")
+        stack = {"StackId": StackName, "StackStatus": self.statuses[StackName]}
+        if StackName == STACK_ID and self.nested:
+            stack.update({"ParentId": PARENT_ID, "RootId": PARENT_ID})
+        return {"Stacks": [stack]}
+
+
+class Config:
+    """botocore.config.Config: records the options a client is built with."""
+
+    def __init__(self, **kwargs):
+        self.options = kwargs
 
 
 class FakeS3:
@@ -110,15 +156,30 @@ def row(bucket_id, name, prefix, sort_prefix=None, **extra):
     return item
 
 
-def bucket(name, prefix, default=False):
-    return {"bucketName": name, "prefix": prefix, "bucketRegion": "us-east-1", "isDefault": default,
-            "tagSyncedObjects": True}
+def bucket(name, prefix, default=False, **extra):
+    entry = {"bucketName": name, "prefix": prefix, "bucketRegion": "us-east-1", "isDefault": default,
+             "tagSyncedObjects": True}
+    entry.update(extra)
+    return entry
 
 
 def run_case(source, stored, buckets, request_type="Update", referenced=(), asset_fail=False,
-             page_size=100, with_asset_table=True):
+             page_size=100, with_asset_table=True, timestamp=None, old_timestamp=None,
+             stack_status="UPDATE_IN_PROGRESS", parent_status="UPDATE_IN_PROGRESS", stack_error=None,
+             nested=True, with_stack_id=True):
+    """`timestamp` / `old_timestamp`: the synth timestamps of ResourceProperties and OldResourceProperties.
+    `stack_status` / `parent_status`: what DescribeStacks answers for the stack holding the resource and
+    for its parent; `stack_error`: the error code every DescribeStacks call raises instead."""
     buckets_table = FakeBucketsTable(stored, page_size)
     asset_table = FakeAssetTable(referenced, asset_fail)
+    cloudformation = FakeCloudFormation({STACK_ID: stack_status, PARENT_ID: parent_status}, stack_error, nested)
+    client_configs = []
+
+    def make_client(service, region_name=None, config=None, **kwargs):
+        if service == "cloudformation":
+            client_configs.append({"service": service, "config": config.options if config else None})
+            return cloudformation
+        return FakeS3()
 
     class FakeResource:
         def Table(self, name):
@@ -126,7 +187,7 @@ def run_case(source, stored, buckets, request_type="Update", referenced=(), asse
 
     fake_boto3 = types.ModuleType("boto3")
     fake_boto3.resource = lambda *args, **kwargs: FakeResource()
-    fake_boto3.client = lambda service, region_name=None, **kwargs: FakeS3()
+    fake_boto3.client = make_client
     fake_dynamodb = types.ModuleType("boto3.dynamodb")
     fake_conditions = types.ModuleType("boto3.dynamodb.conditions")
     fake_conditions.Key = FakeKey
@@ -136,18 +197,28 @@ def run_case(source, stored, buckets, request_type="Update", referenced=(), asse
     fake_exceptions = types.ModuleType("botocore.exceptions")
     fake_exceptions.ClientError = ClientError
     fake_botocore.exceptions = fake_exceptions
+    fake_config = types.ModuleType("botocore.config")
+    fake_config.Config = Config
+    fake_botocore.config = fake_config
     sys.modules["boto3"] = fake_boto3
     sys.modules["boto3.dynamodb"] = fake_dynamodb
     sys.modules["boto3.dynamodb.conditions"] = fake_conditions
     sys.modules["botocore"] = fake_botocore
     sys.modules["botocore.exceptions"] = fake_exceptions
+    sys.modules["botocore.config"] = fake_config
 
     namespace = {}
     exec(compile(source, "populator_inline.py", "exec"), namespace)
     properties = {"tableName": "buckets", "buckets": json.dumps(buckets)}
     if with_asset_table:
         properties.update({"assetTableName": "assets", "assetTableBucketIdIndex": "BucketIdGSI"})
+    if timestamp:
+        properties["timestamp"] = timestamp
     event = {"RequestType": request_type, "ResourceProperties": properties}
+    if with_stack_id:
+        event["StackId"] = STACK_ID
+    if old_timestamp:
+        event["OldResourceProperties"] = {"timestamp": old_timestamp}
     outcome = {"ok": True, "error": None, "data": None}
     try:
         outcome["data"] = namespace["lambda_handler"](event, None).get("Data")
@@ -161,14 +232,24 @@ def run_case(source, stored, buckets, request_type="Update", referenced=(), asse
                 "baseAssetsPrefix": item.get("baseAssetsPrefix"),
                 "isDefault": item.get("isDefault"),
                 "retired": item.get("retired"),
+                "retiredAt": item.get("retiredAt"),
                 "duplicateOfBucketId": item.get("duplicateOfBucketId"),
+                "source": item.get("source"),
+                "defaultSyncDatabaseId": item.get("defaultSyncDatabaseId"),
+                "bucketKmsKeyArn": item.get("bucketKmsKeyArn"),
+                "isAccelerated": item.get("isAccelerated"),
             }
             for item in buckets_table.items.values()
         ),
         key=lambda r: (r["bucketId"], r["sortKey"]),
     )
+    # Every stored item as it is after the run, for the cases that check an attribute the populator
+    # does not own is left in place.
+    outcome["items"] = {item["bucketId"] + "|" + item[SORT_KEY]: item for item in buckets_table.items.values()}
     outcome["calls"] = buckets_table.calls
     outcome["assetCalls"] = asset_table.calls
+    outcome["describeStacks"] = cloudformation.calls
+    outcome["cloudformationClients"] = client_configs
     return outcome
 
 
@@ -235,6 +316,187 @@ def main():
             [bucket("c", "/", default=True)],
         ),
         "twoEntriesOnePair": run_case(source, [], [bucket("b", "assets"), bucket("b", "assets/")]),
+        # #1978: the configured row is merged, not replaced. An attribute the populator does not own
+        # (a later release's layout field) stays; the row gains source, the fallback database and the
+        # declared key; owned fields the configuration no longer gives are removed.
+        "mergeKeepsUnowned": run_case(
+            source,
+            [row("id-a", "b", "assets/", isDefault=True, assetLayout="{assetId}", isAccelerated=True,
+                 bucketKmsKeyArn="arn:aws:kms:us-east-1:111111111111:key/old")],
+            [bucket("b", "assets/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        "upgradeGainsFields": run_case(
+            source,
+            [row("id-a", "b", "assets/", isDefault=True), row("id-r", "c", "/", retired=True,
+                                                              retiredAt="2026-01-01T00:00:00Z")],
+            [bucket("b", "assets/", default=True, defaultSyncDatabaseId="db1",
+                    bucketKmsKeyArn="arn:aws:kms:us-east-1:111111111111:key/k1")],
+        ),
+        # A registration added at run time is never matched, rewritten or retired.
+        "runtimeRowSurvives": run_case(
+            source,
+            [row("id-a", "b", "a/", isDefault=True),
+             row("id-rt", "r", "rt/", source="runtime", status="active", createdBy="admin",
+                 defaultSyncDatabaseId="dbr")],
+            [bucket("b", "a/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        "runtimeRowSamePair": run_case(
+            source,
+            [row("id-rt", "b", "a/", source="runtime", status="active")],
+            [bucket("b", "a/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        # A configured prefix that equals or nests with a stored row the configuration does not include
+        # fails the deployment before anything is written.
+        "nestedInRetired": run_case(
+            source,
+            [row("id-old", "b", "assets/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "assets/team1/", defaultSyncDatabaseId="db1")],
+        ),
+        "retiredNestedInConfigured": run_case(
+            source,
+            [row("id-old", "b", "assets/team1/", retired=True)],
+            [bucket("b", "assets/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        "retiredRootOverlaps": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True)],
+            [bucket("b", "x/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        "nestedInRowBeingRetired": run_case(
+            source,
+            [row("id-old", "b", "old/", isDefault=True)],
+            [bucket("b", "old/new/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        "nestedInRuntimeRow": run_case(
+            source,
+            [row("id-rt", "b", "rt/", source="runtime", status="pending")],
+            [bucket("b", "rt/sub/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        "siblingPrefixesDoNotOverlap": run_case(
+            source,
+            [row("id-old", "b", "assets/", retired=True), row("id-o", "o", "assets/team1/", retired=True)],
+            [bucket("b", "assets2/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        # A configured registration that already has a row is not refused for an overlap that is
+        # already stored: a release before the check kept b:assets/ active after its entry moved to
+        # b:assets/team1/. The same input is the rollback of that upgrade (the previous properties name
+        # the same stored pair), so refusing it would also leave the stack unable to roll back.
+        "storedOverlapNotRefused": run_case(
+            source,
+            [row("id-old", "b", "assets/", isDefault=True), row("id-t", "b", "assets/team1/")],
+            [bucket("b", "assets/team1/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        # Control: the rollback of the refused addition nestedInRetired. CloudFormation sends the
+        # previous properties to the updated function; they add nothing, so nothing is refused.
+        "rollbackAfterRefusedAdd": run_case(
+            source,
+            [row("id-old", "b", "assets/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        # #1978 D2: configuring a retired registration again makes it active now, so it is checked like
+        # an added one: a retired b:assets/ re-activated over an active b:assets/team1/ ...
+        "reactivateOverActive": run_case(
+            source,
+            [row("id-wide", "b", "assets/", retired=True), row("id-team", "b", "assets/team1/", isDefault=True)],
+            [bucket("b", "assets/", default=True, defaultSyncDatabaseId="db1")],
+            timestamp="2026-11-26T02:00:00.000Z", old_timestamp="2026-11-25T02:00:00.000Z",
+        ),
+        # ... and over a retired b:assets/team1/.
+        "reactivateOverRetired": run_case(
+            source,
+            [row("id-wide", "b", "assets/", retired=True), row("id-team", "b", "assets/team1/", retired=True),
+             row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "assets/", defaultSyncDatabaseId="db1")],
+        ),
+        # A rollback re-activates a pair the failed update retired (b:assets/team1/ was configured, with a
+        # stored overlap on the retired b:assets/): it is reported, not refused, so the stack rolls back.
+        # A rollback is read from the stack: the stack holding the resource is rolling back ...
+        "rollbackReactivatesOverlap": run_case(
+            source,
+            [row("id-wide", "b", "assets/", retired=True), row("id-team", "b", "assets/team1/", retired=True),
+             row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "assets/team1/", defaultSyncDatabaseId="db1")],
+            timestamp="2026-11-25T02:00:00.000Z", old_timestamp="2026-11-26T02:00:00.000Z",
+            stack_status="UPDATE_ROLLBACK_IN_PROGRESS",
+        ),
+        # ... or its parent is (the nested stack is rolled back as part of the parent's rollback) ...
+        "parentRollbackReactivatesOverlap": run_case(
+            source,
+            [row("id-wide", "b", "assets/", retired=True), row("id-team", "b", "assets/team1/", retired=True),
+             row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "assets/team1/", defaultSyncDatabaseId="db1")],
+            stack_status="UPDATE_IN_PROGRESS", parent_status="UPDATE_ROLLBACK_IN_PROGRESS",
+        ),
+        # ... whatever the synth timestamps say: a rollback with the newer timestamp is still a rollback.
+        "rollbackStatusNewerTimestamp": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "new1978/", defaultSyncDatabaseId="db1")],
+            timestamp="2026-11-26T02:00:00.000Z", old_timestamp="2026-11-25T02:00:00.000Z",
+            stack_status="UPDATE_ROLLBACK_IN_PROGRESS",
+        ),
+        # R1: a forward deploy of an assembly synthesized before the stack's last deployment (its timestamp
+        # is the older one) adding a prefix that overlaps a retired registration is refused.
+        "olderSynthForwardRefused": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "new1978/", defaultSyncDatabaseId="db1")],
+            timestamp="2026-11-26T05:49:00.000Z", old_timestamp="2026-11-26T05:50:00.000Z",
+        ),
+        # A status that cannot be read is treated as a forward deployment: the check runs.
+        "stackStatusUnreadable": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "new1978/", defaultSyncDatabaseId="db1")],
+            timestamp="2026-11-26T05:49:00.000Z", old_timestamp="2026-11-26T05:50:00.000Z",
+            stack_error="AccessDenied",
+        ),
+        "eventWithoutStackId": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "new1978/", defaultSyncDatabaseId="db1")],
+            stack_status="UPDATE_ROLLBACK_IN_PROGRESS", with_stack_id=False,
+        ),
+        # A stack that is not nested: only its own status is read.
+        "notNestedForward": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "new1978/", defaultSyncDatabaseId="db1")],
+            nested=False,
+        ),
+        # The cleanup after a rollback is not a rollback in progress (it sends Delete requests only).
+        "cleanupStatusIsNotRollback": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "new1978/", defaultSyncDatabaseId="db1")],
+            stack_status="UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS",
+            parent_status="UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS",
+        ),
+        # The same input as a forward update is refused.
+        "forwardReactivatesOverlap": run_case(
+            source,
+            [row("id-wide", "b", "assets/", retired=True), row("id-team", "b", "assets/team1/", retired=True),
+             row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "assets/team1/", defaultSyncDatabaseId="db1")],
+            timestamp="2026-11-26T02:00:00.000Z", old_timestamp="2026-11-25T02:00:00.000Z",
+        ),
+        "deleteSkipsOverlapCheck": run_case(
+            source,
+            [row("id-old", "b", "assets/", retired=True)],
+            [bucket("b", "assets/team1/", default=True, defaultSyncDatabaseId="db1")],
+            request_type="Delete",
+        ),
     }
     print(json.dumps(results))
 

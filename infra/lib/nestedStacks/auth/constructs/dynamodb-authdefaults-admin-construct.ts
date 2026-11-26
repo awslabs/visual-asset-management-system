@@ -2085,6 +2085,115 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "auditLog",
                 },
             },
+            // Asset bucket registrations: the bucket listing and the bucket a database is put on.
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: "initial_admin_allow_all_buckets",
+                },
+                constraintId: {
+                    S: "initial_admin_allow_all_buckets",
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "bucketId",
+                                },
+                                id: {
+                                    S: "admin_all_buckets",
+                                },
+                                operator: {
+                                    S: "contains",
+                                },
+                                value: {
+                                    S: ".*",
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow GET/PUT/POST/DELETE on all asset bucket registrations for admin",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-get-all-buckets",
+                                },
+                                permission: {
+                                    S: "GET",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-put-all-buckets",
+                                },
+                                permission: {
+                                    S: "PUT",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-post-all-buckets",
+                                },
+                                permission: {
+                                    S: "POST",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-delete-all-buckets",
+                                },
+                                permission: {
+                                    S: "DELETE",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: "admin-allow-all-buckets",
+                },
+                objectType: {
+                    S: "bucket",
+                },
+            },
             ...addonAdminDefaultConstraints(props.config, roleNameAdmin),
         ];
 

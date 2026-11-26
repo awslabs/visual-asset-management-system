@@ -135,6 +135,14 @@
                     "type": "allow"
                 }
             ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-buckets",
+            "description": "Allow read of every asset bucket registration. Listing buckets also needs the /buckets route; putting a database on a bucket needs read on that bucket",
+            "objectType": "bucket",
+            "criteriaAnd": [{ "field": "bucketId", "operator": "contains", "value": ".*" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
         }
     ]
 }

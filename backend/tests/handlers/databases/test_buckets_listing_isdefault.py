@@ -18,6 +18,17 @@ from backend.backend.handlers.databases.databaseService import get_buckets
 from backend.backend.models.databases import BucketModel
 
 
+# A caller allowed to read every registration (Tier 2 `bucket` GET), so these tests see the projection.
+READER = {"tokens": ["reader"]}
+
+
+@pytest.fixture(autouse=True)
+def _bucket_reader():
+    with patch("backend.backend.handlers.databases.databaseService.CasbinEnforcer") as enforcer:
+        enforcer.return_value.enforce.return_value = True
+        yield enforcer
+
+
 def _scan_response(rows):
     """A low-level DynamoDB scan response; get_buckets deserializes the typed shape itself."""
     def typed(value):
@@ -47,7 +58,7 @@ class TestBucketsListingIsDefault:
         ]
         with patch("backend.backend.handlers.databases.databaseService.dbClient") as db:
             db.scan.return_value = _scan_response(rows)
-            result = get_buckets({}, {})
+            result = get_buckets({}, READER)
 
         items = result.Items
         assert len(items) == 2, "both rows must be returned before their flags are compared"
@@ -67,7 +78,7 @@ class TestBucketsListingIsDefault:
         }]
         with patch("backend.backend.handlers.databases.databaseService.dbClient") as db:
             db.scan.return_value = _scan_response(rows)
-            result = get_buckets({}, {})
+            result = get_buckets({}, READER)
 
         assert len(result.Items) == 1
         assert result.Items[0].isDefault is False
@@ -83,7 +94,7 @@ class TestBucketsListingIsDefault:
         }]
         with patch("backend.backend.handlers.databases.databaseService.dbClient") as db:
             db.scan.return_value = _scan_response(rows)
-            result = get_buckets({}, {})
+            result = get_buckets({}, READER)
 
         payload = json.loads(json.dumps(result.dict()))
         assert payload["Items"][0]["isDefault"] is True

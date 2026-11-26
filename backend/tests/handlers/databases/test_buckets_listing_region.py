@@ -27,6 +27,17 @@ from backend.backend.handlers.databases.databaseService import get_buckets
 from backend.backend.models.databases import BucketModel
 
 
+# A caller allowed to read every registration (Tier 2 `bucket` GET), so these tests see the projection.
+READER = {"tokens": ["reader"]}
+
+
+@pytest.fixture(autouse=True)
+def _bucket_reader():
+    with patch("backend.backend.handlers.databases.databaseService.CasbinEnforcer") as enforcer:
+        enforcer.return_value.enforce.return_value = True
+        yield enforcer
+
+
 _BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend"))
 
 # Every handler module that reads or writes asset buckets, or mints presigned URLs for them.
@@ -94,7 +105,7 @@ class TestBucketsListingRegion:
         ]
         with patch("backend.backend.handlers.databases.databaseService.dbClient") as db:
             db.scan.return_value = _scan_response(rows)
-            result = get_buckets({}, {})
+            result = get_buckets({}, READER)
         by_name = {i.bucketName: i for i in result.Items}
         assert by_name["local-bucket"].bucketRegion == "us-west-2"
         assert by_name["local-bucket"].bucketAccountId is None
@@ -106,7 +117,7 @@ class TestBucketsListingRegion:
                  "baseAssetsPrefix": "/"}]
         with patch("backend.backend.handlers.databases.databaseService.dbClient") as db:
             db.scan.return_value = _scan_response(rows)
-            result = get_buckets({}, {})
+            result = get_buckets({}, READER)
         payload = json.loads(json.dumps(result.dict()))
         assert payload["Items"][0]["bucketRegion"] is None
         assert payload["Items"][0]["bucketAccountId"] is None
