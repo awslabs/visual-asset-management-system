@@ -90,6 +90,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** The upload page completes an upload whose files are all zero bytes, and a batch of only empty files inside a larger upload, instead of leaving it In Progress. ([#787](https://github.com/awslabs/visual-asset-management-system/issues/787))
 -   **Web** A file opened from the file manager before its version had loaded is looked up once instead of three times, a failed lookup is no longer repeated until the page is left, and a lookup that answers after another file of the asset was opened no longer replaces that file. ([#519](https://github.com/awslabs/visual-asset-management-system/issues/519))
 -   **Web** The file page offers the Preview option for any file that has a preview file, whichever of the file and the asset details loads first, and a version opened from the file's versions list keeps it. ([#1673](https://github.com/awslabs/visual-asset-management-system/issues/1673))
+-   **Documentation** The permissions user guide and the CLI troubleshooting page give the role-name rule the API applies: 1-256 characters of letters, numbers, spaces, hyphens, periods and underscores, with spaces before and after the name removed. They said letters, numbers, hyphens and underscores only. The user guide adds that the web form limits a name to 3-64 characters, and the API reference gives the pattern. ([#378](https://github.com/awslabs/visual-asset-management-system/issues/378))
 
 ### Chores
 

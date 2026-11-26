@@ -119,6 +119,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Zero-byte uploads complete** — An upload whose files are all zero bytes, or a batch of only empty files inside a larger upload, completes instead of staying In Progress. (issue #787)
 -   **File page version lookup** — A file opened from the file manager before its version loaded is looked up once, a failed lookup is not repeated, and a late answer for a file left behind no longer replaces the file opened since. (issue #519)
 -   **File page Preview option** — The file page offers the Preview option for any file that has a preview file, whichever of the file and the asset details loads first, and a version opened from the file's versions list keeps it. (issue #1673)
+-   **Role-name rule** — The [permissions](../user-guide/permissions.md#creating-a-custom-role) user guide, the CLI troubleshooting page and the API reference give the role-name rule the API applies: 1-256 characters of letters, numbers, spaces, hyphens, periods and underscores. (issue #378)
 
 **Other changes:**
 
