@@ -29,7 +29,7 @@ const mockAsset = {
     isDistributable: true,
 };
 jest.mock("../../services/APIService", () => ({
-    fetchAssetWithStatus: jest.fn(),
+    fetchAsset: jest.fn(),
     fetchFileInfo: jest.fn(),
 }));
 jest.mock("../../services/FileOperationsService", () => ({ archiveFile: jest.fn() }));
@@ -78,8 +78,8 @@ const fileInfoAnswer = (previewFile: string | undefined) => [
 
 /** Resolves the asset details after `ms`, and the file read at once: the file answers first. */
 const assetDetailsAfter = (ms: number) =>
-    api.fetchAssetWithStatus.mockImplementation(
-        () => new Promise((resolve) => setTimeout(() => resolve([true, mockAsset]), ms))
+    api.fetchAsset.mockImplementation(
+        () => new Promise((resolve) => setTimeout(() => resolve(mockAsset), ms))
     );
 
 const direct = (search = "") => {
@@ -94,7 +94,7 @@ const NOTICE = /This preview belongs to the latest version of the file/;
 
 beforeEach(() => {
     mockTables.length = 0;
-    api.fetchAssetWithStatus.mockReset();
+    api.fetchAsset.mockReset();
     api.fetchFileInfo.mockReset();
 });
 
@@ -119,7 +119,7 @@ describe("ViewFile Preview option", () => {
                     setTimeout(() => resolve(fileInfoAnswer("asset1/a.glb.previewFile.gif")), 300)
                 )
         );
-        api.fetchAssetWithStatus.mockResolvedValue([true, mockAsset]);
+        api.fetchAsset.mockResolvedValue(mockAsset);
         direct();
         render(<ViewFile />);
         expect(await screen.findByText("Preview", {}, { timeout: 3000 })).toBeInTheDocument();
