@@ -193,3 +193,101 @@ describe("CreateDatabase bucket option labels", () => {
         expect(texts[0]).toContain("fast - / (us-east-1) (VAMS default) (accelerated)");
     });
 });
+
+// GET /buckets lists only the buckets the role may read (#1978). The form reflects that answer: it
+// decides nothing itself.
+const NO_BUCKET =
+    "No bucket is available to your role. Ask an administrator for a bucket permission.";
+
+describe("CreateDatabase with no bucket available to the role", () => {
+    it("says so in the bucket list and on the field when the API lists no bucket", async () => {
+        fetchBuckets.mockResolvedValue({ Items: [] });
+        render(form(true));
+        await waitFor(() => expect(fetchBuckets).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(screen.getByText(NO_BUCKET)).toBeInTheDocument());
+        const select = createWrapper(document.body).findSelect('[data-testid="database-bucket"]');
+        select!.openDropdown();
+        expect(select!.findDropdown().getElement().textContent).toContain(NO_BUCKET);
+        expect(screen.queryByText("A default bucket is required")).not.toBeInTheDocument();
+    });
+
+    it("keeps the required message when the API lists buckets", async () => {
+        fetchBuckets.mockResolvedValue({
+            Items: [
+                { bucketId: "bucket-one", bucketName: "a", baseAssetsPrefix: "/" },
+                { bucketId: "bucket-two", bucketName: "b", baseAssetsPrefix: "/" },
+            ],
+        });
+        render(form(true));
+        await waitFor(() => expect(fetchBuckets).toHaveBeenCalledTimes(1));
+        await waitFor(() =>
+            expect(screen.getByText("A default bucket is required")).toBeInTheDocument()
+        );
+        expect(screen.queryByText(NO_BUCKET)).not.toBeInTheDocument();
+    });
+});
+
+describe("CreateDatabase edit form, current bucket", () => {
+    const database = {
+        databaseId: "team-db",
+        description: "a team database",
+        defaultBucketId: "bucket-current",
+    };
+    const editForm = () => (
+        <CreateDatabase
+            open={true}
+            setOpen={jest.fn()}
+            setReload={jest.fn()}
+            initState={database}
+        />
+    );
+    const select = () =>
+        createWrapper(document.body).findSelect('[data-testid="database-bucket"]')!;
+
+    it("shows the current bucket id when the API does not list it", async () => {
+        fetchBuckets.mockResolvedValue({
+            Items: [{ bucketId: "bucket-other", bucketName: "other", baseAssetsPrefix: "/" }],
+        });
+        render(editForm());
+        await waitFor(() =>
+            expect(screen.getByTestId("database-bucket-current").textContent).toBe(
+                "Current bucket: bucket-current"
+            )
+        );
+        expect(select().findTrigger().getElement().textContent).toContain(
+            "Keep the current bucket"
+        );
+        expect(select().findTrigger().getElement().textContent).not.toContain("Select a bucket");
+    });
+
+    it("shows the current bucket id when the API lists no bucket", async () => {
+        fetchBuckets.mockResolvedValue({ Items: [] });
+        render(editForm());
+        await waitFor(() =>
+            expect(screen.getByTestId("database-bucket-current")).toBeInTheDocument()
+        );
+        // The database has a bucket, so the field is not in error.
+        expect(screen.queryByText(NO_BUCKET)).not.toBeInTheDocument();
+        expect(screen.queryByText("A default bucket is required")).not.toBeInTheDocument();
+    });
+
+    it("shows the current bucket id when the role may not list buckets", async () => {
+        mockAllowed = { loading: false, buckets: false, failed: false };
+        render(editForm());
+        await waitFor(() =>
+            expect(screen.getByTestId("database-bucket-current")).toBeInTheDocument()
+        );
+        expect(fetchBuckets).not.toHaveBeenCalled();
+    });
+
+    it("selects the current bucket and shows no extra text when the API lists it", async () => {
+        fetchBuckets.mockResolvedValue({
+            Items: [{ bucketId: "bucket-current", bucketName: "mine", baseAssetsPrefix: "/" }],
+        });
+        render(editForm());
+        await waitFor(() =>
+            expect(select().findTrigger().getElement().textContent).toContain("mine - /")
+        );
+        expect(screen.queryByTestId("database-bucket-current")).not.toBeInTheDocument();
+    });
+});

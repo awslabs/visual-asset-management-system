@@ -44,6 +44,8 @@ const COMPLIANCE_BIND_DATABASE_API_ROUTE = "/compliance/bind/{databaseId}";
 // this component mounted (as the create modal and as the edit modal of a selected row) for
 // callers who may only list databases.
 const BUCKETS_API_ROUTE = "/buckets";
+const NO_BUCKET_AVAILABLE_MESSAGE =
+    "No bucket is available to your role. Ask an administrator for a bucket permission.";
 
 interface CreateDatabaseProps {
     open: boolean;
@@ -199,6 +201,11 @@ export default function CreateDatabase({
     const [buckets, setBuckets] = useState<BucketOption[]>([]);
     const [selectedBucket, setSelectedBucket] = useState<SelectProps.Option | null>(null);
     const [loadingBuckets, setLoadingBuckets] = useState(false);
+    // Whether GET /buckets answered with a list. The API lists only the buckets the role may read, so
+    // an empty answer means no bucket is available to the role.
+    const [bucketsLoaded, setBucketsLoaded] = useState(false);
+    // Whether the bucket list request ended, with or without a list.
+    const [bucketsSettled, setBucketsSettled] = useState(false);
 
     const [groupOptions, setGroupOptions] = useState<MultiselectProps.Option[]>([]);
     const [loadingGroups, setLoadingGroups] = useState(true);
@@ -330,6 +337,7 @@ export default function CreateDatabase({
                     // API returns an object with Items array
                     const items: BucketOption[] = bucketsData.Items;
                     setBuckets(items);
+                    setBucketsLoaded(true);
                     console.log("Loaded buckets:", items);
 
                     // Show the bucket the database already uses as selected.
@@ -362,6 +370,7 @@ export default function CreateDatabase({
                 console.error("Error fetching buckets:", error);
             } finally {
                 setLoadingBuckets(false);
+                setBucketsSettled(true);
             }
         };
 
@@ -374,6 +383,19 @@ export default function CreateDatabase({
         permissionsFailed,
         formState.defaultBucketId,
     ]);
+
+    // The bucket list as the API answered it. With none, the role has no bucket to choose; a database
+    // whose bucket is not in the list keeps it, and the form shows its id instead of a placeholder.
+    const noBucketAvailable = bucketsLoaded && !loadingBuckets && buckets.length === 0;
+    const bucketListSettled =
+        bucketsSettled || (!permissionsLoading && !canListBuckets && !permissionsFailed);
+    const currentBucketNotListed =
+        !!initState?.databaseId &&
+        bucketListSettled &&
+        !!savedState?.defaultBucketId &&
+        formState.defaultBucketId === savedState.defaultBucketId &&
+        !loadingBuckets &&
+        !buckets.some((bucket) => bucket.bucketId === formState.defaultBucketId);
 
     // An empty create form for the next database; it keeps the selected bucket so the selector and
     // the form agree.
@@ -585,10 +607,19 @@ export default function CreateDatabase({
                                 constraintText={`Required. Select a bucket and prefix for this ${Synonyms.database}.`}
                                 errorText={
                                     !formState.defaultBucketId
-                                        ? "A default bucket is required"
+                                        ? noBucketAvailable
+                                            ? NO_BUCKET_AVAILABLE_MESSAGE
+                                            : "A default bucket is required"
                                         : null
                                 }
                             >
+                                {currentBucketNotListed && (
+                                    <Box margin={{ bottom: "xs" }}>
+                                        <span data-testid="database-bucket-current">
+                                            Current bucket: {formState.defaultBucketId}
+                                        </span>
+                                    </Box>
+                                )}
                                 <Select
                                     selectedOption={selectedBucket}
                                     onChange={({ detail }) => {
@@ -602,10 +633,16 @@ export default function CreateDatabase({
                                         label: bucketOptionLabel(bucket),
                                         value: bucket.bucketId,
                                     }))}
-                                    placeholder="Select a bucket"
+                                    placeholder={
+                                        currentBucketNotListed
+                                            ? "Keep the current bucket"
+                                            : "Select a bucket"
+                                    }
                                     empty={
                                         permissionsLoading || canListBuckets
-                                            ? undefined
+                                            ? noBucketAvailable
+                                                ? NO_BUCKET_AVAILABLE_MESSAGE
+                                                : undefined
                                             : permissionsFailed
                                             ? "The permissions check failed, so the bucket list could not be loaded. Close and reopen this form to try again."
                                             : "Your role does not allow listing buckets."
