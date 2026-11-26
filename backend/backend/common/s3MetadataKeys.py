@@ -158,8 +158,9 @@ VAMS_CHANGE_SOURCE_RESTORE_VALUES: FrozenSet[str] = frozenset(
 # re-indexes the path for search. Consumers derive nothing new from such a version: no workflow trigger
 # fires (workflows already ran on that content), the vector indexer leaves the file's items as the writer
 # left them and queues no embedding, bucket sync writes no change-history row (the writer moved the row of
-# the source version, with its provenance, to the copy), compliance does not re-evaluate, and the Physna
-# add-on keeps its copy (keyed by the asset path, which does not change).
+# the source version, with its provenance, to the copy), compliance does not re-evaluate, the Physna add-on
+# keeps its copy, and the Garnet Framework add-on sends no entity for it (both are keyed by the asset path,
+# which does not change; the writer's search re-index of the path sends Garnet the entity once).
 VAMS_CHANGE_SOURCE_RELOCATION_VALUES: FrozenSet[str] = frozenset(
     {
         VAMS_CHANGE_SOURCE_FILE_RELOCATE,

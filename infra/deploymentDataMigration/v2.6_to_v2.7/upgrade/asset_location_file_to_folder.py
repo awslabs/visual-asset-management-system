@@ -37,8 +37,9 @@ is already at its new path, and a record whose old path now names another file o
 in place and reported. A moved object's copies carry the change source ``fileRelocate`` and the source version
 id (``vams-changeassetfileversionfrom``), so a resumed move continues where it stopped and stops at a version it
 did not write, and the backend treats each copy as a version the file already held: no fileUpload workflow
-starts, nothing is embedded again, bucket sync keeps the history row this step moved, and the Physna add-on
-keeps its copy. A multipart copy's upload id is noted in the conversion record while it runs, so the run that
+starts, nothing is embedded again, bucket sync keeps the history row this step moved, the Physna add-on
+keeps its copy, and the Garnet Framework add-on gets the file's entity once, from this step's search
+re-index. A multipart copy's upload id is noted in the conversion record while it runs, so the run that
 resumes an interrupted move aborts the upload that move left.
 
 Derived data follows the paths, only for the converted assets and the paths that changed. The vector items
@@ -110,9 +111,9 @@ READABLE_STORAGE_CLASSES = frozenset(('STANDARD', 'REDUCED_REDUNDANCY', 'STANDAR
                                       'INTELLIGENT_TIERING', 'GLACIER_IR', 'OUTPOSTS', 'EXPRESS_ONEZONE'))
 
 # The object metadata a move's copies carry (backend common/s3MetadataKeys.py): the relocation change source,
-# which no workflow trigger, vector indexer, bucket sync history row, compliance evaluation or Physna upload
-# reacts to (VAMS_CHANGE_SOURCE_RELOCATION_VALUES), the system user, and the source version, so a resumed move
-# can map each copy to its source version.
+# which no workflow trigger, vector indexer, bucket sync history row, compliance evaluation, Physna upload or
+# Garnet entity reacts to (VAMS_CHANGE_SOURCE_RELOCATION_VALUES), the system user, and the source version, so
+# a resumed move can map each copy to its source version.
 CHANGE_SOURCE_METADATA_KEY = 'vams-changesource'
 CHANGE_USER_ID_METADATA_KEY = 'vams-changeuserid'
 CHANGE_DATABASE_ID_FROM_METADATA_KEY = 'vams-changedatabaseidfrom'
