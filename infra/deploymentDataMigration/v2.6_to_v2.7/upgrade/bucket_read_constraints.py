@@ -20,7 +20,9 @@ out), because the authorizer decides a concrete path. The step leaves a role tha
 without changing them. A role whose constraints cannot be read or evaluated is reported and left alone.
 
 It writes only the constraints table: one ``PutItem`` per role, conditional on the item not existing,
-under an id derived from the role name, so a repeat writes nothing. Every role it looked at is one line of
+under an id derived from the role name. A repeat writes nothing for a role that still has a ``bucket``
+constraint; it cannot tell a role whose constraint was removed after the first run from one that never had
+one, and gives that role the bucket read again. Every role it looked at is one line of
 ``bucketReadConstraints-<dry-run|execute>-report-<UTC time>.jsonl`` naming the routes that qualified it.
 Standard library and botocore only; it imports no backend code.
 """

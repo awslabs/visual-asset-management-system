@@ -3380,7 +3380,9 @@ Notes:
     contains .*; one conditional PutItem). It changes no other constraint, reports users granted a route
     directly without changing them, and leaves a role whose constraints cannot be read unchanged. One line
     per role, naming the routes that qualified it, goes to bucketReadConstraints-<mode>-report-<UTC
-    time>.jsonl; a repeat writes nothing. It runs after orphanedTriggers under --steps all and does not
+    time>.jsonl; a repeat writes nothing for a role that still has a bucket constraint (a role whose bucket
+    constraint was removed after the first run gets the bucket read again, so run it during the upgrade
+    only). It runs after orphanedTriggers under --steps all and does not
     wait for the location steps. Skipping it: re-import the templates (or add a bucket constraint by hand)
     for roles that list buckets or create or update databases.
         """
