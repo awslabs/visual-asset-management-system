@@ -38,7 +38,8 @@ in place and reported. A moved object's copies carry the change source ``fileRel
 id (``vams-changeassetfileversionfrom``), so a resumed move continues where it stopped and stops at a version it
 did not write, and the backend treats each copy as a version the file already held: no fileUpload workflow
 starts, nothing is embedded again, bucket sync keeps the history row this step moved, and the Physna add-on
-keeps its copy.
+keeps its copy. A multipart copy's upload id is noted in the conversion record while it runs, so the run that
+resumes an interrupted move aborts the upload that move left.
 
 Derived data follows the paths, only for the converted assets and the paths that changed. The vector items
 of a moved path (``VectorEmbeddingsStorageTable``) move with it, with their embeddings, so nothing is
@@ -82,6 +83,10 @@ PREVIEW_FILE_PATTERN = '.previewFile.'
 
 STATE_PENDING = 'pending'
 STATE_COMPLETE = 'complete'
+# The multipart upload a large copy of a move has open, noted in the conversion record while it runs (the key and
+# the upload id), so the run that resumes an interrupted move aborts it.
+MULTIPART_KEY_FIELD = 'multipartKey'
+MULTIPART_UPLOAD_ID_FIELD = 'multipartUploadId'
 
 MODE_IN_PLACE = 'in-place'
 MODE_APPEND_SLASH = 'append-slash'
@@ -865,6 +870,45 @@ def flip_row(dynamodb_client, asset_table: str, candidate: Candidate, bucket: st
         raise
 
 
+def note_multipart_upload(dynamodb_client, asset_table: str, candidate: Candidate, key: str,
+                          upload_id: Optional[str]) -> None:
+    """Note in the pending conversion record the multipart upload a copy of the move has open at ``key``
+    (``upload_id``), or remove the note (``None``) once that copy finished. Best effort: a note that cannot be
+    written leaves an interrupted copy's upload to the bucket's lifecycle rule."""
+    names = {'#c': CONVERSION_ATTRIBUTE, '#s': 'state', '#k': MULTIPART_KEY_FIELD, '#u': MULTIPART_UPLOAD_ID_FIELD}
+    values = {':pending': {'S': STATE_PENDING}}
+    if upload_id:
+        expression = 'SET #c.#k = :key, #c.#u = :id'
+        values.update({':key': {'S': key}, ':id': {'S': upload_id}})
+    else:
+        expression = 'REMOVE #c.#k, #c.#u'
+    try:
+        dynamodb_client.update_item(
+            TableName=asset_table,
+            Key={'databaseId': {'S': candidate.database_id}, 'assetId': {'S': candidate.asset_id}},
+            UpdateExpression=expression, ConditionExpression='#c.#s = :pending',
+            ExpressionAttributeNames=names, ExpressionAttributeValues=values)
+    except ClientError as e:
+        logger.warning(f"{candidate.database_id} / {candidate.asset_id}: the multipart upload note was not "
+                       f"{'written' if upload_id else 'removed'} ({_error_code(e) or e})")
+
+
+def abort_noted_upload(s3_client, bucket: str, conversion: Dict[str, str]) -> str:
+    """Abort the multipart upload a pending move's conversion record names: the copy an interrupted run left
+    open. Returns '' when the record names none, 'aborted', or 'gone' when S3 no longer has it (the copy
+    finished or was aborted already)."""
+    key, upload_id = conversion.get(MULTIPART_KEY_FIELD, ''), conversion.get(MULTIPART_UPLOAD_ID_FIELD, '')
+    if not (key and upload_id):
+        return ''
+    try:
+        s3_client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+        return 'aborted'
+    except ClientError as e:
+        if _error_code(e) in ('NoSuchUpload', '404'):
+            return 'gone'
+        raise
+
+
 def complete_row(dynamodb_client, asset_table: str, candidate: Candidate) -> str:
     try:
         dynamodb_client.update_item(
@@ -1279,12 +1323,36 @@ def copied_versions(s3_client, bucket: str, target_key: str, sources: Set[str]) 
     return mapping, foreign
 
 
+def _copy_version(s3_client, source: Dict, bucket: str, target_key: str, extra: Dict,
+                  on_upload: Optional[Callable[[Optional[str]], None]]) -> None:
+    """``s3_client.copy`` of one version. A copy large enough to be multipart opens an upload first; its id
+    goes to ``on_upload`` before the first part is copied, and ``on_upload(None)`` follows once the copy
+    finished, so a run that is stopped mid-copy leaves the id for the run that resumes the move."""
+    def opened(parsed=None, **_):
+        if on_upload and parsed and parsed.get('Key') == target_key and parsed.get('UploadId'):
+            on_upload(parsed['UploadId'])
+            opened.upload = parsed['UploadId']
+
+    opened.upload = None
+    handler_id = f"{STEP}-multipart-{id(opened)}"
+    events = s3_client.meta.events
+    events.register('after-call.s3.CreateMultipartUpload', opened, unique_id=handler_id)
+    try:
+        s3_client.copy(source, bucket, target_key, ExtraArgs=extra)
+    finally:
+        events.unregister('after-call.s3.CreateMultipartUpload', unique_id=handler_id)
+    if on_upload and opened.upload:
+        on_upload(None)
+
+
 def move_object(s3_client, bucket: str, source_key: str, target_key: str, database_id: str, asset_id: str,
-                path: str, archived: bool) -> Tuple[str, Dict[str, str]]:
+                path: str, archived: bool,
+                on_upload: Optional[Callable[[Optional[str]], None]] = None) -> Tuple[str, Dict[str, str]]:
     """Copy every version of ``source_key`` to ``target_key``, oldest first, as relocated versions
-    (``fileRelocate``); put a delete marker on the target when the source was archived (``archived``, read before the
-    conversion started) and one on the source. Returns ``(outcome, source version -> target version)``; the
-    outcome is 'moved', or 'changed' when the target holds a version the step did not write."""
+    (``fileRelocate``); put a delete marker on the target when the source was archived (``archived``, read
+    before the conversion started) and one on the source. ``on_upload`` hears of each multipart upload a copy
+    opens (``_copy_version``). Returns ``(outcome, source version -> target version)``; the outcome is
+    'moved', or 'changed' when the target holds a version the step did not write."""
     versions = [e for e in exact_versions(s3_client, bucket, source_key) if not e['Marker']][::-1]
     mapping, foreign = copied_versions(s3_client, bucket, target_key, {e['VersionId'] for e in versions})
     if foreign:
@@ -1296,8 +1364,8 @@ def move_object(s3_client, bucket: str, source_key: str, target_key: str, databa
         extra = {'Metadata': _copy_metadata(head, database_id, asset_id, path, entry['VersionId']),
                  'MetadataDirective': 'REPLACE'}
         extra.update({name: head[name] for name in _COPIED_HEADERS if head.get(name)})
-        s3_client.copy({'Bucket': bucket, 'Key': source_key, 'VersionId': entry['VersionId']}, bucket, target_key,
-                       ExtraArgs=extra)
+        _copy_version(s3_client, {'Bucket': bucket, 'Key': source_key, 'VersionId': entry['VersionId']}, bucket,
+                      target_key, extra, on_upload)
         written = s3_client.head_object(Bucket=bucket, Key=target_key)
         if (written.get('Metadata') or {}).get(CHANGE_FILE_VERSION_FROM_METADATA_KEY) != entry['VersionId']:
             return 'changed', mapping
@@ -1434,14 +1502,25 @@ def _execute(dynamodb_client, s3_client, cfg: Dict, context: Context, candidate:
     if mode == MODE_MOVE:
         name = _file_name(file_key)
         archived = set(candidate.conversion.get('archived') or ()) if plan.outcome == 'resume' else set(plan.archived)
+        if plan.outcome == 'resume':
+            aborted = abort_noted_upload(s3_client, bucket, candidate.conversion)
+            if aborted:
+                report(dict(base, part='objects', action=f"multipart upload {aborted}",
+                            key=candidate.conversion.get(MULTIPART_KEY_FIELD, ''), detail=(
+                                'the interrupted run left this copy open; it is copied again')))
+                note_multipart_upload(dynamodb_client, asset_table, candidate, '', None)
         sources = own_files(s3_client, bucket, file_key)
         mover.key_map = {source: f"{target}{name}{source[len(file_key):]}" for source in sources}
         for source in sources:
             destination = mover.key_map[source]
             path = '/' + destination[len(target):]
+
+            def on_upload(upload_id: Optional[str], key: str = destination) -> None:
+                note_multipart_upload(dynamodb_client, asset_table, candidate, key, upload_id)
+
             try:
                 outcome, mapping = move_object(s3_client, bucket, source, destination, database_id,
-                                               candidate.asset_id, path, source in archived)
+                                               candidate.asset_id, path, source in archived, on_upload)
             except ClientError as e:
                 _stop_move(dynamodb_client, s3_client, asset_table, candidate, bucket, file_key, target, mover.key_map,
                            e, counts, report, base)

@@ -1349,6 +1349,16 @@ describe("the v2.6 to v2.7 assetLocationFileToFolder step", () => {
         expect(matching).toContain("if change_source in RELOCATION_CHANGE_SOURCES:");
     });
 
+    it("notes a multipart copy's upload and aborts it when the move is resumed", () => {
+        const execute = module.slice(
+            module.indexOf("def _execute("),
+            module.indexOf("def _stop_move(")
+        );
+        expect(execute).toContain("abort_noted_upload(s3_client, bucket, candidate.conversion)");
+        expect(module).toContain("events.register('after-call.s3.CreateMultipartUpload'");
+        expect(readme).toContain("`AbortIncompleteMultipartUpload`");
+    });
+
     it("ships with no resolutions, so a copied config never moves a file", () => {
         expect(config.asset_location_file_to_folder_resolutions).toBeNull();
         expect(config.dry_run).toBe(true);
