@@ -72,40 +72,41 @@ class TestTheMetadataRows:
         assert (seen[0] if seen else set()) == expected
 
 
+@pytest.fixture
+def route(monkeypatch):
+    from moto import mock_aws
+    BUCKET = "vams-test-assets"
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket=BUCKET)
+        client.put_bucket_versioning(Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"})
+        for key in ("A1/x.txt", "A1//x.txt", "A1//sub/y.txt"):
+            client.put_object(Bucket=BUCKET, Key=key, Body=b"content")
+        asset = {"databaseId": DB, "assetId": "A1", "bucketId": "b1", "assetLocation": {"Key": "A1/"}}
+        from tests.common.fileAttributionFakes import AttributionAssetTable, AttributionBucketsTable, registration
+        monkeypatch.setattr(af, "asset_table", AttributionAssetTable([asset]))
+        monkeypatch.setattr(af, "buckets_table", AttributionBucketsTable([registration("b1", BUCKET, "")]))
+        monkeypatch.setattr(af, "s3_client", client)
+        monkeypatch.setattr(af, "s3_resource", boto3.resource("s3", region_name="us-east-1"))
+        monkeypatch.setattr(af, "get_asset_with_permissions", lambda *args, **kwargs: asset)
+        monkeypatch.setattr(af, "get_default_bucket_details",
+                            lambda bucket_id: {"bucketId": bucket_id, "bucketName": BUCKET, "baseAssetsPrefix": ""})
+        monkeypatch.setattr(af, "asset_file_version_history_table", None)
+        monkeypatch.setattr(af, "MAX_PARALLEL_S3_WORKERS", 1)
+        for name in ("send_subscription_email", "delete_assetAuxiliary_files", "delete_auxiliary_files_of_keys",
+                     "delete_file_metadata"):
+            monkeypatch.setattr(af, name, lambda *args, **kwargs: None)
+        calls = {"versions": [], "metadata": []}
+        monkeypatch.setattr(af, "delete_file_version_records",
+                            lambda db, a, paths: calls["versions"].append(sorted(paths)))
+        monkeypatch.setattr(af, "delete_files_metadata",
+                            lambda db, a, paths: calls["metadata"].append(sorted(paths)))
+        yield calls
+
+
 @pytest.mark.unit
 class TestTheDeleteRoute:
     """The route hands the cleanups each deleted file's listed path."""
-
-    @pytest.fixture
-    def route(self, monkeypatch):
-        from moto import mock_aws
-        BUCKET = "vams-test-assets"
-        with mock_aws():
-            client = boto3.client("s3", region_name="us-east-1")
-            client.create_bucket(Bucket=BUCKET)
-            client.put_bucket_versioning(Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"})
-            for key in ("A1/x.txt", "A1//x.txt", "A1//sub/y.txt"):
-                client.put_object(Bucket=BUCKET, Key=key, Body=b"content")
-            asset = {"databaseId": DB, "assetId": "A1", "bucketId": "b1", "assetLocation": {"Key": "A1/"}}
-            from tests.common.fileAttributionFakes import AttributionAssetTable, AttributionBucketsTable, registration
-            monkeypatch.setattr(af, "asset_table", AttributionAssetTable([asset]))
-            monkeypatch.setattr(af, "buckets_table", AttributionBucketsTable([registration("b1", BUCKET, "")]))
-            monkeypatch.setattr(af, "s3_client", client)
-            monkeypatch.setattr(af, "s3_resource", boto3.resource("s3", region_name="us-east-1"))
-            monkeypatch.setattr(af, "get_asset_with_permissions", lambda *args, **kwargs: asset)
-            monkeypatch.setattr(af, "get_default_bucket_details",
-                                lambda bucket_id: {"bucketId": bucket_id, "bucketName": BUCKET, "baseAssetsPrefix": ""})
-            monkeypatch.setattr(af, "asset_file_version_history_table", None)
-            monkeypatch.setattr(af, "MAX_PARALLEL_S3_WORKERS", 1)
-            for name in ("send_subscription_email", "delete_assetAuxiliary_files", "delete_auxiliary_files_of_keys",
-                         "delete_file_metadata"):
-                monkeypatch.setattr(af, name, lambda *args, **kwargs: None)
-            calls = {"versions": [], "metadata": []}
-            monkeypatch.setattr(af, "delete_file_version_records",
-                                lambda db, a, paths: calls["versions"].append(sorted(paths)))
-            monkeypatch.setattr(af, "delete_files_metadata",
-                                lambda db, a, paths: calls["metadata"].append(sorted(paths)))
-            yield calls
 
     @pytest.mark.parametrize("path", ["//x.txt", "A1//x.txt"])
     def test_a_file_delete_names_the_file_by_its_listed_path(self, route, path):
@@ -116,3 +117,24 @@ class TestTheDeleteRoute:
         af.delete_file(DB, "A1", "//", True, True, {"tokens": ["alice"], "roles": []})
         assert route["metadata"] == [["//sub/y.txt", "//x.txt"]]
         assert route["versions"] == [["//sub/y.txt", "//x.txt"]]
+
+
+@pytest.mark.unit
+class TestTheArchiveHistoryPath:
+    """#1977: an archive records the delete marker's history under the archived file's listed path."""
+
+    @pytest.fixture
+    def archive(self, route, monkeypatch):
+        written = []
+        monkeypatch.setattr(af, "write_archive_history",
+                            lambda db, a, path, version_id, user: written.append(path))
+        yield written
+
+    @pytest.mark.parametrize("path", ["//x.txt", "A1//x.txt"])
+    def test_a_file_archive_records_the_listed_path(self, archive, path):
+        af.archive_file(DB, "A1", path, False, {"tokens": ["alice"], "roles": []})
+        assert archive == ["//x.txt"]
+
+    def test_a_folder_archive_records_each_listed_path(self, archive):
+        af.archive_file(DB, "A1", "//", True, {"tokens": ["alice"], "roles": []})
+        assert sorted(archive) == ["//sub/y.txt", "//x.txt"]

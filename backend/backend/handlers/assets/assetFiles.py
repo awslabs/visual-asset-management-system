@@ -2803,14 +2803,15 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
         # Convert full keys to relative paths
         for key, marker_version_id in archived_keys.items():
             if contains(base_key, key):
-                relative_path = _relative_to_location(base_key, key).lstrip('/')
-                affected_files.append(relative_path)
+                listed_path = _relative_to_location(base_key, key)
+                affected_files.append(listed_path.lstrip('/'))
                 # Archive uses a delete marker (no S3 metadata) so sqsBucketSync
                 # cannot derive provenance -- write the history record directly,
-                # keyed to the new delete-marker VersionId. Skip folder markers.
+                # keyed to the new delete-marker VersionId and the file's listed path
+                # ('//x' for '{location}/x', #1977). Skip folder markers.
                 if not key.endswith('/'):
                     write_archive_history(
-                        databaseId, assetId, relative_path, marker_version_id, acting_user
+                        databaseId, assetId, listed_path, marker_version_id, acting_user
                     )
     else:
         # Check if this is a preview file - allow direct archive operations on preview files
@@ -2836,10 +2837,11 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
 
         # Archive uses a delete marker (no S3 metadata) so sqsBucketSync cannot
         # derive provenance -- write the history record directly. Key it to the new
-        # delete-marker VersionId so it matches the version shown in file history.
-        # Use the relative path (no leading slash) to match sqsBucketSync's filePath key form.
+        # delete-marker VersionId so it matches the version shown in file history, and to
+        # the file's listed path, the key sqsBucketSync records it under, whichever form
+        # the request named it by ('//x' for '{location}/x', #1977)
         write_archive_history(
-            databaseId, assetId, file_path.lstrip('/'), delete_marker_version_id, acting_user
+            databaseId, assetId, _relative_to_location(base_key, full_key), delete_marker_version_id, acting_user
         )
 
     # Send email for asset file change
