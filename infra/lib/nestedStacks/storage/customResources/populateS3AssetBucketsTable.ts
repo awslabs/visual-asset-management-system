@@ -142,15 +142,21 @@ def prefixes_overlap(first, second):
     return first == second or first.startswith(second) or second.startswith(first)
 
 def stored_overlap_error(configured_pairs, existing_groups, runtime_rows):
-    """The failure message for the first configured registration whose prefix equals or nests with
-    the prefix of a stored row of the same bucket that the configuration does not include (a retired
-    row, a row this deployment retires, or a runtime row), or None. Assets of that row keep its
-    bucketId and their locations under its prefix, so a second registration over the same objects
-    would leave a file with two owners."""
+    """The failure message for the first registration this deployment adds (a configured pair with no
+    stored row) whose prefix equals or nests with the prefix of a stored row of the same bucket that
+    the configuration does not include (a retired row, a row this deployment retires, or a runtime
+    row), or None. Assets of that row keep its bucketId and their locations under its prefix, so a
+    second registration over the same objects would leave a file with two owners.
+
+    A configured pair that already has a row is not checked: its overlap, if any, is already stored,
+    and refusing it would fail every later deployment and the rollback of a failed one. CloudFormation
+    rolls a failed update back by sending the previous properties to this (already updated) function,
+    and those name only pairs the previous deployment wrote."""
     unmatched = [row for pair, rows in existing_groups.items() if pair not in configured_pairs
                  for row in rows]
     unmatched.extend(runtime_rows)
-    for bucket_name, prefix in sorted(configured_pairs):
+    added = [pair for pair in configured_pairs if pair not in existing_groups]
+    for bucket_name, prefix in sorted(added):
         for row in sorted(unmatched, key=lambda r: str(r.get('bucketId'))):
             other_name, other_prefix = registration_pair(row)
             if other_name != bucket_name or not prefixes_overlap(prefix, other_prefix):
@@ -359,9 +365,9 @@ def lambda_handler(event, context):
                     f"for {len(existing_groups)} bucket name and prefix pairs, and {len(runtime_rows)} "
                     "rows added at run time")
 
-        # A configured prefix may not overlap a stored registration of the same bucket that the
-        # configuration does not include. Checked before any row is written, on Create and Update only,
-        # so a Delete (and the cleanup after a rollback) is never blocked.
+        # A registration the configuration adds may not overlap a stored registration of the same
+        # bucket that the configuration does not include. Checked before any row is written, on Create
+        # and Update only, so a Delete (and the cleanup after a rollback) is never blocked.
         if request_type in ('Create', 'Update'):
             overlap = stored_overlap_error(
                 {(b.get('bucketName'), canonical_prefix(b.get('prefix'))) for b in buckets},

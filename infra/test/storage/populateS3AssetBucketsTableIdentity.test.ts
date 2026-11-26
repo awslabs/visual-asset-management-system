@@ -358,6 +358,19 @@ describe("overlap with stored registrations (#1978)", () => {
     test("a Delete event is never blocked by the check", () => {
         expect(results.deleteSkipsOverlapCheck.ok).toBe(true);
     });
+
+    test("a configured registration that already has a row is not refused for a stored overlap", () => {
+        const result = results.storedOverlapNotRefused;
+        expect(result.ok).toBe(true);
+        expect(rowOf(result, "id-old")[0]).toMatchObject({ retired: true, isDefault: false });
+        expect(rowOf(result, "id-t")[0]).toMatchObject({ retired: null, isDefault: true });
+    });
+
+    test("the rollback of a refused addition succeeds", () => {
+        const result = results.rollbackAfterRefusedAdd;
+        expect(result.ok).toBe(true);
+        expect(rowOf(result, "id-old")[0].retired).toBe(true);
+    });
 });
 
 describe("custom resource properties", () => {
