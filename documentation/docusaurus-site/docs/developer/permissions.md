@@ -286,7 +286,7 @@ DELETE is granted at Tier 2 because archive operations require it. Permanent del
 
 View-only access scoped to a single database. Can browse assets, view files, and read metadata but cannot modify anything.
 
-**Key constraints (16 constraints):**
+**Key constraints (17 constraints):**
 
 -   `web` -- Allow GET on viewing pages only (no `/upload`, no `/metadataschema`)
 -   `api` -- Allow GET on all read routes; allow POST only on `/auth/routes`, `/auth/loginProfile`, `/search`, `/check-subscription`; allow GET only on `/auth/user/api-keys` (the user can view their own API keys but cannot create, extend, or delete them)
@@ -316,13 +316,13 @@ Each grant takes effect within about a minute, when the role's cached policy exp
 
 ### Global read-only
 
-View-only access across all databases (16 constraints). Same as database read-only, except the entity constraints match every database with `databaseId contains .*` instead of scoping to one `databaseId`. That criterion matches both forms of an archived record's id, so this role also views archived assets and archived database records.
+View-only access across all databases (17 constraints). Same as database read-only, except the entity constraints match every database with `databaseId contains .*` instead of scoping to one `databaseId`. That criterion matches both forms of an archived record's id, so this role also views archived assets and archived database records.
 
 ### Database tag admin
 
 Tag and tag type management scoped to a single database, combined with unconstrained read access so the role sees every tag and tag type in the deployment.
 
-**Key constraints (6 constraints):**
+**Key constraints (7 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/auth/tags`, the web route for the Tags Management page
 -   `api` -- Allow GET, PUT, POST, and DELETE on paths starting with `/secure-config`, `/auth/routes`, `/auth/loginProfile`, `/tags`, or `/tag-types` (one `criteriaOr` constraint)
@@ -337,7 +337,7 @@ The split between the two constraint pairs is what makes the pattern work. Read 
 
 Compliance management for one database: the database's schemas, read access to `GLOBAL` schemas (bindable, not editable), schema binding on the database and its assets, evaluation and sweeps, quarantine release and exceptions, and approval of the database's cascades.
 
-**Key constraints (15 constraints):**
+**Key constraints (16 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/compliance` or `/databases` (the compliance pages and the database compliance overview)
 -   `api` -- Allow GET, PUT, POST, and DELETE on paths starting with `/compliance`, `/secure-config`, `/auth/routes`, or `/auth/loginProfile` (one `criteriaOr` constraint)
@@ -358,7 +358,7 @@ Binding a schema is authorized on the database's `complianceBinding` object (`PU
 
 Read-only compliance access: the database's and `GLOBAL` schemas, and the evaluation history, compliance state, quarantine list, cascades and audit trail of one database. The Database User template carries the same compliance constraints for its database.
 
-**Key constraints (10 constraints):**
+**Key constraints (11 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/compliance` or `/databases`
 -   `api` -- Allow GET on paths starting with `/compliance`, `/secure-config`, `/auth/routes`, or `/auth/loginProfile`
@@ -377,7 +377,7 @@ The role reads each asset's evaluation history from **History** on the database 
 
 Management of `GLOBAL` compliance schemas and read access to every database's compliance, for a central compliance team (`compliance-global-admin.json`, `ROLE_NAME` only).
 
-**Key constraints (13 constraints):**
+**Key constraints (14 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/compliance` or `/databases`
 -   `api` -- Allow GET on paths starting with `/compliance`, `/secure-config`, `/auth/routes`, or `/auth/loginProfile`, and POST on `/auth/routes` and `/auth/loginProfile`
@@ -527,18 +527,20 @@ VAMS includes pre-built permission templates that you can import to quickly set 
 
 | Template                  | File                           | Variables                     | Description                                                                                                                                                                                                                           |
 | ------------------------- | ------------------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Database Admin            | `database-admin.json`          | `DATABASE_ID`, `ROLE_NAME`    | Full management of a specific database, including its compliance (20 constraints)                                                                                                                                                     |
-| Database User             | `database-user.json`           | `DATABASE_ID`, `ROLE_NAME`    | Standard user access with archive-only delete, read-only compliance (24 constraints)                                                                                                                                                  |
-| Database Read-Only        | `database-readonly.json`       | `DATABASE_ID`, `ROLE_NAME`    | View-only access to a specific database (16 constraints)                                                                                                                                                                              |
-| Database Tag Admin        | `database-tag-admin.json`      | `DATABASE_ID`, `ROLE_NAME`    | Database-scoped tag and tag type management with global read (6 constraints)                                                                                                                                                          |
-| Global Read-Only          | `global-readonly.json`         | `ROLE_NAME`                   | Read-only access across all databases (16 constraints)                                                                                                                                                                                |
+| Database Admin            | `database-admin.json`          | `DATABASE_ID`, `ROLE_NAME`    | Full management of a specific database, including its compliance (21 constraints)                                                                                                                                                     |
+| Database User             | `database-user.json`           | `DATABASE_ID`, `ROLE_NAME`    | Standard user access with archive-only delete, read-only compliance (25 constraints)                                                                                                                                                  |
+| Database Read-Only        | `database-readonly.json`       | `DATABASE_ID`, `ROLE_NAME`    | View-only access to a specific database (17 constraints)                                                                                                                                                                              |
+| Database Tag Admin        | `database-tag-admin.json`      | `DATABASE_ID`, `ROLE_NAME`    | Database-scoped tag and tag type management with global read (7 constraints)                                                                                                                                                          |
+| Global Read-Only          | `global-readonly.json`         | `ROLE_NAME`                   | Read-only access across all databases (17 constraints)                                                                                                                                                                                |
 | Deny Tagged Asset Editing | `deny-tagged-assets.json`      | `ROLE_NAME`, `TAG_VALUE`      | Overlay: deny editing of assets with a specific tag (1 constraint)                                                                                                                                                                    |
-| Compliance Admin          | `compliance-admin.json`        | `DATABASE_ID`, `ROLE_NAME`    | Compliance schema management, schema binding, evaluation, quarantine actions and cascade approval for one database; runs the database's and `GLOBAL` workflows so it can save pipeline rules (15 constraints)                         |
-| Compliance Readonly       | `compliance-readonly.json`     | `DATABASE_ID`, `ROLE_NAME`    | Read-only compliance access for one database (10 constraints)                                                                                                                                                                         |
-| Compliance Global Admin   | `compliance-global-admin.json` | `ROLE_NAME`                   | `GLOBAL` schema management and read-only compliance across every database; runs `GLOBAL` workflows so it can save pipeline rules (13 constraints)                                                                                     |
-| Audit Reader              | `audit-reader.json`            | `ROLE_NAME`, `ALLOWED_GROUPS` | Search and read the audit log groups matching `ALLOWED_GROUPS` (default `.*`, every group): the Audit Log Search page, the audit routes, the sign-in probes and one `auditLog` constraint (5 constraints). Use an `mfaRequired` role. |
+| Compliance Admin          | `compliance-admin.json`        | `DATABASE_ID`, `ROLE_NAME`    | Compliance schema management, schema binding, evaluation, quarantine actions and cascade approval for one database; runs the database's and `GLOBAL` workflows so it can save pipeline rules (16 constraints)                         |
+| Compliance Readonly       | `compliance-readonly.json`     | `DATABASE_ID`, `ROLE_NAME`    | Read-only compliance access for one database (11 constraints)                                                                                                                                                                         |
+| Compliance Global Admin   | `compliance-global-admin.json` | `ROLE_NAME`                   | `GLOBAL` schema management and read-only compliance across every database; runs `GLOBAL` workflows so it can save pipeline rules (14 constraints)                                                                                     |
+| Audit Reader              | `audit-reader.json`            | `ROLE_NAME`, `ALLOWED_GROUPS` | Search and read the audit log groups matching `ALLOWED_GROUPS` (default `.*`, every group): the Audit Log Search page, the audit routes, the sign-in probes and one `auditLog` constraint (6 constraints). Use an `mfaRequired` role. |
 
 Templates are located in the `documentation/permissionsTemplates/` directory.
+
+Every role template, the add-on ones included, carries one `bucket` constraint that allows `GET` on every asset bucket registration (`bucketId` `contains` `.*`), so a role built from it keeps its bucket listing and can put a database on any bucket where it holds the routes. Narrow it, for example to `bucketName` `starts_with` `team-a-`, to limit a team to its own buckets. The Deny Tagged Asset Editing overlay carries none: it is applied on top of an existing role, which keeps that role's own `bucket` constraint. A role built from a template imported before 2.7.0 has no `bucket` constraint: the v2.6 to v2.7 migration's `bucketReadConstraints` step adds this one to every role allowed `GET /buckets`, `POST /database` or `PUT /database/{databaseId}` that has none; without it, re-import the template.
 
 The Database Admin, Database User, Database Read-Only, and Global Read-Only templates grant `GET` on `/addon/physna/viewer`, the route the Physna viewer plugin calls, with a `starts_with` criterion in their GET API route constraint (the all-methods API route constraint in Database Admin). On a deployment without the Physna add-on the criterion matches no route. The viewer token that route returns is tenant-scoped (see [Physna Viewer](./physna-integration.md#physna-viewer)); to withhold the viewer from a template-built role, remove the `/addon/physna/viewer` criterion from its imported constraint.
 

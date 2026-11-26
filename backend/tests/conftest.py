@@ -145,16 +145,6 @@ _s3pp_spec = _s3mk_importlib_util.spec_from_file_location(
 _s3pp_module = _s3mk_importlib_util.module_from_spec(_s3pp_spec)
 _s3pp_spec.loader.exec_module(_s3pp_module)
 sys.modules['common.s3PathPatterns'] = _s3pp_module
-# bucketRegistrations is pure (the retired and duplicate rules of a bucket registration row), so load
-# the REAL module by path, before fileAttribution and the workflow helpers, which import it.
-_brg_spec = _s3mk_importlib_util.spec_from_file_location(
-    'common.bucketRegistrations',
-    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'bucketRegistrations.py')
-)
-_brg_module = _s3mk_importlib_util.module_from_spec(_brg_spec)
-_brg_spec.loader.exec_module(_brg_module)
-sys.modules['common.bucketRegistrations'] = _brg_module
-sys.modules['common'].bucketRegistrations = _brg_module
 # assetLocations holds the location-key rules (they import common.s3PathPatterns, registered above)
 # and the location-index reads. It builds no client at import (index reads take the caller's table
 # handle; the readiness check builds its SSM client on first use), so load the REAL module by path.
@@ -167,6 +157,17 @@ _alc_module = _s3mk_importlib_util.module_from_spec(_alc_spec)
 _alc_spec.loader.exec_module(_alc_module)
 sys.modules['common.assetLocations'] = _alc_module
 sys.modules['common'].assetLocations = _alc_module
+# bucketRegistrations is pure (the retired and duplicate rules of a bucket registration row), so load
+# the REAL module by path, after assetLocations (whose prefix normalizer it uses) and before
+# fileAttribution and the workflow helpers, which import it.
+_brg_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.bucketRegistrations',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'bucketRegistrations.py')
+)
+_brg_module = _s3mk_importlib_util.module_from_spec(_brg_spec)
+_brg_spec.loader.exec_module(_brg_module)
+sys.modules['common.bucketRegistrations'] = _brg_module
+sys.modules['common'].bucketRegistrations = _brg_module
 # fileAttribution decides which asset an S3 object belongs to from the record's binding, the location
 # index and, before the index is ready, the stamp and the first folder. It builds no client (callers pass
 # their table handles), so load the REAL module by path, after assetLocations, which it imports.

@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Tuple
 from botocore.exceptions import ClientError
 from botocore.config import Config as BotoConfig
 from boto3.dynamodb.conditions import Key
-from common.validators import validate
+from common.validators import object_name_regex, validate
 from common.eventLogSummary import event_log_summary
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
@@ -40,7 +40,7 @@ from common.s3PathPatterns import (
     AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment,
 )
 from common.s3 import is_object_version_archived, region_routing_s3_client
-from common.bucketRegistrations import REGISTRATION_DUPLICATE_OF_FIELD, active_registrations
+from common.bucketRegistrations import REGISTRATION_DUPLICATE_OF_FIELD, active_registrations, find_registration
 from common.indexerEvents import BUCKET_ID_STAMP_FIELD
 from common.vamsObjectTags import emit_bucket_sync_count, tag_synced_version, tagging_enabled
 from models.common import AssetLocationInUseError
@@ -132,7 +132,9 @@ except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
-if not database_id:
+# A function deployed for one registration (ASSET_BUCKET_NAME set) always has its fallback database in
+# the environment; the registration row carries it too (defaultSyncDatabaseId), and the row's value wins.
+if asset_bucket_name and not database_id:
     raise Exception('databaseId not configured')
 
 # This function's own name, used to recognize the ObjectCreated event of a metadata stamp copy an
@@ -525,6 +527,51 @@ def get_bucket_id(bucket_name: str, prefix: str) -> Optional[str]:
     except Exception as e:
         logger.exception(f"Error getting bucket ID: {e}")
         return None
+
+def registrations_of_bucket_name(bucket_name: str) -> List[Dict]:
+    """Every registration row of one bucket (bucketNameGSI, paged), cached for the cache's TTL. A read
+    that fails is logged and answers [] (the record is then skipped and still forwarded, as when
+    get_bucket_id finds nothing)."""
+    cache_key = f"registrations:{bucket_name}"
+    cached = s3_buckets_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        table = dynamodb.Table(s3_asset_buckets_table)
+        query_kwargs = {'IndexName': "bucketNameGSI", 'KeyConditionExpression': Key('bucketName').eq(bucket_name)}
+        rows = []
+        while True:
+            response = table.query(**query_kwargs)
+            rows.extend(response.get('Items', []))
+            if 'LastEvaluatedKey' not in response:
+                break
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    except Exception as e:
+        logger.exception(f"Error reading the registrations of bucket {bucket_name}: {e}")
+        return []
+    s3_buckets_cache.set(cache_key, rows)
+    return rows
+
+
+def registration_for_key(bucket_name: str, object_key: str) -> Optional[Dict]:
+    """The registration an object belongs to: the active registration of its bucket with the longest
+    prefix that holds the key (common.bucketRegistrations.find_registration), or None."""
+    registration = find_registration(bucket_name, object_key, registrations_of_bucket_name(bucket_name))
+    if registration and registration.get('bucketId'):
+        s3_buckets_cache.set(f"{registration['bucketId']}:versioning",
+                             registration.get('isVersioningEnabled', False))
+    return registration
+
+
+def default_sync_database_id(bucket_id: str) -> Optional[str]:
+    """The registration's fallback database for bucket sync: the row's `defaultSyncDatabaseId`, or this
+    function's DEFAULT_DATABASE_ID for a row that does not carry it yet."""
+    row = get_bucket_info_from_bucket_id(bucket_id) if bucket_id else None
+    value = (row or {}).get('defaultSyncDatabaseId') if isinstance(row, dict) else None
+    if isinstance(value, str) and value:
+        return value
+    return database_id or None
+
 
 def is_versioning_enabled(bucket_id: str) -> bool:
     """
@@ -1070,6 +1117,9 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
         logger.info(f"Cache hit for database for bucket registration {bucket_id}")
         return None if cached_db_id == ARCHIVED_DATABASE_CACHE_VALUE else cached_db_id
     
+    # The registration's fallback database, read from its row.
+    fallback_database_id = default_sync_database_id(bucket_id)
+
     # The databases assigned to this registration: their defaultBucketId is its bucketId.
     matching_databases = [db for db in lookup_databases(bucket_id) if db.get('defaultBucketId') == bucket_id]
 
@@ -1081,21 +1131,25 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
         logger.info(f"Using database {only_db_id}, the one database assigned to bucket {bucket_name} prefix {prefix}")
         database_cache.set(cache_key, only_db_id)
         return only_db_id
-    default_db = next((db for db in matching_databases if db['databaseId'] == database_id), None)
+    default_db = next((db for db in matching_databases if db['databaseId'] == fallback_database_id), None)
     if default_db:
-        logger.info(f"Using default database {database_id} for bucket {bucket_name} prefix {prefix}")
+        logger.info(f"Using default database {fallback_database_id} for bucket {bucket_name} prefix {prefix}")
         database_cache.set(cache_key, default_db['databaseId'])
         return default_db['databaseId']
     if matching_databases:
         logger.info(f"{len(matching_databases)} databases are assigned to bucket {bucket_name} prefix {prefix} "
-                    f"and the default sync database {database_id} is not one of them; using the bucket's "
+                    f"and the default sync database {fallback_database_id} is not one of them; using the bucket's "
                     "auto-generated database")
+    if not fallback_database_id:
+        logger.error(f"Bucket registration {bucket_id} ({bucket_name} prefix {prefix}) has no fallback database "
+                     "(defaultSyncDatabaseId); no database is created for it")
+        return None
     
     # No matching database found - need to create one
     # Generate unique database ID based on bucket and prefix
     prefix_for_hash = prefix.rstrip('/') if prefix else 'root'
     prefix_hash = hashlib.md5(f"{bucket_name}:{prefix_for_hash}".encode()).hexdigest()[:8] # nosec B324
-    unique_db_id = f"{database_id}-{prefix_hash}"
+    unique_db_id = f"{fallback_database_id}-{prefix_hash}"
     
     # Check cache for this specific database ID
     db_cache_key = f"database:{unique_db_id}"
@@ -1251,10 +1305,38 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict, 
         return None
 
 
+# The longest assetName and description an asset takes (CreateAssetRequestModel)
+AUTO_CREATED_ASSET_NAME_MAX_LENGTH = 256
+AUTO_CREATED_ASSET_DESCRIPTION_MAX_LENGTH = 256
+# What stands in for each folder-name character the asset name rule refuses
+AUTO_CREATED_ASSET_NAME_REPLACEMENT = "_"
+
+
+def auto_created_asset_name(asset_id: str) -> str:
+    """The name of the asset bucket sync creates for the first-level folder `asset_id` (#1813).
+
+    The asset ID is the folder name, which the asset ID rule (`filename_pattern`) admits with commas,
+    apostrophes and non-ASCII letters; the asset name rule (`object_name_pattern`) refuses those. The folder
+    name is not trusted to satisfy the name rule: each character the rule refuses is replaced by `_`, one for
+    one, so `site,a` is named `site_a` and a name the rule accepts is kept as it is.
+    """
+    name = "".join(character if object_name_regex.fullmatch(character) else AUTO_CREATED_ASSET_NAME_REPLACEMENT
+                   for character in asset_id)
+    return name[:AUTO_CREATED_ASSET_NAME_MAX_LENGTH]
+
+
+def auto_created_asset_description(asset_id: str) -> str:
+    """The description of the asset bucket sync creates for `asset_id`, cut to the description limit."""
+    return f"Auto-created asset for {asset_id}"[:AUTO_CREATED_ASSET_DESCRIPTION_MAX_LENGTH]
+
+
 def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optional[str]:
     """
     Create a new asset
-    
+
+    The asset ID is the folder name; the name and description are derived from it to the asset rules
+    (`auto_created_asset_name`, `auto_created_asset_description`).
+
     Args:
         bucket_id: The bucket ID
         database_id: The database ID
@@ -1272,13 +1354,15 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
     holders = database_asset_id_rows(database_id, asset_id)
     if holders:
         raise AssetIdInUseError(asset_id, holders)
+    asset_name = auto_created_asset_name(asset_id)
+    description = auto_created_asset_description(asset_id)
     try:
         # Create asset request model
         request_model = CreateAssetRequestModel(
             databaseId=database_id,
             assetId=asset_id,
-            assetName=asset_id,
-            description=f"Auto-created asset for {asset_id}",
+            assetName=asset_name,
+            description=description,
             isDistributable=True,
             tags=[]
         )
@@ -1293,8 +1377,8 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         new_asset = {
             'databaseId': database_id,
             'assetId': asset_id,
-            'assetName': asset_id,
-            'description': f"Auto-created asset for {asset_id}",
+            'assetName': request_model.assetName,
+            'description': request_model.description,
             'isDistributable': True,
             'tags': [],
             'bucketId': bucket_id
@@ -2360,7 +2444,15 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
         # A missing bucket record (registration race / transient lookup failure) skips
         # VAMS-side processing but still forwards to the indexers — the file indexer
         # resolves bucket details independently via the object's S3 metadata.
-        bucket_id = get_bucket_id(bucket_name, prefix)
+        # A function deployed for one registration reads it by its configured bucket and prefix; one
+        # that serves any registration finds it by bucket name and the longest prefix holding the key.
+        if asset_bucket_name:
+            bucket_id = get_bucket_id(bucket_name, prefix)
+        else:
+            registration = registration_for_key(bucket_name, object_key)
+            bucket_id = (registration or {}).get('bucketId')
+            if bucket_id:
+                prefix = normalize_base_prefix(registration.get('baseAssetsPrefix')) or "/"
         if not bucket_id:
             logger.info(f"No bucket ID found for {bucket_name} with prefix {prefix}, skipping processing but forwarding to indexers")
             return False, True, f"No bucket ID found for {bucket_name} with prefix {prefix}"

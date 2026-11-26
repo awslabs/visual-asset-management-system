@@ -36,6 +36,16 @@ class FakeTable:
     def put_item(self, Item):
         self.items.append(Item)
 
+    def update_item(self, Key, UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues,
+                    ConditionExpression=None):
+        # The populator's merge write: the item it would store is the key plus every SET field.
+        item = dict(Key)
+        set_part = UpdateExpression.partition(" REMOVE ")[0]
+        for assignment in set_part[len("SET "):].split(", "):
+            name, value = assignment.split(" = ")
+            item[ExpressionAttributeNames[name]] = ExpressionAttributeValues[value]
+        self.items.append(item)
+
 
 class FakeS3:
     def __init__(self, region, accelerate_response, calls):
@@ -68,9 +78,14 @@ def run_case(source, accelerate_response, request_type, buckets):
     fake_exceptions = types.ModuleType("botocore.exceptions")
     fake_exceptions.ClientError = ClientError
     fake_botocore.exceptions = fake_exceptions
+    # botocore.config.Config: the populator builds its CloudFormation client with a retry config.
+    fake_config = types.ModuleType("botocore.config")
+    fake_config.Config = lambda **kwargs: kwargs
+    fake_botocore.config = fake_config
     sys.modules["boto3"] = fake_boto3
     sys.modules["botocore"] = fake_botocore
     sys.modules["botocore.exceptions"] = fake_exceptions
+    sys.modules["botocore.config"] = fake_config
 
     namespace = {}
     exec(compile(source, "populator_inline.py", "exec"), namespace)

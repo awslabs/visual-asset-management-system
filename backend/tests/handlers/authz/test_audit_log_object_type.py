@@ -116,8 +116,10 @@ class TestTheAuditReaderTemplate:
         assert model.variableValues["ALLOWED_GROUPS"] == ".*"
 
     def test_the_template_grants_only_the_audit_surfaces(self):
+        # Plus read of the asset bucket registrations, which every shipped role template carries (#1978);
+        # the template grants no route that lists them.
         constraints = json.loads((TEMPLATES_DIR / TEMPLATE).read_text(encoding="utf-8"))["constraints"]
-        assert sorted(c["objectType"] for c in constraints) == ["api", "api", "api", "auditLog", "web"]
+        assert sorted(c["objectType"] for c in constraints) == ["api", "api", "api", "auditLog", "bucket", "web"]
         for constraint in constraints:
             assert all(p["type"] == "allow" for p in constraint["groupPermissions"])
             assert "PUT" not in [p["action"] for p in constraint["groupPermissions"]]

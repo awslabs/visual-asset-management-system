@@ -58,16 +58,16 @@ def _typed_version(version_id):
 
 
 def _gsi_rows():
-    """Every file-version row of the asset, as the GSI returns them."""
+    """Every file-version row of the asset, as the GSI returns them (the version and the file's key)."""
     return [
-        {"databaseId:assetId:assetVersionId": f"{PK}:{version_id}"}
+        {"databaseId:assetId:assetVersionId": f"{PK}:{version_id}", "fileKey": f"f{index}.txt"}
         for version_id, count in FILES_PER_VERSION.items()
-        for _ in range(count)
+        for index in range(count)
     ]
 
 
 class FileVersionsTableStub:
-    """`asset_file_versions_table` stub that separates GSI reads from per-version COUNT reads."""
+    """`asset_file_versions_table` stub that separates GSI reads from per-version reads."""
 
     def __init__(self, gsi_pages):
         self.gsi_pages = list(gsi_pages)
@@ -80,7 +80,7 @@ class FileVersionsTableStub:
             page_index = min(len(self.gsi_calls) - 1, len(self.gsi_pages) - 1)
             return self.gsi_pages[page_index]
         self.count_calls.append(kwargs)
-        return {"Count": 0}
+        return {"Count": 0, "Items": []}
 
 
 def _list_versions(av, file_versions_table, version_ids=("5", "4", "3", "2", "1")):
@@ -150,7 +150,7 @@ class TestFileCountsAreStillCorrect:
         """The GSI is keyed on databaseId:assetId, so a foreign row cannot appear -- but the
         version id is parsed out of a composite key, and a prefix mismatch must be ignored
         rather than counted under a mangled id."""
-        rows = _gsi_rows() + [{"databaseId:assetId:assetVersionId": "db1:asset-2:5"}]
+        rows = _gsi_rows() + [{"databaseId:assetId:assetVersionId": "db1:asset-2:5", "fileKey": "x.txt"}]
         table = FileVersionsTableStub([{"Items": rows}])
         response = _list_versions(av, table)
 
@@ -201,6 +201,23 @@ class TestTallyFallsBackWhenTheWalkIsTooLarge:
             f"a version's count came from the abandoned partial tally; got {counts}")
 
 
+class _CountRoutedTable:
+    """Serves the `Select='COUNT'` reads from `count_reader` and the one-row probe for entries stored
+    with a leading slash (#1795) with no rows, as for any version created since."""
+
+    def __init__(self, count_reader):
+        self.count_reader = count_reader
+        self.count_calls = []
+        self.probe_calls = []
+
+    def query(self, **kwargs):
+        if kwargs.get("Select") == "COUNT":
+            self.count_calls.append(kwargs)
+            return self.count_reader(**kwargs)
+        self.probe_calls.append(kwargs)
+        return {"Items": []}
+
+
 @pytest.mark.unit
 class TestFileCountQueryPagesToExhaustion:
     """`Select='COUNT'` is bounded by the same 1 MB scan limit as any other query."""
@@ -208,12 +225,11 @@ class TestFileCountQueryPagesToExhaustion:
     def test_the_counts_of_every_page_are_summed(self, av):
         pager = Pager(
             {"Count": 900, "LastEvaluatedKey": {
-                "databaseId:assetId:assetVersionId": f"{PK}:5", "fileKey": "/f900"}},
+                "databaseId:assetId:assetVersionId": f"{PK}:5", "fileKey": "f900"}},
             {"Count": 40},
             name="assetVersions.get_asset_version_file_count",
         )
-        table = MagicMock()
-        table.query.side_effect = pager
+        table = _CountRoutedTable(pager)
 
         with patch.object(av, "asset_file_versions_table", table):
             count = av.get_asset_version_file_count(DB, ASSET, "5")
@@ -224,10 +240,10 @@ class TestFileCountQueryPagesToExhaustion:
 
     def test_a_single_page_count_is_returned_unchanged(self, av):
         """Positive control: the common case must not double-count or loop."""
-        table = MagicMock()
-        table.query.return_value = {"Count": 3}
+        table = _CountRoutedTable(lambda **kwargs: {"Count": 3})
 
         with patch.object(av, "asset_file_versions_table", table):
             assert av.get_asset_version_file_count(DB, ASSET, "5") == 3
-        assert table.query.called, 'no read happened'
-        assert table.query.call_count <= 1, 'a single version count needs one read'
+        assert len(table.count_calls) == 1, 'a single-page version count needs one COUNT read'
+        assert [call.get("Limit") for call in table.probe_calls] == [1], (
+            'the probe for entries stored with a leading slash is one read of at most one row')
