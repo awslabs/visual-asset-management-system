@@ -703,6 +703,11 @@ def archive_file_preview(location, bucket):
         logger.exception(f"Error archiving file {key}: {e}")
     return
 
+def _legacy_history_path(path: str) -> str:
+    """The file history path an earlier release recorded for ``path``: every leading ``/`` collapsed to one."""
+    return "/" + (path or "").lstrip("/")
+
+
 def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, user_id=None,
                                nested: NestedLocations = None):
     """Selectively unarchive an asset's files by removing the delete markers
@@ -767,12 +772,18 @@ def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None
                 if not contains(prefix, key) or (nested and not nested.keep(key)):
                     continue
                 relative_path = normalize_history_file_path(relative_path_in(prefix, key))
-                recorded = archive_markers.get(relative_path, set())
+                candidates = [relative_path]
                 if not is_folder_location(prefix):
                     # A single-file location's archive may be recorded relative to the bare file
                     # key ('/' for the object, '/.previewFile.png' for a preview)
-                    recorded = recorded | archive_markers.get(
-                        normalize_history_file_path(key[len(prefix):]), set())
+                    candidates.append(normalize_history_file_path(key[len(prefix):]))
+                # An archive before 2.7.0 recorded a path with every leading '/' collapsed to one, so
+                # '{location}/x' ('//x') was recorded under '/x' (#1977). Its marker is still matched by
+                # its own VersionId, so another file's record under that path restores nothing here.
+                candidates += [_legacy_history_path(path) for path in candidates]
+                recorded = set()
+                for path in dict.fromkeys(candidates):
+                    recorded |= archive_markers.get(path, set())
                 if delete_marker['VersionId'] in recorded:
                     markers_to_remove.append((key, delete_marker['VersionId'], relative_path))
 

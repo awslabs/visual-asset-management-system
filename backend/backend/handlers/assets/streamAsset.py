@@ -14,7 +14,7 @@ from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import asset_authorization_object
 from common.validators import validate, exceeds_s3_object_key_limit
-from common.assetLocations import is_folder_location, normalize_base_prefix, object_key_for, relative_path_in
+from common.assetLocations import normalize_base_prefix, object_key_for_request, relative_path_in
 from common.fileAttribution import nested_locations_of_asset
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -119,44 +119,34 @@ def _quarantine_object_key(object_key, version_id, asset_version_id, asset_versi
 
 
 def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
-    """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-    
+    """The S3 key a stream request's file path names in the asset (common.assetLocations.object_key_for_request).
+
+    The path arrives as the caller sent it: with a leading '/' it is the file's path in the asset (the CLI,
+    search results, `/{path}` links); without one it is the file's full key when the asset's location holds
+    it (the file list's `key`, which the web viewers send), else the path in the asset. A single-file
+    location's paths name its object, its previews and its companion folder {key}/.
+
     Args:
         asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-        
+        file_path: The file path from the request
+
     Returns:
-        The properly resolved S3 key without duplication
+        The S3 key, always one the asset's location holds
 
     Raises:
-        VAMSGeneralErrorResponse: the asset is a single file and the path does not name it
+        VAMSGeneralErrorResponse: the path names no key of the asset
     """
-    # A single-file location's paths name its object, its previews and its companion folder {key}/
-    if asset_base_key and not is_folder_location(asset_base_key):
-        object_key = object_key_for(asset_base_key, file_path)
-        if object_key is None:
-            raise VAMSGeneralErrorResponse("Requested file is not part of this asset")
-        return object_key
+    object_key = object_key_for_request(asset_base_key, file_path)
+    if object_key is None:
+        raise VAMSGeneralErrorResponse("Requested file is not part of this asset")
+    return object_key
 
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-    
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-    
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
+
+def relative_file_key_in(asset_base_key: str, object_key: str) -> str:
+    """The path a version snapshot is searched by for a resolved file key: its path in the asset
+    (common.assetLocations.relative_path_in), which the snapshot lookup reads with exactly one leading '/'
+    dropped (assetVersions.version_entry_key), so '{location}/x' ('//x') is not '{location}x' ('/x')."""
+    return relative_path_in(asset_base_key, object_key) or object_key
 
 def held_by_nested_asset(asset_bucket, asset_base_key, object_key) -> bool:
     """Whether a resolved key is held by another asset's location nested in this asset's location: it is
@@ -197,9 +187,9 @@ def handle_head_request(event, claims_and_roles):
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
 
-    # If object_key doesn't start with a /, add it
-    if not object_key.startswith('/'):
-        object_key = '/' + object_key
+    # The path keeps the caller's form: a leading '/' marks a path in the asset (resolve_asset_file_path).
+    # The validator reads a path with one, so it checks a copy that has it.
+    validated_path = object_key if object_key.startswith('/') else '/' + object_key
 
     logger.info("Validating parameters for HEAD request")
     validation_params = {
@@ -212,7 +202,7 @@ def handle_head_request(event, claims_and_roles):
             'validator': 'ASSET_ID'
         },
         'assetFilePathKey': {
-            'value': object_key,
+            'value': validated_path,
             'validator': 'RELATIVE_FILE_PATH'
         },
     }
@@ -289,13 +279,8 @@ def handle_head_request(event, claims_and_roles):
 
     # Resolve assetVersionId/alias to S3 versionId
     if asset_version_id_alias or asset_version_id:
-        # Compute relative key by stripping asset_base_key from resolved object_key
-        relative_file_key = object_key
-        if not is_folder_location(asset_base_key):
-            relative_file_key = relative_path_in(asset_base_key, object_key) or object_key
-        elif relative_file_key.startswith(asset_base_key):
-            relative_file_key = relative_file_key[len(asset_base_key):]
-        relative_file_key = relative_file_key.lstrip('/')
+        # The key the version snapshot records for the resolved file
+        relative_file_key = relative_file_key_in(asset_base_key, object_key)
 
         if asset_version_id_alias:
             resolved_asset_version_id = resolve_asset_version_id_from_alias(databaseId, assetId, asset_version_id_alias)
@@ -437,9 +422,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             error_response['headers'].update(streaming_headers)
             return error_response
 
-        #If object_key doesn't start with a /, add it
-        if not object_key.startswith('/'):
-            object_key = '/' + object_key
+        # The path keeps the caller's form: a leading '/' marks a path in the asset (resolve_asset_file_path).
+        # The validator reads a path with one, so it checks a copy that has it.
+        validated_path = object_key if object_key.startswith('/') else '/' + object_key
 
         logger.info("Validating parameters")
         validation_params = {
@@ -452,7 +437,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 'validator': 'ASSET_ID'
             },
             'assetFilePathKey': {
-                'value': object_key,
+                'value': validated_path,
                 'validator': 'RELATIVE_FILE_PATH'
             },
         }
@@ -566,13 +551,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
             # Resolve assetVersionId/alias to S3 versionId
             if asset_version_id_alias or asset_version_id:
-                # Compute relative key by stripping asset_base_key from resolved object_key
-                relative_file_key = object_key
-                if not is_folder_location(asset_base_key):
-                    relative_file_key = relative_path_in(asset_base_key, object_key) or object_key
-                elif relative_file_key.startswith(asset_base_key):
-                    relative_file_key = relative_file_key[len(asset_base_key):]
-                relative_file_key = relative_file_key.lstrip('/')
+                # The key the version snapshot records for the resolved file
+                relative_file_key = relative_file_key_in(asset_base_key, object_key)
 
                 if asset_version_id_alias:
                     resolved_asset_version_id = resolve_asset_version_id_from_alias(databaseId, assetId, asset_version_id_alias)

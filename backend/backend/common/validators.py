@@ -238,12 +238,24 @@ def validate_asset_path(name, value, isFolder):
         return (False, _s3_object_key_limit_message(name))
     return (True, '')
 
+def _auxiliarypreview_empty_segments_allowed(value):
+    """Whether the '//' in an auxiliary preview path, if any, is the one shape a file path may have: a single
+    empty segment, at the start of a path in the asset ('//x/preview/...', the path of the key '{location}/x')
+    or inside a full key ('A1//x/preview/...'). The stream handler checks that a full key's empty segment sits
+    right after the asset's location; '///' and a second '//' are refused here."""
+    if '//' not in value:
+        return True
+    if '///' in value or value.count('//') > 1:
+        return False
+    # A path in the asset has its empty segment only right after the leading '/'
+    return not value.startswith('/') or value.startswith('//')
+
 def validate_asset_auxiliarypreview_path(name, value):
     if not asset_auxiliarypreview_path_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+asset_auxiliarypreview_path_pattern)
     elif value.count('..') > 0:
         return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
-    elif '//' in value:
+    elif not _auxiliarypreview_empty_segments_allowed(value):
         return (False, name + " is invalid. Cannot contain consecutive forward slashes (//).")
     elif exceeds_s3_object_key_limit(value):
         return (False, _s3_object_key_limit_message(name))

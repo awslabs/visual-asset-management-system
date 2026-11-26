@@ -97,11 +97,16 @@ def _relative_to_asset(full_file_key, base_key):
     """Strip the asset's base location key from a stored (full, asset-ID-prefixed) input file
     key to get the asset-relative path used for shadow matching. Both keys may carry a leading
     slash (the stored inputAssetFileKey is normalize_file_key'd); compare without leading slashes.
-    Returns the asset-relative path with a single leading slash."""
+    Returns the asset-relative path with a leading slash. In a folder location the path is "/" + the key
+    after the folder, as the file list gives it (common.assetLocations.relative_path_in), so a key with an
+    empty segment right after the folder keeps it: `{folder}/x` is `//x`, not the path of `{folder}x`
+    (#1977)."""
     fk = (full_file_key or "").lstrip('/')
     base = (base_key or "").lstrip('/')
     if base and fk.startswith(base):
         fk = fk[len(base):]
+        if base.endswith('/'):
+            return "/" + fk
     return er.normalize_file_key(fk)
 
 

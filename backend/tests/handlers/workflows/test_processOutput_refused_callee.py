@@ -82,7 +82,8 @@ def _run(refuse_upload=None, refuse_engine=None, refuse_metadata=None, with_prev
     def invoke_upload(payload):
         index = calls_this_attempt[0]
         calls_this_attempt[0] += 1
-        files = sorted(f["relativeKey"] for f in json.loads(payload["body"])["files"])
+        # Each output is sent as its path in the asset with a leading '/'; recorded here by its name
+        files = sorted(f["relativeKey"].lstrip("/") for f in json.loads(payload["body"])["files"])
         if refuse_upload and refuse_upload(attempt[0], index):
             handed.append((attempt[0], files, "refused"))
             return _function_error(ERROR)

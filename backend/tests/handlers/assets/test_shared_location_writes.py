@@ -162,7 +162,8 @@ class TestUploadsAreRefusedBeforeAnythingIsWritten:
     def test_a_workflow_run_names_the_refusal_in_its_error(self):
         reasons = po._refused_write_back_reasons({"fileResults": [
             {"relativeKey": "/out/a.txt", "success": False, "error": REFUSAL}]})
-        assert reasons == {"/out/a.txt": REFUSAL}
+        # Keyed as the output step keys its outputs, without the leading '/' the completion is sent
+        assert reasons == {"out/a.txt": REFUSAL}
 
 
 # assetFiles operations on two live assets at p/shared/ (db1/a and db2/b); c at p/other/ is the copy source

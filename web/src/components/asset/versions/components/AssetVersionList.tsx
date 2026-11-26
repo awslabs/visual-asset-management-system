@@ -21,6 +21,7 @@ import { AssetVersionContext, AssetVersion, FileVersion } from "../AssetVersionM
 import { fetchAssetVersion, unarchiveAssetVersion } from "../../../../services/AssetVersionService";
 import Synonyms from "../../../../synonyms";
 import { useAssetArchived } from "../../../../context/ArchivedAssetContext";
+import { versionFilePath } from "../versionFilePath";
 
 interface AssetVersionListProps {
     onRevertVersion: (version: AssetVersion) => void;
@@ -214,7 +215,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                         name: fileName,
                         displayName: fileName,
                         relativePath: file.relativeKey,
-                        keyPrefix: file.relativeKey,
+                        keyPrefix: versionFilePath(file.relativeKey),
                         level: 1,
                         expanded: false,
                         subTree: [],

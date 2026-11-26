@@ -368,10 +368,10 @@ always contain the asset ID: an asset created on an existing bucket folder keeps
 a bucket's base prefix sits in front of the asset ID, and from the second step of a workflow on an input
 can be a file an earlier step wrote, which is keyed under the run's output folder in the run bucket.
 
-Each manifest input entry carries the file's asset-relative `relativePath` (with a leading `/`); its
-folder is the subdirectory. In a `vamsExecute` Lambda it is `resolved['inputFiles'][0]['relativePath']`,
-which `manifestHelper.resolved_file_key(resolved)` returns normalized (`/` when the run has no input
-file). Pass it on to the container with the rest of the definition, and search the key for the asset ID
+Each manifest input entry carries the file's asset-relative `relativePath` (with a leading `/`); its folder is the subdirectory.
+In a `vamsExecute` Lambda it is `resolved['inputFiles'][0]['relativePath']`, which `manifestHelper.resolved_file_key(resolved)` returns normalized (`/` when the run has no input file).
+A file whose key has an empty segment right after the asset's folder (`A1//x.las`) has the path `//x.las`, and its metadata record is keyed by that path, apart from the record of `/x.las`.
+Pass the `relativePath` on to the container with the rest of the definition, and search the key for the asset ID
 only for a launch that carries no `relativePath`:
 
 ```python

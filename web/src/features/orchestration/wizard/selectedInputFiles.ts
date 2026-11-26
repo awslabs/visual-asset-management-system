@@ -6,6 +6,7 @@
 import type { ExecuteInputFile } from "../types";
 import type { ResolvedRestrictions } from "./resolveRestrictions";
 import { applyInputFileFilters } from "./ExecuteWizard";
+import { assetFilePath } from "../../../utils/assetFilePath";
 
 /**
  * Pure helpers over the wizard's input-file selection. A selection can carry hundreds of entries, so
@@ -159,11 +160,12 @@ export function filterRows<R extends InputFileRow>(rows: R[], needle: string): R
     );
 }
 
-/** Asset-relative key with exactly one leading slash; a trailing slash (a folder) is kept. */
+/** Asset-relative key with a leading slash; a trailing slash (a folder) and "//x" (an empty segment after
+ *  the location, #1977) are kept. */
 export const normalizeRelativeKey = (raw: string): string => {
     const trimmed = (raw || "").trim();
     if (!trimmed) return "";
-    return `/${trimmed.replace(/^\/+/, "")}`;
+    return assetFilePath(trimmed);
 };
 
 /**

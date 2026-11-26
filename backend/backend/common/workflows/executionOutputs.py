@@ -157,11 +157,13 @@ def _list_current_output_files_unversioned(s3_client, bucket, files_prefix):
 
 
 def _output_file_entry(key, files_prefix, version_id, size):
-    """One output-files listing entry. relativePath is asset-relative to the files prefix."""
+    """One output-files listing entry. relativePath is asset-relative to the files prefix, with one
+    leading slash: output processing writes an output back at that path, dropping every leading slash
+    (processWorkflowExecutionOutput), so the entry names the asset path the output replaces."""
     relative = key[len(files_prefix):] if key.startswith(files_prefix) else key
     return {
         "key": key,
-        "relativePath": er.normalize_file_key(relative),
+        "relativePath": "/" + relative.lstrip("/"),
         "versionId": version_id,
         "fileSize": size or 0,
         "contentType": "",
