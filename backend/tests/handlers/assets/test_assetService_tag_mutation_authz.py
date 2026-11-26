@@ -613,12 +613,12 @@ class TestPostMutationObjectCarriesTheTags:
 class TestAdjacentBehaviourIsPinned:
     """The decisions the post-mutation check makes about everything that is not a tag."""
 
-    def test_a_rename_on_its_own_is_not_re_enforced(self):
-        """A rename with no tag change is evaluated against the stored name only.
+    def test_a_rename_on_its_own_is_evaluated_on_the_new_name(self):
+        """A rename with no tag change is authorized against the renamed record too (#369).
 
-        With `assetName starts_with 'PROJ-'` as the only ALLOW, renaming PROJ-1 to OTHER
-        succeeds. The post-mutation check is scoped to tag changes, so an unrelated field
-        edit is gated exactly as it was.
+        With `assetName starts_with 'PROJ-'` as the only ALLOW, renaming PROJ-1 to OTHER is
+        refused: the name can carry object-level authority exactly as a tag can, so a caller
+        cannot rename an asset out of the constraint that scopes them.
         """
         record = []
         m = _wire(_load_asset_service(), existing_tags=[], asset_name="PROJ-1")
@@ -628,24 +628,22 @@ class TestAdjacentBehaviourIsPinned:
                              _recording_enforcer(_allow_only_proj_asset_names, record)):
             result = _attempt_update(m, {"assetName": "OTHER"})
 
-        # The success IS the property: this constraint refuses the new name, so any evaluation
-        # of the post-rename record would refuse the write.
-        assert getattr(result, "success", None) is True, (
-            f"a rename out of an assetName-scoped ALLOW is now refused: {result}"
-        )
-        assert _written_attributes(m.asset_table)["assetName"] == "OTHER"
+        m.asset_table.update_item.assert_not_called()
+        _assert_denied(result)
         assert ("PUT", "PROJ-1") in _name_evaluations(record), (
             f"the stored record was never evaluated for the write: "
             f"{sorted(_name_evaluations(record), key=str)}"
         )
+        refused = _refusals(record, _allow_only_proj_asset_names)
+        assert refused and all(call["object"].get("assetName") == "OTHER" for call in refused), (
+            f"the refusal was not decided on the new name: {refused}"
+        )
 
     def test_a_rename_combined_with_a_tag_change_is_evaluated_on_the_new_name(self):
-        """A tag change makes the record-to-be-stored the subject of the check.
+        """A rename and a tag change are evaluated together on the record to be stored.
 
-        The non-tag edits are applied before the tag gate, so the two objects it evaluates
-        both carry the new name and differ only in their tag lists. A request that renames
-        AND retags is therefore evaluated against the new name — pinned so the wider reach
-        of the tag gate is a stated behaviour rather than a side effect.
+        The changed record carries both the new name and the new tag list, so a request that
+        renames AND retags is evaluated against the new name with the new tags.
         """
         record = []
         m = _wire(_load_asset_service(), existing_tags=[], asset_name="PROJ-1")
@@ -657,8 +655,8 @@ class TestAdjacentBehaviourIsPinned:
 
         m.asset_table.update_item.assert_not_called()
         _assert_denied(result)
-        # The stored-state check runs before any field is edited and sees the stored name;
-        # every tag-change evaluation sees the new one. Asserted as membership of the evaluated
+        # The stored-state checks see the stored name; every evaluation of the changed record
+        # sees the new one. Asserted as membership of the evaluated
         # (action, assetName) set rather than by position, so an implementation that evaluates
         # more than the minimum stays green.
         evaluated = _name_evaluations(record)

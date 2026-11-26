@@ -62,7 +62,7 @@ separate role with its own constraints.
 
 1. Navigate to **Roles** from the left navigation menu.
 2. Choose **Create Role**.
-3. Enter a **Role Name** (3-64 characters, letters, numbers, hyphens, and underscores).
+3. Enter a **Role Name** of 3-64 characters (the form's limit; the API and the CLI accept 1-256). The name can contain letters, numbers, spaces, hyphens (`-`), periods (`.`), and underscores (`_`). Spaces before and after the name are removed when it is saved.
 4. Enter a **Description** (4-256 characters).
 5. Optionally enable **MFA Required** -- when checked, this role is only active for users who have authenticated with multi-factor authentication.
 6. Choose **Create**.
@@ -178,6 +178,7 @@ If you receive a 403 Forbidden error or cannot see expected data, check both aut
 
     - Does the user's role have a constraint on the correct object type (for example, `asset`, `database`)?
     - Does the criteria match the specific resource? Check `databaseId`, `assetName`, or other filter fields.
+    - For an asset rename or tag change, does the criteria also match the asset under its new name or tags? The update needs `GET` on the asset as stored and `GET` and `PUT` on the asset as it will be stored, so a role with asset `PUT` but no asset `GET` cannot rename or retag an asset (see [Permissions Model](../concepts/permissions-model.md)).
     - Is there a **deny** constraint that overrides the allow?
 
 3. **Check role assignment:**
