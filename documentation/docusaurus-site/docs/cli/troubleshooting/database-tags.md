@@ -167,11 +167,11 @@ Creating or updating a database with a bucket ID fails.
 
 **Cause:**
 
-The supplied `--default-bucket-id` does not match an available bucket configuration, or no bucket configurations exist for the deployment.
+The supplied `--default-bucket-id` does not match an available bucket configuration, the configuration is retired, or your role may not read it. The API gives one answer for all three: `Bucket ID not found or not available for new databases`. A role needs a `bucket` permission constraint to list buckets or choose one; every shipped permission template and seeded role has one, but a custom role may not.
 
 **Resolution:**
 
-List the available bucket configurations and use a valid bucket ID:
+List the bucket configurations your role may read and use one of their IDs. If the list is empty, ask an administrator to add a `bucket` constraint to your role ([Permissions](../../user-guide/permissions.md)):
 
 ```bash
 vamscli database list-buckets

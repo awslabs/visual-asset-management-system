@@ -97,7 +97,7 @@ Returns a single database object in the same format as the items in the list res
 
 ## Bucket configurations
 
-A database is created against a **bucket configuration** — a registered pairing of an Amazon S3 bucket and a base prefix. Bucket configurations are registered at deployment time from the `app.assetBuckets` deployment configuration, covering both the bucket the deployment creates and any external buckets it is given, and cannot be created, changed, or removed through the API. This endpoint lists them so you can obtain the `defaultBucketId` a database requires. A registration whose entry was removed from `app.assetBuckets` is kept as retired and is not listed.
+A database is created against a **bucket configuration** — a registered pairing of an Amazon S3 bucket and a base prefix. Bucket configurations are registered at deployment time from the `app.assetBuckets` deployment configuration, covering both the bucket the deployment creates and any external buckets it is given, and cannot be created, changed, or removed through the API. This endpoint lists them so you can obtain the `defaultBucketId` a database requires. A registration whose entry was removed from `app.assetBuckets` is kept as retired and is not listed. Only the configurations your role may read through a `bucket` permission constraint are listed.
 
 ### List bucket configurations
 
@@ -124,6 +124,8 @@ GET /buckets
 | `bucketRegion`     | string  | The AWS Region the bucket is in; presigned URLs and Amazon S3 requests for the bucket are signed for it. `null` on a row written without a Region, which is the deployment Region.      |
 | `bucketAccountId`  | string  | The 12-digit AWS account that owns the bucket when it is not the deployment account; `null` otherwise.                                                                                  |
 | `isAccelerated`    | boolean | Whether S3 Transfer Acceleration is on for the bucket. Uploads and downloads for an accelerated bucket use its accelerate endpoint. `false` when the registration does not say.         |
+| `source`           | string  | Where the configuration comes from: `static` (the deployment configuration). `runtime` is reserved for buckets registered at run time.                                                  |
+| `status`           | string  | The state of the configuration: `active` for every listed static configuration. `pending` and `disabled` are reserved for buckets registered at run time.                               |
 
 ```json
 {
@@ -135,7 +137,9 @@ GET /buckets
             "isDefault": true,
             "bucketRegion": "us-west-2",
             "bucketAccountId": null,
-            "isAccelerated": true
+            "isAccelerated": true,
+            "source": "static",
+            "status": "active"
         },
         {
             "bucketId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
@@ -144,7 +148,9 @@ GET /buckets
             "isDefault": false,
             "bucketRegion": "us-east-1",
             "bucketAccountId": "222222222222",
-            "isAccelerated": false
+            "isAccelerated": false,
+            "source": "static",
+            "status": "active"
         }
     ],
     "NextToken": null
@@ -153,8 +159,8 @@ GET /buckets
 
 `NextToken` is `null` on the last page.
 
-:::note[Authorization is route-level only]
-`bucket` is not a constraint object type, so no per-bucket constraint can be authored and this listing applies no entity-level filter. A role that is granted the `/buckets` route receives every bucket configuration that is not retired, which is why the shipped permission templates grant it to administrator roles alone.
+:::note[Authorization]
+The route itself is granted by an `api` constraint on `/buckets`, which the shipped permission templates grant to administrator roles alone. Each configuration is then listed only when the role may `GET` it through a `bucket` constraint (fields `bucketId`, `bucketName`, `bucketRegion`, `source`). A role without a `bucket` constraint gets an empty list. The seeded `admin` role and every shipped template read every configuration. A page can hold fewer items than its size; follow `NextToken` until it is `null`.
 :::
 
 #### Error responses
@@ -181,7 +187,7 @@ POST /database
 | --------------------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `databaseId`                      | string  | Yes      | Unique database identifier (4-63 chars, alphanumeric plus `-` and `_`). Cannot be `GLOBAL` or a reserved S3 keyword (`pipeline(s)`, `preview(s)`, `temp-upload(s)`, `workspace(s)`), matched case-insensitively.                                                                                          |
 | `description`                     | string  | Yes      | Description of the database (4-256 chars).                                                                                                                                                                                                                                                                |
-| `defaultBucketId`                 | string  | Yes      | UUID of a pre-configured S3 bucket and prefix combination. Obtain it from [List bucket configurations](#list-bucket-configurations). A retired registration is refused.                                                                                                                                   |
+| `defaultBucketId`                 | string  | Yes      | UUID of a pre-configured S3 bucket and prefix combination. Obtain it from [List bucket configurations](#list-bucket-configurations). The role must be allowed to `GET` it through a `bucket` constraint; a retired registration is refused.                                                               |
 | `restrictMetadataOutsideSchemas`  | boolean | No       | When `true`, user and API metadata writes may add only keys defined in applied schemas. Keys already stored on a record pass; pipeline write-backs are not restricted. Defaults to `false`.                                                                                                               |
 | `restrictFileUploadsToExtensions` | string  | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Each starts with a dot and can contain letters, digits, `_` and further dots (`.x_t`, `.tar.gz`); a file is allowed when its name ends with one, case-insensitively. Use `.all` or leave blank to allow all. Defaults to empty. |
 
@@ -206,13 +212,15 @@ POST /database
 }
 ```
 
+An unknown bucket id, a retired one and one the role may not read all get the same `400` with the message `Bucket ID not found or not available for new databases`, so the answer does not tell them apart.
+
 ### Error responses
 
-| Status | Description                                 |
-| ------ | ------------------------------------------- |
-| `400`  | Validation error or database already exists |
-| `403`  | Not authorized                              |
-| `500`  | Internal server error                       |
+| Status | Description                                                                                         |
+| ------ | --------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, database already exists, or the bucket is unknown, retired or not readable to you |
+| `403`  | Not authorized                                                                                      |
+| `500`  | Internal server error                                                                               |
 
 ---
 
@@ -234,12 +242,12 @@ At least one field must be provided. The `databaseId` cannot be changed after cr
 
 ### Request body
 
-| Field                             | Type    | Required | Description                                                                                                                                                                                                                                                                            |
-| --------------------------------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `description`                     | string  | No       | Updated description (4-256 chars).                                                                                                                                                                                                                                                     |
-| `defaultBucketId`                 | string  | No       | UUID of a pre-configured S3 bucket and prefix combination, from [List bucket configurations](#list-bucket-configurations). Must reference an existing bucket configuration; a retired one is refused unless the database already uses it.                                              |
-| `restrictMetadataOutsideSchemas`  | boolean | No       | When `true`, user and API metadata writes may add only keys defined in applied schemas. Keys already stored on a record pass; pipeline write-backs are not restricted.                                                                                                                 |
-| `restrictFileUploadsToExtensions` | string  | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Each starts with a dot and can contain letters, digits, `_` and further dots (`.x_t`, `.tar.gz`); a file is allowed when its name ends with one, case-insensitively. Use `.all` or leave blank to allow all. |
+| Field                             | Type    | Required | Description                                                                                                                                                                                                                                                                                                                                              |
+| --------------------------------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `description`                     | string  | No       | Updated description (4-256 chars).                                                                                                                                                                                                                                                                                                                       |
+| `defaultBucketId`                 | string  | No       | UUID of a pre-configured S3 bucket and prefix combination, from [List bucket configurations](#list-bucket-configurations). Must reference an existing bucket configuration. Moving the database to another one needs `GET` on it through a `bucket` constraint, and a retired one is refused; the bucket the database already uses is not checked again. |
+| `restrictMetadataOutsideSchemas`  | boolean | No       | When `true`, user and API metadata writes may add only keys defined in applied schemas. Keys already stored on a record pass; pipeline write-backs are not restricted.                                                                                                                                                                                   |
+| `restrictFileUploadsToExtensions` | string  | No       | Comma-separated list of allowed file extensions (e.g., `.jpg,.png,.pdf`). Each starts with a dot and can contain letters, digits, `_` and further dots (`.x_t`, `.tar.gz`); a file is allowed when its name ends with one, case-insensitively. Use `.all` or leave blank to allow all.                                                                   |
 
 ### Request body example
 

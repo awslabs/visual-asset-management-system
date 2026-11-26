@@ -1855,7 +1855,8 @@ paths:
               - DefaultCognitoAuthorizer: []
     /buckets:
         get:
-            summary: "List all S3 bucket configurations."
+            summary: "List the S3 bucket configurations the caller may read."
+            description: "Lists the bucket configurations that are not retired and that the caller may GET through a `bucket` permission constraint (fields bucketId, bucketName, bucketRegion, source). A role without a `bucket` constraint gets an empty list. A page can hold fewer items than its size; follow NextToken until it is absent."
             responses:
                 "200":
                     description: OK
@@ -13696,7 +13697,7 @@ components:
                         Type of object this constraint applies to. The core types are database,
                         asset, api, web, tag, tagType, role, userRole, pipeline, workflow,
                         metadataSchema, complianceSchema, complianceEvaluation, complianceCascade,
-                        complianceBinding and auditLog; a deployment can register more (permission object types in
+                        complianceBinding, auditLog and bucket; a deployment can register more (permission object types in
                         the fork or add-on constants files), so the set is not fixed. GET
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.
@@ -13772,7 +13773,7 @@ components:
                         Type of object this constraint applies to. The core types are database,
                         asset, api, web, tag, tagType, role, userRole, pipeline, workflow,
                         metadataSchema, complianceSchema, complianceEvaluation, complianceCascade,
-                        complianceBinding and auditLog; a deployment can register more (permission object types in
+                        complianceBinding, auditLog and bucket; a deployment can register more (permission object types in
                         the fork or add-on constants files), so the set is not fixed. GET
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.
@@ -14067,6 +14068,7 @@ components:
                 defaultBucketId:
                     #example: 550e8400-e29b-41d4-a716-446655440000
                     $ref: '#/components/schemas/uuid_regex'
+                    description: "The bucket configuration of the database, from GET /buckets. The caller needs GET on it through a `bucket` permission constraint. An unknown, retired or unreadable id gets the same 400 (Bucket ID not found or not available for new databases)."
                 restrictMetadataOutsideSchemas:
                     type: boolean
                     default: false
@@ -14102,7 +14104,7 @@ components:
                     description: "Updated database description (optional)"
                 defaultBucketId:
                     $ref: '#/components/schemas/uuid_regex'
-                    description: "Updated default bucket ID (optional)"
+                    description: "Updated default bucket ID (optional). Moving the database to another bucket configuration needs GET on it through a `bucket` permission constraint; an unknown, retired or unreadable id gets the same 400 (Bucket ID not found or not available for new databases)."
                 restrictMetadataOutsideSchemas:
                     type: boolean
                     description: "Whether user and API metadata writes may add only keys defined in schemas. Keys already stored on a record pass; pipeline write-backs are not restricted (optional)"
@@ -19545,6 +19547,16 @@ components:
                     type: boolean
                     description: "Whether S3 Transfer Acceleration is on for the bucket, as the bucket's registration records it. Uploads and downloads for an accelerated bucket use its accelerate endpoint. False when the registration does not say."
                     default: false
+                source:
+                    type: string
+                    enum: [static, runtime]
+                    description: "Where the configuration comes from: static (the deployment configuration). runtime is reserved for buckets registered at run time."
+                    default: static
+                status:
+                    type: string
+                    enum: [active, retired, pending, disabled]
+                    description: "The state of the configuration. Every listed static configuration is active; pending and disabled are reserved for buckets registered at run time."
+                    default: active
             required:
                 - bucketId
                 - bucketName
