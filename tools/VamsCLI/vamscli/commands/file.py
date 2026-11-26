@@ -607,7 +607,7 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
                 clean_sequence_results = []
                 for seq_result in result['sequence_results']:
                     clean_seq = {
-                        'sequence_number': seq_result.get('sequence_number'),
+                        'sequence_number': seq_result.get('sequence_id'),
                         'successful_files': seq_result.get('successful_files', 0),
                         'failed_files': seq_result.get('failed_files', [])
                     }

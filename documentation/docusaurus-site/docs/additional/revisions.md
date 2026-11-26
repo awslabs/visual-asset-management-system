@@ -664,6 +664,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Token lifetime setting checked** — With Amazon Cognito enabled, synthesis and the ConfigBuilder warn, naming the field, when `credTokenTimeoutSeconds` is not a whole number of minutes from 300 to 86400 seconds, the range the Amazon Cognito web app client accepts. (issue #378)
 -   **CloudFront viewer TLS** — The web distribution sets its `TLSv1.2_2021` minimum viewer TLS version only with a custom domain, so synthesis no longer warns that it is ignored. The default `*.cloudfront.net` domain uses the `TLSv1` policy CloudFront applies there (TLS 1.0 and later); the security and configuration docs say which domain accepts which versions. (issue #434)
 -   **Supported npm range** — The `package.json` files declare `engines.npm` `>=11.10.0 <12` and the deployment prerequisites state the range: npm 12 blocks dependency install scripts (here `esbuild` and `@parcel/watcher`) unless an `allowScripts` entry approves them, and VAMS has not approved or tested any, so builds are supported on npm 11 only until that is done. With `engine-strict`, npm 12 stops with `EBADENGINE` instead. (issue #439)
+-   **Upload sequence in CLI JSON output** — `vamscli file upload --json-output` reports each sequence result's `sequence_number` (the upload sequence it belongs to) instead of `null`. (issue #1988)
 
 **Documentation:**
 
