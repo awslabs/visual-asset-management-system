@@ -616,6 +616,14 @@ class TestWorkflowWrittenObjectsAreSkipped:
         mocks["run_evaluation"].assert_not_called()
         mocks["s3"].head_object.assert_called_once()
 
+    def test_a_relocated_object_is_not_evaluated(self):
+        """The upgrade step that moves a single-file asset's file into its own folder copies versions the
+        file already held (`fileRelocate`) and moves their records: nothing the verdict reads changed."""
+        mocks = _run(_sns_event(_file_message()), database_item=AUTO_EVAL_DB,
+                     compliance_record={"schemaName": SCHEMA}, asset_rows=ASSET_ROWS,
+                     head=_s3_head("fileRelocate"))
+        mocks["run_evaluation"].assert_not_called()
+
     def test_an_object_of_a_database_without_auto_evaluation_is_not_read(self):
         """The auto-evaluation and binding gate runs before the object HEAD, so a file event in a
         deployment that does not evaluate the asset costs no object read."""

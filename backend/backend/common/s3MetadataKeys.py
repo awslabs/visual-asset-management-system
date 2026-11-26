@@ -115,6 +115,9 @@ VAMS_CHANGE_SOURCE_ASSET_ARCHIVE = "assetArchive"
 VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE = "assetUnarchive"
 VAMS_CHANGE_SOURCE_FILE_REVERT = "fileRevert"
 VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE = "fileMetadataUpdate"
+# Written only by the v2.6 to v2.7 upgrade step assetLocationFileToFolder (its `move`): see
+# VAMS_CHANGE_SOURCE_RELOCATION_VALUES.
+VAMS_CHANGE_SOURCE_FILE_RELOCATE = "fileRelocate"
 
 VAMS_CHANGE_SOURCE_VALUES: FrozenSet[str] = frozenset(
     {
@@ -130,6 +133,7 @@ VAMS_CHANGE_SOURCE_VALUES: FrozenSet[str] = frozenset(
         VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
         VAMS_CHANGE_SOURCE_FILE_REVERT,
         VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE,
+        VAMS_CHANGE_SOURCE_FILE_RELOCATE,
     }
 )
 
@@ -143,6 +147,22 @@ VAMS_CHANGE_SOURCE_RESTORE_VALUES: FrozenSet[str] = frozenset(
     {
         VAMS_CHANGE_SOURCE_FILE_UNARCHIVE,
         VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
+    }
+)
+
+# Change sources whose new S3 version RELOCATES a version the file already held: the same bytes, metadata
+# and tags under a new key, at the same asset path. The upgrade step assetLocationFileToFolder writes them
+# when it moves a single-file asset's file into its own folder (`K` to `K/{name}`, every version, oldest
+# first, each copy naming its source in VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY), and it moves the
+# file's version records, its file version history rows and its vector items to the copies itself, and
+# re-indexes the path for search. Consumers derive nothing new from such a version: no workflow trigger
+# fires (workflows already ran on that content), the vector indexer leaves the file's items as the writer
+# left them and queues no embedding, bucket sync writes no change-history row (the writer moved the row of
+# the source version, with its provenance, to the copy), compliance does not re-evaluate, and the Physna
+# add-on keeps its copy (keyed by the asset path, which does not change).
+VAMS_CHANGE_SOURCE_RELOCATION_VALUES: FrozenSet[str] = frozenset(
+    {
+        VAMS_CHANGE_SOURCE_FILE_RELOCATE,
     }
 )
 

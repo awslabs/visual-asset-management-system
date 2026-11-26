@@ -18927,7 +18927,7 @@ components:
                     description: "Path to the preview file for this file: the newest non-archived `.previewFile.` object, or, in a listing with includeArchived=true, the newest archived one when the file has no other. Empty string if no preview file exists."
                 changeSource:
                     type: string
-                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate). Blank or absent for versions created before change provenance tracking was introduced."
+                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate, fileRelocate). Blank or absent for versions created before change provenance tracking was introduced."
                 changeUserId:
                     type: string
                     description: "User (or SYSTEM_USER) that created the current file version. Blank or absent for legacy versions."
@@ -19001,7 +19001,7 @@ components:
                     description: "Path to the preview file for this file: the newest non-archived `.previewFile.` object when several exist. Empty string if no preview file exists."
                 changeSource:
                     type: string
-                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate). Blank or absent for versions created before change provenance tracking was introduced."
+                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate, fileRelocate). Blank or absent for versions created before change provenance tracking was introduced."
                 changeUserId:
                     type: string
                     description: "User (or SYSTEM_USER) that created the current file version. Blank or absent for legacy versions."
@@ -19051,7 +19051,7 @@ components:
                                 nullable: true
                             changeSource:
                                 type: string
-                                description: "How this file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, assetArchive, fileRevert, fileMetadataUpdate). Blank or absent for legacy versions."
+                                description: "How this file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, assetArchive, fileRevert, fileMetadataUpdate, fileRelocate). Blank or absent for legacy versions."
                             changeUserId:
                                 type: string
                                 description: "User (or SYSTEM_USER) that created this version. Blank or absent for legacy versions."

@@ -34,9 +34,11 @@ default) writes nothing. A real run marks each converted row with ``assetLocatio
 again, so a later run never undoes a change a user made after the conversion. A ``pending`` row is resumed:
 records are looked up only at the old paths the asset's keys named, a record is never written over one that
 is already at its new path, and a record whose old path now names another file of the new location is left
-in place and reported. A moved object's copies carry the source version id (``vams-changeassetfileversionfrom``,
-the key the file move route writes), so a resumed move continues where it stopped and stops at a version it
-did not write.
+in place and reported. A moved object's copies carry the change source ``fileRelocate`` and the source version
+id (``vams-changeassetfileversionfrom``), so a resumed move continues where it stopped and stops at a version it
+did not write, and the backend treats each copy as a version the file already held: no fileUpload workflow
+starts, nothing is embedded again, bucket sync keeps the history row this step moved, and the Physna add-on
+keeps its copy.
 
 Derived data follows the paths, only for the converted assets and the paths that changed. The vector items
 of a moved path (``VectorEmbeddingsStorageTable``) move with it, with their embeddings, so nothing is
@@ -102,15 +104,17 @@ MAX_KEY_BYTES = 1024
 READABLE_STORAGE_CLASSES = frozenset(('STANDARD', 'REDUCED_REDUNDANCY', 'STANDARD_IA', 'ONEZONE_IA',
                                       'INTELLIGENT_TIERING', 'GLACIER_IR', 'OUTPOSTS', 'EXPRESS_ONEZONE'))
 
-# The object metadata the file move route writes (backend common/s3MetadataKeys.py), so bucket sync records a
-# copy as a move by the system user, and so a resumed move can map each copy to its source version.
+# The object metadata a move's copies carry (backend common/s3MetadataKeys.py): the relocation change source,
+# which no workflow trigger, vector indexer, bucket sync history row, compliance evaluation or Physna upload
+# reacts to (VAMS_CHANGE_SOURCE_RELOCATION_VALUES), the system user, and the source version, so a resumed move
+# can map each copy to its source version.
 CHANGE_SOURCE_METADATA_KEY = 'vams-changesource'
 CHANGE_USER_ID_METADATA_KEY = 'vams-changeuserid'
 CHANGE_DATABASE_ID_FROM_METADATA_KEY = 'vams-changedatabaseidfrom'
 CHANGE_ASSET_ID_FROM_METADATA_KEY = 'vams-changeassetidfrom'
 CHANGE_FILE_PATH_FROM_METADATA_KEY = 'vams-changeassetfilepathfrom'
 CHANGE_FILE_VERSION_FROM_METADATA_KEY = 'vams-changeassetfileversionfrom'
-CHANGE_SOURCE_FILE_MOVE = 'fileMove'
+CHANGE_SOURCE_FILE_RELOCATE = 'fileRelocate'
 SYSTEM_USER = 'SYSTEM_USER'
 # The asset history change source of a location change (the one the web app labels "Edited").
 HISTORY_CHANGE_SOURCE = 'edit'
@@ -1249,7 +1253,7 @@ class RecordMover:
 def _copy_metadata(head: Dict, database_id: str, asset_id: str, path: str, source_version: str) -> Dict[str, str]:
     metadata = dict(head.get('Metadata') or {})
     metadata.update({
-        CHANGE_SOURCE_METADATA_KEY: CHANGE_SOURCE_FILE_MOVE,
+        CHANGE_SOURCE_METADATA_KEY: CHANGE_SOURCE_FILE_RELOCATE,
         CHANGE_USER_ID_METADATA_KEY: SYSTEM_USER,
         CHANGE_DATABASE_ID_FROM_METADATA_KEY: database_id,
         CHANGE_ASSET_ID_FROM_METADATA_KEY: asset_id,
@@ -1277,8 +1281,8 @@ def copied_versions(s3_client, bucket: str, target_key: str, sources: Set[str]) 
 
 def move_object(s3_client, bucket: str, source_key: str, target_key: str, database_id: str, asset_id: str,
                 path: str, archived: bool) -> Tuple[str, Dict[str, str]]:
-    """Copy every version of ``source_key`` to ``target_key``, oldest first, with the file move route's
-    metadata; put a delete marker on the target when the source was archived (``archived``, read before the
+    """Copy every version of ``source_key`` to ``target_key``, oldest first, as relocated versions
+    (``fileRelocate``); put a delete marker on the target when the source was archived (``archived``, read before the
     conversion started) and one on the source. Returns ``(outcome, source version -> target version)``; the
     outcome is 'moved', or 'changed' when the target holds a version the step did not write."""
     versions = [e for e in exact_versions(s3_client, bucket, source_key) if not e['Marker']][::-1]

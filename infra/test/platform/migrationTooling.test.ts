@@ -1337,6 +1337,18 @@ describe("the v2.6 to v2.7 assetLocationFileToFolder step", () => {
         expect(body).toMatch(/if run_vector_backfill and backfills_wait:/);
     });
 
+    it("stamps a move's copies with the backend's relocation source, which starts no trigger", () => {
+        // A copy stamped fileMove ran the fileUpload workflows and re-embedded every copied version (D15)
+        const keys = backend("common/s3MetadataKeys.py");
+        const relocation =
+            /VAMS_CHANGE_SOURCE_RELOCATION_VALUES[^=]*=\s*frozenset\(\s*\{([^}]*)\}/.exec(keys);
+        expect(relocation?.[1]).toContain("VAMS_CHANGE_SOURCE_FILE_RELOCATE");
+        expect(module).toContain("CHANGE_SOURCE_METADATA_KEY: CHANGE_SOURCE_FILE_RELOCATE,");
+        expect(module).not.toMatch(/'fileMove'/);
+        const matching = backend("common/workflows/triggerMatching.py");
+        expect(matching).toContain("if change_source in RELOCATION_CHANGE_SOURCES:");
+    });
+
     it("ships with no resolutions, so a copied config never moves a file", () => {
         expect(config.asset_location_file_to_folder_resolutions).toBeNull();
         expect(config.dry_run).toBe(true);
@@ -1373,7 +1385,11 @@ describe("the v2.6 to v2.7 assetLocationFileToFolder step", () => {
                 "common/s3MetadataKeys.py",
                 "VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY",
             ],
-            ["CHANGE_SOURCE_FILE_MOVE", "common/s3MetadataKeys.py", "VAMS_CHANGE_SOURCE_FILE_MOVE"],
+            [
+                "CHANGE_SOURCE_FILE_RELOCATE",
+                "common/s3MetadataKeys.py",
+                "VAMS_CHANGE_SOURCE_FILE_RELOCATE",
+            ],
             ["HISTORY_CHANGE_SOURCE", "common/assetHistory.py", "CHANGE_SOURCE_EDIT"],
         ];
         for (const [name, file, backendName] of pairs) {

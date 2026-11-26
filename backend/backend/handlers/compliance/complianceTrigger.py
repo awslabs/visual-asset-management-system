@@ -42,7 +42,10 @@ workflow:
   - a file event for an object a workflow execution wrote (`vams-changesource` object metadata of
     `workflowExecution`, read with a HEAD on the object once the asset has passed the
     auto-evaluation and binding gate) is skipped, so a pipeline rule whose workflow writes its
-    outputs into the asset does not re-enter the trigger and relaunch itself;
+    outputs into the asset does not re-enter the trigger and relaunch itself; an object the upgrade
+    step that moves a single-file asset's file into its own folder wrote (`fileRelocate`, a version the
+    file already held at a new key, with its records moved) is skipped too, since nothing the verdict
+    reads changed;
   - a stream MODIFY whose new image records `lastChangeSource` of `workflowExecution` (the
     provenance `uploadFile` writes onto the asset row when a workflow execution's outputs are
     completed into the asset, and the metadata service writes when a workflow execution's metadata
@@ -133,6 +136,7 @@ from common.resourceNames import ResourceKeys, get_table_name
 from common.s3 import region_routing_s3_client
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_RELOCATION_VALUES,
     VAMS_CHANGE_SOURCE_UPLOAD,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
 )
@@ -1089,6 +1093,13 @@ def _evaluate_file_record(s3_record, message, decided, batch=None):
     if change_source == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
         logger.info(f"Object under asset {asset_id} was written by a workflow execution; "
                     "skipping compliance evaluation")
+        return
+    if change_source in VAMS_CHANGE_SOURCE_RELOCATION_VALUES:
+        # The upgrade step that moves a single-file asset's file into its own folder copies versions the
+        # file already held to a new key at the same asset path, and moves their records with them: the
+        # content, the paths and the version records the verdict reads are what they were.
+        logger.info(f"Object under asset {asset_id} was written by '{change_source}', which relocates a "
+                    "stored version; skipping compliance evaluation")
         return
     if removal_superseded_by_workflow_write(s3_record, s3_info, message):
         logger.info(f"Object removal under asset {asset_id} was superseded by a workflow execution's "
