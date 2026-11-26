@@ -49,7 +49,7 @@ from common.assetHistory import (
     build_asset_snapshot,
     write_asset_history_record,
 )
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, VAMSAssetNotFoundResponse, validation_error_message
 from models.assetsV3 import (
     GetAssetRequestModel, GetAssetsRequestModel, UpdateAssetRequestModel,
     ArchiveAssetRequestModel, UnarchiveAssetRequestModel, DeleteAssetRequestModel, 
@@ -1867,7 +1867,7 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         raise AuthorizationDenied()
 
     if not asset:
-        raise VAMSGeneralErrorResponse("Asset not found in database")
+        raise VAMSAssetNotFoundResponse()
 
     #Get bucket details for asset
     bucketDetails = get_asset_bucket_details(asset)
@@ -2513,6 +2513,8 @@ def handle_delete_request(event):
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAssetNotFoundResponse:
+        return general_error(body={"message": "Asset not found"}, status_code=404, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
