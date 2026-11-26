@@ -114,6 +114,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Point cloud viewer data outside an `{assetId}/` folder** — The Potree viewer loads the octree of a file in a bucket registered under a base prefix, in an asset created on an existing folder, or in the companion folder of an asset created from one S3 object; the auxiliary preview stream reads a file's full key as well as its path in the asset. (issue #1855)
     -   Note: A path with a leading `/` is always the path in the asset; a path without one that starts with the asset's location key is the full key. The licensed VEERUM viewer's point cloud loading gets the same fix.
 -   **Sign-in with Amazon Cognito federation** — The [FAQ](../troubleshooting/faq.md#how-do-i-connect-vams-to-my-existing-authentication-system), [API authentication](../api/authentication.md), [configuration reference](../deployment/configuration-reference.md), [deployment](../deployment/deploy-the-solution.md) and [getting started](../user-guide/getting-started.mdx) pages say that with SAML or OIDC federation the web login page shows only the federated button, and that native user pool accounts, including the initial administrator, sign in with VamsCLI. (issue #652)
+-   **Role-name rule** — The [permissions](../user-guide/permissions.md#creating-a-custom-role) user guide, the CLI troubleshooting page and the API reference give the role-name rule the API applies: 1-256 characters of letters, numbers, spaces, hyphens, periods and underscores. (issue #378)
 
 **Other changes:**
 
