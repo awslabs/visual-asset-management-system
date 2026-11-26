@@ -440,7 +440,10 @@ class TestGLBAssetCombineUploadRefused:
         assert result.exit_code == 1, result.output
         document = json.loads(result.stdout)
         assert document['error_type'] == 'FileUploadError'
-        assert document['error'] == 'Upload failed for: /Root Asset__COMBINED.glb'
+        # The refusal's reason is named with the file (#1072).
+        assert document['error'] == (
+            'Upload failed for: /Root Asset__COMBINED.glb (Failed to initialize upload for sequence 1: '
+            'Access forbidden. Not authorized to upload)')
         assert document['createdAssetId'] == 'new-asset-id'
         mocks['api_client'].initialize_upload.assert_called()
 

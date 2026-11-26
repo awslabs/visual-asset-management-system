@@ -29,7 +29,7 @@ from ..utils.file_processor import (
     FileInfo, create_upload_sequences, validate_file_for_upload,
     validate_file_extensions, format_file_size
 )
-from ..utils.upload_manager import UploadManager, format_duration
+from ..utils.upload_manager import UploadManager, failed_file_reasons, format_duration
 from ..utils.download_manager import (
     DownloadManager, DownloadFileInfo, StreamingDownloadProgress, parse_remote_timestamp,
     generate_presigned_urls
@@ -472,6 +472,9 @@ def push(ctx: click.Context, local_directory, database_id, asset_id, asset_locat
                 lines.append(f"  Successful files: {uploads['successful_files']}/{uploads['total_files']}")
                 lines.append(f"  Total size: {uploads['total_size_formatted']}")
                 lines.append(f"  Duration: {format_duration(uploads['upload_duration'])}")
+                # Each file that was not uploaded, with the reason (#1072), as the deletes below list theirs.
+                for failure in failed_file_reasons(uploads):
+                    lines.append(f"  ✗ {failure['relative_key']}: {failure['error']}")
             deletes = data['execution'].get('deletes')
             if deletes:
                 verb = 'Deleted' if deletes['action'] == 'delete' else 'Archived'
