@@ -4,6 +4,7 @@
  */
 
 import type { ExecuteInputFile } from "../../../features/orchestration/types";
+import { assetFilePath } from "../../../utils/assetFilePath";
 
 /**
  * Maps a file-manager selection onto workflow input files for the Automation group.
@@ -42,8 +43,8 @@ export interface AutomationSelectionInput {
     assetVersionId?: string;
 }
 
-/** Asset-relative key with exactly one leading slash. */
-const toKey = (path?: string): string => `/${(path || "").replace(/^\/+/, "")}`;
+/** Asset-relative key with a leading slash; "//x" (an empty segment after the location) is kept (#1977). */
+const toKey = (path?: string): string => assetFilePath(path);
 
 /** A folder key keeps its trailing slash; the asset root is a bare '/'. */
 const toFolderKey = (path?: string): string => {

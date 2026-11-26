@@ -50,7 +50,7 @@ from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
 from common.assetLocations import (
     NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, contains, held_objects,
-    is_folder_location, names_own_object, normalize_base_prefix, object_key_for,
+    names_own_object, normalize_base_prefix, object_key_for_request,
 )
 from common.fileAttribution import nested_locations_for_asset_type, nested_locations_of_asset
 from common.workflows.defaultBucket import DefaultBucketNotFoundError, resolve_default_bucket
@@ -883,42 +883,27 @@ def upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key) -> Opt
 
 
 def normalize_s3_path(asset_base_key, file_path):
-    """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-    
+    """The S3 key an upload's file path names in the asset (common.assetLocations.object_key_for_request).
+
+    A path with a leading '/' is the file's path in the asset; a path without one is the file's full key
+    when the asset's location holds it, else the path in the asset. In a single-file location the file
+    name names the object, its preview name its own preview, and any other path lands in its companion
+    folder.
+
     Args:
         asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-        
-    Returns:
-        The properly resolved S3 key without duplication
-    """
-    # A single-file location (common.assetLocations): its file name names the object, its preview
-    # name its own preview, and any other path lands in its companion folder
-    if asset_base_key and not is_folder_location(asset_base_key):
-        resolved = object_key_for(asset_base_key, file_path)
-        if resolved is None:
-            raise VAMSGeneralErrorResponse("Invalid file path")
-        return resolved
+        file_path: The file path from the request
 
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-    
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-    
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
+    Returns:
+        The S3 key, always one the asset's location holds
+
+    Raises:
+        VAMSGeneralErrorResponse: the path names no key of the asset
+    """
+    resolved = object_key_for_request(asset_base_key, file_path)
+    if resolved is None:
+        raise VAMSGeneralErrorResponse("Invalid file path")
+    return resolved
 
 def is_preview_file(file_path: str) -> bool:
     """Check if file is a preview file (.previewFile.X pattern)
@@ -1338,7 +1323,9 @@ def start_output_copy_job(file_info: dict, head_response: dict, change_metadata:
         asset_id=file_info["assetId"],
         upload_id=file_info["uploadId"],
         upload_type=file_info["uploadType"],
-        relative_key=file_info["relativeKey"],
+        # The output step keys its outputs, and the job id that makes a repeated start a no-op, by the
+        # path without its leading '/', which it sends on the wire to mark a path in the asset
+        relative_key=file_info["relativeKey"].lstrip("/"),
         change_user_id=file_info.get("changeUserId"),
         scope_id=batch_id,
         workflow_id=file_info.get("workflowId") or "",

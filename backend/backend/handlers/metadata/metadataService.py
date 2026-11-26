@@ -22,7 +22,7 @@ from common.apiRoutes import (
 )
 from common.validators import validate
 from common.assetLocations import (
-    contains, is_folder_location, normalize_base_prefix, object_key_for, relative_path_in,
+    normalize_base_prefix, object_key_for_request, relative_path_in,
 )
 from common.fileAttribution import nested_locations_of_asset
 from common.assetProvenance import (
@@ -817,26 +817,24 @@ def authorize_asset_read(database_id: str, asset_id: str, claims_and_roles: dict
 def file_record_path(asset: dict, asset_id: str, file_path: str) -> str:
     """The path a file's metadata and attributes are keyed by: the path the file is listed at
 
-    A request names a file by that path (the CLI) or by its full S3 key (the web's file panel). A path
-    that is a key the asset's location holds, once its leading slash is dropped, names that key, as on
-    the file routes, and is keyed by the key's listed path. Any other path is taken as the listed path,
-    with a leading /{assetId}/ segment dropped.
+    A request names a file by that path (the CLI, with its leading slash) or by its full S3 key (the
+    web's file panel, without one). The path names a key by the rule of the file routes
+    (common.assetLocations.object_key_for_request) and the records are keyed by that key's listed
+    path, so both forms of one file name the same records. A path that names no key of the location
+    (an asset without a location) is keyed as given, with one leading slash.
 
     Args:
         asset: The asset record
         asset_id: The asset ID
-        file_path: The file path of the request (with leading slash)
+        file_path: The file path of the request, in the form the caller sent
 
     Returns:
         The asset-relative path (with leading slash) the records are keyed by
     """
     location = (asset.get('assetLocation') or {}).get('Key')
-    key = file_path[1:] if file_path.startswith('/') else file_path
-    if contains(location, key):
-        return relative_path_in(location, key)
-    if file_path.startswith(f"/{asset_id}/"):
-        return file_path[len(asset_id) + 1:]
-    return file_path
+    key = object_key_for_request(location, file_path)
+    record_path = relative_path_in(location, key) if key is not None else None
+    return record_path if record_path is not None else '/' + (file_path or '').lstrip('/')
 
 
 def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> bool:
@@ -865,24 +863,11 @@ def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> boo
         if 'assetLocation' not in asset or 'Key' not in asset['assetLocation']:
             raise VAMSGeneralErrorResponse("Asset location not found")
         
-        # Use the asset's actual location as the base path
-        asset_base_path = asset['assetLocation']['Key']
-
-        if asset_base_path and not is_folder_location(asset_base_path):
-            # A single-file location's paths name its object, its previews and its companion folder {key}/
-            full_key = object_key_for(asset_base_path, file_path)
-            if full_key is None:
-                raise VAMSGeneralErrorResponse("File not found in S3")
-        else:
-            # Ensure asset base path ends with slash
-            if not asset_base_path.endswith('/'):
-                asset_base_path += '/'
-
-            # Remove leading slash from file_path before combining (to avoid double slash)
-            normalized_file_path = file_path.lstrip('/')
-
-            # Construct full S3 key using asset's actual location
-            full_key = f"{asset_base_path}{normalized_file_path}"
+        # The key the path names in the asset's location (the rule of the file routes); the callers
+        # pass the record path, which is the file's path in the asset
+        full_key = object_key_for_request(asset['assetLocation']['Key'], file_path)
+        if full_key is None:
+            raise VAMSGeneralErrorResponse("File not found in S3")
         
         # A file the location of another asset nested in this one holds is that asset's file
         nested = nested_locations_of_asset(asset_storage_table, s3_asset_buckets_table, asset, bucket_name,
@@ -4276,7 +4261,7 @@ def handle_file_metadata_get(event):
         # Parse and validate path parameters (validation in model)
         path_request_model = parse(path_parameters, model=FileMetadataPathRequestModel)
         
-        # Parse query parameters - validation handled in model (adds leading slash)
+        # Parse query parameters - validation handled in model (filePath keeps the caller's form)
         query_request_model = parse(query_parameters, model=GetFileMetadataRequestModel)
         
         query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId, 'showArchived': query_request_model.showArchived}
@@ -4318,7 +4303,7 @@ def handle_file_metadata_post(event):
                 logger.exception(f"Invalid JSON in request body: {e}")
                 return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
-        # Parse request model - validation handled in model (adds leading slash)
+        # Parse request model - validation handled in model (filePath keeps the caller's form)
         request_model = parse(body, model=CreateFileMetadataRequestModel)
         
         # The write sets request_model.filePath to the path the file is listed at
@@ -4358,7 +4343,7 @@ def handle_file_metadata_put(event):
                 logger.exception(f"Invalid JSON in request body: {e}")
                 return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
-        # Parse request model - validation handled in model (adds leading slash)
+        # Parse request model - validation handled in model (filePath keeps the caller's form)
         request_model = parse(body, model=UpdateFileMetadataRequestModel)
         
         # The write sets request_model.filePath to the path the file is listed at
@@ -4398,7 +4383,7 @@ def handle_file_metadata_delete(event):
                 logger.exception(f"Invalid JSON in request body: {e}")
                 return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
-        # Parse request model - validation handled in model (adds leading slash)
+        # Parse request model - validation handled in model (filePath keeps the caller's form)
         request_model = parse(body, model=DeleteFileMetadataRequestModel)
         
         # The write sets request_model.filePath to the path the file is listed at

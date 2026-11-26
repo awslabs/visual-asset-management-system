@@ -44,9 +44,12 @@ describe("auxiliaryPreviewStreamUrl", () => {
         );
     });
 
-    it("sends repeated leading slashes as one", () => {
+    it("keeps '//', the path of a file whose key has an empty segment, so it never asks for another file's data (#1977)", () => {
         expect(metadataUrl("//scans/cloud.laz")).toBe(
-            `${STREAM}/scans/cloud.laz/preview/PotreeViewer/metadata.json`
+            `${STREAM}//scans/cloud.laz/preview/PotreeViewer/metadata.json`
+        );
+        expect(metadataUrl("asset-1//cloud.laz")).toBe(
+            `${STREAM}asset-1//cloud.laz/preview/PotreeViewer/metadata.json`
         );
     });
 

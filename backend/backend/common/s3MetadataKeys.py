@@ -199,8 +199,13 @@ def folder_marker_metadata(database_id: str, asset_id: str) -> dict:
 
 
 def normalize_history_file_path(file_path: str) -> str:
-    """Return the asset-relative file path with exactly one leading slash."""
-    return "/" + (file_path or "").lstrip("/")
+    """Return the asset-relative file path with a leading slash, adding one only when it has none.
+
+    One leading ``/`` marks a path in the asset, so ``//x`` is the listed path of the key with an empty segment
+    after the asset's location (``A1//x``), another file than ``/x``; its history rows are keyed apart (#1977).
+    Rows written before 2.7.0 for such a key are under ``/x`` and stay there."""
+    file_path = file_path or ""
+    return file_path if file_path.startswith("/") else "/" + file_path
 
 
 # ---------------------------------------------------------------------------

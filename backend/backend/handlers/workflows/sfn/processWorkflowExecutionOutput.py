@@ -14,8 +14,8 @@ from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
 from common.assetLocations import (
-    NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, is_folder_location,
-    normalize_base_prefix, object_key_for,
+    NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, normalize_base_prefix,
+    normalize_location, object_key_for_request,
 )
 from common.resourceNames import get_resource_name, get_table_name, ResourceKeys, ResourceNameUnavailableError
 from common.ssmParameters import read_parameter_value
@@ -552,7 +552,7 @@ def _ingestion_outcome(result):
     file_results = result.get('fileResults')
     if not isinstance(file_results, list):
         return all_succeeded, None
-    ingested = {entry.get('relativeKey', '') for entry in file_results
+    ingested = {_result_relative_key(entry) for entry in file_results
                 if isinstance(entry, dict) and entry.get('success')}
     return all_succeeded, ingested
 
@@ -562,13 +562,32 @@ def _pending_ingestion_jobs(result):
     file_results = (result or {}).get('fileResults')
     if not isinstance(file_results, list):
         return {}
-    return {entry.get('relativeKey', ''): entry.get('ingestionJobId')
+    return {_result_relative_key(entry): entry.get('ingestionJobId')
             for entry in file_results
             if isinstance(entry, dict) and entry.get('success') and entry.get('ingestionJobId')}
 
 
+def _result_relative_key(entry):
+    """A file-ingestion result's relativeKey in the form this step keys its outputs by: no leading '/'.
+
+    The completion echoes each file's relativeKey as it was sent, and an asset file is sent with a
+    leading '/' (_completion_request_key)."""
+    return (entry.get('relativeKey') or '').lstrip('/')
+
+
+def _completion_request_key(relative_key, upload_type):
+    """The relativeKey the external completion is sent for an output: an asset file's path in the asset
+    with a leading '/', so the upload handler reads it as a path and never as one of the asset's keys
+    (common.assetLocations.object_key_for_request; an output written into a subfolder named like the
+    location lands in that subfolder); a preview's basename as it is."""
+    if upload_type != "assetFile":
+        return relative_key
+    return "/" + relative_key.lstrip("/")
+
+
 def _completion_relative_key(file_key, upload_type, baseFileKeyPrefix, extension="/"):
-    """The asset-relative key the external completion lands a staged output file under.
+    """The asset-relative key the external completion lands a staged output file under, without a
+    leading '/' (the form this step keys its outputs by; _completion_request_key adds it on the wire).
 
     An asset file keeps its path below the output folder, with the output base-execution path
     extension inserted before its own filename (common.workflows.outputPathExtension); a preview
@@ -611,7 +630,7 @@ def _refused_write_back_reasons(result):
     file_results = (result or {}).get('fileResults')
     if not isinstance(file_results, list):
         return {}
-    return {entry.get('relativeKey', ''): entry.get('error')
+    return {_result_relative_key(entry): entry.get('error')
             for entry in file_results
             if isinstance(entry, dict) and not entry.get('success')
             and entry.get('error') in USER_CORRECTABLE_WRITE_BACK_REFUSALS}
@@ -713,17 +732,16 @@ def _drop_ingest_ledger_rows(workflow_execution_id, descriptors, holder=None):
 
 def _destination_key(descriptor, asset, base_assets_prefix):
     """Where the upload handler writes an output in the asset (mirrors uploadFile.complete_external_upload):
-    a file under the asset's location at its relative path, a preview under the previews prefix by
-    basename."""
+    a file under the asset's location at its path in the asset (the completion is sent the path with a
+    leading '/', _completion_request_key), a preview under the previews prefix by basename."""
     asset_id = asset.get('assetId', '')
     relative = (descriptor.get("relativeFilePath") or "").lstrip("/")
     if descriptor.get("fileType") == "preview":
         return f"{base_assets_prefix}{PREVIEW_PREFIX}{asset_id}/{os.path.basename(relative)}"
     base = (asset.get('assetLocation') or {}).get('Key') or f"{base_assets_prefix}{asset_id}/"
-    if not is_folder_location(base):
-        # A single-file asset (common.assetLocations), resolved as the upload handler resolves it
-        return object_key_for(base, relative) or base
-    return relative if relative.startswith(base) else base + relative
+    # Resolved as the upload handler resolves the path (common.assetLocations); a single-file asset's
+    # own file path names its object
+    return object_key_for_request(base, "/" + relative) or normalize_location(base)
 
 
 def _written_by_execution(bucket, key, workflow_execution_id):
@@ -1063,7 +1081,8 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
     extension = file_base_execution_path_extension
     try:
         # Prepare the request payload
-        file_list = [{"relativeKey": _completion_relative_key(file_key, upload_type, baseFileKeyPrefix, extension),
+        file_list = [{"relativeKey": _completion_request_key(
+                          _completion_relative_key(file_key, upload_type, baseFileKeyPrefix, extension), upload_type),
                       "tempKey": file_key}
                      for file_key in files]
 
@@ -1340,9 +1359,11 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
                 'updateType': update_type
             }
             
-            # Add filePath and type for file metadata/attributes
+            # Add filePath and type for file metadata/attributes. The path is the file's path in the
+            # asset, sent with a leading '/' so the metadata service reads it as a path and never as one
+            # of the asset's keys (a file in a subfolder named like the location keeps its own records)
             if file_path:
-                request_body['filePath'] = file_path
+                request_body['filePath'] = "/" + file_path.lstrip("/")
                 request_body['type'] = metadata_type
             
             # Build Lambda event for metadata service PUT endpoint. The synthetic route is built

@@ -76,6 +76,38 @@ describe("Add Files page", () => {
         expect(screen.queryByText("/scene/b.txt")).toBeNull();
     });
 
+    it.each([
+        ["//", "/"],
+        ["/scene/", "/scene/"],
+        ["/scene//props/", "/scene/props/"],
+    ])(
+        "starts the field opened with the file-manager folder %p at the folder the files go to, %p",
+        (folder, shown) => {
+            // The file manager's "/" folder is "//"; uploads drop empty folder names (#1977)
+            mount({ folder });
+            expect(destinationInput().value).toBe(shown);
+        }
+    );
+
+    it("says the empty folder names are dropped and plans the files where they go", () => {
+        mount({ folder: "//" });
+        expect(
+            screen.getByText("Empty folder names are dropped, so the files go to /.")
+        ).toBeTruthy();
+        addFiles([makeFile("a.txt")]);
+        expect(screen.getByText("/a.txt")).toBeTruthy();
+
+        // A value the user types is kept as typed, and the note goes
+        fireEvent.change(destinationInput(), { target: { value: "/x//" } });
+        expect(destinationInput().value).toBe("/x//");
+        expect(screen.queryByText(/Empty folder names are dropped/)).toBeNull();
+    });
+
+    it("shows no note for a folder that keeps its name", () => {
+        mount({ folder: "/scene/" });
+        expect(screen.queryByText(/Empty folder names are dropped/)).toBeNull();
+    });
+
     it("reads the destination from ?folder= when there is no navigation state", () => {
         mount({ query: "?folder=%2Fscene%2Fprops%2F" });
         expect(destinationInput().value).toBe("/scene/props/");
@@ -146,7 +178,8 @@ describe("Add Files page", () => {
             expect.objectContaining({
                 databaseId: "db1",
                 assetId: "a1",
-                prefix: "scene/",
+                // The destination as its path in the asset; the API drops its one leading "/" (#1977)
+                prefix: "/scene/",
                 includeArchived: true,
             })
         );

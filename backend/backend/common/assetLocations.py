@@ -30,6 +30,11 @@ than with the prefix match alone. Code that decides whether two locations overla
 ``locations_share_key``: two locations can hold a common key that neither location key
 names (``a/x`` and ``a/x.previewFile`` both hold ``a/x.previewFile.previewFile.z``).
 
+A file path in a request names a key by ``object_key_for_request``: with a leading ``/`` it is the file's path
+in the asset, without one it is the file's full key when the location holds it and otherwise the path in the
+asset. A stored or listed path (a version record's ``relativeKey``, a file list's ``relativePath``) is only ever
+a path, read with ``object_key_for_path``.
+
 A file belongs to the deepest stored location that contains it. A location of another asset can lie
 inside an asset's location (releases before the create-time conflict check allowed it): the keys that
 deeper location holds are that asset's, so the containing asset's file operations leave them alone.
@@ -248,11 +253,41 @@ OWN_FILE_OUTPUT_REFUSAL = ("A workflow output cannot replace the file of a singl
 
 
 def names_own_object(location: Optional[str], relative_path: Optional[str]) -> bool:
-    """Whether an asset-relative path names a single-file location's object itself (``/{file name}`` or its key)."""
+    """Whether a request's file path names a single-file location's object itself (``/{file name}`` or its key).
+
+    The path is read as ``object_key_for_request`` reads it, so ``/{file key}`` is a companion entry, not the object."""
     loc = normalize_location(location)
     if not loc or loc.endswith("/"):
         return False
-    return object_key_for(loc, relative_path) == loc
+    return object_key_for_request(loc, relative_path) == loc
+
+
+def object_key_for_request(location: Optional[str], value: Optional[str]) -> Optional[str]:
+    """The S3 key a file path from a request names in a location, or None when it names no key there.
+
+    The one rule for a file path a caller sends to an upload, a file operation, the stream and download routes,
+    a file's metadata or a workflow input:
+
+    - a value with a leading ``/`` is the file's path in the asset (``object_key_for_path``), never a full key,
+      so ``/{location}x`` is the file ``{location}{location}x`` of a subfolder named like the location. Exactly
+      one leading ``/`` is the marker, so a value that starts with ``//`` names a key with an empty segment
+      right after the location (``//x`` in ``A1/`` is ``A1//x``, the path ``relative_path_in`` gives that
+      key, at which the file list shows it); uploads before 2.7.0 could write such keys, and each is reached
+      by that path and by its key (#1977);
+    - a value without one is the file's full S3 key when the location holds it (``contains``), the ``key`` the
+      file list returns; any other value is the file's path in the asset.
+
+    None for a value with a ``..`` segment, for ``/`` or no path in a single-file location (the asset as a whole,
+    not one key) and for an empty location. Every key returned is one the location holds, or the folder location
+    itself. Reads the location and the value only, with no AWS call.
+    """
+    loc = normalize_location(location)
+    raw = value or ""
+    if not loc or ".." in raw.split("/"):
+        return None
+    if not raw.startswith("/") and contains(loc, raw):
+        return raw
+    return object_key_for_path(loc, raw)
 
 
 def object_key_for(location: Optional[str], relative_path: Optional[str]) -> Optional[str]:
@@ -264,6 +299,8 @@ def object_key_for(location: Optional[str], relative_path: Optional[str]) -> Opt
     ...), with or without a preview suffix, names the key one level up its chain (the object,
     ``{file key}/{file name}``, ...); any other path names ``{file key}/{path}``.
     ``/`` names the single-file asset as a whole, not one key, and resolves to None.
+    A file path from a request is resolved with ``object_key_for_request`` instead, which never reads a path
+    with a leading ``/`` as a key.
     """
     loc = normalize_location(location)
     relative = (relative_path or "").lstrip("/")
@@ -281,11 +318,16 @@ def object_key_for_path(location: Optional[str], relative_path: Optional[str]) -
     its chain, and any other path names ``{file key}/{path}``. Unlike ``object_key_for``, a path that spells
     one of the location's own keys (``/{file key}/x``) is not taken as that key: it is the companion entry
     ``{file key}/{file key}/x``. ``/`` names a single-file asset as a whole and resolves to None.
+    Exactly one leading ``/`` is dropped, so ``//x`` is the path of the key with an empty segment right after
+    the location (``{folder}/x``, ``{file key}//x``), the path ``relative_path_in`` gives it. ``object_key_for``
+    drops every leading ``/`` before it calls this, as it always did.
     """
     loc = normalize_location(location)
     if not loc:
         return None
-    relative = (relative_path or "").lstrip("/")
+    relative = relative_path or ""
+    if relative.startswith("/"):
+        relative = relative[1:]
     if loc.endswith("/"):
         return loc + relative
     if not relative:

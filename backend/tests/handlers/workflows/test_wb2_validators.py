@@ -573,11 +573,12 @@ class TestLaterStepsJudgedAtTheirTransition:
 
     @pytest.mark.parametrize("second", [
         {"assetId": "a", "relativeFileKey": "/a.obj", "versionId": "v2"},
-        {"assetId": "a", "relativeFileKey": "//a.obj"},
+        {"assetId": "a", "relativeFileKey": "/a.obj"},
     ])
     def test_one_file_selected_twice_counts_once(self, second):
         # The run writes one input row per database, asset and normalized file key, so two
-        # versions (or two spellings) of one file reach a later step as a single entry.
+        # versions of one file (or the same selection twice) reach a later step as a single entry.
+        # '//a.obj' is another file (#1977, test_empty_segment_input_labels).
         wf = self._wf(inputFileArity="multi")
         errs, _ = ev.validate_execution(
             wf,

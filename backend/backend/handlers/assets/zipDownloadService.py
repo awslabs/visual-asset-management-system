@@ -561,12 +561,7 @@ def _resolve_pinned(database_id, asset_id, bucket, base_key, request, nested=Non
     recorded = {}
     for f in snapshot.get("files") or []:
         rel = _version_entry_key(f.get("relativeKey"))
-        if rel.startswith("/"):
-            # A key with an empty segment right after the folder ('{folder}/x', stored '//x'): this route
-            # resolves a member's key from its path with every leading '/' dropped, so it would read
-            # '{folder}x' under this entry's version. Left out, as it was before such keys were told apart.
-            logger.info(f"Leaving out a version entry with an empty first path segment in {asset_id}")
-            continue
+        # A stored '//x' is '/x' here and resolves below as the path '//x', the key '{folder}/x' (#1977)
         if rel and f.get("versionId") and _archived_key(rel) and (not nested or nested.keep(base_key + rel)):
             recorded[rel] = f
     chosen = {}

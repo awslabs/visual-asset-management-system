@@ -46,6 +46,9 @@ REVIEWED = {
         "attributes each file event with fileAttribution.attribute_object (the deepest owner)",
     "handlers/osVectorSearch/vectorIndexer.py":
         "attributes each file event with fileAttribution.attribute_object (the deepest owner)",
+    "handlers/workflows/executionService.py":
+        "a re-run maps each stored input key back to its path in the asset (relative_path_in); the "
+        "re-run's execute request checks the nested locations again",
     "handlers/workflows/sfn/processWorkflowExecutionOutput.py":
         "outputs are written through the upload completion, which refuses a nested path; the refusal is "
         "user-correctable (USER_CORRECTABLE_WRITE_BACK_REFUSALS)",

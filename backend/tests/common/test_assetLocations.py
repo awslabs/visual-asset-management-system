@@ -281,7 +281,15 @@ class TestObjectKeyFor:
     @pytest.mark.parametrize("path", ["/model.glb", "model.glb", FILE_LOCATION, "/" + FILE_LOCATION])
     def test_the_file_name_names_the_object(self, path):
         assert al.object_key_for(FILE_LOCATION, path) == FILE_LOCATION
+
+    @pytest.mark.parametrize("path", ["/model.glb", "model.glb", FILE_LOCATION])
+    def test_a_request_path_names_the_own_object_by_its_name_or_its_key(self, path):
         assert al.names_own_object(FILE_LOCATION, path) is True
+
+    def test_a_request_path_that_spells_the_key_after_a_slash_is_a_companion_entry(self):
+        """#1943: a leading '/' marks a path in the asset, so '/{file key}' is the companion entry
+        '{file key}/{file key}', not the object."""
+        assert al.names_own_object(FILE_LOCATION, "/" + FILE_LOCATION) is False
 
     @pytest.mark.parametrize("path", ["/model.glb.previewFile.png", "projects/model.glb.previewFile.png"])
     def test_a_preview_path_names_the_own_preview(self, path):
@@ -363,6 +371,169 @@ class TestObjectKeyFor:
         assert al.object_key_for_path(FILE_LOCATION, "/") is None
         assert al.object_key_for_path("", "/model.glb") is None
         assert al.object_key_for_path(None, "/model.glb") is None
+
+
+# Location shapes a request path is read against (#1943)
+REQUEST_LOCATIONS = [
+    "A1/",                          # {assetId}/
+    "vams/B/",                      # a registration's base prefix
+    "proj/site/",                   # a custom root on an existing folder
+    "assets/preview/",              # a folder named preview
+    FILE_LOCATION,                  # a single file
+    "projects/preview/model.glb",   # a single file with a preview segment
+    "model.glb",                    # a single file at the bucket root
+]
+
+
+def _request_values(location):
+    """Every value form a request can send for a location."""
+    return [
+        "/x.las", "/sub/x.las", "x.las", "sub/x.las",
+        location + "x.las", location + "/x.las", location + "/sub/x.las",
+        "/" + location + "x.las", "/" + location + "/x.las", "/" + location,
+        location, "/", "", None, "/../x.las", "../x.las", "sub/../../x.las",
+        "A10/x.las", "/A10/x.las", location + ".bak", "/" + location + ".bak",
+        "model.glb", "/model.glb", "/model.glb.previewFile.png", location + ".previewFile.png",
+    ]
+
+
+@pytest.mark.unit
+class TestObjectKeyForRequest:
+    """object_key_for_request (#1943): a leading '/' marks the file's path in the asset; a value without one
+    is the file's full key when the location holds it, else the path in the asset."""
+
+    @pytest.mark.parametrize("value,expected", [
+        # The subfolder named like the asset is a path, the root file's full key is its key
+        ("/A1/cloud.las", "A1/A1/cloud.las"),
+        ("/cloud.las", "A1/cloud.las"),
+        ("A1/cloud.las", "A1/cloud.las"),
+        ("A1/A1/cloud.las", "A1/A1/cloud.las"),
+        ("cloud.las", "A1/cloud.las"),
+        ("sub/cloud.las", "A1/sub/cloud.las"),
+        # A neighbour that only shares characters is a path in the asset
+        ("A10/x.las", "A1/A10/x.las"),
+        ("/A10/x.las", "A1/A10/x.las"),
+        # The whole asset
+        ("/", "A1/"),
+        ("", "A1/"),
+        (None, "A1/"),
+        ("A1/", "A1/"),
+        ("/A1/", "A1/A1/"),
+    ])
+    def test_an_asset_id_folder(self, value, expected):
+        assert al.object_key_for_request("A1/", value) == expected
+
+    @pytest.mark.parametrize("location,value,expected", [
+        ("vams/B/", "/vams/B/x.las", "vams/B/vams/B/x.las"),
+        ("vams/B/", "vams/B/x.las", "vams/B/x.las"),
+        ("vams/B/", "/x.las", "vams/B/x.las"),
+        ("vams/B/", "vams/C/x.las", "vams/B/vams/C/x.las"),
+        ("proj/site/", "/proj/site/m.glb", "proj/site/proj/site/m.glb"),
+        ("proj/site/", "proj/site/m.glb", "proj/site/m.glb"),
+        ("proj/site/", "proj/siteOTHER/m.glb", "proj/site/proj/siteOTHER/m.glb"),
+        ("assets/preview/", "/assets/preview/x.glb", "assets/preview/assets/preview/x.glb"),
+        ("assets/preview/", "/preview/x.glb", "assets/preview/preview/x.glb"),
+    ])
+    def test_a_prefixed_or_custom_folder(self, location, value, expected):
+        assert al.object_key_for_request(location, value) == expected
+
+    @pytest.mark.parametrize("value,expected", [
+        ("/model.glb", FILE_LOCATION),
+        ("model.glb", FILE_LOCATION),
+        (FILE_LOCATION, FILE_LOCATION),
+        # A leading '/' never names one of the location's keys: it is a companion entry
+        ("/" + FILE_LOCATION, "projects/model.glb/projects/model.glb"),
+        ("/" + FILE_LOCATION + "/x.obj", "projects/model.glb/projects/model.glb/x.obj"),
+        ("/" + FILE_LOCATION + ".previewFile.png", "projects/model.glb/projects/model.glb.previewFile.png"),
+        # Held keys without one are the keys
+        ("projects/model.glb/x.obj", "projects/model.glb/x.obj"),
+        ("projects/model.glb.previewFile.png", "projects/model.glb.previewFile.png"),
+        # Paths
+        ("/x.obj", "projects/model.glb/x.obj"),
+        ("x.obj", "projects/model.glb/x.obj"),
+        ("/model.glb.previewFile.png", "projects/model.glb.previewFile.png"),
+        ("/model.glb/model.glb", "projects/model.glb/model.glb"),
+        # A neighbour that only shares characters is a companion entry
+        ("projects/model.glb.bak", "projects/model.glb/projects/model.glb.bak"),
+        ("/model.glb.bak", "projects/model.glb/model.glb.bak"),
+        # The whole single-file asset is no single key
+        ("/", None),
+        ("", None),
+        (None, None),
+    ])
+    def test_a_single_file(self, value, expected):
+        assert al.object_key_for_request(FILE_LOCATION, value) == expected
+
+    @pytest.mark.parametrize("location,value,expected", [
+        ("projects/preview/model.glb", "/projects/preview/model.glb", "projects/preview/model.glb/projects/preview/model.glb"),
+        ("projects/preview/model.glb", "projects/preview/model.glb/preview/x.glb", "projects/preview/model.glb/preview/x.glb"),
+        ("projects/preview/model.glb", "/preview/x.glb", "projects/preview/model.glb/preview/x.glb"),
+        ("model.glb", "/model.glb", "model.glb"),
+        ("model.glb", "model.glb", "model.glb"),
+        ("model.glb", "model.glb/x.obj", "model.glb/x.obj"),
+        ("model.glb", "/model.glb/x.obj", "model.glb/model.glb/x.obj"),
+    ])
+    def test_a_single_file_with_a_preview_segment_or_at_the_bucket_root(self, location, value, expected):
+        assert al.object_key_for_request(location, value) == expected
+
+    @pytest.mark.parametrize("location,value,expected", [
+        # Exactly one leading '/' is the marker: '//x' is the path of the key with an empty segment (L4)
+        ("A1/", "//cloud.las", "A1//cloud.las"),
+        ("A1/", "///cloud.las", "A1///cloud.las"),
+        ("A1/", "//", "A1//"),
+        ("vams/B/", "//x.las", "vams/B//x.las"),
+        (FILE_LOCATION, "//x.obj", "projects/model.glb//x.obj"),
+        (FILE_LOCATION, "/model.glb", FILE_LOCATION),
+        ("A1/", "/cloud.las", "A1/cloud.las"),
+    ])
+    def test_one_leading_slash_is_the_marker(self, location, value, expected):
+        assert al.object_key_for_request(location, value) == expected
+        assert al.relative_path_in(location, expected) == value
+
+    @pytest.mark.parametrize("location", REQUEST_LOCATIONS)
+    def test_relative_path_in_and_the_path_reading_round_trip(self, location):
+        """Round trip: the path relative_path_in gives a key names that key again through object_key_for_path
+        and object_key_for_request, empty segments included."""
+        keys = [location + "x", location + "/x", location + "//x", location + "sub//x", location + "/sub/x"]
+        for key in keys:
+            path = al.relative_path_in(location, key)
+            if path is not None:
+                assert al.object_key_for_request(location, path) == key, (location, key, path)
+                assert al.object_key_for_path(location, path) == key, (location, key, path)
+
+    @pytest.mark.parametrize("location", REQUEST_LOCATIONS)
+    @pytest.mark.parametrize("value", ["/../x.las", "../x.las", "sub/../../x.las", "/sub/.."])
+    def test_a_parent_segment_names_nothing(self, location, value):
+        assert al.object_key_for_request(location, value) is None
+
+    @pytest.mark.parametrize("location", ["", None, "/"])
+    def test_no_location_names_nothing(self, location):
+        assert al.object_key_for_request(location, "/x.las") is None
+        assert al.object_key_for_request(location, "x.las") is None
+
+    @pytest.mark.parametrize("location", REQUEST_LOCATIONS)
+    def test_every_key_it_names_is_held_by_the_location(self, location):
+        """Confinement: whatever the value, the key stays inside the requesting asset's location."""
+        for value in _request_values(location):
+            key = al.object_key_for_request(location, value)
+            if key is not None:
+                assert al.contains(location, key) or key == location, (location, value, key)
+
+    @pytest.mark.parametrize("location", REQUEST_LOCATIONS)
+    def test_a_path_with_a_slash_is_the_path_of_its_key(self, location):
+        """A '/'-path names the key whose listed path it is, the inverse of relative_path_in."""
+        for value in _request_values(location):
+            if not value or not value.startswith("/"):
+                continue
+            key = al.object_key_for_request(location, value)
+            if key is not None:
+                assert key == al.object_key_for_path(location, value)
+
+    @pytest.mark.parametrize("location", REQUEST_LOCATIONS)
+    def test_a_held_key_without_a_slash_is_that_key(self, location):
+        for key in [location + "x.las", location + "/x.las", location + ".previewFile.png"]:
+            if al.contains(location, key):
+                assert al.object_key_for_request(location, key) == key
 
 
 @pytest.mark.unit

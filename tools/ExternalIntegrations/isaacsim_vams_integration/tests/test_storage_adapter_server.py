@@ -180,3 +180,21 @@ def test_the_adapter_keeps_running_while_the_pipe_is_open():
         assert not gone.wait(0.3)
         os.close(write_end)
         assert gone.wait(5)
+
+
+class FilesApi:
+    def list_asset_files(self, database_id, asset_id, params=None):
+        return {"items": [
+            {"relativePath": "/cloud.las", "key": "a1/cloud.las"},
+            {"relativePath": "//cloud.las", "key": "a1//cloud.las"},
+            {"relativePath": "/sub/x.las", "key": "a1/sub/x.las"},
+        ]}
+
+
+def test_a_file_whose_key_has_an_empty_segment_never_stands_in_for_another_file():
+    """#1977: '//cloud.las' names a1//cloud.las; a content URL cannot name it, so it is left out, and
+    'cloud.las' stays the file a1/cloud.las."""
+    tree = server.VamsTree("https://api.example.com/api")
+    files = tree.files(FilesApi(), "who", "db", "a1")
+    assert sorted(files) == ["cloud.las", "sub/x.las"]
+    assert files["cloud.las"]["key"] == "a1/cloud.las"

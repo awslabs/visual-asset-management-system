@@ -428,8 +428,9 @@ def folder_holds_other_objects(bucket_name: str, folder: str, object_key: str) -
 
 
 def _sync_file_path(object_key: str, prefix: str, asset_id: str) -> str:
-    """The asset-relative file path in the form the API records name a file ('/dir/file.ext')."""
-    return "/" + extract_relative_file_path(object_key, prefix, asset_id).lstrip("/")
+    """The asset-relative file path in the form the API records name a file ('/dir/file.ext'): '/' + the key
+    after the asset's folder, so '{assetId}//x' is '//x', the listed path (#1977)."""
+    return "/" + extract_relative_file_path(object_key, prefix, asset_id)
 
 
 def _written_by_vams(object_metadata) -> bool:
@@ -2718,7 +2719,7 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
         asset_location = asset_location_of(asset_data or archived_asset, base_prefix, owner_asset_id)
         relative_path = relative_path_in(asset_location, object_key)
         if relative_path is None:
-            relative_path = "/" + extract_relative_file_path(object_key, prefix, owner_asset_id).lstrip("/")
+            relative_path = "/" + extract_relative_file_path(object_key, prefix, owner_asset_id)
         if binding_out is not None:
             binding_out.update(build_binding(database_id_to_use, owner_asset_id, owner_bucket_id,
                                              relative_path, resolved_by))
@@ -3014,7 +3015,7 @@ def relative_path_for_key(asset_location: str, object_key: str, prefix: str, ass
     location does not hold it. A legacy first-folder match falls back to the path after the folder."""
     relative = relative_path_in(asset_location, object_key)
     if relative is None and resolved_by == RESOLVED_BY_FAST_PATH:
-        relative = "/" + extract_relative_file_path(object_key, prefix, asset_id).lstrip("/")
+        relative = "/" + extract_relative_file_path(object_key, prefix, asset_id)
     return relative
 
 

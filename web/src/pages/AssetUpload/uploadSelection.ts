@@ -10,6 +10,7 @@
  */
 
 import { fetchAssetS3FilesPage } from "../../services/APIService";
+import { assetFilePath } from "../../utils/assetFilePath";
 import { ExistingState, PlannedFile } from "../../components/form/uploadPaths";
 import { FileUploadTableItem } from "./FileUploadTable";
 
@@ -55,9 +56,10 @@ export async function fetchExistingPaths({
     cap?: number;
 }): Promise<ExistingPathsResult> {
     const paths = new Map<string, ExistingState>();
-    // The API takes an asset-relative prefix without the leading slash; item relativePaths come
-    // back relative to that prefix.
-    const prefix = destination === "/" ? null : destination.replace(/^\/+/, "");
+    // The prefix is the destination's path in the asset: the API drops exactly one leading "/" (the path
+    // marker), so "//" is the folder of the keys with an empty segment after the asset's folder, not the
+    // whole asset (#1977). Item relativePaths come back relative to that prefix with one leading "/".
+    const prefix = destination === "/" ? null : assetFilePath(destination);
     let startingToken: string | null = null;
     let seen = 0;
     try {
@@ -73,7 +75,8 @@ export async function fetchExistingPaths({
             if (!page?.success) return { paths: new Map(), complete: false };
             for (const item of page.items || []) {
                 if (item.isFolder) continue;
-                const rel = String(item.relativePath || "").replace(/^\/+/, "");
+                const listed = String(item.relativePath || "");
+                const rel = listed.startsWith("/") ? listed.slice(1) : listed;
                 if (!rel) continue;
                 paths.set(destination + rel, item.isArchived ? "archived" : "exists");
             }

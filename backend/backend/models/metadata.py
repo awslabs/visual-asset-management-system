@@ -844,19 +844,19 @@ class GetFileMetadataRequestModel(BaseModel, extra='ignore'):
 
     @root_validator
     def validate_fields(cls, values):
-        """Normalize and validate file path"""
+        """Validate file path"""
         from common.validators import validate
 
-        # Normalize: Add leading slash if missing
-        file_path = values.get('filePath', '')
-        if file_path and not file_path.startswith('/'):
-            values['filePath'] = '/' + file_path
-            logger.info(f"Normalized filePath by adding leading slash: {file_path} -> {values['filePath']}")
-        
+        # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a
+        # path without one is the file's full key when the asset holds it (metadataService.file_record_path).
+        # The validator reads a path with a leading slash, so it checks a copy that has one.
+        file_path = values.get('filePath')
+        validated_path = '/' + file_path if file_path and not file_path.startswith('/') else file_path
+
         # Validate filePath format
         (valid, message) = validate({
             'filePath': {
-                'value': values.get('filePath'),
+                'value': validated_path,
                 'validator': 'RELATIVE_FILE_PATH'
             }
         })
@@ -879,19 +879,19 @@ class CreateFileMetadataRequestModel(BaseModel, extra='ignore'):
 
     @root_validator
     def validate_fields(cls, values):
-        """Normalize and validate file path and attribute type constraints"""
+        """Validate file path and attribute type constraints"""
         from common.validators import validate
         
-        # Normalize: Add leading slash if missing
-        file_path = values.get('filePath', '')
-        if file_path and not file_path.startswith('/'):
-            values['filePath'] = '/' + file_path
-            logger.info(f"Normalized filePath by adding leading slash: {file_path} -> {values['filePath']}")
-        
+        # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a
+        # path without one is the file's full key when the asset holds it (metadataService.file_record_path).
+        # The validator reads a path with a leading slash, so it checks a copy that has one.
+        file_path = values.get('filePath')
+        validated_path = '/' + file_path if file_path and not file_path.startswith('/') else file_path
+
         # Validate filePath format
         (valid, message) = validate({
             'filePath': {
-                'value': values.get('filePath'),
+                'value': validated_path,
                 'validator': 'RELATIVE_FILE_PATH'
             }
         })
@@ -932,19 +932,19 @@ class UpdateFileMetadataRequestModel(BaseModel, extra='ignore'):
 
     @root_validator
     def validate_fields(cls, values):
-        """Normalize and validate file path and attribute type constraints"""
+        """Validate file path and attribute type constraints"""
         from common.validators import validate
         
-        # Normalize: Add leading slash if missing
-        file_path = values.get('filePath', '')
-        if file_path and not file_path.startswith('/'):
-            values['filePath'] = '/' + file_path
-            logger.info(f"Normalized filePath by adding leading slash: {file_path} -> {values['filePath']}")
-        
+        # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a
+        # path without one is the file's full key when the asset holds it (metadataService.file_record_path).
+        # The validator reads a path with a leading slash, so it checks a copy that has one.
+        file_path = values.get('filePath')
+        validated_path = '/' + file_path if file_path and not file_path.startswith('/') else file_path
+
         # Validate filePath format
         (valid, message) = validate({
             'filePath': {
-                'value': values.get('filePath'),
+                'value': validated_path,
                 'validator': 'RELATIVE_FILE_PATH'
             }
         })
@@ -982,19 +982,19 @@ class DeleteFileMetadataRequestModel(BaseModel, extra='ignore'):
 
     @root_validator
     def validate_fields(cls, values):
-        """Normalize and validate file path"""
+        """Validate file path"""
         from common.validators import validate
         
-        # Normalize: Add leading slash if missing
-        file_path = values.get('filePath', '')
-        if file_path and not file_path.startswith('/'):
-            values['filePath'] = '/' + file_path
-            logger.info(f"Normalized filePath by adding leading slash: {file_path} -> {values['filePath']}")
-        
+        # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a
+        # path without one is the file's full key when the asset holds it (metadataService.file_record_path).
+        # The validator reads a path with a leading slash, so it checks a copy that has one.
+        file_path = values.get('filePath')
+        validated_path = '/' + file_path if file_path and not file_path.startswith('/') else file_path
+
         # Validate filePath format
         (valid, message) = validate({
             'filePath': {
-                'value': values.get('filePath'),
+                'value': validated_path,
                 'validator': 'RELATIVE_FILE_PATH'
             }
         })

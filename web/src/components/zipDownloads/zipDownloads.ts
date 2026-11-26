@@ -5,6 +5,7 @@
 
 import { appCache } from "../../services/appCache";
 import { featuresEnabled, normalizeFeaturesEnabled } from "../../common/constants/featuresEnabled";
+import { assetFilePath } from "../../utils/assetFilePath";
 
 /**
  * Download as Zip: shared types, route templates and pure helpers for the create modal, the asset
@@ -206,8 +207,8 @@ const isFolderItem = (item: ZipSelectableItem): boolean =>
 const isAssetRoot = (item: ZipSelectableItem): boolean =>
     (item.relativePath === "/" || item.relativePath === "") && (item.level ?? 0) === 0;
 
-/** Asset-relative path with exactly one leading slash. */
-const toFileKey = (path?: string): string => `/${(path || "").replace(/^\/+/, "")}`;
+/** Asset-relative path with a leading slash; "//x" names its own file and is never collapsed (#1977). */
+const toFileKey = (path?: string): string => assetFilePath(path);
 
 /** A folder path keeps exactly one trailing slash. */
 const toFolderKey = (path?: string): string => `${toFileKey(path).replace(/\/+$/, "")}/`;

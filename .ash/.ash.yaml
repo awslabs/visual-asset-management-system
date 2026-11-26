@@ -106,8 +106,8 @@ global_settings:
           reason: apiKeyName field holding a display name in a request example, not a secret
         - rule_id: SECRET-HEX-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/files.md
-          line_start: 52
-          line_end: 52
+          line_start: 53
+          line_end: 53
           reason: S3 ETag (MD5 of an empty object) in a response example, not a secret
         - rule_id: SECRET-BASE64-HIGH-ENTROPY-STRING
           path: documentation/docusaurus-site/docs/api/overview.md
