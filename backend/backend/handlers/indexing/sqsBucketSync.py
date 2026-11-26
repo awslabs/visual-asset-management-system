@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Tuple
 from botocore.exceptions import ClientError
 from botocore.config import Config as BotoConfig
 from boto3.dynamodb.conditions import Key
-from common.validators import validate
+from common.validators import new_asset_id_regex, validate
 from common.eventLogSummary import event_log_summary
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
@@ -1269,6 +1269,15 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         AssetLocationInUseError: another asset's location holds the folder.
         RecordRedrive: the id could not be checked.
     """
+    # The folder name is a NEW asset id. Its last character must be one the rest
+    # of the id admits; the shared ASSET_ID rule stays broader so an id an
+    # earlier release stored (for example one ending in '#') stays addressable.
+    if not new_asset_id_regex.fullmatch(asset_id):
+        logger.error(
+            f"Bucket sync cannot create asset {asset_id!r}: the last character must be "
+            "a letter, digit, underscore, dot, comma, apostrophe or hyphen"
+        )
+        return None
     holders = database_asset_id_rows(database_id, asset_id)
     if holders:
         raise AssetIdInUseError(asset_id, holders)

@@ -27,7 +27,13 @@ sagemaker_notebook_name_pattern = '^[a-zA-Z0-9](-*[a-zA-Z0-9])*'
 email_pattern = r'^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$'
 
 file_type_pattern = '^[\\.]([a-zA-Z0-9]){1,7}$'
-filename_pattern = r'^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[\w.,\'-]$'
+filename_pattern = r'^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$'
+# A NEW asset id must use the same character set in every position: its last
+# character is not the broader [^.\s] the shared pattern keeps. The shared
+# pattern is still used by ASSET_ID on every read path, so an id an earlier
+# release stored (for example one ending in '#') stays addressable; this
+# pattern is used only where a caller or bucket sync names a new asset.
+new_asset_id_pattern = r'^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[\w.,\'-]$'
 
 relative_file_path_pattern = r'^\/.*$'
 bucket_existing_key_pattern = r'^[a-zA-Z0-9._\-/]{1,1024}$'
@@ -121,6 +127,7 @@ email_regex = re.compile(email_pattern)
 file_type_regex = re.compile(file_type_pattern)
 filename_regex = re.compile(filename_pattern)
 asset_id_regex = re.compile(filename_pattern)
+new_asset_id_regex = re.compile(new_asset_id_pattern)
 
 relative_file_path_regex = re.compile(relative_file_path_pattern)
 asset_path_regex = re.compile(asset_path_pattern)

@@ -399,3 +399,17 @@ class TestTheTroubleshootingGuide:
         section = text.split(f"### {SECTION}", 1)[1].split("\n### ", 1)[0]
         assert "in any database or bucket" not in section
         assert "same database" in section
+
+
+@pytest.mark.unit
+class TestANewAssetIdWhoseLastCharacterIsNotAdmitted:
+    """The folder name is the new asset id; its last character follows the body rule."""
+
+    @pytest.mark.parametrize("asset_id", ["part%", "part)", "part!", "part™"])
+    def test_no_asset_is_created(self, asset_id):
+        m = _load()
+        m.database_asset_id_rows = MagicMock(side_effect=AssertionError("must not read"))
+        m.create_asset = MagicMock(side_effect=AssertionError("must not create"))
+
+        assert m.create_new_asset("bucket-1", "db1", asset_id) is None
+        m.create_asset.assert_not_called()

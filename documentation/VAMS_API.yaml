@@ -16616,7 +16616,7 @@ components:
             pattern: ^(?:[0-9a-f]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$
         asset_id_regex:
             type: string
-            pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$
+            pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[\w.,\'-]$
         ingest_asset:
             description: "Asset ingest request. The presence of uploadId selects the complete stage; its absence selects the initialize stage."
             oneOf:
@@ -23428,7 +23428,7 @@ components:
                 assetId:
                     type: string
                     maxLength: 256
-                    pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$
+                    pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[\w.,\'-]$
                     description: "Asset whose downstream assets are re-evaluated."
                 reason:
                     type: string
