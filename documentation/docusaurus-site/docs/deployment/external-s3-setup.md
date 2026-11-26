@@ -711,7 +711,7 @@ The deployment therefore checks every registration it makes active (a bucket and
 Configuration Error: bucket my-bucket cannot be registered under the prefix assets/team1/: it overlaps the prefix assets/ of the stored registration 1a2b... (retired), and two registrations of one bucket cannot hold the same objects. Choose a prefix that does not overlap assets/, or configure assets/ again in place of this entry.
 ```
 
-The stack update rolls back. A registration that already has an active row is not refused, and neither is a rollback to the previous configuration, so an overlap stored before this check existed (for example a prefix moved inside an earlier one before v2.7, when the earlier row stayed active) blocks neither the upgrade nor its rollback. The deployment logs each such overlap as a warning in the `PopulateS3AssetBucketsTable` function's log group; review the assets of the stored registration it names.
+The stack update rolls back. A registration that already has an active row is not refused, and neither is a rollback to the previous configuration, so an overlap stored before this check existed (for example a prefix moved inside an earlier one before v2.7, when the earlier row stayed active) blocks neither the upgrade nor its rollback. The deployment tells a rollback from the CloudFormation status of the stack (an update rollback in progress), not from when the template was synthesized, so every forward deployment is checked, including one of an assembly synthesized before the stack's last deployment. If the status cannot be read, the check runs. The deployment logs each such overlap as a warning in the `PopulateS3AssetBucketsTable` function's log group; review the assets of the stored registration it names.
 
 To deploy:
 

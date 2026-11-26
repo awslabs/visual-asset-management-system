@@ -147,13 +147,44 @@ def activated_pairs(configured_pairs, existing_groups):
     return [pair for pair in configured_pairs
             if pair not in existing_groups or all(row.get(RETIRED_FIELD) is True for row in existing_groups[pair])]
 
+# The stack statuses in which an Update of this resource is CloudFormation rolling a failed update
+# back: it then sends the previous properties to this function.
+ROLLBACK_IN_PROGRESS_STATUSES = ('UPDATE_ROLLBACK_IN_PROGRESS', 'ROLLBACK_IN_PROGRESS', 'IMPORT_ROLLBACK_IN_PROGRESS')
+
+def described_stack(cloudformation, stack_id):
+    """The DescribeStacks entry of one stack, by its id."""
+    stacks = cloudformation.describe_stacks(StackName=stack_id).get('Stacks') or []
+    if not stacks:
+        raise Exception('DescribeStacks returned no stack for ' + str(stack_id))
+    return stacks[0]
+
 def is_rollback(event):
-    """Whether an Update is CloudFormation rolling a failed update back. A rollback sends the previous
-    properties as ResourceProperties and the failed update's as OldResourceProperties, so its synth
-    timestamp is the older one; a forward update's is newer."""
-    new_stamp = str((event.get('ResourceProperties') or {}).get('timestamp') or '')
-    old_stamp = str((event.get('OldResourceProperties') or {}).get('timestamp') or '')
-    return event.get('RequestType') == 'Update' and bool(new_stamp) and bool(old_stamp) and new_stamp < old_stamp
+    """Whether an Update is CloudFormation rolling a failed update back, read from the status of the
+    stack that holds this resource (the event's StackId) and, when that stack is nested, of its parent:
+    a nested stack is rolled back as part of its parent's rollback. When a status cannot be read the
+    answer is False, so the overlap check runs as on a forward deployment."""
+    if event.get('RequestType') != 'Update':
+        return False
+    stack_id = event.get('StackId')
+    if not stack_id:
+        logger.warning("The event names no stack, so a rollback cannot be recognised; the overlap check runs")
+        return False
+    try:
+        cloudformation = boto3.client('cloudformation')
+        stack = described_stack(cloudformation, stack_id)
+        statuses = [(stack_id, stack.get('StackStatus'))]
+        parent_id = stack.get('ParentId')
+        if stack.get('StackStatus') not in ROLLBACK_IN_PROGRESS_STATUSES and parent_id:
+            statuses.append((parent_id, described_stack(cloudformation, parent_id).get('StackStatus')))
+    except Exception as e:
+        logger.warning("Could not read the stack status (" + str(e) + "); the overlap check runs as on a "
+                       "forward deployment")
+        return False
+    for checked_id, status in statuses:
+        logger.info("Stack " + str(checked_id) + " status: " + str(status))
+        if status in ROLLBACK_IN_PROGRESS_STATUSES:
+            return True
+    return False
 
 def stored_overlap_error(configured_pairs, existing_groups, runtime_rows):
     """The failure message for the first registration this deployment makes active (activated_pairs: a
@@ -575,6 +606,21 @@ def lambda_handler(event, context):
 
     // Grant the Lambda function permissions to read/write to the DynamoDB table
     table.grantReadWriteData(populateS3AssetBucketsTableLambda);
+
+    // Whether an Update is a rollback is read from the status of the stack that holds the resource and,
+    // when it is nested, of its parent (is_rollback): DescribeStacks on exactly those two stacks.
+    const holdingStack = cdk.Stack.of(scope);
+    const statusStackIds = [holdingStack.stackId];
+    if (holdingStack.nestedStackParent) {
+        statusStackIds.push(holdingStack.nestedStackParent.stackId);
+    }
+    populateS3AssetBucketsTableLambda.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["cloudformation:DescribeStacks"],
+            resources: statusStackIds,
+            effect: iam.Effect.ALLOW,
+        })
+    );
 
     // Which of two rows for one registration assets reference: Query on the asset table's bucketId
     // index only (no table read, no scan), plus decrypt when the table uses the customer managed key.

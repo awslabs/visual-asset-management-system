@@ -55,7 +55,12 @@ interface CaseResult {
     items: Record<string, Record<string, unknown>>;
     calls: { op: string; bucketId?: string; sortKey?: string; start?: unknown }[];
     assetCalls: { index: string; key: string; value: string; limit: number | null }[];
+    describeStacks: string[];
 }
+
+// The stack the harness event names (the storage nested stack) and its parent.
+const STACK_ID = "arn:aws:cloudformation:us-east-1:111111111111:stack/vams-core-storage/aaaa";
+const PARENT_ID = "arn:aws:cloudformation:us-east-1:111111111111:stack/vams-core/bbbb";
 
 const buildStack = () => {
     s3AssetBucketRecords.length = 0;
@@ -388,14 +393,56 @@ describe("overlap with stored registrations (#1978)", () => {
         }
     );
 
-    test("a rollback that re-activates an overlapping registration is reported, not refused", () => {
-        const result = results.rollbackReactivatesOverlap;
+    test.each(["rollbackReactivatesOverlap", "parentRollbackReactivatesOverlap"])(
+        "%s: a rollback that re-activates an overlapping registration is reported, not refused",
+        (name) => {
+            const result = results[name];
+            expect(result.ok).toBe(true);
+            expect(rowOf(result, "id-team")[0]).toMatchObject({ retired: null });
+            expect(rowOf(result, "id-wide")[0].retired).toBe(true);
+            expect(result.data?.StoredOverlaps).toBe(
+                "b prefix assets/team1/ overlaps stored registration id-wide (prefix assets/)"
+            );
+        }
+    );
+
+    test("a rollback is read from the stack's status: its own, and its parent's when its own is not one", () => {
+        expect(results.rollbackReactivatesOverlap.describeStacks).toEqual([STACK_ID]);
+        expect(results.parentRollbackReactivatesOverlap.describeStacks).toEqual([
+            STACK_ID,
+            PARENT_ID,
+        ]);
+        expect(results.forwardReactivatesOverlap.describeStacks).toEqual([STACK_ID, PARENT_ID]);
+        expect(results.notNestedForward.describeStacks).toEqual([STACK_ID]);
+        // A Create is never a rollback, and no stack is read for it.
+        expect(results.newRegistration.describeStacks).toEqual([]);
+    });
+
+    test("a rollback status is a rollback whatever the synth timestamps say", () => {
+        const result = results.rollbackStatusNewerTimestamp;
         expect(result.ok).toBe(true);
-        expect(rowOf(result, "id-team")[0]).toMatchObject({ retired: null });
-        expect(rowOf(result, "id-wide")[0].retired).toBe(true);
         expect(result.data?.StoredOverlaps).toBe(
-            "b prefix assets/team1/ overlaps stored registration id-wide (prefix assets/)"
+            "b prefix new1978/ overlaps stored registration id-old (prefix /)"
         );
+    });
+
+    test.each([
+        [
+            "olderSynthForwardRefused",
+            "a forward deploy of an assembly synthesized before the last one",
+        ],
+        ["stackStatusUnreadable", "a stack status that cannot be read (fail closed)"],
+        ["eventWithoutStackId", "an event that names no stack"],
+        ["notNestedForward", "a forward update of a stack that is not nested"],
+        ["cleanupStatusIsNotRollback", "a status outside the rollback-in-progress ones"],
+    ])("%s: %s runs the overlap check and refuses the new overlapping prefix (R1)", (name) => {
+        const result = results[name];
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain(
+            "cannot be registered under the prefix new1978/: it overlaps the prefix / of the stored " +
+                "registration id-old (retired)"
+        );
+        expect(result.calls.filter((call) => call.op !== "scan")).toEqual([]);
     });
 
     test("the rollback of a refused addition succeeds", () => {

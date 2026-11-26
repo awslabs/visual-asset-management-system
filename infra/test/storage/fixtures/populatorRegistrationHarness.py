@@ -105,6 +105,30 @@ class FakeAssetTable:
         raise AssertionError("the populator never scans the asset table")
 
 
+STACK_ID = "arn:aws:cloudformation:us-east-1:111111111111:stack/vams-core-storage/aaaa"
+PARENT_ID = "arn:aws:cloudformation:us-east-1:111111111111:stack/vams-core/bbbb"
+
+
+class FakeCloudFormation:
+    """DescribeStacks of the stack holding the resource (nested, its ParentId the core stack) and of its
+    parent. `statuses` maps a stack id to its status; `error` makes every call raise."""
+
+    def __init__(self, statuses, error=None, nested=True):
+        self.statuses = statuses
+        self.error = error
+        self.nested = nested
+        self.calls = []
+
+    def describe_stacks(self, StackName):
+        self.calls.append(StackName)
+        if self.error:
+            raise ClientError({"Error": {"Code": self.error}}, "DescribeStacks")
+        stack = {"StackId": StackName, "StackStatus": self.statuses[StackName]}
+        if StackName == STACK_ID and self.nested:
+            stack.update({"ParentId": PARENT_ID, "RootId": PARENT_ID})
+        return {"Stacks": [stack]}
+
+
 class FakeS3:
     def get_bucket_versioning(self, Bucket):
         return {"Status": "Enabled"}
@@ -133,11 +157,15 @@ def bucket(name, prefix, default=False, **extra):
 
 
 def run_case(source, stored, buckets, request_type="Update", referenced=(), asset_fail=False,
-             page_size=100, with_asset_table=True, timestamp=None, old_timestamp=None):
+             page_size=100, with_asset_table=True, timestamp=None, old_timestamp=None,
+             stack_status="UPDATE_IN_PROGRESS", parent_status="UPDATE_IN_PROGRESS", stack_error=None,
+             nested=True, with_stack_id=True):
     """`timestamp` / `old_timestamp`: the synth timestamps of ResourceProperties and OldResourceProperties.
-    A rollback sends the previous (older) properties, so its timestamp is the older of the two."""
+    `stack_status` / `parent_status`: what DescribeStacks answers for the stack holding the resource and
+    for its parent; `stack_error`: the error code every DescribeStacks call raises instead."""
     buckets_table = FakeBucketsTable(stored, page_size)
     asset_table = FakeAssetTable(referenced, asset_fail)
+    cloudformation = FakeCloudFormation({STACK_ID: stack_status, PARENT_ID: parent_status}, stack_error, nested)
 
     class FakeResource:
         def Table(self, name):
@@ -145,7 +173,8 @@ def run_case(source, stored, buckets, request_type="Update", referenced=(), asse
 
     fake_boto3 = types.ModuleType("boto3")
     fake_boto3.resource = lambda *args, **kwargs: FakeResource()
-    fake_boto3.client = lambda service, region_name=None, **kwargs: FakeS3()
+    fake_boto3.client = lambda service, region_name=None, **kwargs: (
+        cloudformation if service == "cloudformation" else FakeS3())
     fake_dynamodb = types.ModuleType("boto3.dynamodb")
     fake_conditions = types.ModuleType("boto3.dynamodb.conditions")
     fake_conditions.Key = FakeKey
@@ -169,6 +198,8 @@ def run_case(source, stored, buckets, request_type="Update", referenced=(), asse
     if timestamp:
         properties["timestamp"] = timestamp
     event = {"RequestType": request_type, "ResourceProperties": properties}
+    if with_stack_id:
+        event["StackId"] = STACK_ID
     if old_timestamp:
         event["OldResourceProperties"] = {"timestamp": old_timestamp}
     outcome = {"ok": True, "error": None, "data": None}
@@ -200,6 +231,7 @@ def run_case(source, stored, buckets, request_type="Update", referenced=(), asse
     outcome["items"] = {item["bucketId"] + "|" + item[SORT_KEY]: item for item in buckets_table.items.values()}
     outcome["calls"] = buckets_table.calls
     outcome["assetCalls"] = asset_table.calls
+    outcome["describeStacks"] = cloudformation.calls
     return outcome
 
 
@@ -362,6 +394,7 @@ def main():
         ),
         # A rollback re-activates a pair the failed update retired (b:assets/team1/ was configured, with a
         # stored overlap on the retired b:assets/): it is reported, not refused, so the stack rolls back.
+        # A rollback is read from the stack: the stack holding the resource is rolling back ...
         "rollbackReactivatesOverlap": run_case(
             source,
             [row("id-wide", "b", "assets/", retired=True), row("id-team", "b", "assets/team1/", retired=True),
@@ -369,6 +402,67 @@ def main():
             [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
              bucket("b", "assets/team1/", defaultSyncDatabaseId="db1")],
             timestamp="2026-11-25T02:00:00.000Z", old_timestamp="2026-11-26T02:00:00.000Z",
+            stack_status="UPDATE_ROLLBACK_IN_PROGRESS",
+        ),
+        # ... or its parent is (the nested stack is rolled back as part of the parent's rollback) ...
+        "parentRollbackReactivatesOverlap": run_case(
+            source,
+            [row("id-wide", "b", "assets/", retired=True), row("id-team", "b", "assets/team1/", retired=True),
+             row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "assets/team1/", defaultSyncDatabaseId="db1")],
+            stack_status="UPDATE_IN_PROGRESS", parent_status="UPDATE_ROLLBACK_IN_PROGRESS",
+        ),
+        # ... whatever the synth timestamps say: a rollback with the newer timestamp is still a rollback.
+        "rollbackStatusNewerTimestamp": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "new1978/", defaultSyncDatabaseId="db1")],
+            timestamp="2026-11-26T02:00:00.000Z", old_timestamp="2026-11-25T02:00:00.000Z",
+            stack_status="UPDATE_ROLLBACK_IN_PROGRESS",
+        ),
+        # R1: a forward deploy of an assembly synthesized before the stack's last deployment (its timestamp
+        # is the older one) adding a prefix that overlaps a retired registration is refused.
+        "olderSynthForwardRefused": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "new1978/", defaultSyncDatabaseId="db1")],
+            timestamp="2026-11-26T05:49:00.000Z", old_timestamp="2026-11-26T05:50:00.000Z",
+        ),
+        # A status that cannot be read is treated as a forward deployment: the check runs.
+        "stackStatusUnreadable": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "new1978/", defaultSyncDatabaseId="db1")],
+            timestamp="2026-11-26T05:49:00.000Z", old_timestamp="2026-11-26T05:50:00.000Z",
+            stack_error="AccessDenied",
+        ),
+        "eventWithoutStackId": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "new1978/", defaultSyncDatabaseId="db1")],
+            stack_status="UPDATE_ROLLBACK_IN_PROGRESS", with_stack_id=False,
+        ),
+        # A stack that is not nested: only its own status is read.
+        "notNestedForward": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "new1978/", defaultSyncDatabaseId="db1")],
+            nested=False,
+        ),
+        # The cleanup after a rollback is not a rollback in progress (it sends Delete requests only).
+        "cleanupStatusIsNotRollback": run_case(
+            source,
+            [row("id-old", "b", "/", retired=True), row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "new1978/", defaultSyncDatabaseId="db1")],
+            stack_status="UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS",
+            parent_status="UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS",
         ),
         # The same input as a forward update is refused.
         "forwardReactivatesOverlap": run_case(
