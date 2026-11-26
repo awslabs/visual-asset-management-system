@@ -130,8 +130,10 @@ class TestCustomRoles:
             object_type="database")]})
         for action in ACTIONS:
             assert enforcer.enforce(_bucket(), action) is False
-        audited = [c.args[2]["obj"] for c in build_enforcer.audit.call_args_list]
-        assert audited and all(obj["object__type"] == "bucket" for obj in audited)
+        # One authorization audit record per refused check, each naming the bucket object and action.
+        audited = [(c.args[2]["action"], c.args[2]["obj"]["object__type"], c.args[2]["obj"]["bucketId"])
+                   for c in build_enforcer.audit.call_args_list]
+        assert audited == [(action, "bucket", "b-1") for action in ACTIONS]
 
     def test_a_database_constraint_does_not_reach_a_bucket(self, build_enforcer):
         # A bucket object carries no databaseId, and a database line is never walked for it.

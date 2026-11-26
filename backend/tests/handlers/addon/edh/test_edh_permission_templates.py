@@ -8,7 +8,8 @@ adds the admin route prefix and the admin page. Both parse through the import mo
 ROLE_NAME supplied, and both grant /auth/loginProfile on GET and POST like every other route-granting
 template, because the web app POSTs it at sign-in and the CLI GETs it to validate a session. Both grant
 GET on /auth/routes, which covers the GET /auth/routes/api/allowed call the EDH pages make to decide which
-actions to enable.
+actions to enable. Like every shipped template, both also carry the core `bucket` read (GET on every
+asset bucket registration, #1978); it grants no route.
 """
 
 import json
@@ -72,7 +73,7 @@ def _allowed_actions(constraint):
 
 @pytest.mark.unit
 class TestEdhTemplatesImport:
-    @pytest.mark.parametrize("name,count", [("edh-user.json", 6), ("edh-admin.json", 8)])
+    @pytest.mark.parametrize("name,count", [("edh-user.json", 7), ("edh-admin.json", 9)])
     def test_parses_through_the_import_model_with_role_name_only(self, name, count):
         template = _template(name)
         assert [v["name"] for v in template["variables"]] == ["ROLE_NAME"]
@@ -88,9 +89,10 @@ class TestEdhTemplatesImport:
     def test_entity_constraints_use_only_matrix_fields_of_edh_types(self, name):
         entity = _entity_constraints(_template(name))
         assert entity, f"{name} grants no Tier-2 object type"
+        assert [c["objectType"] for c in entity].count("bucket") == 1
         for constraint in entity:
-            assert constraint["objectType"] in {"edhWorkstation", "edhImage", "edhCapacityReservation"}, \
-                constraint["name"]
+            assert constraint["objectType"] in {"edhWorkstation", "edhImage", "edhCapacityReservation",
+                                                "bucket"}, constraint["name"]
             fields = get_constraint_fields_for_object_type(constraint["objectType"])
             criteria = _criteria(constraint)
             assert criteria, constraint["name"]
