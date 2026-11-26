@@ -197,7 +197,7 @@ class TestPermittedKeyShapesUnchanged:
 
         assert _signed_keys(m) == [f"{UNSLASHED_BASE}/{raw_key}"]
 
-    @pytest.mark.parametrize("raw_key,relative", [('/pfx', 'pfx'), ('/dir/f.glb', 'dir/f.glb')])
+    @pytest.mark.parametrize("raw_key,relative", [('/pfx', '/pfx'), ('/dir/f.glb', '/dir/f.glb')])
     def test_a_single_file_asset_version_pin_uses_the_asset_relative_key(self, raw_key, relative):
         m = _wire(_load(), UNSLASHED_BASE)
         m.resolve_file_version_from_asset_version = MagicMock(return_value='v-pinned')
@@ -228,8 +228,9 @@ class TestVersionPinInvariance:
 
         m.download_asset_file('db1', 'asset1', request)
 
+        # The file's path in the asset; the snapshot lookup drops one leading '/' (#1977)
         m.resolve_file_version_from_asset_version.assert_called_once_with(
-            'db1', 'asset1', '2', 'dir/f.glb')
+            'db1', 'asset1', '2', '/dir/f.glb')
         params = m.s3.generate_presigned_url.call_args.kwargs['Params']
         assert params['Key'] == 'assets/pfx/dir/f.glb'
         assert params['VersionId'] == 'v-pinned'
@@ -245,7 +246,7 @@ class TestVersionPinInvariance:
         m.download_asset_file('db1', 'asset1', request)
 
         m.resolve_file_version_from_asset_version.assert_called_once_with(
-            'db1', 'asset1', '7', 'dir/f.glb')
+            'db1', 'asset1', '7', '/dir/f.glb')
         assert m.s3.generate_presigned_url.call_args.kwargs['Params']['VersionId'] == 'v-alias'
 
 
