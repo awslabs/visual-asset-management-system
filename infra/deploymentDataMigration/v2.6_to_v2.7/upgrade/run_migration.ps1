@@ -133,6 +133,9 @@ try {
             Write-Host "  6. Read the assetLocationFileToFolder report: decide a move or include-siblings for each refused asset"
             Write-Host "     in a resolutions file (asset_location_file_to_folder_resolutions), then run"
             Write-Host "     -Steps assetLocationFileToFolder -Execute again"
+            Write-Host "  7. Read the bucketReadConstraints report: add a bucket constraint by hand for each role listed 'unreadable'"
+            Write-Host "     that lists buckets or creates or updates databases, and for each user listed 'userGrantNotChanged'"
+            Write-Host "     that needs one"
         } else {
             Write-Host "This was a dry run: no rows were deleted and no executions were launched." -ForegroundColor Yellow
             Write-Host "Review the summaries above, then set `"dry_run`": false in the config and re-run with -Execute to apply them."

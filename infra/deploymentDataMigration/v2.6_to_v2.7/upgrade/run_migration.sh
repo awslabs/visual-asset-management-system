@@ -141,6 +141,9 @@ if [ "$MIGRATION_STATUS" -eq 0 ]; then
         echo "  6. Read the assetLocationFileToFolder report: decide a move or include-siblings for each refused asset"
         echo "     in a resolutions file (asset_location_file_to_folder_resolutions), then run"
         echo "     --steps assetLocationFileToFolder --execute again"
+        echo "  7. Read the bucketReadConstraints report: add a bucket constraint by hand for each role listed 'unreadable'"
+        echo "     that lists buckets or creates or updates databases, and for each user listed 'userGrantNotChanged'"
+        echo "     that needs one"
     else
         echo "This was a dry run: no rows were deleted and no executions were launched."
         echo "Review the summaries above, then set \"dry_run\": false in the config and re-run with --execute to apply them."
