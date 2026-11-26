@@ -60,6 +60,13 @@ The v2.7 release introduces:
      reported and left where it is; no v2.6 row is ever written or deleted. Each copy is recorded with it,
      so a repeat copies only what earlier runs left and never undoes what users changed since. Required
      right after the deploy on a deployment with comments or subscriptions; resumable.
+  6. A ``bucket`` permission object type on the bucket routes: from v2.7 ``GET /buckets`` lists a bucket, and
+     a database is put on one, only for a role that may read it through a ``bucket`` constraint. A role
+     imported from a shipped template before 2.7.0 holds the ``/buckets`` route and no such constraint. The
+     ``bucketReadConstraints`` step (module ``bucket_read_constraints.py``) gives every role whose own
+     constraints allow ``GET /buckets`` and that has no ``bucket`` constraint the one the shipped role
+     templates carry (``GET`` on every registration). It changes no other constraint, reports user-level
+     grants without changing them, and a repeat writes nothing.
 
 Configuration: set ``resource_names_ssm_param_prefix`` (from the core stack output
 ``ResourceNamesSSMParamPrefixOutput``); every table and function name is then resolved from SSM
@@ -67,8 +74,8 @@ Parameter Store. Explicit ``*_table_name`` / ``vector_reindexer_function_name`` 
 supported as optional overrides.
 
 Safety: every run is a DRY RUN unless ``--execute`` is given and the config's ``dry_run`` is false (the
-shipped config sets it true). A real run that changes asset location keys, deletes trigger rows, deletes vectors,
-or launches
+shipped config sets it true). A real run that changes asset location keys, deletes trigger rows, writes
+constraints, deletes vectors, or launches
 Bedrock-billed executions is confirmed against the resolved AWS account id - typed at a prompt or
 passed as ``--confirm-account`` - and refused when the identity cannot be resolved or confirmed.
 
@@ -118,6 +125,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 # Shared migration tooling (infra/deploymentDataMigration/tools)
 sys.path.insert(0, os.path.join(_HERE, "..", "..", "tools"))
 from ssm_resource_lookup import ResourceParamKeys, SsmResourceLookup  # noqa: E402
+
+# The bucketReadConstraints step lives in its own module beside this script.
+sys.path.insert(0, _HERE)
+import bucket_read_constraints  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1149,6 +1160,49 @@ def run_orphaned_triggers_step(config: dict, args, base_param_prefix, profile, r
     logger.info("=" * 80)
 
     return 0 if counts['errors'] == 0 else 1
+
+
+#######################
+# STEP: bucketReadConstraints
+#######################
+
+def run_bucket_read_constraints_step(config: dict, args, base_param_prefix, profile, region, dry_run) -> int:
+    """Give each role allowed GET /buckets with no bucket constraint the shipped templates' bucket read.
+    Returns 0 unless a write failed; a role whose constraints cannot be read is reported and left alone."""
+    step = bucket_read_constraints.STEP
+    try:
+        resolve = make_resolver(config, base_param_prefix, profile, region)
+        constraints_table = resolve('constraints_storage_table_name', ResourceParamKeys.CONSTRAINTS_STORAGE_TABLE)
+    except Exception as e:
+        logger.error(f"Failed resolving the constraints table name for the {step} step: {e}")
+        return 1
+    output_dir = config.get('bucket_read_constraints_output_dir') or os.getcwd()
+    dynamodb_client = _session(profile, region).client('dynamodb', config=_DYNAMODB_CLIENT_CONFIG)
+
+    logger.info("=" * 80)
+    logger.info("VAMS v2.6 -> v2.7 BUCKET READ CONSTRAINTS")
+    logger.info(f"Constraints table: {constraints_table}")
+    logger.info(f"Output dir:        {output_dir}")
+    logger.info(f"Dry Run: {dry_run}")
+    logger.info("=" * 80)
+
+    start = datetime.now(timezone.utc)
+    try:
+        result = bucket_read_constraints.run_bucket_read_constraints(
+            dynamodb_client, constraints_table, dry_run, output_dir, log=logger.info, now=start)
+    except Exception as e:
+        logger.error(f"{step} step failed: {e}. Run it again; a role that already has a bucket constraint "
+                     "is never changed, so a repeat writes only what this run did not.")
+        return 1
+    duration = (datetime.now(timezone.utc) - start).total_seconds()
+
+    logger.info("=" * 80)
+    logger.info("BUCKET READ CONSTRAINTS SUMMARY")
+    logger.info(f"  Duration: {duration:.1f}s   Dry Run: {dry_run}")
+    for line in bucket_read_constraints.summary_lines(result, dry_run):
+        logger.info(f"  {line}")
+    logger.info("=" * 80)
+    return bucket_read_constraints.exit_status(result)
 
 
 #######################
@@ -3166,13 +3220,14 @@ def run_comment_subscription_keys_step(config: dict, args, base_param_prefix, pr
 # CLI
 #######################
 
-STEP_CHOICES = ('commentSubscriptionKeys', 'assetLocationFolderKeys', 'orphanedTriggers', 'vectorBackfill',
-                'metadataBackfill', 'systemPipelineRetirement', 'assetLocationIndex', 'all')
+STEP_CHOICES = ('commentSubscriptionKeys', 'assetLocationFolderKeys', 'orphanedTriggers', 'bucketReadConstraints',
+                'vectorBackfill', 'metadataBackfill', 'systemPipelineRetirement', 'assetLocationIndex', 'all')
 
 
 def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vectors: bool,
                    backfills_metadata: bool = False, fixes_locations: bool = False,
-                   indexes_locations: bool = False, copies_comments: bool = False) -> str:
+                   indexes_locations: bool = False, copies_comments: bool = False,
+                   adds_bucket_reads: bool = False) -> str:
     """What a real run changes, deletes, bills or rewrites, phrased to follow "This run will"."""
     parts = []
     if fixes_locations:
@@ -3183,6 +3238,9 @@ def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vecto
     if copies_comments:
         parts.append('copy every comment and subscription into the tables keyed by database and asset id '
                      '(commentSubscriptionKeys)')
+    if adds_bucket_reads:
+        parts.append('add a bucket read constraint to each role allowed GET /buckets that has no bucket '
+                     'constraint (bucketReadConstraints)')
     if clears_vectors:
         parts.append('delete every stored vector (vectorBackfill --clear-vectors)')
     if backfills_vectors:
@@ -3219,8 +3277,8 @@ def _account_id(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description='VAMS v2.6 to v2.7 data migration (asset location folder keys, orphaned trigger cleanup, '
-                    'vector index backfill, system-pipeline retirement report, comment and subscription keys, '
-                    'asset location index backfill). '
+                    'bucket read constraints, vector index backfill, system-pipeline retirement report, comment '
+                    'and subscription keys, asset location index backfill). '
                     'Dry run by default.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -3239,6 +3297,9 @@ Examples:
 
   # Delete orphaned trigger rows only
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps orphanedTriggers
+
+  # Give roles allowed GET /buckets the bucket read the shipped templates carry (writes constraints)
+  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps bucketReadConstraints
 
   # Rebuild the vector index from scratch (clears every stored vector first)
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps vectorBackfill --clear-vectors
@@ -3260,7 +3321,7 @@ Notes:
   - Every run is a DRY RUN unless --execute is given AND the config's dry_run is false. The shipped
     config sets "dry_run": true; set it to false once the dry run's counts look right.
   - A real run that changes asset rows (assetLocationFolderKeys), deletes rows (orphanedTriggers),
-    deletes vectors (--clear-vectors), or launches
+    writes constraints (bucketReadConstraints), deletes vectors (--clear-vectors), or launches
     Bedrock-billed executions (vectorBackfill, with or without --clear-vectors) is confirmed against
     the resolved AWS account id: type it at the prompt, or pass --confirm-account <account-id>. No
     flag skips the check; an unresolved identity or a non-interactive run without --confirm-account
@@ -3307,6 +3368,14 @@ Notes:
     'ambiguous': name their database in comment_subscription_resolution_file and run the step again. A
     repeat copies only what earlier runs left ('alreadyCopied' for the rest), so it never brings back a
     deleted comment, an unsubscribed user or a deleted subscription.
+  - bucketReadConstraints reads the api and bucket constraints (two Query calls on the constraints table's
+    ObjectTypeIndex) and, for each role whose own constraints allow GET /buckets and that has no bucket
+    constraint, writes the bucket constraint the shipped role templates carry (GET, bucketId contains .*;
+    one conditional PutItem). It changes no other constraint, reports users granted the route directly
+    without changing them, and leaves a role whose constraints cannot be read unchanged. One line per role
+    goes to bucketReadConstraints-<mode>-report-<UTC time>.jsonl; a repeat writes nothing. It runs after
+    orphanedTriggers under --steps all and does not wait for the location steps. Skipping it: re-import the
+    templates (or add a bucket constraint by hand) for roles that list buckets or create databases.
         """
     )
 
@@ -3362,6 +3431,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_retirement_report = args.steps in ('systemPipelineRetirement', 'all')
     run_asset_location_index = args.steps in ('assetLocationIndex', 'all')
     run_comment_subscription_keys = args.steps in ('commentSubscriptionKeys', 'all')
+    run_bucket_read_constraints = args.steps in ('bucketReadConstraints', 'all')
 
     # Dry run unless --execute was given (args.dry_run is False only then) AND the config does not
     # pin dry_run: true. Either source can force a dry run; neither can force a real one alone.
@@ -3404,6 +3474,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         step_plan.append('assetLocationFolderKeys')
     if run_orphaned_triggers:
         step_plan.append('orphanedTriggers')
+    if run_bucket_read_constraints:
+        step_plan.append('bucketReadConstraints')
     if run_vector_backfill:
         if vector_plan.action == 'skip':
             step_plan.append(f"vectorBackfill ({VECTOR_BACKFILL_SKIPPED_OUTCOME})")
@@ -3432,8 +3504,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     #
     # The gate covers every step that deletes, bills or rewrites rows: orphanedTriggers deletes rows,
     # a real vectorBackfill launches one Bedrock-billed execution per file whether or not it clears the
-    # stored vectors first, and assetLocationIndex writes every asset row. systemPipelineRetirement only
-    # reads.
+    # stored vectors first, assetLocationIndex writes every asset row, and bucketReadConstraints writes
+    # constraints. systemPipelineRetirement only reads.
     clears_vectors = backfills_vectors and clear_vectors
     if not confirm_migration_target(
         profile=profile,
@@ -3442,11 +3514,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         dry_run=dry_run,
         args_dry_run=args.dry_run,
         gated=run_location_keys or run_orphaned_triggers or backfills_vectors or backfills_metadata
-        or run_asset_location_index or run_comment_subscription_keys,
+        or run_asset_location_index or run_comment_subscription_keys or run_bucket_read_constraints,
         gated_summary=_gated_summary(run_orphaned_triggers, backfills_vectors, clears_vectors,
                                      backfills_metadata, fixes_locations=run_location_keys,
                                      indexes_locations=run_asset_location_index,
-                                     copies_comments=run_comment_subscription_keys),
+                                     copies_comments=run_comment_subscription_keys,
+                                     adds_bucket_reads=run_bucket_read_constraints),
         confirm_account=args.confirm_account,
         step_plan=step_plan,
     ):
@@ -3492,6 +3565,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         logger.info("##### STEP: Orphaned workflow-trigger cleanup #####")
         rc = run_orphaned_triggers_step(config, args, base_param_prefix, profile, region, dry_run)
         _record('orphanedTriggers', rc)
+        if rc != 0:
+            exit_code = rc
+
+    # Reads and writes the constraints table only, so the location steps never hold it; it runs before the
+    # long backfills so a role's bucket listing is back as soon as possible after the deploy.
+    if run_bucket_read_constraints:
+        logger.info("")
+        logger.info("##### STEP: Bucket read constraints #####")
+        rc = run_bucket_read_constraints_step(config, args, base_param_prefix, profile, region, dry_run)
+        _record('bucketReadConstraints', rc)
         if rc != 0:
             exit_code = rc
 
