@@ -29,18 +29,27 @@ const gate = (file: string): Gate => {
 // Files whose lookup fails. The answer is a failure tuple, as fetchFileInfo returns for a rejected
 // request, and it takes a few milliseconds, as a request over the network does.
 const mockFailing = new Set<string>();
+// The preview file a file's lookup answers with, by file.
+const mockPreviews: Record<string, string> = {};
+// While set, the asset details answer only once it resolves.
+let mockAssetGate: Promise<void> | null = null;
 // A runaway loop of lookups stops answering after this many calls, so a failing run ends.
 const mockCallCap = 20;
 let mockCallCount = 0;
 
 jest.mock("../../services/APIService", () => ({
     fetchAsset: jest.fn(
-        async ({ databaseId, assetId }: { databaseId: string; assetId: string }) => ({
-            assetId,
-            databaseId,
-            assetName: `Asset ${assetId}`,
-            isDistributable: true,
-        })
+        async ({ databaseId, assetId }: { databaseId: string; assetId: string }) => {
+            if (mockAssetGate) {
+                await mockAssetGate;
+            }
+            return {
+                assetId,
+                databaseId,
+                assetName: `Asset ${assetId}`,
+                isDistributable: true,
+            };
+        }
     ),
     fetchFileInfo: jest.fn(
         async ({ assetId, fileKey }: { databaseId: string; assetId: string; fileKey: string }) => {
@@ -61,6 +70,7 @@ jest.mock("../../services/APIService", () => ({
                 {
                     key: `${assetId}/${rel}`,
                     fileName: rel.split("/").pop(),
+                    ...(mockPreviews[rel] ? { previewFile: mockPreviews[rel] } : {}),
                     versions: [
                         { versionId: `v-${rel}`, isLatest: true },
                         { versionId: "v-old", isLatest: false },
@@ -111,14 +121,20 @@ const Probe = () => {
 const FILE_ROUTE = "/databases/db1/assets/assetA/file";
 
 /** The File Manager's View File before the file's version loaded: the state names no version. */
-const fromFileManager = (file: string) => ({
+const fromFileManager = (file: string, extraState: Record<string, unknown> = {}) => ({
     pathname: `${FILE_ROUTE}/${file}`,
-    state: { filename: file, key: `assetA/${file}`, isDirectory: false },
+    state: { filename: file, key: `assetA/${file}`, isDirectory: false, ...extraState },
 });
 
-const openFromFileManager = (file: string, { strict = false } = {}) => {
+const openFromFileManager = (
+    file: string,
+    {
+        strict = false,
+        extraState = {},
+    }: { strict?: boolean; extraState?: Record<string, unknown> } = {}
+) => {
     const tree = (
-        <MemoryRouter initialEntries={[fromFileManager(file)]}>
+        <MemoryRouter initialEntries={[fromFileManager(file, extraState)]}>
             <Probe />
             <Routes>
                 <Route
@@ -154,6 +170,8 @@ beforeEach(() => {
     jest.clearAllMocks();
     Object.keys(mockGates).forEach((file) => delete mockGates[file]);
     mockFailing.clear();
+    Object.keys(mockPreviews).forEach((file) => delete mockPreviews[file]);
+    mockAssetGate = null;
     mockCallCount = 0;
     visited = [];
 });
@@ -232,5 +250,39 @@ describe("ViewFile opened from the File Manager without a version", () => {
         await settle();
 
         expect(lastUrl()).toBe(`${FILE_ROUTE}/a.glb?version=v-a.glb`);
+    });
+
+    // The file manager's quick listing sends an empty previewFile, so only the lookup's answer
+    // knows the file has a preview (issue #1673).
+    it("offers Preview for a listed file whose lookup answers before the asset details", async () => {
+        mockPreviews["p.glb"] = "assetA/p.glb.previewFile.png";
+        let openDetails: () => void = () => undefined;
+        mockAssetGate = new Promise<void>((resolve) => {
+            openDetails = resolve;
+        });
+        openFromFileManager("p.glb", { extraState: { previewFile: "" } });
+        await waitFor(() => expect(lookups("p.glb")).toBe(1));
+        await settle();
+
+        await act(async () => openDetails());
+        await settle();
+
+        expect(await screen.findByText("Preview", {}, { timeout: 3000 })).toBeInTheDocument();
+        expect(lookups("p.glb")).toBe(1);
+    });
+
+    it("offers Preview for a listed file whose lookup answers after the asset details", async () => {
+        mockPreviews["p.glb"] = "assetA/p.glb.previewFile.png";
+        const slow = gate("p.glb");
+        openFromFileManager("p.glb", { extraState: { previewFile: "" } });
+        await waitFor(() => expect(lookups("p.glb")).toBe(1));
+        await settle();
+        expect(screen.queryByText("Preview")).not.toBeInTheDocument();
+
+        await act(async () => slow.open());
+        await settle();
+
+        expect(await screen.findByText("Preview", {}, { timeout: 3000 })).toBeInTheDocument();
+        expect(lookups("p.glb")).toBe(1);
     });
 });
