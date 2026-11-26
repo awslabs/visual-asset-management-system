@@ -34,16 +34,13 @@ const mockCallCap = 20;
 let mockCallCount = 0;
 
 jest.mock("../../services/APIService", () => ({
-    fetchAssetWithStatus: jest.fn(
-        async ({ databaseId, assetId }: { databaseId: string; assetId: string }) => [
-            true,
-            {
-                assetId,
-                databaseId,
-                assetName: `Asset ${assetId}`,
-                isDistributable: true,
-            },
-        ]
+    fetchAsset: jest.fn(
+        async ({ databaseId, assetId }: { databaseId: string; assetId: string }) => ({
+            assetId,
+            databaseId,
+            assetName: `Asset ${assetId}`,
+            isDistributable: true,
+        })
     ),
     fetchFileInfo: jest.fn(
         async ({ assetId, fileKey }: { databaseId: string; assetId: string; fileKey: string }) => {
