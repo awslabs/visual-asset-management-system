@@ -903,7 +903,7 @@ When a new file is placed directly in S3 under an archived asset's prefix, the b
 Each 3D model (and its supporting files) must reside in its own folder directly under the `baseAssetsPrefix`. The folder name becomes the `assetId` in VAMS.
 
 :::warning[Asset ID requirements]
-The folder name used as the asset ID must match VAMS validation rules: alphanumeric characters, hyphens, underscores, and periods only, with a maximum length of 256 characters. Folders with names containing spaces or special characters are skipped by the sync process.
+The folder name used as the asset ID must match the VAMS asset ID rule: letters (in any script), digits, spaces, underscores, hyphens, periods, commas and apostrophes, 2 to 255 characters, not ending in a period or a space. Bucket sync creates no asset for a folder whose name breaks the rule, and a file written there belongs to no asset. The bucket sync function logs `Asset ID <folder> is not valid, skipping processing but forwarding to indexers` at INFO level for each such file, not as an error. To import the files, copy them to a folder whose name the rule accepts. The asset's name is the folder name with each character an asset name does not allow (anything other than ASCII letters, digits, spaces, hyphens, underscores and periods) replaced by `_`, so a folder `site,a` becomes the asset `site,a` named `site_a`.
 :::
 
 :::warning[Reserved folder names]

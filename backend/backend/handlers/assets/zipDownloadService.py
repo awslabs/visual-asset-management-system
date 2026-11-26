@@ -534,6 +534,13 @@ def _enforce_limits(files, size):
         raise ZipRefusal(f"The selection is larger than {MAX_TOTAL_BYTES_PER_REQUEST} bytes")
 
 
+def _version_entry_key(path) -> str:
+    """A version entry's or a selected file's path with exactly one leading '/' removed (the rule of
+    assetVersions.version_entry_key), so 'x' and '/x' name one file and '//x' another."""
+    path = str(path or "")
+    return path[1:] if path.startswith("/") else path
+
+
 def _resolve_pinned(database_id, asset_id, bucket, base_key, request, nested=None):
     """Resolve the selection against an asset version snapshot: every selected file, folder or the
     whole asset becomes the file versions recorded in that version. A recorded file a nested asset's
@@ -553,12 +560,18 @@ def _resolve_pinned(database_id, asset_id, bucket, base_key, request, nested=Non
     snapshot = get_asset_file_versions(database_id, asset_id, asset_version_id, raise_errors=True) or {}
     recorded = {}
     for f in snapshot.get("files") or []:
-        rel = (f.get("relativeKey") or "").lstrip("/")
+        rel = _version_entry_key(f.get("relativeKey"))
+        if rel.startswith("/"):
+            # A key with an empty segment right after the folder ('{folder}/x', stored '//x'): this route
+            # resolves a member's key from its path with every leading '/' dropped, so it would read
+            # '{folder}x' under this entry's version. Left out, as it was before such keys were told apart.
+            logger.info(f"Leaving out a version entry with an empty first path segment in {asset_id}")
+            continue
         if rel and f.get("versionId") and _archived_key(rel) and (not nested or nested.keep(base_key + rel)):
             recorded[rel] = f
     chosen = {}
     for entry in request.selection:
-        rel = entry.relativePath.lstrip("/")
+        rel = _version_entry_key(entry.relativePath)
         if entry.type == "file" and not _archived_key(rel):
             # A preview companion is left out like in a folder or the whole asset, not refused.
             continue

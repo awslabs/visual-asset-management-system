@@ -591,11 +591,21 @@ def save_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
         partition_key = f"{databaseId}:{assetId}:{assetVersionId}"
         created_at = utc_now().isoformat()
 
-        # Create individual records for each file
-        with asset_file_versions_table.batch_writer() as batch:
+        # Create individual records for each file. Two entries of one file (an older version can hold
+        # '/a.txt' and 'a.txt', which a revert copies) are one row: the batch keeps the last one,
+        # where DynamoDB would refuse the whole batch.
+        with asset_file_versions_table.batch_writer(
+                overwrite_by_pkeys=['databaseId:assetId:assetVersionId', 'fileKey']) as batch:
             for file in files:
-                # Use the file's relativeKey as the sort key
-                file_key = file['relativeKey']
+                # The sort key is the file's path in its stored form (stored_version_entry_key): 'x' for
+                # '/x' or 'x', '//x' for '//x', however the caller wrote it (#1795).
+                raw_key = file.get('relativeKey')
+                if names_no_file(raw_key):
+                    # Only an entry an earlier release stored for the asset root can get here (a revert
+                    # copies it); it names no file.
+                    logger.warning(f"Skipping a version entry that names no file in {partition_key}")
+                    continue
+                file_key = stored_version_entry_key(raw_key)
 
                 # Create item for DynamoDB
                 item = {
@@ -617,6 +627,51 @@ def save_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
     except Exception as e:
         logger.exception(f"Error saving asset file versions: {e}")
         return False
+
+
+def version_entry_key(file_key) -> str:
+    """The key a version entry is compared and deduplicated by: its path with exactly one leading '/'
+    removed, which is the key's part after the asset's location ('x' for '{location}x', '/x' for the key
+    with an empty segment right after the location, '{location}/x').
+
+    A leading '/' marks a path in the asset, so 'x' and the legacy '/x' name one file and '//x' names
+    another. Stripping every leading '/' would make '//x' and '/x' one entry.
+    """
+    file_key = str(file_key or '')
+    return file_key[1:] if file_key.startswith('/') else file_key
+
+
+def stored_version_entry_key(file_key) -> str:
+    """The form a version entry is stored and handed out in: 'x' for '{location}x' and '//x' for
+    '{location}/x' (never '/x', which legacy rows store for '{location}x'). Every reader resolves it
+    with exactly one leading '/' dropped, as it resolves the path the caller wrote."""
+    key = version_entry_key(file_key)
+    return '/' + key if key.startswith('/') else key
+
+
+def names_no_file(file_key) -> bool:
+    """Whether a version entry's key is made only of '/' (or is empty): the asset root, not a file."""
+    return not str(file_key or '').strip('/')
+
+
+def collapse_version_entries(items: List[Dict]) -> List[Dict]:
+    """The rows of an asset version's files, one per file, keyed by version_entry_key.
+
+    A version a file list created before #1795 can name one file both as '/a.txt' and 'a.txt' (D1),
+    and can hold a '/' row that names no file. The row stored in the current form
+    (stored_version_entry_key) wins, the first one read otherwise, and a row that names no file is
+    left out, so the version detail lists the file once and a revert copies it once. '//a.txt' is
+    another file ('{location}/a.txt') and stays its own entry.
+    """
+    chosen: Dict[str, Dict] = {}
+    for item in items:
+        stored_key = str(item.get('fileKey') or '')
+        if names_no_file(stored_key):
+            continue
+        relative_key = version_entry_key(stored_key)
+        if relative_key not in chosen or stored_key == stored_version_entry_key(stored_key):
+            chosen[relative_key] = item
+    return list(chosen.values())
 
 
 def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
@@ -648,11 +703,13 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
         if not items:
             return None
 
-        # Reconstruct the file versions structure
+        # Reconstruct the file versions structure. The key is handed out in the form new entries are
+        # stored in (stored_version_entry_key), once per file, so an entry a file list stored with the
+        # slash before #1795 reads the same way: in the version detail, a revert and every lookup.
         files = []
-        for item in items:
+        for item in collapse_version_entries(items):
             file_info = {
-                'relativeKey': item.get('fileKey'),
+                'relativeKey': stored_version_entry_key(item.get('fileKey')),
                 'versionId': item.get('versionId'),
                 'size': item.get('size'),
                 'lastModified': item.get('lastModified'),
@@ -699,11 +756,12 @@ def resolve_file_version_from_asset_version(databaseId: str, assetId: str, asset
         logger.warning(f"No files recorded in asset version {assetVersionId!r} of {databaseId}:{assetId}")
         raise VAMSGeneralErrorResponse(MSG_ASSET_VERSION_NO_FILES)
 
-    # Build a lookup map with normalized keys (strip leading /)
-    file_map = {f['relativeKey'].lstrip('/'): f for f in file_versions['files']}
+    # Build a lookup map by version_entry_key: exactly one leading '/' removed, so '//x' and 'x' stay
+    # two files
+    file_map = {version_entry_key(f['relativeKey']): f for f in file_versions['files']}
 
-    # Normalize the requested file key — strip leading /
-    normalized_key = fileKey.lstrip('/')
+    # The requested file by the same rule
+    normalized_key = version_entry_key(fileKey)
 
     # Look up the file
     file_entry = file_map.get(normalized_key)
@@ -752,6 +810,12 @@ def resolve_asset_version_id_from_alias(databaseId: str, assetId: str, alias: st
     return matches[0]['assetVersionId']
 
 
+def count_version_files(file_keys) -> int:
+    """The number of files a version's rows name: one per version_entry_key, a row that names no file
+    ('/') left out. The version detail lists the same set (collapse_version_entries)."""
+    return len({version_entry_key(file_key) for file_key in file_keys if not names_no_file(file_key)})
+
+
 def get_asset_version_file_count(databaseId: str, assetId: str, assetVersionId: str) -> int:
     """Get count of available files for a specific asset version
 
@@ -761,19 +825,36 @@ def get_asset_version_file_count(databaseId: str, assetId: str, assetVersionId: 
         assetVersionId: The asset version ID
 
     Returns:
-        The number of snapshot rows recorded for the version -- EVERY row, including ones
-        marked isPermanentlyDeleted. No such filter is applied, and this is the number the
-        version listing reports, so an assertion against it must compare with the unfiltered
-        file list (get_asset_version_details emits isPermanentlyDeleted rows too).
+        The number of files the version's detail lists (get_asset_version_details): one per path
+        without its leading slash, a row that names no file left out (count_version_files), and
+        every other row counted, including ones marked isPermanentlyDeleted. No such filter is
+        applied, so an assertion against it must compare with the unfiltered file list.
     """
     try:
         # Query using the table PK (databaseId:assetId:assetVersionId is now the table PK)
         version_composite_key = f"{databaseId}:{assetId}:{assetVersionId}"
+        version_key_condition = Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
+
+        # A row stored with a leading slash exists only in a version a file list created before
+        # #1795, where it can name a file another row names too, or name no file ('/'). Such a
+        # version is counted from its keys; any other is counted without reading them. The probe is
+        # a key condition on the sort key, so it reads only those rows.
+        slashed_query = {
+            'KeyConditionExpression': version_key_condition & Key('fileKey').begins_with('/'),
+            'ProjectionExpression': '#fileKey',
+            'ExpressionAttributeNames': {'#fileKey': 'fileKey'},
+            'Limit': 1
+        }
+        if asset_file_versions_table.query(**slashed_query).get('Items'):
+            file_keys = [item.get('fileKey') for item in query_all_items(
+                asset_file_versions_table, KeyConditionExpression=version_key_condition,
+                ProjectionExpression='#fileKey', ExpressionAttributeNames={'#fileKey': 'fileKey'})]
+            return count_version_files(file_keys)
 
         # A COUNT query is bounded by the same 1 MB scan limit as any other query, so page to
         # exhaustion or a version holding many files reports a short count.
         query_kwargs = {
-            'KeyConditionExpression': Key('databaseId:assetId:assetVersionId').eq(version_composite_key),
+            'KeyConditionExpression': version_key_condition,
             'Select': 'COUNT'
         }
         count = 0
@@ -797,20 +878,21 @@ def tally_asset_version_file_counts(databaseId: str, assetId: str) -> Optional[D
         assetId: The asset ID
 
     Returns:
-        Mapping of assetVersionId to file count, or None when the walk exceeded
-        FILE_COUNT_TALLY_MAX_PAGES and the tally would be partial
+        Mapping of assetVersionId to file count (count_version_files), or None when the walk
+        exceeded FILE_COUNT_TALLY_MAX_PAGES and the tally would be partial
     """
     composite_key = f"{databaseId}:{assetId}"
     version_key_prefix = f"{composite_key}:"
-    counts: Dict[str, int] = {}
+    keys_by_version: Dict[str, List] = {}
 
-    # Only the version each row belongs to is needed, which keeps the pages small enough to
-    # deserialize on an asset holding many files.
+    # Only the version each row belongs to and its key are needed, which keeps the pages small
+    # enough to deserialize on an asset holding many files. The key is read because a version a
+    # file list created before #1795 can name one file both with and without the leading slash.
     query_kwargs = {
         'IndexName': 'databaseIdAssetIdIndex',
         'KeyConditionExpression': Key('databaseId:assetId').eq(composite_key),
-        'ProjectionExpression': '#versionPk',
-        'ExpressionAttributeNames': {'#versionPk': 'databaseId:assetId:assetVersionId'}
+        'ProjectionExpression': '#versionPk, #fileKey',
+        'ExpressionAttributeNames': {'#versionPk': 'databaseId:assetId:assetVersionId', '#fileKey': 'fileKey'}
     }
 
     try:
@@ -820,10 +902,10 @@ def tally_asset_version_file_counts(databaseId: str, assetId: str) -> Optional[D
                 version_key = item.get('databaseId:assetId:assetVersionId') or ''
                 if version_key.startswith(version_key_prefix):
                     version_id = version_key[len(version_key_prefix):]
-                    counts[version_id] = counts.get(version_id, 0) + 1
+                    keys_by_version.setdefault(version_id, []).append(item.get('fileKey'))
 
             if 'LastEvaluatedKey' not in response:
-                return counts
+                return {version_id: count_version_files(keys) for version_id, keys in keys_by_version.items()}
             query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
 
         logger.info(
@@ -1959,6 +2041,12 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         (None, relative_key) when the file should be skipped."""
         relative_key = file['relativeKey']
         source_version_id = file['versionId']
+        if version_entry_key(relative_key).startswith('/'):
+            # A stored '//x' names '{location}/x', but object_key_for drops every leading slash and would
+            # copy '{location}x' under it. Skipped and reported until the location-key work (PR #1965)
+            # moves this resolution to the one-slash rule; create refuses such a path for the same reason.
+            logger.info(f"Revert of {databaseId}:{assetId} skips an entry whose path starts with two slashes")
+            return None, relative_key
         full_key = object_key_for(prefix, relative_key)
         if not full_key or not nested.keep(full_key):
             return None, relative_key
@@ -2037,12 +2125,16 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
 
     #Send email for asset version change
     send_subscription_email(databaseId, assetId)
-    
+
+    # The files the new version stores: one entry per version_entry_key, as save_asset_file_versions
+    # writes them
+    stored_file_count = count_version_files(f.get('relativeKey') for f in files_to_version)
+
     # Return response
     now = utc_now().isoformat()
     return AssetVersionOperationResponseModel(
         success=True,
-        message=f"Successfully reverted to version {request_model.assetVersionId} with {len(files_to_version)} files",
+        message=f"Successfully reverted to version {request_model.assetVersionId} with {stored_file_count} files",
         assetId=assetId,
         assetVersionId=new_assetVersionId,
         operation="revert",

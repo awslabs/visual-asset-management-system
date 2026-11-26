@@ -417,7 +417,9 @@ files.
 
 The response payload is still written to stdout first, so a `--json-output` consumer keeps the detail:
 `overall_success`, `successful_files` / `failed_files`, and the per-file `failed_files` /
-`failed_downloads` lists.
+`failed_downloads` lists. For an upload, each `sequence_results` entry also lists the reason each file
+failed under `failed_file_errors` (`relative_key` and `error`), as `failed_downloads` does for a
+download, and the plain output prints each failed file with its reason.
 
 A transfer records an AWS WAF block or a permission denial against the file or upload sequence it
 struck, as it records any other failure: the error keeps its message, which for a block names the web
