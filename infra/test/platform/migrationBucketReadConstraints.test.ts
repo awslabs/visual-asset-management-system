@@ -6,11 +6,12 @@
 /**
  * The v2.6 to v2.7 migration's `bucketReadConstraints` step (issue #1978).
  *
- * From v2.7 a role lists a bucket and puts a database on it only with a `bucket` constraint, which a role
- * imported from a shipped template before 2.7.0 does not have. The step gives each role whose own
- * constraints allow GET /buckets, and that has no bucket constraint, the one the shipped role templates
- * carry, and nothing else. The real step and the real main() run here against a fake constraints table
- * (fixtures/bucketReadConstraintsHarness.py, standard library only); that its route decision equals the
+ * From v2.7 a role lists a bucket (GET /buckets) and puts a database on it (POST /database, PUT
+ * /database/{databaseId}) only with a `bucket` constraint, which a role stored before 2.7.0 does not have.
+ * The step gives each role whose own constraints allow one of those routes, and that has no bucket
+ * constraint, the one the shipped role templates carry, and nothing else. The real step and the real
+ * main() run here against a fake constraints table and database table
+ * (fixtures/bucketReadConstraintsHarness.py, standard library only); that its route decisions equal the
  * authorizer's is pinned against the real Casbin enforcer in
  * backend/tests/handlers/authz/test_bucket_read_migration_parity.py.
  */
@@ -35,6 +36,8 @@ interface Put {
 
 interface StepRun {
     counts: Record<string, number>;
+    routes: Record<string, number>;
+    databaseScans: number;
     report: string;
     reportLines: Array<Record<string, any>>;
     puts: Put[];
@@ -64,7 +67,11 @@ interface Results {
     mainExecuteWrongAccount: MainRun;
 }
 
-const ADDED_ROLES = ["legacy-admin", "list-route"];
+const ADDED_ROLES = ["creator", "db-editor", "legacy-admin", "list-route"];
+const LIST = "GET /buckets";
+const CREATE = "POST /database";
+const UPDATE = "PUT /database/{databaseId}";
+const SEEDED_ITEMS = 19;
 
 function outcomes(run: StepRun): Record<string, string> {
     return Object.fromEntries(
@@ -105,7 +112,8 @@ describe("the bucketReadConstraints step writes the shipped role templates' buck
     });
 
     it("writes it as a template import stores it, under an id derived from the role", () => {
-        const [put] = results.execute.puts;
+        const put = results.execute.puts.find((p) => p.item.groupId === "legacy-admin") as Put;
+        expect(put).toBeDefined();
         expect(put.table).toBe("vams-test-constraintsStorageTable");
         expect(put.condition).toBe("attribute_not_exists(constraintId)");
         expect(put.item.constraintId).toMatch(/^[0-9a-f-]{36}#group#legacy-admin$/);
@@ -134,11 +142,14 @@ describe("the bucketReadConstraints step writes the shipped role templates' buck
 });
 
 describe("what the step changes", () => {
-    it("reads the api and bucket constraints through ObjectTypeIndex, following every page", () => {
+    it("reads the api and bucket constraints through ObjectTypeIndex and the database ids, every page", () => {
         const queries = results.dryRun.queries;
         expect(new Set(queries)).toEqual(new Set(["api", "bucket"]));
-        // Two items a page: twelve stored items take more than one page per type.
+        // Two items a page: the stored items take more than one page per type.
         expect(queries.filter((t) => t === "api").length).toBeGreaterThan(1);
+        // Three database rows, two a page; the archived one is left out.
+        expect(results.dryRun.databaseScans).toBe(2);
+        expect(results.dryRun.counts.databasesChecked).toBe(2);
     });
 
     it("a dry run reports every role and writes nothing", () => {
@@ -149,32 +160,58 @@ describe("what the step changes", () => {
         expect(outcomes(run)).toEqual({
             "legacy-admin": "wouldAdd",
             "list-route": "wouldAdd",
+            creator: "wouldAdd",
+            "db-editor": "wouldAdd",
             "has-bucket": "alreadyHasBucket",
-            reader: "noBucketsRoute",
-            denied: "noBucketsRoute",
-            "post-only": "noBucketsRoute",
+            reader: "noQualifyingRoute",
+            denied: "noQualifyingRoute",
+            "post-only": "noQualifyingRoute",
+            "future-db-editor": "noQualifyingRoute",
+            "archived-db-editor": "noQualifyingRoute",
+            "create-denied": "noQualifyingRoute",
             broken: "unreadable",
             "user:alice": "userGrantNotChanged",
+            "user:bob": "userGrantNotChanged",
         });
         expect(run.counts).toMatchObject({
-            rolesExamined: 7,
-            rolesWithBucketsRoute: 3,
-            wouldAdd: 2,
+            rolesExamined: 12,
+            rolesQualified: 5,
+            wouldAdd: 4,
             added: 0,
             alreadyHasBucket: 1,
-            noBucketsRoute: 3,
+            noQualifyingRoute: 6,
             unreadable: 1,
-            usersWithBucketsRoute: 1,
+            usersQualified: 2,
         });
+        expect(run.routes).toEqual({ [LIST]: 3, [CREATE]: 2, [UPDATE]: 2 });
         expect(run.exitStatus).toBe(0);
     });
 
-    it("a real run adds the bucket read only to the roles allowed GET /buckets that had none", () => {
+    it("names the routes that qualified each role, and the database the update route was allowed on", () => {
+        const byRole = Object.fromEntries(
+            results.dryRun.reportLines.map((line) => [line.role ?? `user:${line.user}`, line])
+        );
+        expect(byRole["legacy-admin"].qualifiedBy).toEqual([LIST, CREATE, UPDATE]);
+        expect(byRole["legacy-admin"].updateAllowedOnDatabase).toBe("db-a");
+        expect(byRole["list-route"].qualifiedBy).toEqual([LIST]);
+        expect(byRole.creator.qualifiedBy).toEqual([CREATE]);
+        expect(byRole.creator.grantedBy).toEqual({ [CREATE]: ["creator-api"] });
+        expect(byRole["db-editor"].qualifiedBy).toEqual([UPDATE]);
+        expect(byRole["db-editor"].updateAllowedOnDatabase).toBe("db-a");
+        expect(byRole["user:bob"].qualifiedBy).toEqual([UPDATE]);
+        expect(byRole["user:bob"].updateAllowedOnDatabase).toBe("db-b");
+        // Update only on a database the deployment does not hold, or holds archived: not qualified.
+        expect(byRole["future-db-editor"].qualifiedBy).toBeUndefined();
+        expect(byRole["archived-db-editor"].qualifiedBy).toBeUndefined();
+        expect(byRole["create-denied"].deniedBy).toEqual({ [CREATE]: ["create-denied-deny"] });
+    });
+
+    it("a real run adds the bucket read only to the roles allowed a bucket route that had none", () => {
         const run = results.execute;
         expect(run.puts.map((p) => p.item.groupId)).toEqual(ADDED_ROLES);
         expect(run.existingItemsUnchanged).toBe(true);
-        expect(run.itemCount).toBe(12 + ADDED_ROLES.length);
-        expect(run.counts).toMatchObject({ added: 2, wouldAdd: 0, failed: 0 });
+        expect(run.itemCount).toBe(SEEDED_ITEMS + ADDED_ROLES.length);
+        expect(run.counts).toMatchObject({ added: 4, wouldAdd: 0, failed: 0 });
         expect(run.report).toMatch(/^bucketReadConstraints-execute-report-\d{8}T\d{6}Z\.jsonl$/);
         const added = run.reportLines.filter((line) => line.outcome === "added");
         expect(added.map((line) => line.constraintId)).toEqual(
@@ -182,17 +219,34 @@ describe("what the step changes", () => {
         );
         // The audit trail: which stored constraint gave the role the route.
         expect(added.map((line) => line.grantedBy)).toEqual([
-            ["legacy-admin-api"],
-            ["list-route-api"],
+            { [CREATE]: ["creator-api"] },
+            { [UPDATE]: ["db-editor-api"] },
+            {
+                [LIST]: ["legacy-admin-api"],
+                [CREATE]: ["legacy-admin-api"],
+                [UPDATE]: ["legacy-admin-api"],
+            },
+            { [LIST]: ["list-route-api"] },
         ]);
-        expect(run.reportLines.find((line) => line.role === "denied")?.deniedBy).toEqual([
-            "denied-buckets",
-        ]);
+        expect(run.reportLines.find((line) => line.role === "denied")?.deniedBy).toEqual({
+            [LIST]: ["denied-buckets"],
+        });
     });
 
     it("leaves a role that already has a bucket constraint, a user grant and an unreadable role alone", () => {
         const written = results.execute.puts.map((p) => p.item.groupId);
-        for (const left of ["has-bucket", "alice", "broken", "denied", "post-only", "reader"]) {
+        for (const left of [
+            "has-bucket",
+            "alice",
+            "bob",
+            "broken",
+            "denied",
+            "post-only",
+            "reader",
+            "future-db-editor",
+            "archived-db-editor",
+            "create-denied",
+        ]) {
             expect(written).not.toContain(left);
         }
         expect(results.execute.reportLines.find((line) => line.role === "broken")?.error).toMatch(
@@ -203,35 +257,39 @@ describe("what the step changes", () => {
     it("a repeat writes nothing", () => {
         const run = results.rerun;
         expect(run.puts).toEqual([]);
-        expect(run.counts).toMatchObject({ alreadyHasBucket: 3, added: 0, failed: 0 });
+        expect(run.counts).toMatchObject({ alreadyHasBucket: 5, added: 0, failed: 0 });
         expect(run.exitStatus).toBe(0);
     });
 
     it("a repeat the index has not caught up with is refused by the condition and overwrites nothing", () => {
         const run = results.indexLag;
         expect(run.puts.map((p) => p.item.groupId)).toEqual(ADDED_ROLES);
-        expect(run.counts).toMatchObject({ alreadyAdded: 2, added: 0, failed: 0 });
+        expect(run.counts).toMatchObject({ alreadyAdded: 4, added: 0, failed: 0 });
         expect(run.existingItemsUnchanged).toBe(true);
         expect(run.exitStatus).toBe(0);
     });
 
     it("a failed write fails the step and is reported", () => {
         const run = results.writeFails;
-        expect(run.counts).toMatchObject({ failed: 2, added: 0 });
+        expect(run.counts).toMatchObject({ failed: 4, added: 0 });
         expect(run.exitStatus).toBe(1);
         expect(
             run.reportLines.filter((line) => line.outcome === "failed").map((line) => line.error)
-        ).toEqual(["AccessDeniedException", "AccessDeniedException"]);
+        ).toEqual(Array(4).fill("AccessDeniedException"));
     });
 
     it("prints a summary that counts each outcome", () => {
         const summary = results.execute.summary.join("\n");
-        expect(summary).toMatch(/Roles allowed GET \/buckets:\s+3/);
-        expect(summary).toMatch(/given the bucket read \(added\):\s+2/);
+        expect(summary).toMatch(/Roles allowed a bucket route:\s+5/);
+        expect(summary).toMatch(/allowed GET \/buckets:\s+3/);
+        expect(summary).toMatch(/allowed POST \/database:\s+2/);
+        expect(summary).toMatch(/allowed PUT \/database\/\{databaseId\}:\s+2/);
+        expect(summary).toMatch(/Databases the update route was checked on:\s+2/);
+        expect(summary).toMatch(/given the bucket read \(added\):\s+4/);
         expect(summary).toMatch(/\(unreadable\):\s+1/);
-        expect(summary).toMatch(/\(userGrantNotChanged\):\s+1/);
+        expect(summary).toMatch(/\(userGrantNotChanged\):\s+2/);
         expect(results.dryRun.summary.join("\n")).toMatch(
-            /would get the bucket read \(wouldAdd\):\s+2/
+            /would get the bucket read \(wouldAdd\):\s+4/
         );
     });
 });
@@ -268,8 +326,8 @@ describe("the step in the migration script", () => {
         expect(run.exit).toBe(0);
         expect(run.puts).toEqual(ADDED_ROLES);
         expect(run.log).toContain(
-            "  This run will: add a bucket read constraint to each role allowed GET /buckets that has no " +
-                "bucket constraint (bucketReadConstraints)"
+            "  This run will: add a bucket read constraint to each role allowed GET /buckets, POST /database " +
+                "or PUT /database/{databaseId} that has no bucket constraint (bucketReadConstraints)"
         );
         const refused = results.mainExecuteWrongAccount;
         expect(refused.exit).toBe(1);
@@ -295,7 +353,7 @@ describe("the step is documented where the operator looks", () => {
             readme.indexOf("### Python Dependencies")
         );
         expect(iam).toMatch(
-            /bucketReadConstraints step: DynamoDB `Query` on the\s+constraints table's `ObjectTypeIndex` and `PutItem` on the constraints table/
+            /bucketReadConstraints step: DynamoDB `Query` on the\s+constraints table's `ObjectTypeIndex`, `Scan` on the database table and `PutItem` on the constraints table/
         );
     });
 
@@ -304,15 +362,34 @@ describe("the step is documented where the operator looks", () => {
         expect(guide).toMatch(/If you skipped the step, re-import the templates/);
         for (const page of [changelog, revisions]) {
             expect(page).toContain(
-                "Roles imported from a template before 2.7.0 get it from the v2.6 to v2.7 migration's " +
-                    "`bucketReadConstraints` step"
+                "Roles stored before 2.7.0 keep what they had: the v2.6 to v2.7 migration's " +
+                    "`bucketReadConstraints` step adds the templates' bucket read to every role allowed " +
+                    "`GET /buckets`, `POST /database` or `PUT /database/{databaseId}`"
             );
             expect(page).toContain("if you skip the step, re-import the templates");
         }
     });
 
+    it("names the three routes, and keeps the manual step 8 only for roles it cannot read", () => {
+        expect(readme).toMatch(
+            /-\s+`GET` on `\/buckets`;\s+-\s+`POST` on `\/database`;\s+-\s+`PUT` on `\/database\/<databaseId>`/
+        );
+        const stepEight = guide.slice(
+            guide.indexOf("\n8.  Read the `bucketReadConstraints` report.")
+        );
+        expect(stepEight.length).toBeLessThan(guide.length);
+        expect(stepEight.slice(0, 1200)).toMatch(
+            /every role allowed `GET \/buckets`, `POST \/database` or `PUT \/database\/\{databaseId\}` that had none, so those roles need nothing more/
+        );
+        expect(stepEight.slice(0, 1200)).toMatch(/only to each role it reports `unreadable`/);
+        expect(guide).not.toContain(
+            "8.  Give each custom role that lists buckets or creates or moves databases"
+        );
+    });
+
     it("has its config keys in the shipped config", () => {
         expect(config).toHaveProperty("constraints_storage_table_name", null);
+        expect(config).toHaveProperty("database_storage_table_name", null);
         expect(config).toHaveProperty("bucket_read_constraints_output_dir", null);
     });
 });

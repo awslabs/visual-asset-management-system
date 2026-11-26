@@ -4,13 +4,15 @@
 """The v2.6 to v2.7 migration's `bucketReadConstraints` step decides as the authorizer does (issue #1978).
 
 The step (infra/deploymentDataMigration/v2.6_to_v2.7/upgrade/bucket_read_constraints.py) gives a role the
-shipped templates' bucket read only when the role's own stored constraints allow GET on the `/buckets` API
-route. It re-implements that decision without the backend, so it is pinned here against the real policy
-builder and Casbin enforcer, reading the same stored (denormalized, wire-format) items through the real
-GroupPermissionsIndex / UserPermissionsIndex read path: for every constraint shape below, and for a role
-imported from each shipped template before 2.7.0 (its constraints without the bucket read), the step's
-answer equals the enforcer's. The item the step writes is the one a template import writes, and the
-authorizer reads it as GET on every registration and nothing else.
+shipped templates' bucket read only when the role's own stored constraints allow one of the three API
+routes that read a bucket registration from v2.7: GET `/buckets`, POST `/database` (create) and PUT
+`/database/<databaseId>` (update) for a database the deployment holds. It re-implements that decision
+without the backend, so it is pinned here against the real policy builder and Casbin enforcer, reading the
+same stored (denormalized, wire-format) items through the real GroupPermissionsIndex /
+UserPermissionsIndex read path: for every constraint shape below, and for a role imported from each
+shipped template before 2.7.0 (its constraints without the bucket read), the step's answer for each route
+equals the enforcer's. The item the step writes is the one a template import writes, and the authorizer
+reads it as GET on every registration and nothing else.
 
 The migration tree carries no committed tests (infra Development Rule 6); this file tests the step from
 the backend's side because the decision it must match lives here.
@@ -37,6 +39,14 @@ TEMPLATE_VALUES = {"DATABASE_ID": "db-a", "TAG_VALUE": "locked", "ALLOWED_GROUPS
 ROLE = "r"
 USER_ID = "parity-user"
 ROUTE = {"object__type": "api", "route__path": "/buckets"}
+# The databases the deployment holds in these cases: the update route is decided for each one's path.
+DATABASES = ["db-a", "db-b"]
+# route -> (action, the request paths the authorizer decides for it)
+ROUTE_REQUESTS = {
+    "GET /buckets": ("GET", ["/buckets"]),
+    "POST /database": ("POST", ["/database"]),
+    "PUT /database/{databaseId}": ("PUT", [f"/database/{database_id}" for database_id in DATABASES]),
+}
 _SERIALIZER = TypeSerializer()
 
 
@@ -122,6 +132,10 @@ def enforcer_for():
 
 def _api_items(items):
     return [item for item in items if item["objectType"]["S"] == "api"]
+
+
+# Of the shipped templates, only database-admin.json grants a database route (it also grants GET /buckets).
+EXPECTED_TEMPLATE_DATABASE_ROUTES = {"database-admin.json": {"POST /database", "PUT /database/{databaseId}"}}
 
 
 # (case id, the enforcer's answer, role constraints): every operator, value lists, AND with OR, other
@@ -220,6 +234,112 @@ class TestTheRouteDecision:
         decisions = step.decide_route(_api_items(items), step.BUCKETS_ROUTE_OBJECT, step.BUCKETS_ROUTE_ACTION)
         # The allow line alone would allow the route; the step reports the role and writes nothing for it.
         assert ("role", ROLE) in decisions.unreadable
+
+
+def _enforcer_routes(enforcer):
+    """The routes the enforcer allows: a route is allowed when any of its request paths is."""
+    return {route for route, (action, paths) in ROUTE_REQUESTS.items()
+            if any(enforcer.enforce({"object__type": "api", "route__path": path}, action) for path in paths)}
+
+
+def _step_routes(items, principal=("role", ROLE)):
+    found = step.qualify(_api_items(items), DATABASES)
+    assert principal not in found.unreadable
+    return set(found.qualified_by(principal))
+
+
+CREATE, UPDATE, LIST = "POST /database", "PUT /database/{databaseId}", "GET /buckets"
+
+# (case id, the routes the enforcer allows, role constraints): the create path, the update path of a database
+# the deployment holds, one it does not hold, sub-routes, methods, deny lines, and the route template text.
+DATABASE_CASES = [
+    ("create-equals", {CREATE}, [_api([_route("equals", "/database")], permissions=[("POST", "allow")])]),
+    ("create-get-only", set(), [_api([_route("equals", "/database")], permissions=[("GET", "allow")])]),
+    ("create-and-update-starts-with", {CREATE, UPDATE},
+     [_api([_route("starts_with", "/database")], permissions=ALL_METHODS)]),
+    ("update-one-database", {UPDATE},
+     [_api([_route("starts_with", "/database/db-a")], permissions=[("PUT", "allow")])]),
+    ("update-database-not-held", set(),
+     [_api([_route("starts_with", "/database/db-z")], permissions=[("PUT", "allow")])]),
+    ("update-subroute-only", set(),
+     [_api([_route("starts_with", "/database/db-a/assets")], permissions=[("PUT", "allow")])]),
+    ("update-ends-with-id", {UPDATE}, [_api([_route("ends_with", "/db-b")], permissions=[("PUT", "allow")])]),
+    ("update-route-template-text", set(),
+     [_api([_route("equals", "/database/{databaseId}")], permissions=[("PUT", "allow")])]),
+    ("update-deny-one-database", {UPDATE},
+     [_api([_route("starts_with", "/database/")], permissions=[("PUT", "allow")], name="allow-all"),
+      _api([_route("equals", "/database/db-a")], permissions=[("PUT", "deny")], name="deny-a")]),
+    ("update-deny-every-database", set(),
+     [_api([_route("starts_with", "/database/")], permissions=[("PUT", "allow")], name="allow-all"),
+      _api([_route("starts_with", "/database/")], permissions=[("PUT", "deny")], name="deny-all")]),
+    ("create-denied-update-allowed", {UPDATE},
+     [_api([_route("starts_with", "/")], permissions=[("POST", "allow"), ("PUT", "allow")], name="allow-all"),
+      _api([_route("equals", "/database")], permissions=[("POST", "deny")], name="deny-create")]),
+    ("or-criteria", {CREATE, UPDATE},
+     [_api([], [_route("equals", "/database"), _route("starts_with", "/database/db-b")],
+           permissions=[("POST", "allow"), ("PUT", "allow")])]),
+    ("is-not-one-of-database", {CREATE, UPDATE},
+     [_api([_route("is_not_one_of", "/assets")], permissions=[("POST", "allow"), ("PUT", "allow")])]),
+    # The 2.6 database-user.json api routes: one constraint per method, each `starts_with /database`. A role
+    # imported from it before 2.7.0 created and updated databases on any bucket, and keeps that.
+    ("v2.6-database-user-routes", {CREATE, UPDATE},
+     [_api([_route("starts_with", "/database")], permissions=[(method, "allow")], name=f"routes-{method}")
+      for method in ("GET", "POST", "PUT")]),
+    ("buckets-and-update", {LIST, UPDATE},
+     [_api([_route("is_one_of", ["/buckets", "/database/db-a"])], permissions=[("GET", "allow"), ("PUT", "allow")])]),
+]
+
+
+@pytest.mark.unit
+class TestTheDatabaseRoutes:
+    @pytest.mark.parametrize("case, expected, constraints", DATABASE_CASES,
+                             ids=[case for case, _, _ in DATABASE_CASES])
+    def test_a_role_is_allowed_each_route_exactly_when_the_enforcer_allows_it(
+            self, case, expected, constraints, enforcer_for):
+        items = _stored_items(constraints)
+        assert _enforcer_routes(enforcer_for(items, [ROLE])) == expected
+        assert _step_routes(items) == expected
+
+    @pytest.mark.parametrize("case, expected, constraints", ROLE_CASES, ids=[case for case, _, _ in ROLE_CASES])
+    def test_the_buckets_route_cases_are_decided_the_same_way_with_the_database_routes(
+            self, case, expected, constraints, enforcer_for):
+        items = _stored_items(constraints)
+        routes = _enforcer_routes(enforcer_for(items, [ROLE]))
+        assert (LIST in routes) is expected
+        assert _step_routes(items) == routes
+
+    @pytest.mark.parametrize("value, action, route", [
+        ("/database", "POST", CREATE), ("/database/db-b", "PUT", UPDATE), ("/database/db-z", "PUT", None)])
+    def test_a_user_level_grant_of_a_database_route_is_decided_as_the_enforcer_decides_it(
+            self, value, action, route, enforcer_for):
+        items = _stored_items([_api([_route("equals", value)], permissions=[(action, "allow")], user=USER_ID)])
+        expected = {route} if route else set()
+        assert _enforcer_routes(enforcer_for(items, [])) == expected
+        assert _step_routes(items, ("user", USER_ID)) == expected
+
+    @pytest.mark.parametrize("template_name", shipped_constraints.template_names())
+    def test_a_role_imported_from_a_template_before_2_7_is_decided_as_the_enforcer_decides_it(
+            self, template_name, enforcer_for):
+        constraints = [c for c in shipped_constraints.template_constraints(template_name, ROLE, TEMPLATE_VALUES)
+                       if c["objectType"] != "bucket"]
+        items = _stored_items(constraints)
+        assert _step_routes(items) == _enforcer_routes(enforcer_for(items, [ROLE]))
+
+    def test_the_templates_that_hold_a_database_route_so_the_template_cases_are_not_vacuous(self):
+        holding = {}
+        for template_name in shipped_constraints.template_names():
+            constraints = shipped_constraints.template_constraints(template_name, ROLE, TEMPLATE_VALUES)
+            routes = _step_routes(_stored_items(constraints)) - {LIST}
+            if routes:
+                holding[template_name] = routes
+        assert holding == EXPECTED_TEMPLATE_DATABASE_ROUTES
+
+    def test_the_update_route_is_decided_for_the_databases_given_and_no_other(self):
+        items = _stored_items([_api([_route("starts_with", "/database/")], permissions=[("PUT", "allow")])])
+        assert step.qualify(_api_items(items), []).qualified_by(("role", ROLE)) == []
+        found = step.qualify(_api_items(items), ["db-b", "db-a"])
+        assert found.qualified_by(("role", ROLE)) == [UPDATE]
+        assert found.update_database[("role", ROLE)] == "db-b"
 
 
 def _bucket(name="team-a-assets", source="static"):

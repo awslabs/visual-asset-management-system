@@ -61,12 +61,13 @@ The v2.7 release introduces:
      so a repeat copies only what earlier runs left and never undoes what users changed since. Required
      right after the deploy on a deployment with comments or subscriptions; resumable.
   6. A ``bucket`` permission object type on the bucket routes: from v2.7 ``GET /buckets`` lists a bucket, and
-     a database is put on one, only for a role that may read it through a ``bucket`` constraint. A role
-     imported from a shipped template before 2.7.0 holds the ``/buckets`` route and no such constraint. The
-     ``bucketReadConstraints`` step (module ``bucket_read_constraints.py``) gives every role whose own
-     constraints allow ``GET /buckets`` and that has no ``bucket`` constraint the one the shipped role
-     templates carry (``GET`` on every registration). It changes no other constraint, reports user-level
-     grants without changing them, and a repeat writes nothing.
+     ``POST /database`` and ``PUT /database/{databaseId}`` put a database on one, only for a role that may
+     read it through a ``bucket`` constraint. A role stored before 2.7.0 holds those routes and no such
+     constraint. The ``bucketReadConstraints`` step (module ``bucket_read_constraints.py``) gives every role
+     whose own constraints allow one of the three routes (the update route decided for every database the
+     deployment holds) and that has no ``bucket`` constraint the one the shipped role templates carry
+     (``GET`` on every registration). It changes no other constraint, reports user-level grants without
+     changing them, and a repeat writes nothing.
 
 Configuration: set ``resource_names_ssm_param_prefix`` (from the core stack output
 ``ResourceNamesSSMParamPrefixOutput``); every table and function name is then resolved from SSM
@@ -1167,14 +1168,16 @@ def run_orphaned_triggers_step(config: dict, args, base_param_prefix, profile, r
 #######################
 
 def run_bucket_read_constraints_step(config: dict, args, base_param_prefix, profile, region, dry_run) -> int:
-    """Give each role allowed GET /buckets with no bucket constraint the shipped templates' bucket read.
-    Returns 0 unless a write failed; a role whose constraints cannot be read is reported and left alone."""
+    """Give each role allowed GET /buckets, POST /database or PUT /database/{databaseId} with no bucket
+    constraint the shipped templates' bucket read. Returns 0 unless a write failed; a role whose constraints
+    cannot be read is reported and left alone."""
     step = bucket_read_constraints.STEP
     try:
         resolve = make_resolver(config, base_param_prefix, profile, region)
         constraints_table = resolve('constraints_storage_table_name', ResourceParamKeys.CONSTRAINTS_STORAGE_TABLE)
+        database_table = resolve('database_storage_table_name', ResourceParamKeys.DATABASE_STORAGE_TABLE)
     except Exception as e:
-        logger.error(f"Failed resolving the constraints table name for the {step} step: {e}")
+        logger.error(f"Failed resolving the constraints and database table names for the {step} step: {e}")
         return 1
     output_dir = config.get('bucket_read_constraints_output_dir') or os.getcwd()
     dynamodb_client = _session(profile, region).client('dynamodb', config=_DYNAMODB_CLIENT_CONFIG)
@@ -1182,6 +1185,7 @@ def run_bucket_read_constraints_step(config: dict, args, base_param_prefix, prof
     logger.info("=" * 80)
     logger.info("VAMS v2.6 -> v2.7 BUCKET READ CONSTRAINTS")
     logger.info(f"Constraints table: {constraints_table}")
+    logger.info(f"Database table:    {database_table}")
     logger.info(f"Output dir:        {output_dir}")
     logger.info(f"Dry Run: {dry_run}")
     logger.info("=" * 80)
@@ -1189,7 +1193,8 @@ def run_bucket_read_constraints_step(config: dict, args, base_param_prefix, prof
     start = datetime.now(timezone.utc)
     try:
         result = bucket_read_constraints.run_bucket_read_constraints(
-            dynamodb_client, constraints_table, dry_run, output_dir, log=logger.info, now=start)
+            dynamodb_client, constraints_table, dry_run, output_dir, log=logger.info, now=start,
+            database_table=database_table)
     except Exception as e:
         logger.error(f"{step} step failed: {e}. Run it again; a role that already has a bucket constraint "
                      "is never changed, so a repeat writes only what this run did not.")
@@ -3239,8 +3244,8 @@ def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vecto
         parts.append('copy every comment and subscription into the tables keyed by database and asset id '
                      '(commentSubscriptionKeys)')
     if adds_bucket_reads:
-        parts.append('add a bucket read constraint to each role allowed GET /buckets that has no bucket '
-                     'constraint (bucketReadConstraints)')
+        parts.append('add a bucket read constraint to each role allowed GET /buckets, POST /database or '
+                     'PUT /database/{databaseId} that has no bucket constraint (bucketReadConstraints)')
     if clears_vectors:
         parts.append('delete every stored vector (vectorBackfill --clear-vectors)')
     if backfills_vectors:
@@ -3298,7 +3303,7 @@ Examples:
   # Delete orphaned trigger rows only
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps orphanedTriggers
 
-  # Give roles allowed GET /buckets the bucket read the shipped templates carry (writes constraints)
+  # Give roles allowed the bucket routes the bucket read the shipped templates carry (writes constraints)
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps bucketReadConstraints
 
   # Rebuild the vector index from scratch (clears every stored vector first)
@@ -3369,13 +3374,15 @@ Notes:
     repeat copies only what earlier runs left ('alreadyCopied' for the rest), so it never brings back a
     deleted comment, an unsubscribed user or a deleted subscription.
   - bucketReadConstraints reads the api and bucket constraints (two Query calls on the constraints table's
-    ObjectTypeIndex) and, for each role whose own constraints allow GET /buckets and that has no bucket
-    constraint, writes the bucket constraint the shipped role templates carry (GET, bucketId contains .*;
-    one conditional PutItem). It changes no other constraint, reports users granted the route directly
-    without changing them, and leaves a role whose constraints cannot be read unchanged. One line per role
-    goes to bucketReadConstraints-<mode>-report-<UTC time>.jsonl; a repeat writes nothing. It runs after
-    orphanedTriggers under --steps all and does not wait for the location steps. Skipping it: re-import the
-    templates (or add a bucket constraint by hand) for roles that list buckets or create databases.
+    ObjectTypeIndex) and the database ids (one Scan of the database table) and, for each role whose own
+    constraints allow GET /buckets, POST /database or PUT /database/<id> for a database it holds, and that
+    has no bucket constraint, writes the bucket constraint the shipped role templates carry (GET, bucketId
+    contains .*; one conditional PutItem). It changes no other constraint, reports users granted a route
+    directly without changing them, and leaves a role whose constraints cannot be read unchanged. One line
+    per role, naming the routes that qualified it, goes to bucketReadConstraints-<mode>-report-<UTC
+    time>.jsonl; a repeat writes nothing. It runs after orphanedTriggers under --steps all and does not
+    wait for the location steps. Skipping it: re-import the templates (or add a bucket constraint by hand)
+    for roles that list buckets or create or update databases.
         """
     )
 

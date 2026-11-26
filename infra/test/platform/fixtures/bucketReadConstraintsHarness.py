@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Runs the REAL bucketReadConstraints step of the v2.6 to v2.7 migration (bucket_read_constraints.py, and
-# the main script's main() for the wiring) against a fake constraints table and prints one JSON object per
-# scenario. migrationBucketReadConstraints.test.ts reads it. boto3 and botocore are replaced by small fakes
-# so the harness needs only the Python standard library; the migration tools carry no committed Python
-# tests (infra Development Rule 6).
+# the main script's main() for the wiring) against a fake constraints table and database table and prints
+# one JSON object per scenario. migrationBucketReadConstraints.test.ts reads it. boto3 and botocore are
+# replaced by small fakes so the harness needs only the Python standard library; the migration tools carry
+# no committed Python tests (infra Development Rule 6).
 #
 # Usage: bucketReadConstraintsHarness.py <v2.6_to_v2.7/upgrade directory> <scratch directory>
 import copy
@@ -17,6 +17,9 @@ import sys
 import types
 
 TABLE = "vams-test-constraintsStorageTable"
+DATABASE_TABLE = "vams-test-databaseStorageTable"
+# The database rows: two live databases and one archived (stored under '<id>#deleted').
+DATABASES = ["db-a", "db-b", "db-old#deleted"]
 ACCOUNT = "111122223333"
 
 
@@ -39,10 +42,12 @@ class Config:
 
 class FakeConstraintsTable:
     """The constraints table: items keyed by constraintId, ObjectTypeIndex queries served two items a page
-    (so the step must follow LastEvaluatedKey), PutItem honouring attribute_not_exists(constraintId)."""
+    (so the step must follow LastEvaluatedKey), PutItem honouring attribute_not_exists(constraintId). The
+    same client serves the database table's Scan, also two rows a page."""
 
-    def __init__(self, items, page_size=2):
+    def __init__(self, items, page_size=2, databases=DATABASES):
         self.items = {item["constraintId"]["S"]: copy.deepcopy(item) for item in items}
+        self.databases = list(databases)
         self.page_size = page_size
         self.index_snapshot = None  # set to serve the index from an older copy (index lag)
         self.put_error = None
@@ -63,6 +68,19 @@ class FakeConstraintsTable:
         response = {"Items": [copy.deepcopy(source[cid]) for cid in page]}
         if start + self.page_size < len(ordered):
             response["LastEvaluatedKey"] = {"constraintId": {"S": page[-1]}, "objectType": {"S": object_type}}
+        return response
+
+    def scan(self, **kwargs):
+        assert kwargs["TableName"] == DATABASE_TABLE, kwargs["TableName"]
+        assert kwargs.get("ExpressionAttributeNames") == {"#d": "databaseId"}, kwargs
+        self.calls.append({"op": "scan", "start": kwargs.get("ExclusiveStartKey")})
+        start = 0
+        if kwargs.get("ExclusiveStartKey"):
+            start = self.databases.index(kwargs["ExclusiveStartKey"]["databaseId"]["S"]) + 1
+        page = self.databases[start:start + self.page_size]
+        response = {"Items": [{"databaseId": {"S": database_id}} for database_id in page]}
+        if start + self.page_size < len(self.databases):
+            response["LastEvaluatedKey"] = {"databaseId": {"S": page[-1]}}
         return response
 
     def put_item(self, **kwargs):
@@ -185,8 +203,23 @@ def seed():
         _stored("broken-api", ("role", "broken"), "api", [], raw_criteria_and="not json"),
         _stored("list-route-api", ("role", "list-route"), "api", [_route("is_one_of", ["/x", "/buckets"])]),
         _stored("alice-api", ("user", "alice"), "api", [_route("equals", "/buckets")]),
-        _stored("alice-asset", ("user", "alice"), "asset", [{"field": "databaseId", "operator": "equals",
-                                                              "value": "db-a"}]),
+        _stored("alice-asset", ("user", "alice"), "asset",
+                [{"field": "databaseId", "operator": "equals", "value": "db-a"}]),
+        # The database routes: create, update on a database the deployment holds, update only on one it
+        # does not hold or holds archived, and a create the role is denied.
+        _stored("creator-api", ("role", "creator"), "api", [_route("equals", "/database")],
+                permissions=[("POST", "allow")]),
+        _stored("db-editor-api", ("role", "db-editor"), "api", [_route("starts_with", "/database/db-a")],
+                permissions=[("GET", "allow"), ("PUT", "allow")]),
+        _stored("future-db-editor-api", ("role", "future-db-editor"), "api",
+                [_route("starts_with", "/database/db-z")], permissions=[("PUT", "allow")]),
+        _stored("archived-db-editor-api", ("role", "archived-db-editor"), "api",
+                [_route("starts_with", "/database/db-old")], permissions=[("PUT", "allow")]),
+        _stored("create-denied-allow", ("role", "create-denied"), "api", [_route("starts_with", "/")],
+                permissions=[("POST", "allow")]),
+        _stored("create-denied-deny", ("role", "create-denied"), "api", [_route("equals", "/database")],
+                permissions=[("POST", "deny")]),
+        _stored("bob-api", ("user", "bob"), "api", [_route("ends_with", "/db-b")], permissions=[("PUT", "allow")]),
     ]
 
 
@@ -202,15 +235,17 @@ def _read_report(path):
 def run_step(step, table, dry_run, output_dir):
     CURRENT_TABLE["table"] = table
     before = copy.deepcopy(table.items)
-    result = step.run_bucket_read_constraints(table, TABLE, dry_run, output_dir)
+    result = step.run_bucket_read_constraints(table, TABLE, dry_run, output_dir, database_table=DATABASE_TABLE)
     unchanged = all(table.items.get(cid) == item for cid, item in before.items())
     return {
         "counts": result["counts"],
+        "routes": result["routes"],
         "report": os.path.basename(result["report"]),
         "reportLines": _read_report(result["report"]),
         "puts": [{"item": _plain(call["item"]), "condition": call["condition"], "table": call["table"]}
                  for call in table.puts()],
         "queries": [call["objectType"] for call in table.calls if call["op"] == "query"],
+        "databaseScans": len([call for call in table.calls if call["op"] == "scan"]),
         "existingItemsUnchanged": unchanged,
         "itemCount": len(table.items),
         "exitStatus": step.exit_status(result),
@@ -234,6 +269,7 @@ def run_main(migration, scratch, name, argv_extra, dry_run_config):
     config_path = os.path.join(scratch, f"{name}-config.json")
     with open(config_path, "w", encoding="utf-8") as config:
         json.dump({"resource_names_ssm_param_prefix": None, "constraints_storage_table_name": TABLE,
+                   "database_storage_table_name": DATABASE_TABLE,
                    "bucket_read_constraints_output_dir": output_dir, "dry_run": dry_run_config}, config)
     collect = _Collect()
     root = logging.getLogger()
