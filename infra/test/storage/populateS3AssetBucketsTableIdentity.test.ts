@@ -362,6 +362,10 @@ describe("overlap with stored registrations (#1978)", () => {
     test("a configured registration that already has a row is not refused for a stored overlap", () => {
         const result = results.storedOverlapNotRefused;
         expect(result.ok).toBe(true);
+        // Reported, not refused.
+        expect(result.data?.StoredOverlaps).toBe(
+            "b prefix assets/team1/ overlaps stored registration id-old (prefix assets/)"
+        );
         expect(rowOf(result, "id-old")[0]).toMatchObject({ retired: true, isDefault: false });
         expect(rowOf(result, "id-t")[0]).toMatchObject({ retired: null, isDefault: true });
     });
@@ -369,6 +373,7 @@ describe("overlap with stored registrations (#1978)", () => {
     test("the rollback of a refused addition succeeds", () => {
         const result = results.rollbackAfterRefusedAdd;
         expect(result.ok).toBe(true);
+        expect(result.data?.StoredOverlaps).toBe("");
         expect(rowOf(result, "id-old")[0].retired).toBe(true);
     });
 });

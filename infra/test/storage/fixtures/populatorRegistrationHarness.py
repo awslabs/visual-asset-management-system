@@ -323,14 +323,16 @@ def main():
             [bucket("b", "assets2/", default=True, defaultSyncDatabaseId="db1")],
         ),
         # A configured registration that already has a row is not refused for an overlap that is
-        # already stored (a deployment upgraded with it, or a later deployment of the same config).
+        # already stored: a release before the check kept b:assets/ active after its entry moved to
+        # b:assets/team1/. The same input is the rollback of that upgrade (the previous properties name
+        # the same stored pair), so refusing it would also leave the stack unable to roll back.
         "storedOverlapNotRefused": run_case(
             source,
             [row("id-old", "b", "assets/", isDefault=True), row("id-t", "b", "assets/team1/")],
             [bucket("b", "assets/team1/", default=True, defaultSyncDatabaseId="db1")],
         ),
-        # The rollback of the deployment nestedInRetired fails: CloudFormation sends the previous
-        # properties to the updated function, and they name only pairs the previous deployment wrote.
+        # Control: the rollback of the refused addition nestedInRetired. CloudFormation sends the
+        # previous properties to the updated function; they add nothing, so nothing is refused.
         "rollbackAfterRefusedAdd": run_case(
             source,
             [row("id-old", "b", "assets/", retired=True), row("id-c", "c", "/", isDefault=True)],

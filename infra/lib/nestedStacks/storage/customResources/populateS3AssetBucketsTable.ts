@@ -148,19 +148,16 @@ def stored_overlap_error(configured_pairs, existing_groups, runtime_rows):
     row), or None. Assets of that row keep its bucketId and their locations under its prefix, so a
     second registration over the same objects would leave a file with two owners.
 
-    A configured pair that already has a row is not checked: its overlap, if any, is already stored,
-    and refusing it would fail every later deployment and the rollback of a failed one. CloudFormation
-    rolls a failed update back by sending the previous properties to this (already updated) function,
-    and those name only pairs the previous deployment wrote."""
-    unmatched = [row for pair, rows in existing_groups.items() if pair not in configured_pairs
-                 for row in rows]
-    unmatched.extend(runtime_rows)
+    A configured pair that already has a row is not refused (stored_overlap_warnings reports it): its
+    overlap is already stored, for example by a release that kept a removed registration active, and
+    refusing it would fail that deployment's upgrade and every later deployment. It would also fail the
+    rollback: CloudFormation rolls a failed update back by sending the previous properties to this
+    (already updated) function, and those name the same stored pairs."""
+    unmatched = unconfigured_rows(configured_pairs, existing_groups, runtime_rows)
     added = [pair for pair in configured_pairs if pair not in existing_groups]
     for bucket_name, prefix in sorted(added):
-        for row in sorted(unmatched, key=lambda r: str(r.get('bucketId'))):
-            other_name, other_prefix = registration_pair(row)
-            if other_name != bucket_name or not prefixes_overlap(prefix, other_prefix):
-                continue
+        for row in overlapping_rows(bucket_name, prefix, unmatched):
+            other_prefix = registration_pair(row)[1]
             if is_runtime(row):
                 state, way_out = 'added at run time', ''
             elif row.get(RETIRED_FIELD) is True:
@@ -175,6 +172,30 @@ def stored_overlap_error(configured_pairs, existing_groups, runtime_rows):
                 ". See 'Overlapping bucket registrations' in the external bucket setup guide."
             )
     return None
+
+def unconfigured_rows(configured_pairs, existing_groups, runtime_rows):
+    """The stored rows the configuration does not include: rows of pairs it does not name (retired, or
+    retired by this deployment) and every runtime row."""
+    unmatched = [row for pair, rows in existing_groups.items() if pair not in configured_pairs
+                 for row in rows]
+    return unmatched + list(runtime_rows)
+
+def overlapping_rows(bucket_name, prefix, rows):
+    """The rows of bucket_name whose canonical prefix equals or nests with prefix, by bucketId."""
+    return [row for row in sorted(rows, key=lambda r: str(r.get('bucketId')))
+            if registration_pair(row)[0] == bucket_name and prefixes_overlap(prefix, registration_pair(row)[1])]
+
+def stored_overlap_warnings(configured_pairs, existing_groups, runtime_rows):
+    """One line per configured pair that already has a row and overlaps a stored row of the same bucket
+    that the configuration does not include. Such an overlap was stored before the deployment checked
+    for it; it is reported, not refused (stored_overlap_error)."""
+    unmatched = unconfigured_rows(configured_pairs, existing_groups, runtime_rows)
+    lines = []
+    for bucket_name, prefix in sorted(pair for pair in configured_pairs if pair in existing_groups):
+        for row in overlapping_rows(bucket_name, prefix, unmatched):
+            lines.append(str(bucket_name) + " prefix " + prefix + " overlaps stored registration " +
+                         str(row.get('bucketId')) + " (prefix " + registration_pair(row)[1] + ")")
+    return lines
 
 def write_owned_fields(table, key, item):
     """Write a configured row: SET every owned field the item carries and REMOVE every owned field it
@@ -375,6 +396,12 @@ def lambda_handler(event, context):
             if overlap:
                 logger.error(overlap)
                 raise Exception(overlap)
+        stored_overlaps = stored_overlap_warnings(
+            {(b.get('bucketName'), canonical_prefix(b.get('prefix'))) for b in buckets},
+            existing_groups, runtime_rows) if request_type in ('Create', 'Update') else []
+        for line in stored_overlaps:
+            logger.warning("Stored overlapping registrations: " + line + ". Review the assets of the stored "
+                           "registration; see 'Overlapping bucket registrations' in the external bucket setup guide.")
 
         # Process each bucket
         table = dynamodb.Table(table_name)
@@ -515,6 +542,7 @@ def lambda_handler(event, context):
                 'Message': f"Successfully processed {len(buckets)} buckets",
                 'RetiredRegistrations': ', '.join(sorted(retired))[:REPORT_FIELD_MAX_CHARS],
                 'DuplicateRegistrations': '; '.join(duplicate_reports)[:REPORT_FIELD_MAX_CHARS],
+                'StoredOverlaps': '; '.join(stored_overlaps)[:REPORT_FIELD_MAX_CHARS],
             }
         }
     except Exception as e:
