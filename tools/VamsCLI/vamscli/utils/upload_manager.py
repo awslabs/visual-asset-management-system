@@ -12,7 +12,62 @@ from ..constants import DEFAULT_PARALLEL_UPLOADS, DEFAULT_RETRY_ATTEMPTS
 from .exceptions import FileUploadError, PartUploadError
 from .file_processor import UploadSequence, FileInfo, format_file_size
 from .api_client import APIClient
-from .logging import log_warning
+from .logging import log_debug, log_warning, scrub_text
+
+
+# Why a file was not stored, as `file upload` and `sync file push` print it (#1072). The reasons reach
+# stdout, which scripts and the connectors capture, so credential-shaped text is masked and the length
+# is bounded. An Amazon S3 error body is never part of a reason: a refused presigned part upload can
+# echo the canonical request, which carries the URL's security token.
+MAX_FAILURE_REASON_CHARS = 500
+NO_REASON_GIVEN = "no reason given"
+
+
+def _failure_reason(message: Any) -> str:
+    """`message` as a reason a command can print: masked, bounded, never empty."""
+    text = scrub_text(str(message).strip()) if message else ""
+    if not text:
+        return NO_REASON_GIVEN
+    if len(text) > MAX_FAILURE_REASON_CHARS:
+        text = text[:MAX_FAILURE_REASON_CHARS - 3] + "..."
+    return text
+
+
+def _failed_file_errors(failed_keys: List[str], reasons: Dict[str, Any],
+                        default: Any = None) -> List[Dict[str, str]]:
+    """The `failed_file_errors` entries of a sequence result: one per failed file, in `failed_keys`
+    order, with the reason recorded for it or `default`."""
+    return [{"relative_key": key, "error": _failure_reason(reasons.get(key) or default)}
+            for key in failed_keys]
+
+
+def failed_file_reasons(result: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Every failed file of an upload result with the reason it failed, as
+    `[{"relative_key", "error"}]`.
+
+    Reads each `sequence_results` entry's `failed_file_errors`, falling back to the sequence's own
+    `error` and then to `NO_REASON_GIVEN`, so a result built before `failed_file_errors` existed still
+    lists every failed file."""
+    entries = []
+    for sequence in (result or {}).get("sequence_results") or []:
+        if not isinstance(sequence, dict):
+            continue
+        recorded = {entry.get("relative_key"): entry.get("error")
+                    for entry in sequence.get("failed_file_errors") or [] if isinstance(entry, dict)}
+        for key in sequence.get("failed_files") or []:
+            entries.append({"relative_key": key,
+                            "error": recorded.get(key) or _failure_reason(sequence.get("error"))})
+    return entries
+
+
+def _s3_error_code(body: str) -> Optional[str]:
+    """The `<Code>` of an Amazon S3 XML error body, if it has one."""
+    start = body.find("<Code>") if isinstance(body, str) else -1
+    if start < 0:
+        return None
+    end = body.find("</Code>", start)
+    code = body[start + len("<Code>"):end] if end > start else ""
+    return code if code.isalnum() and len(code) <= 64 else None
 
 
 class PartUploadInfo:
@@ -251,6 +306,7 @@ class UploadManager:
         completion_files = []
         successful_files = set()
         failed_files = set()
+        file_errors: Dict[str, str] = {}  # why each failed file was not stored (#1072)
         
         # Group parts by file
         file_parts = defaultdict(list)
@@ -292,6 +348,10 @@ class UploadManager:
                 # completing this would store a file that exists, has a plausible size, and is wrong.
                 # Fail it instead, which surfaces in failed_files and makes the command exit non-zero.
                 failed_files.add(file_key)
+                file_errors[file_key] = (
+                    f"the upload initialization returned {len(parts)} part upload URL(s) for a file "
+                    f"that needs {len(planned_parts)}, so the file was not stored"
+                )
                 log_warning(
                     f"Upload of {file_key} is incomplete and was NOT stored: the upload "
                     f"initialization returned {len(parts)} part upload URL(s) for a file needing "
@@ -319,6 +379,12 @@ class UploadManager:
                     })
                 else:
                     failed_files.add(file_key)
+                    failed_part = next((p for p in sorted(parts, key=lambda p: p.part_number)
+                                        if p.status != "completed"), None)
+                    file_errors[file_key] = (
+                        f"part {failed_part.part_number} of {len(parts)} did not upload: "
+                        f"{failed_part.error or NO_REASON_GIVEN}"
+                    )
         
         # Complete upload if we have any successful files (run synchronous API call in executor).
         # Bounded by the API semaphore (authorizer-hitting call), like initialize.
@@ -375,6 +441,7 @@ class UploadManager:
                     successful_files.discard(key)
                     failed_files.add(key)
                     demoted.add(key)
+                    file_errors[key] = entry.get("error") or "refused at completion, with no reason given"
                     log_warning(
                         f"Upload of {key} was rejected at completion and is NOT stored: "
                         f"{entry.get('error') or 'no reason given'}"
@@ -393,6 +460,9 @@ class UploadManager:
                 unstored = sorted(successful_files)
                 failed_files.update(unstored)
                 successful_files.clear()
+                server_message = body.get("message") if isinstance(body.get("message"), str) else None
+                for key in unstored:
+                    file_errors[key] = server_message or "the server reported that this upload stored no file"
                 log_warning(
                     f"The server reported overallSuccess=False for this upload, so its "
                     f"{len(unstored)} file(s) are NOT stored"
@@ -404,11 +474,13 @@ class UploadManager:
         if self.progress_callback:
             self.progress_callback(progress)
         
+        failed_list = list(failed_files)
         return {
             "sequence_id": sequence.sequence_id,
             "upload_id": init_result.upload_id,
             "successful_files": list(successful_files),
-            "failed_files": list(failed_files),
+            "failed_files": failed_list,
+            "failed_file_errors": _failed_file_errors(failed_list, file_errors),
             "completion_result": completion_result,
             "total_parts": len(part_uploads),
             "successful_parts": sum(1 for p in part_uploads if p.status == "completed"),
@@ -445,11 +517,13 @@ class UploadManager:
             return await self._complete_sequence(init_result, database_id, asset_id, upload_type, progress)
             
         except Exception as e:
+            keys = [f.relative_key for f in sequence.files]
             return {
                 "sequence_id": sequence.sequence_id,
-                "error": str(e),
+                "error": _failure_reason(e),
                 "successful_files": [],
-                "failed_files": [f.relative_key for f in sequence.files]
+                "failed_files": keys,
+                "failed_file_errors": _failed_file_errors(keys, {}, default=e),
             }
     
     async def _upload_part_with_retry(self, part_upload: PartUploadInfo, 
@@ -477,7 +551,8 @@ class UploadManager:
                         return
                         
                     except Exception as e:
-                        part_upload.error = str(e)
+                        # A timeout's text is empty, so the class names it in the printed reason.
+                        part_upload.error = str(e) or type(e).__name__
                         
                         if attempt < self.max_retries:
                             # Wait before retry with exponential backoff
@@ -519,8 +594,15 @@ class UploadManager:
         # Upload to S3
         async with self.session.put(part_upload.upload_url, data=data) as response:
             if response.status != 200:
+                # The error's text becomes the file's printed reason, so it names the status and the
+                # S3 error code only. The body goes to the debug log, which masks credentials: a
+                # refused presigned request can echo its canonical request, security token included.
+                body = await response.text()
+                log_debug(f"Part {part_upload.part_number} of {part_upload.file_info.relative_key} "
+                          f"answered HTTP {response.status}: {body}")
+                code = _s3_error_code(body)
                 raise PartUploadError(
-                    f"Part upload failed with status {response.status}: {await response.text()}"
+                    f"Amazon S3 answered HTTP {response.status}" + (f" ({code})" if code else "")
                 )
             
             # Extract ETag from response headers
@@ -594,9 +676,10 @@ class UploadManager:
         except Exception as e:
             sequence_results = [{
                 "sequence_id": seq.sequence_id,
-                "error": str(e),
+                "error": _failure_reason(e),
                 "successful_files": [],
-                "failed_files": [f.relative_key for f in seq.files]
+                "failed_files": [f.relative_key for f in seq.files],
+                "failed_file_errors": _failed_file_errors([f.relative_key for f in seq.files], {}, default=e),
             } for seq in all_sequences_ordered]
 
         # Handle any exceptions in results.
@@ -607,11 +690,13 @@ class UploadManager:
         for i, result in enumerate(sequence_results):
             if isinstance(result, Exception):
                 failed_sequence = all_sequences_ordered[i]
+                keys = [f.relative_key for f in failed_sequence.files]
                 final_results.append({
                     "sequence_id": failed_sequence.sequence_id,
-                    "error": str(result),
+                    "error": _failure_reason(result),
                     "successful_files": [],
-                    "failed_files": [f.relative_key for f in failed_sequence.files]
+                    "failed_files": keys,
+                    "failed_file_errors": _failed_file_errors(keys, {}, default=result),
                 })
             else:
                 final_results.append(result)
@@ -657,6 +742,10 @@ class UploadManager:
                 "error": "files unaccounted for by any sequence result",
                 "successful_files": [],
                 "failed_files": unaccounted,
+                "failed_file_errors": _failed_file_errors(
+                    unaccounted, {},
+                    default="neither confirmed nor reported failed by its upload sequence, so it is "
+                            "treated as not stored"),
             })
 
         return {
