@@ -103,7 +103,7 @@ class TestReading:
     def test_a_legacy_slashed_row_still_names_the_plain_key(self, aws, monkeypatch):
         monkeypatch.setattr(av, "asset_file_versions_table", _versions_table(ROWS))
         files = {f["versionId"]: f["relativeKey"] for f in av.get_asset_file_versions(DB, ASSET, "1")["files"]}
-        assert av.object_key_for(PREFIX, files["v-legacy"]) == f"{PREFIX}y.txt"
+        assert av.object_key_for_path(PREFIX, files["v-legacy"]) == f"{PREFIX}y.txt"
 
     @pytest.mark.parametrize("requested, expected", [("x.txt", "v-plain"), ("/x.txt", "v-plain"),
                                                      ("//x.txt", "v-empty-segment"), ("/y.txt", "v-legacy")])
