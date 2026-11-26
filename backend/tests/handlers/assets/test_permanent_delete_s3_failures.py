@@ -490,7 +490,8 @@ def files(s3, aux, monkeypatch):
 
 
 def _prefix_metadata_paths(files):
-    """Paths whose metadata the prefix delete removed, whether one at a time or in a batch."""
+    """Paths whose metadata the prefix delete removed, whether one at a time or in a batch. A batch names each
+    file by its listed path ('/sub/y.txt'; '//x' for a key with an empty segment after the location, #1977)."""
     single = [call.args[2] for call in files.delete_file_metadata.call_args_list]
     batched = [path for call in files.delete_files_metadata.call_args_list for path in call.args[2]
                if not path.endswith("/")]
@@ -506,9 +507,9 @@ class TestFilePrefixDeleteStopsWhenS3KeepsObjects:
             af.delete_file("db1", "a1", "/sub/", True, True, CLAIMS)
 
         assert str(raised.value).endswith(PREFIX_MESSAGE)
-        assert _prefix_metadata_paths(files) == ["sub/y.txt"]
+        assert _prefix_metadata_paths(files) == ["/sub/y.txt"]
         files.delete_file_metadata.assert_not_called()
-        files.delete_file_version_records.assert_called_once_with("db1", "a1", ["sub/y.txt"])
+        files.delete_file_version_records.assert_called_once_with("db1", "a1", ["/sub/y.txt"])
         assert _aux_prefixes(files.aux) == ["db1/proj/a/sub/y.txt/preview/"]
         files.send_subscription_email.assert_not_called()
         assert _keys_under(files.client, "proj/a/sub/") == ["proj/a/sub/z.txt"]
@@ -529,7 +530,7 @@ class TestFilePrefixDeleteStopsWhenS3KeepsObjects:
 
         assert response.success is True
         assert sorted(response.affectedFiles) == ["sub/y.txt", "sub/z.txt"]
-        assert _prefix_metadata_paths(files) == ["sub/y.txt", "sub/z.txt"]
+        assert _prefix_metadata_paths(files) == ["/sub/y.txt", "/sub/z.txt"]
         assert _aux_prefixes(files.aux) == ["db1/proj/a/sub/"]
         files.send_subscription_email.assert_called_once_with("db1", "a1")
 
@@ -954,8 +955,8 @@ class TestTheFilePrefixDeleteLeavesANestedAssetsKeys:
         assert str(raised.value).endswith(PREFIX_MESSAGE)
         assert _keys_under(files.client, "proj/a/sub/") == [DEEP_KEY, "proj/a/sub/z.txt"]
         assert _versions(files.client, DEEP_KEY) == deep_versions
-        assert _prefix_metadata_paths(files) == ["sub/y.txt"]
-        files.delete_file_version_records.assert_called_once_with("db1", "a1", ["sub/y.txt"])
+        assert _prefix_metadata_paths(files) == ["/sub/y.txt"]
+        files.delete_file_version_records.assert_called_once_with("db1", "a1", ["/sub/y.txt"])
         assert _aux_prefixes(files.aux) == ["db1/proj/a/sub/y.txt/preview/"]
 
     def test_a_refused_nested_key_is_not_a_failure(self, files):

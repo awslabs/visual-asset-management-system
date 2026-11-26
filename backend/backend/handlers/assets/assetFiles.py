@@ -2359,7 +2359,10 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
     Args:
         databaseId: The database ID
         assetId: The asset ID
-        file_paths: List of relative file paths (with or without leading slash)
+        file_paths: The files' paths in the asset (the listed path, or the path without its leading slash).
+            Rows are matched by version_entry_key, exactly one leading slash removed: '/x', 'x' and a legacy
+            '/x' row are one file, and '//x' (the key with an empty segment after the location) another, so
+            deleting one never deletes the other's rows (#1977).
 
     Returns:
         Number of records deleted
@@ -2370,17 +2373,15 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
     deleted_count = 0
     db_asset_key = f"{databaseId}:{assetId}"
 
-    # A row's fileKey is the file's path without a leading slash; a version built from a file list
-    # before #1795 stored the path as the caller wrote it, often with the slash. Paths are compared
-    # without the slash, and each row is deleted by the key it is stored under.
+    # A row's fileKey is the stored form ('x', '//x'); a version built from a file list before #1795 stored
+    # the path as the caller wrote it, often with the slash. Paths and rows are compared by
+    # version_entry_key, and each row is deleted by the key it is stored under.
     normalized_paths = set()
     for fp in file_paths:
         fp_clean = fp.strip()
-        if fp_clean.endswith('/'):
+        if fp_clean.endswith('/') or names_no_file(fp_clean):
             continue
-        fp_clean = fp_clean.lstrip('/')
-        if fp_clean:
-            normalized_paths.add(fp_clean)
+        normalized_paths.add(version_entry_key(fp_clean))
 
     if not normalized_paths:
         return 0
@@ -2395,7 +2396,7 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
         while True:
             response = asset_version_files_table.query(**query_kwargs)
             for item in response.get('Items', []):
-                if str(item.get('fileKey', '')).lstrip('/') in normalized_paths:
+                if version_entry_key(item.get('fileKey', '')) in normalized_paths:
                     records_to_delete.append(item)
 
             if 'LastEvaluatedKey' in response:
@@ -2430,8 +2431,9 @@ def delete_files_metadata(databaseId: str, assetId: str, relative_file_paths: Li
     ``DatabaseIdAssetIdFilePathIndex``, so only the rows of those files are read. Above that, the asset's
     rows are read from the ``DatabaseIdAssetIdIndex`` one page of at most ``FILE_RECORDS_DELETE_PAGE_SIZE``
     rows at a time, and each page's rows of the given files are deleted before the next page is read, so
-    memory stays flat however large the asset. Only the leading ``/`` of a path is normalized; a path is
-    otherwise matched as stored. Folder paths and an empty path (the asset's own metadata) are skipped.
+    memory stays flat however large the asset. A path is the file's listed path: a ``/`` is added when it has
+    none, and repeated leading slashes are kept, so ``//x`` (the key with an empty segment after the location)
+    is not ``/x`` (#1977). Folder paths and a path made only of ``/`` (the asset's own metadata) are skipped.
     Failures are logged, not raised.
 
     Args:
@@ -2444,9 +2446,10 @@ def delete_files_metadata(databaseId: str, assetId: str, relative_file_paths: Li
     """
     composite_keys = set()
     for path in relative_file_paths or []:
-        path = (path or '').lstrip('/')
-        if path and not path.endswith('/'):
-            composite_keys.add(f"{databaseId}:{assetId}:/{path}")
+        path = path or ''
+        path = path if path.startswith('/') else '/' + path
+        if path.strip('/') and not path.endswith('/'):
+            composite_keys.add(f"{databaseId}:{assetId}:{path}")
     if not composite_keys:
         return 0
 
@@ -2590,6 +2593,8 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     
     # Delete file(s)
     affected_files = []
+    # The deleted files' listed paths, for their metadata and version records
+    deleted_paths = []
     incomplete = None
     kept_previews = []
     
@@ -2613,11 +2618,13 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         else:
             delete_auxiliary_files_of_keys(databaseId, [key for key in deleted_keys if contains(base_key, key)])
         
-        # Convert full keys to relative paths and delete the metadata of non-folder files
+        # Convert full keys to relative paths and delete the metadata of non-folder files, by each file's
+        # listed path ('//x' for '{location}/x', #1977)
         for key in deleted_keys:
             if contains(base_key, key):
-                affected_files.append(_relative_to_location(base_key, key).lstrip('/'))
-        delete_files_metadata(databaseId, assetId, affected_files)
+                deleted_paths.append(_relative_to_location(base_key, key))
+                affected_files.append(deleted_paths[-1].lstrip('/'))
+        delete_files_metadata(databaseId, assetId, deleted_paths)
     else:
         # Check if this is a preview file - don't allow direct operations on preview files
         if is_preview_file(file_path):
@@ -2644,6 +2651,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
                 rel_preview_path = _relative_to_location(base_key, preview_file)
                 
                 affected_files.append(rel_preview_path)
+                deleted_paths.append(rel_preview_path)
                 logger.info(f"Deleted preview file: {rel_preview_path}")
             else:
                 kept_previews.append(preview_file)
@@ -2653,13 +2661,15 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         delete_assetAuxiliary_files(aux_prefix, keep=aux_keep)
         
         affected_files.append(file_path)
+        deleted_paths.append(_relative_to_location(base_key, full_key))
         
         # Delete metadata for the main file (not a folder since we checked earlier), keyed by the
         # file's listed path whichever form the request named it by
         delete_file_metadata(databaseId, assetId, _relative_to_location(base_key, full_key))
 
-    # Clean up version snapshot records in DynamoDB for deleted files
-    delete_file_version_records(databaseId, assetId, affected_files)
+    # Clean up version snapshot records in DynamoDB for deleted files, by their listed paths: the request
+    # may name a file by its full key, and '//x' is not '/x'
+    delete_file_version_records(databaseId, assetId, deleted_paths)
 
     if incomplete is not None:
         raise VAMSGeneralErrorResponse(PREFIX_DELETE_INCOMPLETE_MESSAGE)
