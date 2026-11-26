@@ -1355,7 +1355,7 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
     # of the id admits; the shared ASSET_ID rule stays broader so an id an
     # earlier release stored (for example one ending in '#') stays addressable.
     if not new_asset_id_regex.fullmatch(asset_id):
-        logger.error(
+        logger.warning(
             f"Bucket sync cannot create asset {asset_id!r}: the last character must be "
             "a letter, digit, underscore, comma, apostrophe or hyphen"
         )
@@ -2654,8 +2654,9 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
                     )
                     database_id_to_use = restored_database_id
             if not asset_data and not archived_asset:
-                # Auto-create an asset for a new first-level folder.
-                if not first_folder_valid:
+                # Auto-create an asset for a new first-level folder. The folder name is a new asset id,
+                # so it also follows the new-id rule; an existing asset was found by the lookups above.
+                if not first_folder_valid or not new_asset_id_regex.fullmatch(asset_id):
                     logger.info(f"Asset ID {asset_id} is not valid, skipping processing but forwarding to indexers")
                     return False, True, f"Asset ID {asset_id} is not valid"
                 derived_location = derive_location({'baseAssetsPrefix': base_prefix}, '', asset_id)
