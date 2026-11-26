@@ -51,6 +51,8 @@ for _k, _v in {
 
 from backend.tests.handlers.workflows import test_processOutput_ingestion_outcome as base  # noqa: E402
 from backend.tests.copyEngineRouting import engine, route_to_engine  # noqa: E402
+from backend.tests.handlers.workflows.test_processOutput_retry_records_all_outputs import (  # noqa: E402
+    repeat_safe_copy_on)
 from backend.backend.handlers.assets import uploadFile as uf  # noqa: E402
 
 po = base.po
@@ -182,7 +184,7 @@ def _run_attempts(fail):
         p(uf, "log_file_upload")
         p(uf, "update_asset_attributes")
         p(uf, "s3", s3)
-        p(uf.s3_resource.meta, "client", s3)
+        p(uf, "copy_s3_object_repeat_safe", new=repeat_safe_copy_on(s3))
         p(uf, "copy_jobs_table", return_value=jobs)
         p(uf, "sfn_client", sfn)
         p(uf.loc, "state_machine_arn", return_value="arn:aws:states:us-east-1:1:stateMachine:LargeObjectCopy-x")

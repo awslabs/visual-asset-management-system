@@ -12,7 +12,8 @@ The v2.7 release introduces:
      Amazon S3 object (a single-file asset). Before v2.7 a folder key written without the '/' still
      listed its files. The ``assetLocationFolderKeys`` step finds asset rows whose key has no trailing
      '/', no object at the key and objects under ``{key}/``, reports them, and on a real run appends the
-     '/'. It runs first, before the backfills that walk every asset's location; it saves its scan
+     '/'. It runs first of the location steps (after ``commentSubscriptionKeys``), before the backfills
+     that walk every asset's location; it saves its scan
      position after every page (``--resume``) and writes one report line per finding.
   0b. An asset is created on a folder only: from v2.7 ``POST /assets`` refuses a ``bucketExistingKey``
      that names a file. The ``assetLocationFileToFolder`` step (module ``asset_location_file_to_folder.py``)
@@ -2529,14 +2530,36 @@ COMMENT_SUBSCRIPTION_ATTEMPTS = 5
 # Classes of the JSON Lines report: one per v2.6 comment row, one per subscriber of a v2.6 subscription row.
 COMMENT_SUBSCRIPTION_CLASSES = (
     'placed', 'resolvedByVersions', 'resolvedBySnsTopic', 'resolvedByMapping', 'alreadyPresent', 'alreadyCopied',
-    'ambiguous', 'duplicateCommentId', 'noAsset', 'noSubscribers', 'unreadable',
+    'ambiguous', 'duplicateCommentId', 'notOnTopic', 'noAsset', 'noSubscribers', 'unreadable',
 )
-_COMMENT_SUBSCRIPTION_LEFT = ('ambiguous', 'duplicateCommentId', 'noAsset', 'unreadable')
+_COMMENT_SUBSCRIPTION_LEFT = ('ambiguous', 'duplicateCommentId', 'notOnTopic', 'noAsset', 'unreadable')
+# A permanent asset delete (v2.6 and later) writes an asset history record with this changeSource under
+# '<databaseId>:<assetId>' and removes the asset row, its versions and its V2 comments and subscription row, but
+# not its v2.6 rows. The value mirrors backend/backend/common/assetHistory.py CHANGE_SOURCE_PERMANENT_DELETE.
+ASSET_HISTORY_PARTITION_KEY = 'databaseId:assetId'
+ASSET_HISTORY_PERMANENT_DELETE = 'permanentDelete'
 _RETRYABLE_CANCELLATIONS = {'None', 'ConditionalCheckFailed', 'TransactionConflict'}
+
+
+class HistoryScanError(Exception):
+    """The asset history read failed. Not a ClientError, so it ends the commentSubscriptionKeys step at once."""
 
 
 def _plain(item: Dict) -> Dict:
     return {k: _ASSET_LOCATION_DESERIALIZER.deserialize(v) for k, v in (item or {}).items()}
+
+
+def _iso_before(earlier: str, later: str) -> bool:
+    """Whether the ISO 8601 time ``earlier`` is before ``later`` (UTC when no offset is given). False when either
+    cannot be read, so a deleted candidate is never ruled out on a time that cannot be compared."""
+    def parse(value: str) -> Optional[datetime]:
+        try:
+            parsed = datetime.fromisoformat(str(value).strip().replace('Z', '+00:00'))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    first, second = parse(earlier), parse(later)
+    return first is not None and second is not None and first < second
 
 
 def _wire(value: Dict) -> Dict:
@@ -2613,6 +2636,8 @@ class CommentSubscriptionCopy:
         self.run_id = run_id or uuid.uuid4().hex
         self.current_run_id = self.run_id
         self._candidates: Dict[str, List[str]] = {}
+        self._deletes: Optional[Dict[str, Dict[str, str]]] = None
+        self._deleted: Dict[str, Dict[str, str]] = {}
         self._versions: Dict[Tuple[str, str], Optional[Tuple[set, str]]] = {}
         self._endpoints: Dict[Tuple[str, str], set] = {}
         self._emails: Dict[str, str] = {}
@@ -2636,6 +2661,54 @@ class CommentSubscriptionCopy:
                     databases.add(database_id)
             self._candidates[asset_id] = sorted(databases)
         return self._candidates[asset_id]
+
+    def _permanent_deletes(self) -> Dict[str, Dict[str, str]]:
+        """{assetId: {databaseId: time of its latest permanent delete}} from one paged Scan of the asset history
+        table, filtered on the permanentDelete records and projected to their key and time, read once per run.
+
+        The cost follows the size of the history table (one read per 1 MB page), not the number of databases
+        times the number of asset ids, and it is paid only when some v2.6 row's id has a live candidate.
+
+        A failed read is tried once per run: it raises HistoryScanError, which is not a ClientError, so it is not
+        reported against the row (run_table) but ends the step as an interruption does, and --resume continues
+        from the last saved page with the scan tried again."""
+        if self._deletes is None:
+            deletes: Dict[str, Dict[str, str]] = {}
+            try:
+                for row in _paginate(self.ddb.scan, TableName=self.cfg['asset_history_storage_table_name'],
+                                     FilterExpression='#c = :d', ProjectionExpression='#p, #db, #a, #r',
+                                     ExpressionAttributeNames={'#c': 'changeSource',
+                                                               '#p': ASSET_HISTORY_PARTITION_KEY, '#db': 'databaseId',
+                                                               '#a': 'assetId', '#r': 'recordDate'},
+                                     ExpressionAttributeValues=_wire({':d': ASSET_HISTORY_PERMANENT_DELETE})):
+                    key_database, _, key_asset = _attr_s(row, ASSET_HISTORY_PARTITION_KEY).partition(':')
+                    database_id = _attr_s(row, 'databaseId') or key_database
+                    asset_id = _attr_s(row, 'assetId') or key_asset
+                    if not database_id or not asset_id:
+                        continue
+                    when = _attr_s(row, 'recordDate')
+                    latest = deletes.setdefault(asset_id, {})
+                    latest[database_id] = max(when, latest.get(database_id, ''))
+            except ClientError as e:
+                raise HistoryScanError(
+                    f"could not read the permanentDelete records of the asset history table "
+                    f"({e.response.get('Error', {}).get('Code', 'error')}), so no row of an id a database still "
+                    f"holds was placed past this point") from e
+            self._deletes = deletes
+        return self._deletes
+
+    def deleted_databases(self, asset_id: str) -> Dict[str, str]:
+        """{databaseId: time of its latest permanent delete} for the databases that no longer hold an asset with
+        this id but whose asset history records a permanent delete of it (_permanent_deletes).
+
+        Such a database's asset may own some of the id's v2.6 rows (a permanent delete on v2.7 leaves them), and
+        its versions and topic are gone with it, so its evidence cannot be read. It is counted as a candidate."""
+        if asset_id not in self._deleted:
+            live = set(self.candidate_databases(asset_id))
+            self._deleted[asset_id] = {database_id: when for database_id, when
+                                       in self._permanent_deletes().get(asset_id, {}).items()
+                                       if database_id not in live}
+        return self._deleted[asset_id]
 
     def _asset_row(self, database_id: str, asset_id: str) -> Optional[Dict]:
         for partition in (database_id, f"{database_id}{ARCHIVED_DATABASE_SUFFIX}"):
@@ -2695,35 +2768,55 @@ class CommentSubscriptionCopy:
             self._endpoints[key] = endpoints
         return self._endpoints[key]
 
-    def resolve(self, asset_id: str, evidence: Callable[[str], bool], evidence_class: str
-                ) -> Tuple[Optional[str], str, List[str]]:
+    def resolve(self, asset_id: str, evidence: Callable[[str], bool], evidence_class: str,
+                made: str = '') -> Tuple[Optional[str], str, List[str]]:
         """(databaseId or None, report class, candidates) for a V1 comment row or subscriber of this asset id.
 
-        One candidate database: placed there. Several: the evidence rule, then the operator mapping file
-        (honoured only when it names a candidate); otherwise ambiguous. Never more than one database."""
-        candidates = self.candidate_databases(asset_id)
-        if not candidates:
-            return None, 'noAsset', candidates
+        The candidates are the databases holding the id and the databases whose asset with the id was
+        permanently deleted (deleted_databases), except one deleted before ``made`` (a comment's dateCreated),
+        whose asset was gone when the comment was made. One candidate: placed there; the evidence is not
+        applied to a single candidate (an asset version record can be younger than the comments made on the
+        asset). Several: the evidence rule, then the operator mapping file (honoured only when it names a
+        candidate); otherwise ambiguous. A row the evidence or the mapping gives to a deleted candidate belongs
+        to that deleted asset and is reported noAsset. Never more than one database."""
+        live = self.candidate_databases(asset_id)
+        if not live:
+            return None, 'noAsset', live
+        deleted = [database_id for database_id, when in self.deleted_databases(asset_id).items()
+                   if not made or not _iso_before(when, made)]
+        candidates = sorted(set(live) | set(deleted))
         if len(candidates) == 1:
             return candidates[0], 'placed', candidates
         matching = [database_id for database_id in candidates if evidence(database_id)]
         if len(matching) == 1:
+            if matching[0] in deleted:
+                return None, 'noAsset', candidates
             return matching[0], evidence_class, candidates
         mapped = self.mapping.get(asset_id)
         if mapped in candidates:
+            if mapped in deleted:
+                return None, 'noAsset', candidates
             return mapped, 'resolvedByMapping', candidates
         return None, 'ambiguous', candidates
 
     def place_subscriber(self, asset_id: str, subscriber: str) -> Tuple[Optional[str], str, List[str]]:
         """Where one v2.6 subscriber goes: the database whose asset topic has the subscriber's endpoint (its id
         or its e-mail address in the user table). The mapping file decides only for a subscriber on no
-        candidate's topic, or on several."""
+        candidate's topic, or on several. With one candidate the subscriber must be on its topic too; one who
+        is not (unsubscribed, or the subscription deleted, on v2.7 before the first run) is reported
+        notOnTopic, unless the mapping file names that database."""
         addresses = self._subscriber_addresses([subscriber])
 
         def evidence(database_id: str) -> bool:
+            # A deleted candidate has no asset row, so no topic: it never matches
             return bool(self._topic_endpoints(database_id, asset_id) & addresses)
 
-        return self.resolve(asset_id, evidence, 'resolvedBySnsTopic')
+        database_id, result, candidates = self.resolve(asset_id, evidence, 'resolvedBySnsTopic')
+        if result == 'placed' and not evidence(database_id):
+            if self.mapping.get(asset_id) == database_id:
+                return database_id, 'resolvedByMapping', candidates
+            return None, 'notOnTopic', candidates
+        return database_id, result, candidates
 
     # ----- copy records -----
 
@@ -2823,7 +2916,10 @@ class CommentSubscriptionCopy:
         def evidence(database_id: str) -> bool:
             # The comment's version counts only when some candidate has it: a comment made in the web app
             # before v2.7 may carry another value (the S3 version or the asset id) in place of the asset
-            # version id. The asset must also have existed when the comment was made.
+            # version id. The asset must also have existed when the comment was made. A permanently deleted
+            # candidate's versions are gone, so nothing rules it out: it matches.
+            if database_id in self.deleted_databases(asset_id):
+                return True
             versions = self._asset_versions(database_id, asset_id)
             if versions is None:
                 return False
@@ -2839,8 +2935,11 @@ class CommentSubscriptionCopy:
             copied = self._copy_record(asset_id, source_hash, legacy_source)
             if copied:
                 return [self._reported(record, copied)]
-            database_id, result, candidates = self.resolve(asset_id, evidence, 'resolvedByVersions')
+            database_id, result, candidates = self.resolve(asset_id, evidence, 'resolvedByVersions', made=created)
             record['candidates'] = candidates
+            deleted_candidates = sorted(set(candidates) & set(self.deleted_databases(asset_id))) if candidates else []
+            if deleted_candidates:
+                record['deletedCandidates'] = deleted_candidates
             if database_id is None:
                 return [dict(record, result=result)]
             record['databaseId'] = database_id
@@ -2936,6 +3035,10 @@ class CommentSubscriptionCopy:
                     continue
                 database_id, result, candidates = self.place_subscriber(asset_id, subscriber)
                 lines[subscriber] = dict(line, candidates=candidates, result=result)
+                deleted_candidates = (sorted(set(candidates) & set(self.deleted_databases(asset_id)))
+                                      if candidates else [])
+                if deleted_candidates:
+                    lines[subscriber]['deletedCandidates'] = deleted_candidates
                 if database_id is not None:
                     lines[subscriber]['databaseId'] = database_id
                     pending.setdefault(database_id, []).append(subscriber)
@@ -3061,6 +3164,9 @@ def run_comment_subscription_keys_step(config: dict, args, base_param_prefix, pr
             'asset_versions_storage_table_name': resolve(
                 'asset_versions_storage_table_name', ResourceParamKeys.ASSET_VERSIONS_STORAGE_TABLE),
             'user_storage_table_name': resolve('user_storage_table_name', ResourceParamKeys.USER_STORAGE_TABLE),
+            # The databases whose asset with an id was permanently deleted are candidates too (deleted_databases)
+            'asset_history_storage_table_name': resolve(
+                'asset_history_storage_table_name', ResourceParamKeys.ASSET_HISTORY_STORAGE_TABLE),
         }
         mapping = load_resolution_file(config.get('comment_subscription_resolution_file'))
     except Exception as e:
@@ -3140,10 +3246,11 @@ def run_comment_subscription_keys_step(config: dict, args, base_param_prefix, pr
         logger.info(f"  {copier.legacy_records_found} copy record(s) of a pre-release build found and honoured, "
                     f"{copier.legacy_records_rewritten} rewritten in the hashed form"
                     f"{' (a real run rewrites them)' if dry_run else ''}.")
-    left = sum(counts['ambiguous'] + counts['duplicateCommentId'] for counts in totals.values())
+    left = sum(counts['ambiguous'] + counts['duplicateCommentId'] + counts['notOnTopic']
+               for counts in totals.values())
     if left:
-        logger.info(f"  {left} comment row(s) or subscriber(s) were left in the V1 tables (ambiguous or "
-                    "duplicateCommentId). Name the database of each ambiguous asset id in "
+        logger.info(f"  {left} comment row(s) or subscriber(s) were left in the V1 tables (ambiguous, "
+                    "duplicateCommentId or notOnTopic). Name the database of each ambiguous asset id in "
                     "comment_subscription_resolution_file and run the step again: it copies only what earlier "
                     "runs left.")
     logger.info("=" * 80)
@@ -3154,9 +3261,8 @@ def run_comment_subscription_keys_step(config: dict, args, base_param_prefix, pr
 # CLI
 #######################
 
-STEP_CHOICES = ('assetLocationFolderKeys', 'assetLocationFileToFolder', 'orphanedTriggers', 'vectorBackfill',
-                'metadataBackfill', 'systemPipelineRetirement', 'commentSubscriptionKeys', 'assetLocationIndex',
-                'all')
+STEP_CHOICES = ('commentSubscriptionKeys', 'assetLocationFolderKeys', 'assetLocationFileToFolder', 'orphanedTriggers',
+                'vectorBackfill', 'metadataBackfill', 'systemPipelineRetirement', 'assetLocationIndex', 'all')
 
 
 def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vectors: bool,
@@ -3280,10 +3386,11 @@ Notes:
     assetLocationFolderKeys-<mode>-report.jsonl, and saves its scan position after every page (--resume
     continues from it). Part (b) moves the records of a single-file asset's copy '{key}/{name}' to
     '/{name}/{name}' and marks the asset row done, so no later run moves them again. Run it before users
-    edit metadata on single-file assets. It runs first under --steps all.
-  - assetLocationFileToFolder runs second and converts each asset whose location names a file: in place on
-    the parent folder when it holds only the asset's keys (no S3 write), '/' appended when nothing is at the
-    key, and a move or an include-siblings only for the assets named in
+    edit metadata on single-file assets. It runs first of the location steps under --steps all, after
+    commentSubscriptionKeys.
+  - assetLocationFileToFolder runs right after assetLocationFolderKeys and converts each asset whose location
+    names a file: in place on the parent folder when it holds only the asset's keys (no S3 write), '/'
+    appended when nothing is at the key, and a move or an include-siblings only for the assets named in
     asset_location_file_to_folder_resolutions. Every other layout is reported in
     assetLocationFileToFolder-<mode>-report-<time>.jsonl and left unchanged. A real run that leaves a row
     pending, or fails, makes vectorBackfill and metadataBackfill wait under --steps all.
@@ -3297,11 +3404,15 @@ Notes:
     writes the completion marker), trigger rows examined (orphanedTriggers), is forwarded as the reindexer's
     limit (vectorBackfill), caps rows listed per section (systemPipelineRetirement), and caps V1 rows examined
     per table (commentSubscriptionKeys).
-  - commentSubscriptionKeys is required after the v2.7 deploy on a deployment with comments or subscriptions:
-    until it runs, existing comments do not show and existing subscriptions read as not subscribed (change
-    e-mails keep arriving: they use each asset's topic). It writes commentSubscriptionKeys-<mode>-report.jsonl,
-    saves its scan position after every page (--resume continues from it), never overwrites a V2 row, and
-    never writes or deletes a v2.6 row. Ids several databases hold that the evidence cannot place are left as
+  - commentSubscriptionKeys is required after the v2.7 deploy on a deployment with comments or subscriptions,
+    and runs first under --steps all: until it runs, existing comments do not show and existing subscriptions
+    read as not subscribed (change e-mails keep arriving: they use each asset's topic). Run it right after the
+    deploy; until it has run, do not permanently delete assets or change subscriptions. It writes
+    commentSubscriptionKeys-<mode>-report.jsonl, saves its scan position after every page (--resume continues
+    from it), never overwrites a V2 row, and never writes or deletes a v2.6 row. A database whose asset with an
+    id was permanently deleted counts as a candidate for that id's rows ('deletedCandidates'), and a
+    subscriber of a single candidate is copied only from its asset's topic ('notOnTopic' otherwise). Ids
+    several databases hold that the evidence cannot place are left as
     'ambiguous': name their database in comment_subscription_resolution_file and run the step again. A
     repeat copies only what earlier runs left ('alreadyCopied' for the rest), so it never brings back a
     deleted comment, an unsubscribed user or a deleted subscription.
@@ -3398,6 +3509,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     backfills_metadata = run_metadata_backfill and metadata_plan.action == 'run'
 
     step_plan = []
+    if run_comment_subscription_keys:
+        step_plan.append('commentSubscriptionKeys')
     if run_location_keys:
         step_plan.append('assetLocationFolderKeys')
     if run_file_to_folder:
@@ -3420,8 +3533,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             step_plan.append('metadataBackfill')
     if run_retirement_report:
         step_plan.append('systemPipelineRetirement')
-    if run_comment_subscription_keys:
-        step_plan.append('commentSubscriptionKeys')
     if run_asset_location_index:
         step_plan.append('assetLocationIndex')
 
@@ -3469,7 +3580,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     def _record(step: str, rc: int) -> None:
         outcomes.append((step, "completed" if rc == 0 else f"failed (exit {rc})"))
 
-    # First: the backfills below walk every asset's location, so a folder key gets its '/' before them.
+    # First: comments and subscriptions stay hidden until this step has run, and the asset deletes and
+    # subscription changes users make before it are what it cannot see. It is independent of the location
+    # steps (it reads no location attribute and writes no table they read), and their failure never holds it.
+    if run_comment_subscription_keys:
+        logger.info("")
+        logger.info("##### STEP: Comment and subscription keys #####")
+        rc = run_comment_subscription_keys_step(config, args, base_param_prefix, profile, region, dry_run)
+        _record('commentSubscriptionKeys', rc)
+        if rc != 0:
+            exit_code = rc
+
+    # Then: the backfills below walk every asset's location, so a folder key gets its '/' before them.
     if run_location_keys:
         logger.info("")
         logger.info("##### STEP: Asset location folder keys #####")
@@ -3479,7 +3601,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             exit_code = rc
             location_keys_unfinished = not dry_run
 
-    # Second: the conversion reads the copy records assetLocationFolderKeys moved, and the backfills below
+    # Next: the conversion reads the copy records assetLocationFolderKeys moved, and the backfills below
     # write vectors and metadata at the paths it settles.
     file_to_folder_failed = False
     if run_file_to_folder and location_keys_unfinished:
@@ -3556,15 +3678,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         rc = run_system_pipeline_retirement_step(config, args, base_param_prefix, profile, region,
                                                  dry_run)
         _record('systemPipelineRetirement', rc)
-        if rc != 0:
-            exit_code = rc
-
-    # Independent of the location steps: it reads the asset table's assetIdGSI and the version records only.
-    if run_comment_subscription_keys:
-        logger.info("")
-        logger.info("##### STEP: Comment and subscription keys #####")
-        rc = run_comment_subscription_keys_step(config, args, base_param_prefix, profile, region, dry_run)
-        _record('commentSubscriptionKeys', rc)
         if rc != 0:
             exit_code = rc
 

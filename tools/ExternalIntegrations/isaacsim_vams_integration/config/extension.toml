@@ -14,6 +14,9 @@ reloadable = true
 "omni.kit.uiapp" = {optional = true}
 "isaacsim.asset.importer.urdf" = {optional = true}
 "isaacsim.asset.importer.mjcf" = {optional = true}
+# Loaded first when present so the VAMS connection can be added to the Content window (Isaac Sim 6.1+).
+"omni.kit.window.content_browser" = {optional = true}
+"omni.kit.widget.connection_manager" = {optional = true}
 
 [[python.module]]
 name = "vams.connector.isaacsim"
@@ -23,3 +26,7 @@ name = "vams.connector.isaacsim"
 exts."vams.connector.isaacsim".profile = "default"
 # Optional explicit path to the vamscli executable. Leave empty to use PATH.
 exts."vams.connector.isaacsim".vamscli_path = ""
+# Show VAMS in the Content window under Omniverse Storage once signed in (Isaac Sim 6.1+). Needs grpcio and
+# protobuf in the VAMS CLI's environment (locks/storage/requirements.lock). The Content window keeps its connections in
+# the user's omniverse.toml, so the entry is written there while the connection is on.
+exts."vams.connector.isaacsim".content_window = false

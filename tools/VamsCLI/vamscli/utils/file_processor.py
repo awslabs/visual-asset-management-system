@@ -124,6 +124,22 @@ def validate_file_for_upload(file_path: Path, upload_type: str, relative_key: st
             )
 
 
+def file_name_has_extension(file_path: str, extension: str) -> bool:
+    """
+    Whether a file's name ends with an allowed extension (lower-case, with its leading dot).
+
+    An extension may have several parts (``.tar.gz``), so the name is matched by its ending, not
+    by its last suffix. The part of the name before the extension must hold a character other than
+    a dot: ``.pdf`` and ``..pdf`` have no extension. An entry that does not start with a dot or ends
+    with one matches nothing. Mirrors file_name_has_extension in the VAMS backend
+    (backend/backend/common/assetUploads.py), which refuses the upload.
+    """
+    name = file_path.rsplit('/', 1)[-1].lower()
+    if not extension.startswith('.') or extension.endswith('.') or not name.endswith(extension):
+        return False
+    return name[:-len(extension)].strip('.') != ''
+
+
 def validate_file_extensions(files: List[FileInfo], allowed_extensions: str, upload_type: str = "assetFile") -> None:
     """
     Validate files against allowed extensions from database configuration.
@@ -162,14 +178,11 @@ def validate_file_extensions(files: List[FileInfo], allowed_extensions: str, upl
         if '.previewFile.' in file_info.relative_key:
             continue
         
-        # Get file extension
-        file_ext = Path(file_info.local_path).suffix.lower()
-        
-        # Check if extension is allowed
-        if file_ext not in extensions_list:
+        # The API checks the name the file is stored under, so the relative key is matched
+        if not any(file_name_has_extension(file_info.relative_key, ext) for ext in extensions_list):
             invalid_files.append({
                 'file': file_info.relative_key,
-                'extension': file_ext
+                'extension': Path(file_info.relative_key).suffix.lower()
             })
     
     # Raise error if any files are invalid

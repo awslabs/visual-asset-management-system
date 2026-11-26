@@ -18,7 +18,11 @@ hand-kept list) it:
    prebuilt wheel in an export (flash-attn in the GR00T image) is audited as `name==<version>`, the
    version read from the wheel's file name, when its URL is under an allowed prefix; any other direct URL fails
    the run (see `pin_direct_urls`). A pin with a local version label (`torch==2.10.0+cu128`, from the PyTorch index)
-   is audited as the public release (`drop_local_versions`), since PyPI has no such version.
+   is audited as the public release (`drop_local_versions`), since PyPI has no such version. The environment marker of each pin
+   (`; python_full_version < '3.13'`, `; sys_platform == 'win32'`) is removed first (`drop_markers`), because pip-audit
+   drops a line whose marker is false for the job's interpreter without a finding or a warning. Afterwards every pin of the
+   export must appear in pip-audit's report, or the run fails and names the file, line and package. A package pinned at
+   several versions (a uv export of a forked lock) is audited one version per pip-audit run (`split_duplicate_pins`).
 
 The allowlist is validated first: every entry needs `id`, `package`, `reason`, a `reviewBy` date
 (ISO, not in the past) and `projects`, the uv project directories it applies to (each one a directory
@@ -464,25 +468,105 @@ def drop_local_versions(text):
     )
 
 
+# An exact pin at the start of a requirements line (extras allowed), then an optional environment marker.
+PIN_LINE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==(?P<version>[^\s;\\]+)")
+MARKER_PIN = re.compile(
+    r"^(?P<req>[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[^\]]*\])?==[^\s;\\]+)\s*;.*?(?P<tail>\s+--hash.*|\s*\\)?$"
+)
+
+
+def drop_markers(text):
+    """The requirements text with the environment marker of each `name==version ; <marker>` pin removed.
+
+    pip-audit evaluates a marker against the interpreter that runs the job and drops a line whose marker is
+    false (`typing-extensions==4.15.0 ; python_full_version < '3.13'` under Python 3.13, or a `sys_platform
+    == 'win32'` line on Linux) without a finding or a warning, so that package would go unaudited. The audit
+    answers "does this lock hold a vulnerable version", whatever platform installs it, so every pin is audited
+    as `name==version`. Hash and continuation lines are kept as they are."""
+    lines = []
+    for line in text.split("\n"):
+        match = MARKER_PIN.match(line)
+        if not match:
+            lines.append(line)
+            continue
+        tail = (match.group("tail") or "").strip()
+        lines.append(match.group("req") + (" " + tail if tail else ""))
+    return "\n".join(lines)
+
+
+def pinned_lines(text):
+    """{(canonical name, version): line number} of each exact pin in the requirements text."""
+    pins = {}
+    for number, line in enumerate(text.split("\n"), 1):
+        match = PIN_LINE.match(line)
+        if match:
+            pins.setdefault((canonical_name(match.group("name")), match.group("version")), number)
+    return pins
+
+
+def split_duplicate_pins(text):
+    """The requirements text as a list of texts in which no package is pinned twice.
+
+    A uv export of a lock with several resolution forks lists a package once per fork, each pin behind its own
+    marker (`requests==2.19.0 ; sys_platform == 'win32'` and `requests==2.32.3 ; sys_platform == 'linux'`).
+    Without the markers pip-audit refuses the file ("package requests has duplicate requirements"), so the pins
+    of one name are spread over separate texts, the n-th distinct version of each name in text n, and each text
+    is audited on its own. A pin repeated with the same name and version is kept once. A pin's hash and
+    continuation lines stay with it; every other line (comments, options) is in every text."""
+    blocks = []  # [pin key or None, [lines]]
+    for line in text.split("\n"):
+        match = PIN_LINE.match(line)
+        if match:
+            blocks.append([(canonical_name(match.group("name")), match.group("version")), [line]])
+        elif blocks and (line[:1].isspace() or line.startswith("--hash")) and blocks[-1][0] is not None:
+            blocks[-1][1].append(line)
+        else:
+            blocks.append([None, [line]])
+    seen = {}  # canonical name -> distinct versions in order of appearance
+    layers, plain = [[]], []
+    for key, lines in blocks:
+        if key is None:
+            plain.extend(lines)
+            for layer in layers:
+                layer.extend(lines)
+            continue
+        versions = seen.setdefault(key[0], [])
+        if key[1] in versions:
+            continue
+        versions.append(key[1])
+        index = len(versions) - 1
+        while len(layers) <= index:
+            layers.append(list(plain))
+        layers[index].extend(lines)
+    return ["\n".join(layer) for layer in layers]
+
+
 def audit_export(root, rel_path, pip_audit):
     """Findings for one requirements file: list of (package, version, [ids])."""
     source = os.path.join(root, rel_path)
     with open(source, encoding="utf-8") as handle:
         text = handle.read()
-    pinned = drop_local_versions(pin_direct_urls(text, rel_path))
-    if pinned != text:
-        # pip-audit reads a copy in which each wheel-URL requirement is a name==version pin.
+    pinned = drop_markers(drop_local_versions(pin_direct_urls(text, rel_path)))
+    expected = pinned_lines(pinned)
+    layers = split_duplicate_pins(pinned)
+    if len(layers) == 1 and layers[0] == text:
+        return _audit_file(root, rel_path, rel_path, pip_audit, expected)
+    # pip-audit reads copies in which each wheel-URL requirement is a name==version pin, a local version label
+    # is dropped, no pin carries an environment marker and no package is pinned twice.
+    findings = []
+    for layer in layers:
         handle, copy = tempfile.mkstemp(prefix="uv-export-pinned-", suffix=".txt")
         with os.fdopen(handle, "w", encoding="utf-8") as out:
-            out.write(pinned)
+            out.write(layer)
         try:
-            return _audit_file(root, copy, rel_path, pip_audit)
+            wanted = {k: expected[k] for k in pinned_lines(layer)}
+            findings.extend(_audit_file(root, copy, rel_path, pip_audit, wanted))
         finally:
             os.unlink(copy)
-    return _audit_file(root, rel_path, rel_path, pip_audit)
+    return findings
 
 
-def _audit_file(root, read_path, rel_path, pip_audit):
+def _audit_file(root, read_path, rel_path, pip_audit, expected=None):
     command = pip_audit + ["-r", read_path, "-f", "json"] + PIP_AUDIT_STRICT_ARGS
     result = run(command, root, check=False)
     try:
@@ -493,14 +577,23 @@ def _audit_file(root, read_path, rel_path, pip_audit):
             f"the advisory service may be unreachable: {last_line(result.stderr)}"
         )
     findings = []
+    seen = set()
     for dep in report.get("dependencies", []):
         if "skip_reason" in dep:
             raise AuditError(f"pip-audit skipped {dep.get('name')} in {rel_path}: {dep['skip_reason']}")
+        seen.add((canonical_name(dep.get("name", "")), dep.get("version")))
         for vuln in dep.get("vulns", []):
             ids = [vuln["id"]] + list(vuln.get("aliases") or [])
             findings.append((dep["name"], dep["version"], ids))
     if result.returncode not in (0, 1) or (result.returncode == 1 and not findings):
         raise AuditError(f"pip-audit failed for {rel_path} (exit {result.returncode}): {last_line(result.stderr)}")
+    # Every pin must come back in the report: a pin pip-audit dropped silently was not audited.
+    missing = sorted(
+        (number, key) for key, number in (expected or {}).items() if key not in seen
+    )
+    if missing:
+        names = ", ".join(f"{rel_path}:{number} {key[0]}=={key[1]}" for number, key in missing)
+        raise AuditError(f"pip-audit did not report on {len(missing)} pinned package(s), so they were not audited: {names}")
     return findings
 
 

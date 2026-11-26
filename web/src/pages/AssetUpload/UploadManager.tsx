@@ -44,6 +44,18 @@ import { storedNoFile, UploadOutcome } from "./uploadOutcome";
 import { PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
 import Synonyms from "../../synonyms";
 
+/**
+ * The sequences with no part to upload: every file in them is zero bytes. The part upload reports a
+ * sequence finished only when its last part lands, so these must be completed directly (#787).
+ */
+function sequenceIdsWithoutParts(
+    sequences: { sequenceId: number }[],
+    parts: { sequenceId: number }[]
+): number[] {
+    const withParts = new Set(parts.map((p) => p.sequenceId));
+    return sequences.map((s) => s.sequenceId).filter((id) => !withParts.has(id));
+}
+
 interface UploadManagerProps {
     assetDetail: AssetDetail;
     metadata: Metadata;
@@ -625,6 +637,15 @@ export default function UploadManager({
                     // Wait a tick to ensure state is updated
                     await new Promise((resolve) => setTimeout(resolve, 100));
 
+                    // Complete the sequences of zero-byte files, which the part upload below never
+                    // reports. Read from this run's `sequences`: the `uploadSequences` state this
+                    // effect closed over on mount is still the empty initial list (#787).
+                    if (handleSequenceCompletionRef.current) {
+                        sequenceIdsWithoutParts(sequences, allParts).forEach((sequenceId) =>
+                            handleSequenceCompletionRef.current!(sequenceId)
+                        );
+                    }
+
                     // Step 4: Upload File Parts with sequence completion callback
                     if (allParts.length > 0) {
                         console.log(`Starting upload of ${allParts.length} parts`);
@@ -684,17 +705,12 @@ export default function UploadManager({
                     } else {
                         // No parts to upload (all zero-byte files)
                         console.log(`No parts to upload (all zero-byte files)`);
+                        // Every sequence was completed above.
                         setUploadState((prev) => ({
                             ...prev,
                             uploadStatus: "completed",
                             completionStatus: "in-progress",
                         }));
-                        // Trigger completion for all sequences
-                        if (handleSequenceCompletionRef.current) {
-                            uploadSequences.forEach((seq) =>
-                                handleSequenceCompletionRef.current!(seq.sequenceId)
-                            );
-                        }
                     }
                 } else if (fileItems.length === 0) {
                     // No files to upload
@@ -1232,6 +1248,14 @@ export default function UploadManager({
 
             await new Promise((resolve) => setTimeout(resolve, 100));
 
+            // As in the main upload: complete the sequences of zero-byte files from this run's
+            // `sequences`; the `uploadSequences` this callback closed over is not this run's (#787).
+            if (handleSequenceCompletionRef.current) {
+                sequenceIdsWithoutParts(sequences, allParts).forEach((sequenceId) =>
+                    handleSequenceCompletionRef.current!(sequenceId)
+                );
+            }
+
             if (allParts.length > 0) {
                 console.log(`Starting upload of ${allParts.length} parts`);
                 setUploadState((prev) => ({
@@ -1274,16 +1298,12 @@ export default function UploadManager({
                     }));
                 }
             } else {
+                // Every sequence was completed above.
                 setUploadState((prev) => ({
                     ...prev,
                     uploadStatus: "completed",
                     completionStatus: "in-progress",
                 }));
-                if (handleSequenceCompletionRef.current) {
-                    uploadSequences.forEach((seq) =>
-                        handleSequenceCompletionRef.current!(seq.sequenceId)
-                    );
-                }
             }
         } else if (fileItems.length === 0) {
             const mockResponse: CompleteUploadResponse = {

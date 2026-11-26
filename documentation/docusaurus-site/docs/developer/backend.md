@@ -499,6 +499,8 @@ from common.s3PathPatterns import (
     PREVIEW_FILE_PATTERN,             # '.previewFile.' marker substring
     ALLOWED_PREVIEW_FILE_EXTENSIONS,  # ('.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.bmp')
     TEMPORARY_UPLOAD_PREFIX,          # 'temp-uploads/'
+    staged_upload_key,                # an upload's staging key: '{base}temp-uploads/{upload tag}/{final key}'
+    max_uploaded_file_key_bytes,      # longest uploaded final key for a baseAssetsPrefix (998 at a root)
     PREVIEW_PREFIX,                   # 'previews/' (asset bucket)
     PIPELINES_PREFIX,                 # 'pipelines/' (workflow run I/O in the default bucket)
     AUXILIARY_PREVIEW_PREFIX,         # 'preview/' (auxiliary bucket, singular)
@@ -747,7 +749,7 @@ def customAuthClaimsCheckOverride(claims_and_roles, lambdaRequest):
 
 ## Notification Subscriptions
 
-`handlers/subscription/subscriptionService.py` records who is notified when an asset changes. Each entry is keyed on the event name and the entity (`Asset#{assetId}`) and holds a `subscribers` list; the handler resolves each subscriber to an email address and creates an Amazon SNS `email` subscription on the asset's own topic. `common/snsTopicNames.py` names that topic `AssetTopic{databaseId}-{assetId}-{hash}`: characters SNS does not allow in the asset ID become `-`, `{hash}` is the first 16 hex characters of the asset ID's SHA-256, and the name is shortened before the hash to stay within the 256-character SNS limit. Notification content is the asset name and its current version identifier, sent by `handlers/sendEmail/sendEmail.py`.
+`handlers/subscription/subscriptionService.py` records who is notified when an asset changes. Each entry of `SubscriptionsStorageTableV2` is keyed on the event name and the entity `Asset:<databaseId>:<assetId>` (two databases may hold assets with the same asset ID) and holds a `subscribers` list; the handler resolves each subscriber to an email address and creates an Amazon SNS `email` subscription on the asset's own topic. `common/snsTopicNames.py` names that topic `AssetTopic{databaseId}-{assetId}-{hash}`: characters SNS does not allow in the asset ID become `-`, `{hash}` is the first 16 hex characters of the asset ID's SHA-256, and the name is shortened before the hash to stay within the 256-character SNS limit. Notification content is the asset name and its current version identifier, sent by `handlers/sendEmail/sendEmail.py`.
 
 How a subscriber value becomes an email address:
 

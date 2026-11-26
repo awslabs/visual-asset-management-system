@@ -492,13 +492,13 @@ POST /roles
 
 #### Request body
 
-| Field              | Type    | Required | Description                                                    |
-| ------------------ | ------- | -------- | -------------------------------------------------------------- |
-| `roleName`         | string  | Yes      | Unique role name                                               |
-| `description`      | string  | Yes      | Role description                                               |
-| `source`           | string  | No       | Role source (e.g. `INTERNAL_SYSTEM`)                           |
-| `sourceIdentifier` | string  | No       | Identifier associated with the source                          |
-| `mfaRequired`      | boolean | No       | When `true`, the role's constraints apply only to MFA sessions |
+| Field              | Type    | Required | Description                                                                                                                                                   |
+| ------------------ | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `roleName`         | string  | Yes      | Unique role name: 1-256 characters of letters, digits, spaces, `-`, `.`, and `_` (`^[a-zA-Z0-9\-._\s]{1,256}$`, checked after surrounding spaces are removed) |
+| `description`      | string  | Yes      | Role description                                                                                                                                              |
+| `source`           | string  | No       | Role source (e.g. `INTERNAL_SYSTEM`)                                                                                                                          |
+| `sourceIdentifier` | string  | No       | Identifier associated with the source                                                                                                                         |
+| `mfaRequired`      | boolean | No       | When `true`, the role's constraints apply only to MFA sessions                                                                                                |
 
 #### Request body example
 
@@ -849,6 +849,8 @@ The `/auth/api-keys` routes are the administrative variant of these endpoints. T
 Because `POST /auth/api-keys` accepts any `userId`, including an administrator's, a role that can call it can issue a credential that acts as any user in the deployment. Access to the `/auth/api-keys` routes is therefore equivalent to full administrative access. Grant them only to administrator roles, and give other users the self-service `/auth/user/api-keys` routes for managing their own keys.
 :::
 
+A caller that authenticates with an API key cannot create an API key or change a key's expiration, in either scope and whatever its roles grant, so a leaked key cannot mint its successor or extend itself. `POST` answers `403` `API keys cannot be created with an API key. Sign in through your identity provider to create one.`, and a `PUT` whose body carries `expiresAt` (a clear with `""` on the administrative route included) answers `403` `An API key's expiration cannot be changed with an API key. Sign in through your identity provider to change it.` before the key is read, whether or not it exists. Nothing is written. Listing, reading and deleting keys, and a `PUT` that changes only `description` or `isActive`, follow the route's own authorization: reads, description changes, deactivation and reactivation stay allowed, so a key can still list and revoke itself, and a reactivated key still stops working at its stored `expiresAt`. A user signed in through the deployment's identity provider (Amazon Cognito, or the external OAuth identity provider) is unaffected: automation that rotates or extends keys signs in that way.
+
 API-key create and update — `POST` and `PUT` in both the administrative and the self-service scope — refuse a caller that authenticates with a temporary session key (an API key whose name starts with the reserved prefix `temporary-session-`, minted on a user's behalf by a VAMS component) with `403` `API keys cannot be created or updated with a temporary session key`, so a session credential cannot mint or extend a key. The refusal runs after the route's own authorization; a caller whose own key record cannot be read is answered the generic `500 Internal Server Error`, not that refusal. Because the prefix is reserved, a create request whose `apiKeyName` starts with `temporary-session-` is refused with `400` `API key names starting with the temporary session key prefix are reserved. Please choose a different name.`
 
 ### List API keys
@@ -1018,6 +1020,7 @@ The `/auth/user/api-keys` routes are the self-service variant of the API key end
 -   Created keys are always tied to the authenticated caller -- there is no `userId` field.
 -   An **expiration date is required** on creation and may be at most **365 days** from creation.
 -   Updates cannot clear the expiration and cannot set it beyond 365 days from the key's **original creation date**. After the window elapses, the user must create a new key (rotation).
+-   Creating a key and changing an expiration need a sign-in through the identity provider: a caller that authenticates with an API key is refused both with `403` (see [API keys](#api-keys)).
 
 The administrative routes ([`/auth/api-keys`](#api-keys)) cover every user's keys, accept a `userId` on creation, and treat the expiration date as optional. They are reserved for administrator roles.
 

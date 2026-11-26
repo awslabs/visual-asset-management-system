@@ -1,0 +1,95 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package nvidia.omniverse.storage.filefolder.v1beta;
+
+import "nvidia/omniverse/storage/fileobject/v1beta/fileobject.proto";
+
+option go_package = "pb.api.nvidia.com/omniverse/storage/filefolder/v1beta;storage";
+option java_multiple_files = true;
+option java_outer_classname = "FilefolderServiceProto";
+option java_package = "com.nvidia.omniverse.storage.filefolder.v1beta";
+
+// The FileFolderService is the public API which consuming applications use
+// to perform operations on folders.
+service FileFolderService {
+  // List the content of the storage at the given resource address
+  // (-- api-linter: core::0136::verb-noun=disabled
+  //     aip.dev/not-precedent: A better name would be ListFolder --)
+  rpc List(ListRequest) returns (stream ListResponse);
+  // List the content of the storage at the given resource address, including resource identities and metadata
+  // (-- api-linter: core::0136::verb-noun=disabled
+  //     aip.dev/not-precedent: A better name would be ListStatFolder --)
+  rpc ListStat(ListStatRequest) returns (stream ListStatResponse);
+  // Delete a folder - this must fail if the folder is not empty
+  rpc DeleteFolder(DeleteFolderRequest) returns (DeleteFolderResponse);
+}
+
+// The ListRequest message defines the input parameters for the List() operation
+message ListRequest {
+  // The FolderAddress to list. The semantics are storage specific
+  FolderAddress folder = 1;
+}
+
+// The response of the list operation. This is a streaming response, where each message
+// may contain a size-bounded batch of ResourceInfo entries.
+message ListResponse {
+  // Batch of resource addresses that can be listed (i.e. folders) with List() and ListStat()
+  repeated FolderAddress subfolder_addresses = 1;
+  // Batch of addresses for file objects that can be subjected to Stat() and ReadFromAddress()
+  repeated string sub_resource_addresses = 2;
+}
+
+// The ListStatRequest message defines the input parameters for the ListStat() operation
+message ListStatRequest {
+  // The FolderAddress to list. The semantics are storage specific
+  FolderAddress folder = 1;
+}
+
+// The response of the list operation. This is a streaming response, where each message
+// may contain a size-bounded batch of ResourceInfo entries.
+message ListStatResponse {
+  // Batch of resource addresses that can be listed (i.e. folders)
+  repeated FolderAddress subfolder_addresses = 1;
+  // Batch of ListItem messages with the addresses, and optionally identities and metadata.
+  repeated ListItem entries = 2;
+}
+
+// Supply a FolderAddress for the Folder that is to be deleted
+message DeleteFolderRequest {
+  // Address of the folder to be deleted
+  FolderAddress folder = 1;
+}
+
+// The message struct for the response - the GRPC status will indicate if the operation succeeded
+message DeleteFolderResponse {}
+
+// Each entry in the ListResult delivers at least the ResourceAddress, optionally enriched with
+// the ResourceInfo to allow direct reads without an additional Stat()
+message ListItem {
+  // The resource address of the list item
+  string resource_address = 1;
+
+  // Optionally, the ResourceInfo for that file
+  optional fileobject.v1beta.ResourceInfo resource_info = 2;
+}
+
+// The FolderAddress follows RFC 3986, the URI syntax. This defines how to resolve relative addresses and URIs to form new URIs
+message FolderAddress {
+  // The URI of the folder stored as a string
+  string uri = 1;
+}

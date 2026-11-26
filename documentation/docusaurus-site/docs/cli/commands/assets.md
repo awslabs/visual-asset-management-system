@@ -175,7 +175,7 @@ vamscli assets delete <ASSET_ID> [OPTIONS]
 | `--json-output`    | Flag | No       | Output raw JSON response         |
 
 :::danger[Permanent Deletion]
-This action permanently removes the asset record, all files and versions from Amazon S3, all links and relationships, comments, version history, metadata, and SNS topics. The `--confirm` flag is required. When the command runs in an interactive terminal without `--json-output`, an additional confirmation prompt appears; in a script, pipe or CI job, or with `--json-output`, `--confirm` alone proceeds.
+This action permanently removes the asset record, all files and versions from Amazon S3, all links and relationships, comments, version history, metadata, and SNS topics. When Amazon S3 does not delete every version of the asset's files, the delete is refused and the asset is kept (see below). The `--confirm` flag is required. When the command runs in an interactive terminal without `--json-output`, an additional confirmation prompt appears; in a script, pipe or CI job, or with `--json-output`, `--confirm` alone proceeds.
 :::
 
 When Amazon S3 does not delete every version of the asset's files, for example because a bucket policy denies the delete or the objects are locked, the API refuses the delete with `400` and keeps the asset and the files Amazon S3 kept. The command prints `✗ Delete Refused:` followed by the API's message and a hint, and exits `1`. With `--json-output` it prints one JSON object whose `error_type` is `InvalidAssetDataError`:

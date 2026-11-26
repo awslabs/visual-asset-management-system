@@ -261,6 +261,23 @@ vamscli file delete -d my-database -a my-asset -p "/folder/" --prefix --confirm
 Permanent deletion cannot be undone. To remove a file recoverably, use `vamscli file archive` instead.
 :::
 
+### Delete Refused Because Amazon S3 Kept Files
+
+`vamscli assets delete` or `vamscli file delete` exits `1`, and the asset or file is still there.
+
+**Symptoms:**
+
+-   `✗ Delete Refused:` (`assets delete`) or `✗ File Deletion Error:` (`file delete`), followed by the API's message. With `--json-output`, one JSON object whose `error_type` is `InvalidAssetDataError`.
+-   `vamscli sync file push --allow-delete --permanent-delete` lists the file under `deletes.failed` (on a `✗` line without `--json-output`), goes on with the other files and exits `1`.
+
+**Cause:**
+
+Amazon S3 did not delete every version of the files, for example because a bucket policy denies the delete or the objects are locked. The API refuses the delete with `400` and keeps the asset, and the files Amazon S3 kept keep their records.
+
+**Resolution:**
+
+Remove the cause in Amazon S3 (the bucket policy statement or the object lock), then run the same command again. `vamscli assets get -d my-database my-asset --show-archived` shows the asset that was kept.
+
 ---
 
 ## Recovering Files

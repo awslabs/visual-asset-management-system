@@ -94,7 +94,7 @@ When `--default-bucket-id` is omitted, the CLI lists available buckets and promp
 ### Configuration fields
 
 -   **Metadata restriction** — when `--restrict-metadata-outside-schemas` is set, only metadata fields defined in the database schema can be added to assets.
--   **File extension restriction** — `--restrict-file-uploads-to-extensions` accepts a comma-separated list of extensions with leading dots (e.g., `.pdf,.docx,.jpg`). The special value `.all` bypasses the restriction; an empty or omitted value applies no restriction.
+-   **File extension restriction** — `--restrict-file-uploads-to-extensions` accepts a comma-separated list of extensions with leading dots (e.g., `.pdf,.docx,.jpg`). An extension can contain letters, digits, `_` and further dots (`.x_t`, `.tar.gz`), and a file matches when its name ends with it, case-insensitively. The special value `.all` bypasses the restriction; an empty or omitted value applies no restriction.
 
 ### JSON input format
 

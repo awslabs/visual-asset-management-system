@@ -578,6 +578,8 @@ Each entry in `files` is an object:
 
 A request accepts at most 1,000 files and 1,500 total parts across all files, and at most 10,000 parts per file; a request over any of these is refused with `400`. Because every part's presigned URL carries the file's key, a request whose estimated response is over 5 MiB is also refused with `400` ("Upload request too large; split the files across several requests") even inside those limits; this can happen when keys are long and use non-ASCII characters. Split such a request, or send fewer, larger parts. See [Upload request size limits](../troubleshooting/known-limitations.md#upload-request-size-limits).
 
+A file's key, which is its asset's location followed by its `relativeKey`, may be at most 998 bytes of UTF-8 in a bucket registered at its root, and the length of the bucket's base prefix less than that otherwise. The upload is staged under a longer key that must fit the 1,024-byte Amazon S3 limit. A longer key is refused with `400` (`VAMS General Error: File key is too long to upload: a file key, including its asset location, may be at most N bytes`, where N is the bound for the asset's bucket), and no multipart upload is created for any file in the request. See [Amazon S3 quotas](../additional/quotas.md#amazon-s3).
+
 **Response:**
 
 ```json
@@ -602,15 +604,15 @@ A request accepts at most 1,000 files and 1,500 total parts across all files, an
 
 **Error Responses:**
 
-| Status | Description                                                                                                                          |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, asset not found, blocked file extension or MIME type, or a request over a per-request limit described above.     |
-| `403`  | Not authorized to upload files to this asset.                                                                                        |
-| `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60). |
-| `500`  | Internal server error.                                                                                                               |
+| Status | Description                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, asset not found, a blocked file extension or one the database does not allow, a file key over the upload bound, or a request over a per-request limit described above. |
+| `403`  | Not authorized to upload files to this asset.                                                                                                                                              |
+| `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60).                                                       |
+| `500`  | Internal server error.                                                                                                                                                                     |
 
 :::info[Blocked File Types]
-For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked. The destination file name of a move, rename or copy gets the same extension check.
+For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. The destination file name of a move, rename or copy gets the same extension check. The blocked MIME type list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
 :::
 
 :::info[Single-file assets]
@@ -824,11 +826,18 @@ Returns file metadata without the file body.
 
 **Request Parameters:**
 
-| Parameter    | Location | Type   | Required | Description                                         |
-| ------------ | -------- | ------ | -------- | --------------------------------------------------- |
-| `databaseId` | path     | string | Yes      | Database identifier.                                |
-| `assetId`    | path     | string | Yes      | Asset identifier.                                   |
-| `{proxy+}`   | path     | string | Yes      | The relative file path within the auxiliary bucket. |
+| Parameter    | Location | Type   | Required | Description                                                    |
+| ------------ | -------- | ------ | -------- | -------------------------------------------------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier.                                           |
+| `assetId`    | path     | string | Yes      | Asset identifier.                                              |
+| `{proxy+}`   | path     | string | Yes      | The viewer data path `{file}/preview/{data path}` (see below). |
+
+A file's viewer data lives in its own `preview/` folder, so the path is the file, then `/preview/`, then the data path a pipeline wrote (for example `scans/site.laz/preview/PotreeViewer/metadata.json`). The file part names a file the asset holds in either form, for folder and single-file assets:
+
+-   its path in the asset with its leading `/`, the file list's `relativePath` (`/scans/site.laz`, so the request path has two slashes after `stream`);
+-   its full S3 key, the `key` the file list returns (`vams/a1/scans/site.laz` for an asset in a bucket registered under the base prefix `vams/`), the form the web viewers send for a file the list showed.
+
+A leading `/` marks the path in the asset: `/a1/cloud.laz` in an asset stored at `a1/` is the file `a1/a1/cloud.laz` of a subfolder named like the asset, never `a1/cloud.laz`. A path without a leading `/` that starts with the asset's location key is read as the full key, and any other path as the path in the asset. URL-encode each segment and keep the slashes, so a viewer that reads the files beside `metadata.json` can resolve them. A path that names no file of this asset is refused with `400` and a `message` that contains `Requested file is not part of this asset`, and the data of another asset nested in this asset's folder answers `404`.
 
 **Response:**
 
@@ -836,12 +845,12 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                  |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | The asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). |
-| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable.                           |
-| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                                              |
-| `500`  | Internal server error.                                                                                                                                                       |
+| Status | Description                                                                                                                                                                                                                                                                                  |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | The path names no file of this asset (a `message` that contains `Requested file is not part of this asset`); or the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). |
+| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable.                                                                                                                                           |
+| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                                                                                                                                                              |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                       |
 
 ---
 

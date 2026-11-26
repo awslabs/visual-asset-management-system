@@ -955,7 +955,8 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "number",
         section: "auth",
         advanced: true,
-        min: 1,
+        min: 300,
+        help: "Lifetime of Amazon Cognito ID and access tokens: a whole number of minutes, in seconds, from 300 to 86400 (default 3600 = 1h). Refresh tokens stay at 24h.",
         visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
     },
     {

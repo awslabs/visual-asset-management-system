@@ -41,7 +41,7 @@ npm install
 npm run build
 ```
 
-Node.js 22 bundles npm 10, and the `package.json` files require npm 11.10.0 or later (`engine-strict`), so `npm install` fails with `EBADENGINE` until npm 11 is installed. nvm keeps a separate npm per Node.js version, so run `npm install -g npm@11` after `nvm use`. The install also clones viewer repositories from `github.com`; they are listed on the [Prerequisites](prerequisites.md#network-requirements) page.
+Node.js 22 bundles npm 10, and the `package.json` files accept npm `>=11.10.0 <12` with `engine-strict` on, so `npm install` fails with `EBADENGINE` under npm 10 or npm 12 until npm 11 is installed. npm 12 is not supported: it blocks dependency install scripts unless an `allowScripts` entry approves them, and VAMS has not approved or tested any (see [Prerequisites](prerequisites.md)). npm 11.21 and later print an `install scripts not yet covered by allowScripts` warning for `esbuild` and `@parcel/watcher`; the warning is expected, and npm 11 still runs those scripts. nvm keeps a separate npm per Node.js version, so run `npm install -g npm@11` after `nvm use`. The install also clones viewer repositories from `github.com`; they are listed on the [Prerequisites](prerequisites.md#network-requirements) page.
 
 The build output is written to `web/dist/`, which the CDK infrastructure references during deployment.
 
@@ -246,9 +246,13 @@ When `app.api.apiGatewayRest.customDomain` is enabled, the core stack outputs `A
 3. Sign in with the admin user ID and temporary password.
 4. You will be prompted to set a new password on first login.
 
+:::note[With SAML or OIDC federation]
+With `app.authProvider.useCognito.useSaml` or `useOidc` enabled, the login page shows only the **Login with \{displayName\}** button, which signs users in through your identity provider. The administrator is a native user pool account, so it cannot sign in on that page. Sign in as the administrator with [VamsCLI](../cli/getting-started.md) instead (`vamscli auth login -u <admin user ID>`, which asks for a new password on the first sign-in), and give federated users their roles from there (`vamscli role user create`) or through a default role (`app.authProvider.authorizerOptions.defaultUserRoleName`). A federated user's VAMS user ID is the username Amazon Cognito gives the user at the first sign-in, not the email address; see [role user create](../cli/commands/permissions.md#role-user-create).
+:::
+
 ### Create additional users (optional)
 
-After signing in as the administrator, you can create additional users through the web interface under **Admin - Auth > User Management** (when Amazon Cognito authentication is active). For detailed instructions, see the [Permissions Guide](../user-guide/permissions.md).
+After signing in as the administrator, you can create additional users through the web interface under **Admin - Auth > User Management** (when Amazon Cognito authentication is active). With SAML or OIDC federation, the administrator cannot use that page as the native administrator account: create native users with [`vamscli user cognito create`](../cli/commands/users-and-keys.md#user-cognito-create), or on that page after signing in as a federated user who holds an admin role. Federated users need no account in the pool; Amazon Cognito creates one at their first sign-in. For detailed instructions, see the [Permissions Guide](../user-guide/permissions.md).
 
 ## Multiple deployments in the same account
 

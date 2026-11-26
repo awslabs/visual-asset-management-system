@@ -4,16 +4,19 @@
 """Issue #407, write paths: a resolved S3 key over the 1024-byte limit is refused before the first S3 call.
 
 The request models bound the asset-relative key a caller sends, but S3 measures the RESOLVED key: the
-asset's base key plus the relative part and, for an upload in flight, the ``temp-uploads/`` prefix on
-top. A relative key inside the limit on its own can therefore resolve to a key S3 refuses. Before this
+asset's base key plus the relative part and, for an upload in flight, the ``temp-uploads/`` prefix and
+the upload's 12-character staging folder on top (#1928). A relative key inside the limit on its own can
+therefore resolve to a key S3 refuses. Before this
 guard, upload initialization let that key reach ``create_multipart_upload``; S3 answered
 ``KeyTooLongError``, nothing caught it, and the request was a 500 -- with the batch's earlier files left
 as orphaned multipart uploads. ``create_folder``, ``move_file`` and ``copy_file`` answered a misleading
 400 ("Error creating folder." / "Error checking destination file." / "Error accessing destination
 path...") after one wasted S3 round trip.
 
-Each guard is exercised the same way: the refusal is the generic message the stream and download
-guards already use, the key is not echoed, and the S3 client mock records no call. A paired short-key
+Each guard is exercised the same way: the refusal does not echo the key and the S3 client mock records
+no call. The file operations answer the generic message the stream and download guards use; upload
+initialize names the upload bound instead (#1928): an upload's staging key must fit the S3 limit too, so
+the bound is lower than 1,024 bytes and depends on the bucket's prefix. A paired short-key
 control at the same base key proves the guard refuses the length and not the shape; a multibyte case --
 3-byte characters, inside the limit in characters and over it in bytes -- proves the guard measures what
 S3 measures. The fixtures import nothing that the fix introduced, so on the base tree this file collects
@@ -31,6 +34,13 @@ from backend.tests.handlers.assets import test_uploadFile_preview_extension_init
 from backend.tests.handlers.assets import test_assetFiles_head_miss_archived_check as asset_files
 
 MESSAGE = "File key exceeds the maximum S3 object key length"
+UPLOAD_MESSAGE_PREFIX = "File key is too long to upload: a file key, including its asset location, may be at most"
+
+
+def _upload_message(max_bytes):
+    return f"{UPLOAD_MESSAGE_PREFIX} {max_bytes} bytes"
+
+
 S3_KEY_LIMIT_BYTES = 1024
 
 DATABASE_ID = "db-001"
@@ -78,10 +88,24 @@ MULTIBYTE_FOLDER_KEY = _multibyte_key("/scans/", 330, "/")           # 998 bytes
 assert _over_in_bytes_only(ASSET_BASE_KEY + MULTIBYTE_FOLDER_KEY[1:])
 
 # Resolved FINAL key inside the limit (60 + 960 = 1020 bytes) while the TEMPORARY key -- the one
-# create_multipart_upload is actually issued for -- is over it (13 + 1020 = 1033 bytes).
+# create_multipart_upload is actually issued for -- is over it (13 + 13 + 1020 = 1046 bytes).
 TEMP_ONLY_FILE_KEY = _ascii_key("/scans/", 961, ".glb")
 assert len((ASSET_BASE_KEY + TEMP_ONLY_FILE_KEY[1:]).encode("utf-8")) == 1020
-assert len((TEMPORARY_UPLOAD_PREFIX + ASSET_BASE_KEY + TEMP_ONLY_FILE_KEY[1:]).encode("utf-8")) == 1033
+
+# The staging key is ``temp-uploads/{12-character upload tag}/{final key}`` at the bucket root, so an
+# uploaded file's final key can be at most 1024 - 26 = 998 bytes there. 1,011 bytes is the largest final
+# key that fits under the bare temp-uploads prefix. Stated as literals so the bound is pinned, not
+# re-derived.
+STAGING_OVERHEAD_BYTES = len(TEMPORARY_UPLOAD_PREFIX) + 12 + 1
+assert STAGING_OVERHEAD_BYTES == 26
+assert STAGING_OVERHEAD_BYTES + len((ASSET_BASE_KEY + TEMP_ONLY_FILE_KEY[1:]).encode("utf-8")) == 1046
+MAX_UPLOAD_FINAL_KEY_BYTES = 998
+AT_BOUND_FILE_KEY = _ascii_key("/scans/", MAX_UPLOAD_FINAL_KEY_BYTES - 60 + 1, ".glb")
+OVER_BOUND_FILE_KEY = _ascii_key("/scans/", MAX_UPLOAD_FINAL_KEY_BYTES - 60 + 2, ".glb")
+OLD_BOUND_FILE_KEY = _ascii_key("/scans/", 1011 - 60 + 1, ".glb")
+assert len((ASSET_BASE_KEY + AT_BOUND_FILE_KEY[1:]).encode("utf-8")) == 998
+assert len((ASSET_BASE_KEY + OVER_BOUND_FILE_KEY[1:]).encode("utf-8")) == 999
+assert len((ASSET_BASE_KEY + OLD_BOUND_FILE_KEY[1:]).encode("utf-8")) == 1011
 
 
 def _assert_not_echoed(text, key):
@@ -133,18 +157,19 @@ class TestInitializeUploadResolvedKeyLength:
             with pytest.raises(uf.VAMSGeneralErrorResponse) as err:
                 uf.initialize_upload(_upload_request(SHORT_FILE_KEY, LONG_FILE_KEY), CLAIMS)
 
-        assert MESSAGE in str(err.value)
+        assert err.value.user_message == _upload_message(MAX_UPLOAD_FINAL_KEY_BYTES)
         mock_s3.create_multipart_upload.assert_not_called()
         mock_s3.abort_multipart_upload.assert_not_called()
 
-    def test_the_refusal_is_a_generic_400_through_the_handler(self):
+    def test_the_refusal_is_a_400_naming_the_bound_through_the_handler(self):
         with upload_init._initialize_upload_env(_upload_asset()) as (uf, mock_s3), \
                 patch.object(uf, "request_to_claims", return_value=CLAIMS), \
                 patch.object(uf, "CasbinEnforcer", MagicMock()):
             response = uf.lambda_handler(_upload_event(SHORT_FILE_KEY, LONG_FILE_KEY), MagicMock())
 
         assert response["statusCode"] == 400
-        assert MESSAGE in json.loads(response["body"])["message"]
+        assert json.loads(response["body"])["message"] == (
+            "VAMS General Error: " + _upload_message(MAX_UPLOAD_FINAL_KEY_BYTES))
         _assert_not_echoed(response["body"], LONG_FILE_KEY)
         mock_s3.create_multipart_upload.assert_not_called()
 
@@ -154,7 +179,7 @@ class TestInitializeUploadResolvedKeyLength:
             with pytest.raises(uf.VAMSGeneralErrorResponse) as err:
                 uf.initialize_upload(_upload_request(TEMP_ONLY_FILE_KEY), CLAIMS)
 
-        assert MESSAGE in str(err.value)
+        assert err.value.user_message == _upload_message(MAX_UPLOAD_FINAL_KEY_BYTES)
         mock_s3.create_multipart_upload.assert_not_called()
 
     def test_the_guard_measures_bytes_not_characters(self):
@@ -162,11 +187,12 @@ class TestInitializeUploadResolvedKeyLength:
             with pytest.raises(uf.VAMSGeneralErrorResponse) as err:
                 uf.initialize_upload(_upload_request(SHORT_FILE_KEY, MULTIBYTE_FILE_KEY), CLAIMS)
 
-        assert MESSAGE in str(err.value)
+        assert err.value.user_message == _upload_message(MAX_UPLOAD_FINAL_KEY_BYTES)
         mock_s3.create_multipart_upload.assert_not_called()
 
     def test_a_short_key_at_the_same_base_still_initializes(self):
         """Paired control: the guard refuses the length, not the base key or the batch shape."""
+        from backend.backend.common.s3PathPatterns import staged_upload_key
         with upload_init._initialize_upload_env(_upload_asset()) as (uf, mock_s3):
             response = uf.initialize_upload(_upload_request(SHORT_FILE_KEY, "/scans/pump.e57"), CLAIMS)
 
@@ -174,9 +200,76 @@ class TestInitializeUploadResolvedKeyLength:
         assert len(response.files) == 2
         created = [c.kwargs["Key"] for c in mock_s3.create_multipart_upload.call_args_list]
         assert created == [
-            TEMPORARY_UPLOAD_PREFIX + ASSET_BASE_KEY + "scans/pump.glb",
-            TEMPORARY_UPLOAD_PREFIX + ASSET_BASE_KEY + "scans/pump.e57",
+            staged_upload_key("", response.uploadId, ASSET_BASE_KEY + "scans/pump.glb"),
+            staged_upload_key("", response.uploadId, ASSET_BASE_KEY + "scans/pump.e57"),
         ]
+
+    def test_a_final_key_inside_the_per_path_staging_bound_is_refused_at_the_per_upload_one(self):
+        """A 1,011-byte final key fits under the bare temp-uploads prefix (13 + 1011 = 1024) and not under
+        the upload's staging folder (26 + 1011 = 1037); it is refused before any multipart upload is
+        created."""
+        with upload_init._initialize_upload_env(_upload_asset()) as (uf, mock_s3):
+            with pytest.raises(uf.VAMSGeneralErrorResponse) as err:
+                uf.initialize_upload(_upload_request(SHORT_FILE_KEY, OLD_BOUND_FILE_KEY), CLAIMS)
+
+        assert err.value.user_message == _upload_message(MAX_UPLOAD_FINAL_KEY_BYTES)
+        _assert_not_echoed(str(err.value), OLD_BOUND_FILE_KEY)
+        mock_s3.create_multipart_upload.assert_not_called()
+
+    def test_one_byte_over_the_per_upload_staging_bound_is_refused(self):
+        with upload_init._initialize_upload_env(_upload_asset()) as (uf, mock_s3):
+            with pytest.raises(uf.VAMSGeneralErrorResponse) as err:
+                uf.initialize_upload(_upload_request(OVER_BOUND_FILE_KEY), CLAIMS)
+
+        assert err.value.user_message == _upload_message(MAX_UPLOAD_FINAL_KEY_BYTES)
+        mock_s3.create_multipart_upload.assert_not_called()
+
+    def test_a_final_key_at_the_per_upload_staging_bound_initializes(self):
+        """Paired control at the boundary: a 998-byte final key stages at exactly 1,024 bytes."""
+        with upload_init._initialize_upload_env(_upload_asset()) as (uf, mock_s3):
+            response = uf.initialize_upload(_upload_request(AT_BOUND_FILE_KEY), CLAIMS)
+
+        assert response.uploadId
+        created = [c.kwargs["Key"] for c in mock_s3.create_multipart_upload.call_args_list]
+        assert created, "no multipart upload was created"
+        assert all(len(key.encode("utf-8")) == S3_KEY_LIMIT_BYTES for key in created)
+
+    def test_the_bound_follows_the_bucket_prefix(self):
+        """In a bucket registered under a prefix the bound is lower by the prefix's bytes: 1024 - 5 - 26 =
+        993 for ``area/``. A final key of 993 bytes initializes; one of 994 is refused naming 993."""
+        prefix = "area/"
+        base_key = prefix + ASSET_BASE_KEY
+        asset = {**_upload_asset(), "assetLocation": {"Key": base_key}}
+        at_bound = _ascii_key("/scans/", 993 - len(base_key) + 1, ".glb")
+        over_bound = _ascii_key("/scans/", 993 - len(base_key) + 2, ".glb")
+        assert len((base_key + at_bound[1:]).encode("utf-8")) == 993
+        bucket = {"bucketId": "bucket-1", "bucketName": "asset-bucket", "baseAssetsPrefix": prefix}
+
+        with upload_init._initialize_upload_env(asset) as (uf, mock_s3), \
+                patch.object(uf, "get_default_bucket_details", return_value=bucket):
+            response = uf.initialize_upload(_upload_request(at_bound), CLAIMS)
+            created = [c.kwargs["Key"] for c in mock_s3.create_multipart_upload.call_args_list]
+            with pytest.raises(uf.VAMSGeneralErrorResponse) as err:
+                uf.initialize_upload(_upload_request(over_bound), CLAIMS)
+
+        assert response.uploadId
+        assert created, "no multipart upload was created"
+        assert all(len(key.encode("utf-8")) == S3_KEY_LIMIT_BYTES for key in created)
+        assert err.value.user_message == _upload_message(993)
+        _assert_not_echoed(str(err.value), over_bound)
+
+    def test_the_bound_is_measured_in_bytes(self):
+        """A final key of 333 three-byte characters under the 60-byte base is under 998 characters and over
+        998 bytes; it is refused naming the 998-byte bound."""
+        key = _multibyte_key("/s/", 333, ".glb")
+        assert len(ASSET_BASE_KEY + key[1:]) < MAX_UPLOAD_FINAL_KEY_BYTES
+        assert len((ASSET_BASE_KEY + key[1:]).encode("utf-8")) > MAX_UPLOAD_FINAL_KEY_BYTES
+        with upload_init._initialize_upload_env(_upload_asset()) as (uf, mock_s3):
+            with pytest.raises(uf.VAMSGeneralErrorResponse) as err:
+                uf.initialize_upload(_upload_request(key), CLAIMS)
+
+        assert err.value.user_message == _upload_message(MAX_UPLOAD_FINAL_KEY_BYTES)
+        mock_s3.create_multipart_upload.assert_not_called()
 
 
 # ------------------------------------------------------- assetFiles: createFolder / move / copy

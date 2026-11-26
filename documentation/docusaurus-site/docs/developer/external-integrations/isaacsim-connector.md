@@ -10,6 +10,7 @@ This integration is in **experimental** status and may still have issues. Verify
 
 -   **Database and Asset Browsing** -- Navigate VAMS databases, assets, and files in a dockable UI panel
 -   **Asset Download and Import** -- Download individual files or full assets; USD, URDF, and MJCF files can be imported directly into the Isaac Sim stage from the file list UI. USD files can be opened as new stages or added as prim references. URDF and MJCF files are converted to USD on import using Isaac Sim's built-in asset importers.
+-   **Content Window Connection** (Isaac Sim 6.1+, opt-in) -- Browse VAMS databases, assets and files in the Isaac Sim **Content** window, as a Nucleus server, and open USD files in place so their relative references resolve without a local copy
 -   **General File Download** -- Other files can be downloaded to `~/vams_downloads`, keeping their path within the asset
 -   **Scene Export and Upload** -- Export the current Isaac Sim USD stage and upload it to VAMS as a new or existing asset
 -   **Workflow Execution** -- List available processing workflows, view execution history, and trigger new workflow runs on assets; **Run** is offered only for files the workflow and its first pipeline accept, with a template choice for a pipeline that requires one
@@ -17,9 +18,10 @@ This integration is in **experimental** status and may still have issues. Verify
 
 ## Prerequisites
 
--   **NVIDIA Isaac Sim 5.1 or 6.2** (other Isaac Sim 6.x releases are untested)
--   **Python 3.10+** (included with Isaac Sim)
+-   **NVIDIA Isaac Sim 5.1 or 6.2** (other Isaac Sim 6.x releases are untested); the Content window connection needs Isaac Sim 6.1 or later
+-   **Python 3.10+** for the extension (included with Isaac Sim), and **Python 3.12+** for the VAMS CLI's own environment
 -   **VAMS CLI** installed and configured
+-   For the optional Content window connection: **VAMS CLI 2.7.0 or later** (from the same VAMS release as the connector), and `grpcio` and `protobuf` in the VAMS CLI's environment (see [Content window connection (optional, Isaac Sim 6.1+)](#content-window-connection-optional-isaac-sim-61))
 
 ### VAMS CLI setup
 
@@ -80,6 +82,32 @@ isaac-sim --ext-folder /path/to/kit-exts --enable vams.connector.isaacsim
 folders = ["/path/to/kit-exts"]
 ```
 
+### Content window connection (optional, Isaac Sim 6.1+)
+
+To browse VAMS in the Isaac Sim **Content** window as well (see [Content window connection](#content-window-connection-isaac-sim-61)), after installing the extension:
+
+1.  Check that the VAMS CLI is 2.7.0 or later, then install `grpcio` and `protobuf` into the **VAMS CLI's** environment (not Isaac Sim's bundled Python) from the connector's hashed lock, with that environment's `pip`. The environment needs Python 3.12 or later, as the VAMS CLI does. The storage adapter sends each request with the signed-in user's own token through the VAMS CLI's API client, which an earlier VAMS CLI cannot do: with one, VAMS appears in the Content window with nothing under it, and no log names the cause. Install the VAMS CLI from the same VAMS release as the connector:
+
+    ```bash
+    # Linux and macOS
+    ~/vamscli-venv/bin/vamscli --version    # VamsCLI version 2.7.0 or later
+    ~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
+    # Windows
+    %USERPROFILE%\vamscli-venv\Scripts\vamscli --version
+    %USERPROFILE%\vamscli-venv\Scripts\pip install --require-hashes --only-binary :all: -r C:\path\to\kit-exts\vams.connector.isaacsim\locks\storage\requirements.lock
+    ```
+
+2.  Turn the connection on in `/path/to/kit-exts/vams.connector.isaacsim/config/extension.toml`:
+
+    ```toml
+    [settings]
+    exts."vams.connector.isaacsim".content_window = true
+    ```
+
+3.  Start Isaac Sim and sign in (or start it with a CLI profile that is already signed in). VAMS appears under **Omniverse Storage** > **VAMS**.
+
+The setting lives in the copy Kit loads, so set it again after each update of the connector, and run step 1 again when an update changes `locks/storage/requirements.lock`. Without the packages, or on Isaac Sim 5.1, the extension leaves the Content window alone and logs why. The EDH Workstations `isaacsim` desktop image does all three steps. The connection has been tested on Linux only.
+
 ## Ubuntu / EC2 Setup
 
 When running Isaac Sim on Ubuntu (e.g., on an Amazon EC2 instance), the VAMS CLI should be installed in an isolated Python virtual environment to avoid conflicts with Isaac Sim's bundled Python.
@@ -97,6 +125,12 @@ Then set the explicit CLI path in `/path/to/kit-exts/vams.connector.isaacsim/con
 ```toml
 [settings]
 exts."vams.connector.isaacsim".vamscli_path = "/home/ubuntu/vamscli-venv/bin/vamscli"
+```
+
+Optionally, for the Content window connection (Isaac Sim 6.1+), install its packages into the same environment and set `content_window = true` in the same file (see [Content window connection (optional, Isaac Sim 6.1+)](#content-window-connection-optional-isaac-sim-61)):
+
+```bash
+~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
 ```
 
 ### SSL certificate bundle
@@ -175,6 +209,36 @@ The Execute view offers **Run** only for the files that pass the input-file filt
 After loading a USD asset, if the viewport appears empty, add a light (**Create > Light > Dome Light**) and press **F** to frame the camera on the root prim.
 :::
 
+### Content window connection (Isaac Sim 6.1+)
+
+With the `content_window` setting on, VAMS appears in the Isaac Sim **Content** window once you are signed in, under **Omniverse Storage** > **VAMS**, as a Nucleus server does. Its tree is:
+
+```
+VAMS
+  <database>                      one folder per database you can see
+    <asset name> (<asset id>)     one folder per asset
+      <files and folders>         the asset's own tree, from its file paths
+```
+
+The **VAMS Connector** window stays for sign-in, workflows, export and upload. The connection is read-only.
+
+-   **Paths**: files have `vams://vams/<database>/<asset name> (<asset id>)/<path>` URLs, which USD layers, references and textures can name directly, including by relative path between assets (for example `@../robot (<asset id>)/robot.usda@`). Nothing is copied to a local folder first.
+-   **Folder names**: an asset folder is named `<asset name> (<asset id>)` and is at most 255 bytes of UTF-8, the folder-name limit of Linux, Windows and macOS file systems. The full asset id is always kept; a name too long to fit is cut and ends in `...`. Only the id resolves the folder, so a path written before an asset was renamed still opens it.
+-   **Access**: everything listed and read goes through the VAMS API as you, so you see what your VAMS role allows; a denied item and a missing one both answer "not found". Files download straight from their presigned VAMS URLs.
+-   **When it connects**: as soon as the extension has a sign-in, on an EDH Workstations desktop or anywhere else. A sign-in the VAMS CLI profile already holds when Isaac Sim starts (the desktop's session sign-in, or an earlier `vamscli auth login`) is taken over at startup. Without one, sign in under **Authentication** in the **VAMS Connector** window; a sign-in made outside Isaac Sim after it started (a desktop sign-in that finishes late, or `vamscli auth login` in a terminal) is found within 30 seconds, or at once with **Refresh Databases**.
+-   **How it runs**: the extension starts a storage adapter (`vams/connector/isaacsim/storage_adapter/`) with the VAMS CLI's Python, as its own process listening on `127.0.0.1` only, and registers it with the Content window. The adapter serves the Omniverse Storage API over gRPC and holds no credential: each request carries your own VAMS CLI sign-in, which the extension hands to Isaac Sim for the adapter's exact address only. The adapter exits when Isaac Sim's process ends, however it ends.
+-   **Sign-in expiry**: a Cognito sign-in whose token has expired, or expires within five minutes, is renewed with the CLI profile's refresh token when Isaac Sim asks for a sign-in, as `vamscli auth refresh` does, and the renewed tokens are saved to the profile; API keys and other override tokens are used as they are. When VAMS refuses the sign-in, Content window requests fail at once instead of waiting, and the connection reconnects by itself once the CLI profile holds a usable sign-in again, for example after signing in in the **VAMS Connector** window.
+-   **Requirements**: VAMS CLI 2.7.0 or later (`vamscli --version`), and `grpcio` and `protobuf` in the VAMS CLI's environment, installed from the connector's hashed lock `locks/storage/requirements.lock` (exported from `locks/storage/uv.lock`, which the CI dependency audit checks) with that environment's `pip`:
+
+    ```bash
+    ~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
+    ```
+
+    Without them, or on Isaac Sim 5.1, the **VAMS Connector** window works as before and the Isaac Sim log says why the Content window entry was not added. The install steps are under [Content window connection (optional, Isaac Sim 6.1+)](#content-window-connection-optional-isaac-sim-61).
+
+-   **Turning it on**: the connection is off unless `content_window` is `true`, because the Content window keeps its connections in your `omniverse.toml` and the VAMS entry is written there while the connection is on. The entry is removed when you sign out or close Isaac Sim, and an entry left by a session that did not close cleanly is removed at the next sign-in. The EDH Workstations `isaacsim` desktop image installs the dependencies and turns it on.
+-   **Limits**: the database list is read when the connection is made, so a database created later appears after the next sign-in. A folder shows changes made elsewhere when it is opened again, not live. Folders show no modification date (the Omniverse Storage API carries no date for folders; the Content window shows 1970-01-01).
+
 ### URDF and MJCF import on Isaac Sim 6.x
 
 URDF and MJCF import work on Isaac Sim 5.1 and on Isaac Sim 6.2. The connector uses whichever importer API the running Isaac Sim provides; its 6.x import follows the Isaac Sim 6.2 importer API, and Isaac Sim 6.0 and 6.1 are untested. On 6.x the importers convert a file into a USD file of their own instead of writing into the open stage: the connector has them write it to a new private temporary directory (`vams_urdf_usd_*` or `vams_mjcf_usd_*`), never next to the downloaded file, and adds that file to the current stage as a reference, under the same parent prim as on 5.1. The prims under it follow the 6.x importers' own layout. The directory is kept, since the stage refers to it, so a stage saved with the robot resolves only while it is there; **Export & Upload** flattens the robot into the export, and counts a file path the robot names in that directory among the paths that resolve only on this machine. On 6.x:
@@ -245,10 +309,11 @@ The `download_and_import_asset` and `download_and_add_reference` methods validat
 
 Extension settings can be configured in `config/extension.toml` or overridden at runtime:
 
-| Setting                                       | Default     | Description                                           |
-| :-------------------------------------------- | :---------- | :---------------------------------------------------- |
-| `exts."vams.connector.isaacsim".profile`      | `"default"` | VAMS CLI profile name                                 |
-| `exts."vams.connector.isaacsim".vamscli_path` | `""`        | Explicit path to vamscli executable (empty uses PATH) |
+| Setting                                         | Default     | Description                                                    |
+| :---------------------------------------------- | :---------- | :------------------------------------------------------------- |
+| `exts."vams.connector.isaacsim".profile`        | `"default"` | VAMS CLI profile name                                          |
+| `exts."vams.connector.isaacsim".vamscli_path`   | `""`        | Explicit path to vamscli executable (empty uses PATH)          |
+| `exts."vams.connector.isaacsim".content_window` | `false`     | Add VAMS to the Content window once signed in (Isaac Sim 6.1+) |
 
 ### Multiple VAMS deployments
 
@@ -278,17 +343,31 @@ isaacsim_vams_integration/
 │           ├── __init__.py            # Package exports
 │           ├── extension.py           # VamsConnectorExtension(omni.ext.IExt)
 │           ├── connector.py           # IsaacVAMSConnector
+│           ├── content_connection.py  # VamsContentConnection (Content window entry, sign-in callback)
+│           ├── storage_adapter/       # Omniverse Storage API adapter, run with the VAMS CLI's Python
+│           │   ├── server.py          # Discovery document, Storage gRPC services, notification consumer
+│           │   ├── naming.py          # Asset folder names: <asset name> (<asset id>), 255-byte cap
+│           │   ├── token_helper.py    # Reads the VAMS CLI profile's sign-in for the extension
+│           │   ├── proto/             # Storage API protos (NVIDIA, Apache-2.0)
+│           │   └── _proto/            # Generated modules, shipped so nothing is generated at install
 │           └── vams_cli_service.py    # VamsCliService (CLI subprocess wrapper)
+├── locks/
+│   └── storage/                       # grpcio and protobuf for the Content window connection
+│       ├── pyproject.toml
+│       ├── uv.lock
+│       └── requirements.lock          # Hashed uv export the install uses
 ├── README.md
 ├── LICENSE
 └── requirements.txt
 ```
 
-| Component   | File                  | Purpose                                                                   |
-| :---------- | :-------------------- | :------------------------------------------------------------------------ |
-| Extension   | `extension.py`        | `omni.ext.IExt` subclass with `on_startup`/`on_shutdown` lifecycle and UI |
-| Connector   | `connector.py`        | High-level API for all VAMS operations and Isaac Sim stage integration    |
-| CLI Service | `vams_cli_service.py` | Subprocess wrapper around `vamscli` with JSON output parsing              |
+| Component          | File                    | Purpose                                                                                                             |
+| :----------------- | :---------------------- | :------------------------------------------------------------------------------------------------------------------ |
+| Extension          | `extension.py`          | `omni.ext.IExt` subclass with `on_startup`/`on_shutdown` lifecycle and UI                                           |
+| Connector          | `connector.py`          | High-level API for all VAMS operations and Isaac Sim stage integration                                              |
+| CLI Service        | `vams_cli_service.py`   | Subprocess wrapper around `vamscli` with JSON output parsing                                                        |
+| Content connection | `content_connection.py` | Starts and stops the storage adapter, registers it with the Content window and answers its sign-in requests         |
+| Storage adapter    | `storage_adapter/`      | Lists databases, assets and files and redirects reads to presigned URLs, through the VAMS API as the signed-in user |
 
 UI button handlers are deferred via `omni.kit.app`'s update event stream to avoid blocking the Omniverse Kit draw pass, which can cause deadlocks or crashes when performing blocking I/O during rendering.
 
