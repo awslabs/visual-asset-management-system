@@ -5,7 +5,8 @@
 
 Pinned here: the type and its four fields are core constants served to the constraint editor; the
 seeded admin role holds every action on every registration and the seeded read-only role holds GET;
-every shipped permission template holds GET on every registration and nothing else on the type; a
+every shipped role template holds GET on every registration and nothing else on the type, and the
+overlay template (deny-tagged-assets.json, applied on top of an existing role) holds none; a
 custom role's constraint on `bucketName` allows only the matching registrations; a role with no
 `bucket` constraint is denied (deny by default). Roles are evaluated through the real policy builder
 and Casbin enforcer; only the two table reads are stubbed.
@@ -164,9 +165,15 @@ class TestSeededRoles:
         assert enforcer.enforce({"object__type": "api", "route__path": "/buckets"}, "GET") is False
 
 
+# The overlay is applied on top of an existing role, which already carries its own bucket read, so it
+# adds no bucket constraint; every full role template carries one.
+OVERLAY_TEMPLATE = "deny-tagged-assets.json"
+ROLE_TEMPLATES = [name for name in shipped_constraints.template_names() if name != OVERLAY_TEMPLATE]
+
+
 @pytest.mark.unit
 class TestShippedTemplates:
-    @pytest.mark.parametrize("template_name", shipped_constraints.template_names())
+    @pytest.mark.parametrize("template_name", ROLE_TEMPLATES)
     def test_every_template_reads_every_registration_and_nothing_more(self, template_name):
         document = json.loads((TEMPLATES_DIR / template_name).read_text(encoding="utf-8"))
         bucket_constraints = [c for c in document["constraints"] if c["objectType"] == "bucket"]
@@ -176,7 +183,7 @@ class TestShippedTemplates:
         assert constraint["criteriaOr"] == []
         assert constraint["groupPermissions"] == [{"action": "GET", "type": "allow"}]
 
-    @pytest.mark.parametrize("template_name", shipped_constraints.template_names())
+    @pytest.mark.parametrize("template_name", ROLE_TEMPLATES)
     def test_a_role_from_the_template_reads_any_registration(self, template_name, build_enforcer):
         role = shipped_constraints.template_constraints(template_name, "tpl", TEMPLATE_VALUES)
         bucket_only = [c for c in role if c["objectType"] == "bucket"]
@@ -185,10 +192,20 @@ class TestShippedTemplates:
         assert enforcer.enforce(_bucket(name="anything", region="", source="runtime"), "GET") is True
         assert enforcer.enforce(_bucket(), "POST") is False
 
-    def test_twelve_templates_are_covered(self):
+    def test_twelve_templates_are_covered_and_only_the_overlay_is_an_exception(self):
         assert len(shipped_constraints.template_names()) == 12
+        assert OVERLAY_TEMPLATE in shipped_constraints.template_names()
+        assert len(ROLE_TEMPLATES) == 11
 
-    @pytest.mark.parametrize("template_name", shipped_constraints.template_names())
+    def test_the_overlay_template_grants_no_bucket(self, build_enforcer):
+        document = json.loads((TEMPLATES_DIR / OVERLAY_TEMPLATE).read_text(encoding="utf-8"))
+        assert [c for c in document["constraints"] if c["objectType"] == "bucket"] == []
+        role = shipped_constraints.template_constraints(OVERLAY_TEMPLATE, "tpl", TEMPLATE_VALUES)
+        enforcer = build_enforcer({"tpl": role})
+        for action in ACTIONS:
+            assert enforcer.enforce(_bucket(), action) is False
+
+    @pytest.mark.parametrize("template_name", ROLE_TEMPLATES)
     def test_the_template_passes_the_import_validation(self, template_name):
         document = json.loads((TEMPLATES_DIR / template_name).read_text(encoding="utf-8"))
         values = {v["name"]: TEMPLATE_VALUES.get(v["name"], "x") for v in document["variables"]}

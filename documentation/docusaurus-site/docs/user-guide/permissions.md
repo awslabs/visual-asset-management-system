@@ -189,7 +189,7 @@ Access to audit log records is set per audit log group through the `auditLog` ob
 
 ### Bucket permissions
 
-Which asset buckets a role sees and can put a database on is set through the `bucket` object type (fields `bucketId`, `bucketName`, `bucketRegion` and `source`). It is checked only on the bucket list (`GET /buckets`) and on the bucket chosen when a database is created or moved to another bucket; access to assets and files is still decided by the `database` and `asset` constraints. The seeded `admin` and read-only roles and every shipped template read every bucket. A custom role needs its own `bucket` constraint, for example `bucketName` `starts_with` `team-a-` with `GET`, or it lists no bucket and cannot choose one.
+Which asset buckets a role sees and can put a database on is set through the `bucket` object type (fields `bucketId`, `bucketName`, `bucketRegion` and `source`). It is checked only on the bucket list (`GET /buckets`) and on the bucket chosen when a database is created or moved to another bucket; access to assets and files is still decided by the `database` and `asset` constraints. The seeded `admin` and read-only roles and every shipped role template read every bucket; the Deny Tagged Asset Editing overlay adds no `bucket` constraint, so a role it is applied to keeps its own. A custom role needs its own `bucket` constraint, for example `bucketName` `starts_with` `team-a-` with `GET`, or it lists no bucket and cannot choose one.
 
 For template details, JSON format, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 

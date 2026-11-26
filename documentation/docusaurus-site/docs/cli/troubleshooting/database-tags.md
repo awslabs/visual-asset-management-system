@@ -167,7 +167,7 @@ Creating or updating a database with a bucket ID fails.
 
 **Cause:**
 
-The supplied `--default-bucket-id` does not match an available bucket configuration, the configuration is retired, or your role may not read it. The API gives one answer for all three: `Bucket ID not found or not available`. A role needs a `bucket` permission constraint to list buckets or choose one; every shipped permission template and seeded role has one, but a custom role may not.
+The supplied `--default-bucket-id` does not match an available bucket configuration, the configuration is retired, or your role may not read it. The API gives one answer for all three: `Bucket ID not found or not available`. A role needs a `bucket` permission constraint to list buckets or choose one; every shipped role template and seeded role has one (the `deny-tagged-assets.json` overlay adds none), but a custom role may not.
 
 **Resolution:**
 

@@ -8,7 +8,7 @@ adds the admin route prefix and the admin page. Both parse through the import mo
 ROLE_NAME supplied, and both grant /auth/loginProfile on GET and POST like every other route-granting
 template, because the web app POSTs it at sign-in and the CLI GETs it to validate a session. Both grant
 GET on /auth/routes, which covers the GET /auth/routes/api/allowed call the EDH pages make to decide which
-actions to enable. Like every shipped template, both also carry the core `bucket` read (GET on every
+actions to enable. Like every shipped role template, both also carry the core `bucket` read (GET on every
 asset bucket registration, #1978); it grants no route.
 """
 

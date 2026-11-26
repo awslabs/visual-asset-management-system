@@ -160,7 +160,7 @@ GET /buckets
 `NextToken` is `null` on the last page.
 
 :::note[Authorization]
-The route itself is granted by an `api` constraint on `/buckets`, which the shipped permission templates grant to administrator roles alone. Each configuration is then listed only when the role may `GET` it through a `bucket` constraint (fields `bucketId`, `bucketName`, `bucketRegion`, `source`). A role without a `bucket` constraint gets an empty list. The seeded `admin` role and every shipped template read every configuration. A page can hold fewer items than its size; follow `NextToken` until it is `null`.
+The route itself is granted by an `api` constraint on `/buckets`, which the shipped permission templates grant to administrator roles alone. Each configuration is then listed only when the role may `GET` it through a `bucket` constraint (fields `bucketId`, `bucketName`, `bucketRegion`, `source`). A role without a `bucket` constraint gets an empty list. The seeded `admin` role and every shipped role template read every configuration (the `deny-tagged-assets.json` overlay adds no `bucket` constraint). A page can hold fewer items than its size; follow `NextToken` until it is `null`.
 :::
 
 #### Error responses
