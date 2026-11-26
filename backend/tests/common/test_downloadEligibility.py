@@ -223,9 +223,9 @@ class TestResolveAssetFileKey:
         assert str(e.value) == _msg("Requested file is not part of this asset")
 
     @pytest.mark.parametrize("final_key,expected", [
-        ('assets/pfx', 'pfx'),
-        ('assets/pfx/dir/f.glb', 'dir/f.glb'),
-        ('assets/pfx.previewFile.png', 'pfx.previewFile.png'),
+        ('assets/pfx', '/pfx'),
+        ('assets/pfx/dir/f.glb', '/dir/f.glb'),
+        ('assets/pfx.previewFile.png', '/pfx.previewFile.png'),
     ])
     def test_a_single_file_asset_relative_key_for_version_snapshots(self, final_key, expected):
         assert de.asset_relative_key(final_key, UNSLASHED_BASE) == expected
@@ -277,9 +277,12 @@ class TestResolveAssetFileKey:
         assert de.resolve_asset_file_key(SLASHED_BASE, relative) == SLASHED_BASE + relative
 
     @pytest.mark.parametrize("base", [UNSLASHED_BASE, SLASHED_BASE])
-    @pytest.mark.parametrize("final_key", ['assets/pfx/dir/f.glb', 'assets/pfx//dir/f.glb'])
-    def test_relative_key_for_version_snapshots(self, base, final_key):
-        assert de.asset_relative_key(final_key, base) == 'dir/f.glb'
+    @pytest.mark.parametrize("final_key,expected", [('assets/pfx/dir/f.glb', '/dir/f.glb'),
+                                                    ('assets/pfx//dir/f.glb', '//dir/f.glb')])
+    def test_relative_key_for_version_snapshots(self, base, final_key, expected):
+        # The file's path in the asset; the snapshot lookup drops one '/', so the key with an empty segment
+        # after the location ('//dir/f.glb') is its own file (#1977)
+        assert de.asset_relative_key(final_key, base) == expected
 
 
 @pytest.mark.unit
@@ -511,7 +514,7 @@ class TestCheckFileEligibilityPin:
             client, 'assets/pfx/dir/f.glb', base=SLASHED_BASE, asset_version_id='2',
             resolve_file_version=resolve_file, resolve_alias=MagicMock())
         assert (final_key, version_id) == ('assets/pfx/dir/f.glb', 'v-pinned')
-        resolve_file.assert_called_once_with('db1', 'asset1', '2', 'dir/f.glb')
+        resolve_file.assert_called_once_with('db1', 'asset1', '2', '/dir/f.glb')
         client.head_object.assert_called_once_with(
             Bucket='bucket', Key='assets/pfx/dir/f.glb', VersionId='v-pinned')
 
