@@ -1290,6 +1290,21 @@ def finalize_asset_version(asset: Dict, new_assetVersionId: str, databaseId: str
     return asset
 
 
+def versioned_metadata_paths(files_to_version: List[Dict]) -> set:
+    """The metadata ``filePath`` of each file a version holds, and ``/`` for the asset's own record.
+
+    A file's metadata is keyed by its listed path, which is ``/`` + its version entry with exactly one leading
+    ``/`` removed (``version_entry_key``): ``x`` and a legacy ``/x`` are ``/x``, and ``//x`` (the key with an
+    empty segment after the location) is ``//x`` (#1977). An entry that starts with the asset ID is a path in
+    the asset like any other (``A1/x`` is ``/A1/x``, the file of a subfolder named like the asset, #1943); it
+    was read as ``/x``, so a version kept or restored the root file's metadata for it.
+    """
+    paths = {"/"}
+    for file in files_to_version:
+        paths.add("/" + version_entry_key(file['relativeKey']))
+    return paths
+
+
 def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: str, 
                                files_to_version: List[Dict]) -> bool:
     """Save a snapshot of current asset and file metadata/attributes for a version
@@ -1314,22 +1329,8 @@ def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: s
         return False
     
     try:
-        # Build set of file paths from files_to_version
-        versioned_file_paths = set()
-        versioned_file_paths.add("/")  # Always include asset-level metadata
-        
-        for file in files_to_version:
-            relative_key = file['relativeKey']
-            
-            # Remove asset ID prefix if present
-            if relative_key.startswith(assetId + '/'):
-                path_without_asset = relative_key[len(assetId) + 1:]
-            else:
-                path_without_asset = relative_key
-            
-            # Prepend "/" to match metadata filePath format
-            file_path = "/" + path_without_asset.lstrip('/')
-            versioned_file_paths.add(file_path)
+        # The metadata filePath of each versioned file, plus the asset-level record
+        versioned_file_paths = versioned_metadata_paths(files_to_version)
         
         logger.info(f"Versioning metadata for {len(versioned_file_paths)} file paths (including asset-level)")
         logger.info(f"Versioned file paths: {versioned_file_paths}")
@@ -1634,22 +1635,8 @@ def revert_asset_metadata_version(databaseId: str, assetId: str, target_assetVer
         return False
     
     try:
-        # Build set of file paths from files_to_version
-        versioned_file_paths = set()
-        versioned_file_paths.add("/")  # Always include asset-level metadata
-        
-        for file in files_to_version:
-            relative_key = file['relativeKey']
-            
-            # Remove asset ID prefix if present
-            if relative_key.startswith(assetId + '/'):
-                path_without_asset = relative_key[len(assetId) + 1:]
-            else:
-                path_without_asset = relative_key
-            
-            # Prepend "/" to match metadata filePath format
-            file_path = "/" + path_without_asset.lstrip('/')
-            versioned_file_paths.add(file_path)
+        # The metadata filePath of each versioned file, plus the asset-level record
+        versioned_file_paths = versioned_metadata_paths(files_to_version)
         
         logger.info(f"Reverting metadata for {len(versioned_file_paths)} file paths (including asset-level)")
         logger.info(f"Versioned file paths: {versioned_file_paths}")

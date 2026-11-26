@@ -109,3 +109,13 @@ class TestTheReadersSendThePathTheSnapshotIsSearchedBy:
                           else original(target, name, value)):
             info._info(monkeypatch, [(DB, ASSET, "2", "//inner.txt", "v-2")], file_path="//inner.txt")
         assert seen and {path for path, _ in seen} == {"//inner.txt"}
+
+
+@pytest.mark.unit
+class TestTheMetadataSnapshotPaths:
+    """Create and revert snapshot the metadata of the files they version, keyed by each file's listed path."""
+
+    def test_each_file_names_its_own_metadata_path(self):
+        files = [{"relativeKey": k} for k in ("x.txt", "//x.txt", "/y.txt", f"{ASSET}/z.txt", "sub//w.txt")]
+        assert av.versioned_metadata_paths(files) == {
+            "/", "/x.txt", "//x.txt", "/y.txt", f"/{ASSET}/z.txt", "/sub//w.txt"}
