@@ -130,8 +130,13 @@ The following integrations require separate commercial licenses from their respe
 | [RapidPipeline](https://rapidpipeline.com/) | Spatial data conversions and optimizations               | Commercial (AWS Marketplace) | Processing pipeline (`useRapidPipeline`)                              |
 | [VNTANA](https://www.vntana.com/)           | 3D ModelOps: conversions, optimizations, and web viewing | Commercial (AWS Marketplace) | Viewer plugin (`vntana-viewer`) + Processing pipeline (`useModelOps`) |
 | [Veerum](https://veerum.com/)               | Advanced 3D viewer for point clouds and 3D tilesets      | Commercial                   | Viewer plugin (`veerum-viewer`)                                       |
+| [Miris](https://miris.com/)                 | Progressive streaming of USD files in the file viewer    | Commercial service           | Add-on (`useMirisStreaming`) + upload pipeline (`upload`)             |
 
 ### Enabling Licensed Integrations
+
+#### Miris Spatial Streaming
+
+The add-on and its optional upload pipeline require a Miris account, a Miris Integration Key stored in AWS Secrets Manager, and the commercial `aws` partition. See [Miris Spatial Streaming](../developer/addon/miris-spatial-streaming/overview.md).
 
 #### RapidPipeline
 

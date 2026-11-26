@@ -18,15 +18,23 @@ import {
     validateEdhWorkstationsConfig,
     warnEdhImageBuildsOutsideCodeBuildPartitions,
 } from "./edhWorkstationsConfig";
+import type { ConfigMirisStreaming } from "./mirisStreamingConfig";
+import {
+    applyMirisStreamingDefaults,
+    mirisVpcRequiringFeatures,
+    validateMirisStreamingConfig,
+} from "./mirisStreamingConfig";
 
 /** The add-on members of `ConfigPublic.app.addons`. */
 export interface ConfigAddonLane {
     useEdhWorkstations: ConfigEdhWorkstations;
+    useMirisStreaming: ConfigMirisStreaming;
 }
 
 /** Fills in each add-on block's defaults. */
 export function applyAddonConfigDefaults(config: Config): void {
     applyEdhWorkstationsDefaults(config);
+    applyMirisStreamingDefaults(config);
 }
 
 /** Warns about add-on image builds in a partition outside the in-account CodeBuild partitions. */
@@ -36,10 +44,11 @@ export function warnAddonCodeBuildPartition(config: Config, resolvedPartition: s
 
 /** The enabled add-on features that require a VPC, named as getConfig() reports them. */
 export function addonVpcRequiringFeatures(config: Config): string[] {
-    return [...edhVpcRequiringFeatures(config)];
+    return [...edhVpcRequiringFeatures(config), ...mirisVpcRequiringFeatures(config)];
 }
 
 /** Validates each add-on block. */
 export function validateAddonConfig(config: Config): void {
     validateEdhWorkstationsConfig(config);
+    validateMirisStreamingConfig(config);
 }

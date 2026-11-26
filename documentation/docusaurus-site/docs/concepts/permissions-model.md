@@ -576,9 +576,11 @@ The routes are deployed unless `app.auditLogging.search.enabled` is `false`, as 
 
 ### Add-on routes
 
-| Route                  | Methods | Tier 2 Object Type | Tier 2 Fields                                  |
-| ---------------------- | ------- | ------------------ | ---------------------------------------------- |
-| `/addon/physna/viewer` | GET     | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| Route                       | Methods | Tier 2 Object Type         | Tier 2 Fields                                  |
+| --------------------------- | ------- | -------------------------- | ---------------------------------------------- |
+| `/addon/physna/viewer`      | GET     | `asset`                    | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/addon/miris/asset-status` | GET     | `asset`                    | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/addon/miris/viewer-key`   | POST    | `asset` (checked as `GET`) | `assetName`, `databaseId`, `assetType`, `tags` |
 
 #### EDH Workstations routes
 

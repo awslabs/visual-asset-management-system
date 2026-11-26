@@ -40,6 +40,10 @@ const CORE_AND_ADDON_FILES: Array<{ core: string; addon: string }> = [
         core: "infra/lib/core-stack.ts",
         addon: "infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts",
     },
+    {
+        core: "infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts",
+        addon: "infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts",
+    },
     { core: "infra/lib/helper/security.ts", addon: "infra/lib/nestedStacks/addon/addonCsp.ts" },
     {
         core: "infra/lib/nestedStacks/auth/constructs/dynamodb-authdefaults-ro-construct.ts",
@@ -140,7 +144,7 @@ const CORE_FILES_WITH_ADDON_LINES: Record<string, string[]> = {
  * (`Workstation`, `WORKSTATIONS`, `useEdhWorkstations`); its short name `edh` is `EDH_NAME`, matched
  * case-sensitively below.
  */
-const ADDON_NAME = /physna|garnet|vntana|veerum|workstation/i;
+const ADDON_NAME = /physna|garnet|miris|vntana|veerum|workstation/i;
 
 /**
  * The EDH Workstations add-on, in the spellings its identifiers use: `edh` where no letter precedes

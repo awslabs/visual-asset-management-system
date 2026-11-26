@@ -12,6 +12,8 @@ deployed, as its route is.
 from typing import Dict, Tuple
 
 from common.addonApiRoutes import (
+    API_ADDON_MIRIS_ASSET_STATUS,
+    API_ADDON_MIRIS_VIEWER_KEY,
     API_ADDON_PHYSNA_VIEWER,
     API_EDH_ADMIN_AMI_RECIPE,
     API_EDH_ADMIN_AMI_RECIPE_BUILD,
@@ -50,6 +52,7 @@ from common.addonApiRoutes import (
 from common.apiRouteTypes import DELETE, GET, POST, PUT
 from common.auditActionTypes import (
     GROUP_AUTH_CHANGES,
+    GROUP_AUTH_OTHER,
     AuditLogGroup,
     AuditSpec,
     RouteMethod,
@@ -154,6 +157,11 @@ ADDON_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
     }),
     **route_entries(API_EDH_CONTAINERS_JOB, {
         DELETE: spec("edhContainerJobCancel", "containerJob", legacy_type=_PROXY),
+    }),
+    # Miris Spatial Streaming: a viewer key authorizes streaming one Miris asset; the route mints one.
+    **route_entries(API_ADDON_MIRIS_ASSET_STATUS, {GET: read("mirisAssetStatusGet", "file")}),
+    **route_entries(API_ADDON_MIRIS_VIEWER_KEY, {
+        POST: spec("mirisViewerKeyMint", "file", group=GROUP_AUTH_OTHER, legacy_type="mirisViewerKeyMint"),
     }),
 }
 

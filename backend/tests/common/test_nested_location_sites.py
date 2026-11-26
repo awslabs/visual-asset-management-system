@@ -30,6 +30,9 @@ REVIEWED = {
     "common/s3PathPatterns.py": "pure path joining; callers decide ownership",
     "handlers/addon/garnetFramework/garnetDataIndexFile.py":
         "attributes each file event with fileAttribution.attribute_object (the deepest owner)",
+    "handlers/addon/miris/getAssetStatus.py":
+        "compares only the files its dependency manifest lists, under the root prefix the upload read; a "
+        "nested asset's file is in the manifest only when the uploaded USD referenced it",
     "handlers/addon/physna/physnaAssetSync.py":
         "the asset's files come from its file metadata rows (keyed by asset id), not from a listing",
     "handlers/addon/physna/physnaFileSync.py":

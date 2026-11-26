@@ -29,6 +29,7 @@ import pytest
 import backend.backend.handlers.authz as authz_module  # noqa: E402
 from backend.backend.common.apiRoutes import (  # noqa: E402
     ALL_API_ROUTES,
+    API_ADDON_MIRIS_VIEWER_KEY,
     API_ASSET_EXPORT,
     API_AUTH_LOGIN_PROFILE,
     API_AUTH_ROUTES,
@@ -212,9 +213,13 @@ _TEMPLATE_ALLOWED = {(POST, route) for route in (
 # it signs), and cancelling or deleting the caller's own job. The seeded role does not.
 _TEMPLATE_ZIP_DOWNLOADS = {(POST, API_ZIP_DOWNLOADS_ASSET), (DELETE, API_ZIP_DOWNLOADS_ASSET_REQUEST),
                            (POST, API_ZIP_DOWNLOADS_ASSET_REQUEST_URL)}
+# The Miris viewer key route reads through a POST body (a viewer key grants streaming only), and the
+# read-only templates grant it (tests/handlers/addon/miris/addonRouteGrants.py).
+_TEMPLATE_MIRIS_VIEWER_KEY = {(POST, API_ADDON_MIRIS_VIEWER_KEY)}
+
 EXPECTED_WRITE_METHOD_ROUTES = {
-    "template database-readonly.json": _TEMPLATE_ALLOWED | _TEMPLATE_ZIP_DOWNLOADS,
-    "template global-readonly.json": _TEMPLATE_ALLOWED | _TEMPLATE_ZIP_DOWNLOADS,
+    "template database-readonly.json": _TEMPLATE_ALLOWED | _TEMPLATE_ZIP_DOWNLOADS | _TEMPLATE_MIRIS_VIEWER_KEY,
+    "template global-readonly.json": _TEMPLATE_ALLOWED | _TEMPLATE_ZIP_DOWNLOADS | _TEMPLATE_MIRIS_VIEWER_KEY,
     "seeded basicReadOnly": _TEMPLATE_ALLOWED | {
         (method, route) for route in ALL_API_ROUTES if route.path.startswith("/auth/user/api-keys")
         for method in WRITE_METHODS if method in route.methods},

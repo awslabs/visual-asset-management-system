@@ -71,6 +71,30 @@
             "category": "3d",
             "featuresEnabledRestriction": ["PHYSNA_ADDON"],
             "enabled": true
+        },
+        {
+            "id": "miris-stream-viewer",
+            "name": "Miris Spatial Streaming",
+            "description": "Stream USD files uploaded to the Miris platform, using the Miris asset recorded in the file's metadata.",
+            "componentPath": "./viewers/MirisStreamViewerPlugin/MirisStreamViewerComponent",
+            "dependencyManager": "./viewers/MirisStreamViewerPlugin/dependencies",
+            "dependencyManagerClass": "MirisStreamDependencyManager",
+            "dependencyCleanupMethod": "cleanup",
+            "supportedExtensions": [".usd", ".usda", ".usdc", ".usdz"],
+            "supportsMultiFile": false,
+            "canFullscreen": true,
+            "priority": 0,
+            "autoSelect": true,
+            "dependencies": [
+                "@miris-inc/components",
+                "@miris-inc/core",
+                "@miris-inc/three",
+                "three"
+            ],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "featuresEnabledRestriction": ["MIRIS_ADDON", "ALLOWUNSAFEEVAL"],
+            "enabled": true
         }
     ]
 }

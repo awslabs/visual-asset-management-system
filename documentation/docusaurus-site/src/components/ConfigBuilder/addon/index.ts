@@ -21,21 +21,34 @@ import {
     EDH_RULES,
     EDH_VPC_REQUIRING_FEATURES,
 } from "./edhWorkstations";
+import {
+    MIRIS_DEFAULTS,
+    MIRIS_FIELDS,
+    MIRIS_JSON_ONLY_PATHS,
+    MIRIS_RULES,
+    MIRIS_VPC_REQUIRING_FEATURES,
+} from "./mirisStreaming";
 
 /** Add-on form fields, appended to the core `FIELDS`. */
-export const ADDON_FIELDS: FieldMeta[] = [...EDH_FIELDS];
+export const ADDON_FIELDS: FieldMeta[] = [...EDH_FIELDS, ...MIRIS_FIELDS];
 
 /** Add-on rules, appended to the core `RULES`. */
-export const ADDON_RULES: Rule[] = [...EDH_RULES];
+export const ADDON_RULES: Rule[] = [...EDH_RULES, ...MIRIS_RULES];
 
 /** Add-on features that require a VPC, appended to the core VPC-requiring features. */
-export const ADDON_VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [...EDH_VPC_REQUIRING_FEATURES];
+export const ADDON_VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [
+    ...EDH_VPC_REQUIRING_FEATURES,
+    ...MIRIS_VPC_REQUIRING_FEATURES,
+];
 
 /** Add-on blocks of the template JSONs, spread into `app.addons` after the core add-ons. */
-export const ADDON_DEFAULTS: ConfigShape = { ...EDH_DEFAULTS };
+export const ADDON_DEFAULTS: ConfigShape = { ...EDH_DEFAULTS, ...MIRIS_DEFAULTS };
 
 /** Add-on config paths edited only in the downloaded config.json. */
-export const ADDON_JSON_ONLY_PATHS: readonly string[] = [...EDH_JSON_ONLY_PATHS];
+export const ADDON_JSON_ONLY_PATHS: readonly string[] = [
+    ...EDH_JSON_ONLY_PATHS,
+    ...MIRIS_JSON_ONLY_PATHS,
+];
 
 /** Runs each add-on's normalizations, recording every forced field in `changes`. */
 export function applyAddonDerived(input: ConfigShape, changes: DerivedChange[]): ConfigShape {

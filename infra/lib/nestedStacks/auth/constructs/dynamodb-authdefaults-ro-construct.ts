@@ -23,6 +23,7 @@ import { kmsKeyPolicyStatementGenerator } from "../../../helper/security";
 import { Service } from "../../../../lib/helper/service-helper";
 import * as ServiceHelper from "../../../../lib/helper/service-helper";
 import {
+    addonReadOnlyApiPostRouteCriteria,
     addonReadOnlyApiRouteCriteria,
     addonReadOnlyWebRouteCriteria,
 } from "../../addon/addonDefaultRoutes";
@@ -852,6 +853,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
+                        ...addonReadOnlyApiPostRouteCriteria(props.config, roleNameIDClean),
                     ],
                 },
                 description: {

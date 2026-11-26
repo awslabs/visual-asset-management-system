@@ -670,6 +670,7 @@ export function generateContentSecurityPolicy(
     const addonSources = addonCspSources(config);
     connectSrc.push(...addonSources.connectSrc);
     frameSrc.push(...addonSources.frameSrc);
+    scriptSrc = mergeCSPSources(scriptSrc, addonSources.scriptSrc);
 
     // Merge additional CSP sources if configuration is loaded
     if (additionalCSPConfig) {

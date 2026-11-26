@@ -61,6 +61,7 @@ graph TD
     Api2 --> Pipeline
     Storage --> Addon
     Names --> Addon
+    Api2 --> Addon
     Storage --> Rest
     Auth --> Rest
     Api --> Rest
@@ -393,6 +394,8 @@ enum VAMS_APP_FEATURES {
 // common/addonAppFeatures.ts
 enum ADDON_APP_FEATURES {
     PHYSNA_ADDON,
+    MIRIS_ADDON,
+    MIRIS_UPLOAD,
 }
 ```
 

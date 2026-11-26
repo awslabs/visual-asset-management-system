@@ -545,6 +545,15 @@ _sns_module = _s3mk_importlib_util.module_from_spec(_sns_spec)
 _sns_spec.loader.exec_module(_sns_module)
 sys.modules['common.snsTopicNames'] = _sns_module
 sys.modules['common'].snsTopicNames = _sns_module
+# The add-on resource-name keys (common/addonResourceNames.py, pure data over ResourceParamKey) are
+# imported by add-on handlers at module load; `common` is a MagicMock, so register the real module.
+_addon_rn_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.addonResourceNames',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'addonResourceNames.py')
+)
+_addon_rn_module = _s3mk_importlib_util.module_from_spec(_addon_rn_spec)
+_addon_rn_spec.loader.exec_module(_addon_rn_module)
+sys.modules['common.addonResourceNames'] = _addon_rn_module
 # handlers.assets.assetVersions is imported by assetFiles and metadataService at module load.
 # Create a minimal mock package hierarchy: handlers → handlers.assets → handlers.assets.assetVersions
 if 'handlers' not in sys.modules:
@@ -730,6 +739,8 @@ os.environ.setdefault("ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME", "assetFil
 # Vector search + workflow coordination tables
 os.environ["VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME"] = "vectorEmbeddingsStorageTable"
 os.environ["WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME"] = "workflowExecutionLocksStorageTable"
+# Miris add-on viewer key table (mintViewerKey resolves it at module load)
+os.environ["MIRIS_VIEWER_KEY_STORAGE_TABLE_NAME"] = "mirisViewerKeyTable"
 
 
 @pytest.fixture(scope="function")

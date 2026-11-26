@@ -9977,6 +9977,115 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 type: object
             security:
                 - DefaultCognitoAuthorizer: []
+    /addon/miris/asset-status:
+        get:
+            summary: "Get the Miris stream status of an asset file."
+            description: "Reports the Miris stream recorded in the file's `miris_*` metadata. The Miris asset UUID is read server side from `miris_asset_uuid`, so a caller reaches only a stream the file references; the Miris asset must carry the binding tags `vams-asset-{assetId}` and `vams-database-{databaseId}`. The status is advisory: anything short of a definitive processing failure or a missing binding is `unknown`. Enforces Tier 1 on the route and Tier 2 `GET` on the asset. Deployed only when `app.addons.useMirisStreaming.enabled` is true."
+            parameters:
+                - name: databaseId
+                  in: query
+                  required: true
+                  schema:
+                      type: string
+                - name: assetId
+                  in: query
+                  required: true
+                  schema:
+                      type: string
+                - name: filePath
+                  in: query
+                  required: true
+                  description: "The file's asset-relative path (`/folder/scene.usd`) or its full object key, which is reduced to the asset-relative path. A path ending in `/` is rejected."
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: "The file's stream metadata and the stream's state."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/mirisAssetStatusResponse'
+                "400":
+                    description: "Invalid query parameters, or the asset does not exist."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: "Tier 1 or Tier 2 authorization denied."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: "Unexpected internal error."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+    /addon/miris/viewer-key:
+        post:
+            summary: "Get a Miris viewer key that can stream an asset file's Miris asset."
+            description: "Returns a viewer key for the Miris asset recorded in the file's `miris_asset_uuid` metadata, after the asset distribution rule of the core download routes (distributable, and not quarantined while `app.compliance.quarantineBlocksDownload` is on) and the binding tag check the status route makes. VAMS creates a key for the one Miris asset that expires after `viewerKeyTtlMinutes` and records its key ID in the add-on's viewer key table. The key material is never stored, logged, or audited; each mint writes an `AUTHOTHER` audit record (`mirisViewerKeyMint`). Responses carry `Cache-Control: no-cache, no-store`. Enforces Tier 1 `POST` on the route and Tier 2 `GET` on the asset. Deployed only when `app.addons.useMirisStreaming.enabled` is true."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/mirisViewerKeyRequest'
+            responses:
+                "200":
+                    description: "A viewer key that can stream the file's Miris asset."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/mirisViewerKeyResponse'
+                "400":
+                    description: "Invalid request body, the asset does not exist, the asset is not distributable (`Asset not distributable`) or is quarantined (`Asset is quarantined and cannot be downloaded`), or `miris_asset_uuid` is not a UUID (`state: invalidUuid`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/mirisStreamError'
+                "403":
+                    description: "Authorization denied, or the Miris asset is missing or lacks a binding tag (`state: notBound`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/mirisStreamError'
+                "404":
+                    description: "The file records no Miris stream (`state: notStreamed`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/mirisStreamError'
+                "500":
+                    description: "A minted key could not be recorded (VAMS attempts to delete it from Miris), or the key lifetime is invalid."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "502":
+                    description: "Miris could not be reached, or did not create the key."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: "The add-on's viewer key settings are incomplete."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "504":
+                    description: "The request deadline passed before Miris answered."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
     /addon/edh/workstations:
         get:
             summary: "List the caller's EDH workstations."
@@ -16157,6 +16266,92 @@ components:
                     type: string
             required:
                 - message
+        mirisStreamError:
+            type: object
+            properties:
+                message:
+                    type: string
+                state:
+                    type: string
+                    description: "Present when the error concerns the file's Miris stream."
+                    enum:
+                        - notStreamed
+                        - invalidUuid
+                        - notBound
+            required:
+                - message
+        mirisViewerKeyRequest:
+            type: object
+            properties:
+                databaseId:
+                    type: string
+                    minLength: 3
+                    maxLength: 63
+                assetId:
+                    type: string
+                    minLength: 1
+                    maxLength: 256
+                filePath:
+                    type: string
+                    minLength: 1
+                    maxLength: 1024
+                    description: "As the `filePath` query parameter of `GET /addon/miris/asset-status`."
+            required:
+                - databaseId
+                - assetId
+                - filePath
+        mirisAssetStatusResponse:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "The normalized asset-relative path, for example `/scene.usd`."
+                mirisAssetUuid:
+                    type: string
+                    nullable: true
+                    description: "`miris_asset_uuid`; null when absent or empty."
+                sourceVersionId:
+                    type: string
+                    nullable: true
+                    description: "`miris_source_version_id`; null when absent, empty when the source version was not known at upload."
+                uploadedAt:
+                    type: string
+                    nullable: true
+                    description: "`miris_uploaded_at` (ISO 8601); null when absent."
+                displayName:
+                    type: string
+                    nullable: true
+                    description: "`miris_display_name`; null when absent."
+                state:
+                    type: string
+                    description: "`notStreamed` (no UUID), `invalidUuid` (not a UUID), `notBound` (the Miris asset is missing, Miris reports it `deleted`, or it lacks a binding tag), `unknown` (the state could not be established), or the processing state Miris reports, such as `preview`, `streamable`, `error`, or `failed`."
+                stale:
+                    type: boolean
+                    nullable: true
+                    description: "`true` when a file the stream was built from (the root file, its sublayers and references, or a texture or other asset it uses) was removed from the asset or changed since the upload, `false` when none was, and null when this cannot be established: the file records no `miris_dependency_manifest` or no usable `miris_asset_uuid`, the manifest or the asset listing cannot be read, the manifest does not match its SHA-256 ID, or the comparison does not finish before the request deadline."
+            required:
+                - filePath
+                - state
+        mirisViewerKeyResponse:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    description: "The normalized asset-relative path."
+                mirisAssetUuid:
+                    type: string
+                viewerKey:
+                    type: string
+                    description: "The viewer key material."
+                expiresAt:
+                    type: string
+                    format: date-time
+                    description: "The key's expiry."
+            required:
+                - filePath
+                - mirisAssetUuid
+                - viewerKey
+                - expiresAt
         requestBlockedError:
             type: object
             description: "The body of the 403 API Gateway returns when the deployment's AWS WAF web ACL blocks a request at the stage (the WAF_FILTERED gateway response)."

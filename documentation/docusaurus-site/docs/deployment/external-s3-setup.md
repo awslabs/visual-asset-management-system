@@ -252,7 +252,7 @@ Whether a pipeline can process an asset in a cross-Region bucket depends on wher
 
 -   **Supported through the manifest Region.** VAMS-owned code reads the input and writes the output, and it addresses each asset bucket in the Region the manifest names. In the VPC the traffic uses the cross-Region endpoint (Variation B) or the operator's path (Variation C); outside the VPC, the public Amazon S3 endpoints.
 -   **Supported through the cross-Region endpoint.** As above, but the compute runs in the isolated subnets, which reach another Region only through the cross-Region interface endpoint the VPC builder creates there. With the endpoint flag off, or in a restricted partition, the pipeline rejects the input and the operator [moves it to private subnets](#moving-an-isolated-subnet-pipeline-to-private-subnets).
--   **Same-Region only.** A third-party container image reads the input and writes the output through its own AWS SDK, whose cross-Region behaviour VAMS neither controls nor verifies, so the pipeline rejects an input or output bucket outside the deployment Region.
+-   **Same-Region only.** A third-party container image reads the input and writes the output through its own AWS SDK, whose cross-Region behaviour VAMS neither controls nor verifies, or the container reads and writes Amazon S3 with a client for the deployment Region only, so the pipeline rejects an input or output bucket outside the deployment Region.
 
 A rejection happens in the pipeline's `vamsExecute` function before the job is submitted and is reported through `SendTaskFailure`, so the execution fails fast with a message naming both Regions (and, for the isolated-subnet pipelines, both remedies) instead of after its compute is provisioned.
 

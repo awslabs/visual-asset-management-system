@@ -14,12 +14,13 @@ through the S3 gateway endpoint and in each cross-Region asset bucket's Region t
 cross-Region S3 interface endpoint the VPC builder creates there (`addCrossRegionS3Endpoints`). The
 CDK names those Regions in `CROSS_REGION_S3_ENDPOINT_REGIONS` on their `vamsExecute` Lambdas, and
 the handlers reject an input in any other Region before submitting the job, from inside the `try`
-that reports `SendTaskFailure`. The eight private-subnet pipelines, the GenAI CAD STEP agent (its
+that reports `SendTaskFailure`. The private-subnet pipelines, the GenAI CAD STEP agent (its
 container runs on Amazon Bedrock AgentCore outside the VPC, or on AWS Batch in private subnets) and
-the Lambda-container pipelines are not gated: their compute has a route to Amazon S3 in the bucket
-Region.
+the Lambda-container pipelines are not gated, because their compute has a route to Amazon S3 in the
+bucket Region, except the same-Region-only class below (third-party container images, and the Miris
+upload, whose client is built for the deployment Region).
 
-The seventeen `manifestHelper.py` copies are one file; byte identity is asserted first so an edit
+The eighteen `manifestHelper.py` copies are one file; byte identity is asserted first so an edit
 applied to one copy and not propagated fails here.
 """
 
@@ -39,6 +40,7 @@ MANIFEST_HELPER_COPIES = (
     "backendPipelines/conversion/3dBasic/lambda/manifestHelper.py",
     "backendPipelines/conversion/cogConvert/lambda/manifestHelper.py",
     "backendPipelines/conversion/coordinateTransform/lambda/manifestHelper.py",
+    "backendPipelines/addon/conversion/mirisUpload/lambda/manifestHelper.py",
     "backendPipelines/genAi/cadStepAgent/lambda/manifestHelper.py",
     "backendPipelines/genAi/imageTo3d/lambda/manifestHelper.py",
     "backendPipelines/genAi/nvidia/cosmos/3/lambda/manifestHelper.py",
@@ -85,8 +87,10 @@ REGION_CONSUMING_VAMS_EXECUTE = (
 )
 
 # Private-subnet pipelines that hand s3:// locations to a third-party container image whose SDK VAMS
-# does not control: same-Region only, rejected at vamsExecute.
+# does not control, and the Miris upload, whose container reads the asset and writes its metadata with a
+# client for the deployment Region: same-Region only, rejected at vamsExecute.
 SAME_REGION_ONLY_VAMS_EXECUTE = (
+    "backendPipelines/addon/conversion/mirisUpload/lambda/vamsExecuteMirisUpload.py",
     "backendPipelines/multi/modelOps/lambda/vamsExecuteModelOps.py",
     "backendPipelines/multi/rapidPipeline/lambda/vamsExecuteRapidPipeline.py",
     "backendPipelines/multi/rapidPipelineEKS/lambda/vamsExecuteRapidPipelineEKS.py",

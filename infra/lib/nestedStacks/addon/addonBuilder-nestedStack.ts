@@ -12,6 +12,9 @@ import { Stack, NestedStack } from "aws-cdk-lib";
 import { GarnetFrameworkBuilderNestedStack } from "./garnetFramework/garnetFrameworkBuilder-nestedStack";
 import { PhysnaSyncBuilderNestedStack } from "./physna/physnaSyncBuilder-nestedStack";
 import { EdhWorkstationsBuilderNestedStack } from "./edhWorkstations/edhWorkstationsBuilder-nestedStack";
+import { MirisBuilderNestedStack } from "./miris/mirisBuilder-nestedStack";
+import { MirisUploadBuilderNestedStack } from "./miris/upload/mirisUploadBuilder-nestedStack";
+import { SecurityGroupGatewayPipelineConstruct } from "../pipelines/constructs/securitygroup-gateway-pipeline-construct";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import { RouteRegistry } from "../apiLambda/apiRouteRegistry";
@@ -29,10 +32,13 @@ export interface AddonBuilderNestedStackProps extends cdk.StackProps {
     vpc: ec2.IVpc;
     privateSubnets: ec2.ISubnet[];
     isolatedSubnets: ec2.ISubnet[];
+    vpceSecurityGroup: ec2.ISecurityGroup;
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
     registry: RouteRegistry;
     apiKeyServiceFunction: lambda.IFunction;
+    // vamsSchema import CR lambda name (ApiBuilder2), for add-on pipelines that register with VAMS.
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 /**
@@ -49,6 +55,11 @@ export class AddonBuilderNestedStack extends NestedStack {
      * stack after ApiBuilder. With no such add-on the stack keeps the dependencies it has without one.
      */
     public readonly usesApiKeyService: boolean = false;
+    /**
+     * True when an enabled add-on builds a pipeline that registers with VAMS through the vamsSchema
+     * import Lambda (ApiBuilder2); the core stack then deploys this stack after ApiBuilder2.
+     */
+    public invokesVamsSchemaImportFunction = false;
 
     constructor(parent: Construct, name: string, props: AddonBuilderNestedStackProps) {
         super(parent, name);
@@ -122,6 +133,64 @@ export class AddonBuilderNestedStack extends NestedStack {
             }
             if (props.config.app.addons.useEdhWorkstations.amiBuilds.enabled) {
                 this.enabledFeatures.push(ADDON_APP_FEATURES.EDH_AMI_RECIPES);
+            }
+        }
+
+        //Miris Spatial Streaming
+        if (props.config.app.addons.useMirisStreaming.enabled) {
+            const mirisBuilderNestedStack = new MirisBuilderNestedStack(
+                this,
+                "MirisBuilderNestedStack",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    isolatedSubnets: props.isolatedSubnets,
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    registry: props.registry,
+                }
+            );
+
+            // The Miris streaming viewer is gated by this flag, so the web UI only surfaces it
+            // when the add-on is deployed.
+            this.enabledFeatures.push(ADDON_APP_FEATURES.MIRIS_ADDON);
+
+            //Miris upload pipeline (AWS Batch on Fargate in the private pipeline subnets)
+            if (props.config.app.addons.useMirisStreaming.upload.enabled) {
+                const pipelineNetwork = new SecurityGroupGatewayPipelineConstruct(
+                    this,
+                    "PipelineNetwork",
+                    {
+                        config: props.config,
+                        vpc: props.vpc,
+                        vpceSecurityGroup: props.vpceSecurityGroup,
+                        privateSubnets: props.privateSubnets,
+                        isolatedSubnets: props.isolatedSubnets,
+                    }
+                );
+
+                const mirisUploadBuilderNestedStack = new MirisUploadBuilderNestedStack(
+                    this,
+                    "MirisUploadBuilderNestedStack",
+                    {
+                        config: props.config,
+                        storageResources: props.storageResources,
+                        vpc: props.vpc,
+                        pipelineSubnets: pipelineNetwork.privateSubnets.pipeline,
+                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                        importGlobalPipelineWorkflowV2FunctionName:
+                            props.importGlobalPipelineWorkflowV2FunctionName,
+                    }
+                );
+                this.pipelineVamsLambdaFunctionNames.push(
+                    mirisUploadBuilderNestedStack.pipelineVamsLambdaFunctionName
+                );
+                this.invokesVamsSchemaImportFunction = true;
+
+                // Gates the viewer's "Stream with Miris" action, which runs this pipeline.
+                this.enabledFeatures.push(ADDON_APP_FEATURES.MIRIS_UPLOAD);
             }
         }
 

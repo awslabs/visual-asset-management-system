@@ -63,6 +63,8 @@ SHIPPED_CRITERION_VALUES = [
     '/addon/edh/admin',
     '/addon/edh/catalog',
     '/addon/edh/workstations',
+    '/addon/miris/asset-status',
+    '/addon/miris/viewer-key',
     '/addon/physna/viewer',
     '/asset-links',
     '/audit/',

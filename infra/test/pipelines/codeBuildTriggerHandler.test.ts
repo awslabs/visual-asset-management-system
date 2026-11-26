@@ -21,6 +21,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { PIPELINE_SOURCE_DIRS, pipelineSourceLabel } from "../support/addonPipelines";
 import * as cdk from "aws-cdk-lib";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { Template } from "aws-cdk-lib/assertions";
@@ -30,8 +31,6 @@ import {
 } from "../../lib/nestedStacks/pipelines/constructs/codeBuildTrigger";
 import { newTestApp } from "../support/testApp";
 
-const PIPELINES_DIR = path.join(__dirname, "..", "..", "lib", "nestedStacks", "pipelines");
-
 /** Every `*CodeBuild-construct.ts` under the pipelines directory. */
 const codeBuildConstructs = (dir: string): string[] =>
     fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -40,7 +39,7 @@ const codeBuildConstructs = (dir: string): string[] =>
         return entry.name.endsWith("CodeBuild-construct.ts") ? [full] : [];
     });
 
-const CONSTRUCTS = codeBuildConstructs(PIPELINES_DIR);
+const CONSTRUCTS = PIPELINE_SOURCE_DIRS.flatMap((dir) => codeBuildConstructs(dir));
 const HANDLER_SOURCE = fs.readFileSync(CODEBUILD_TRIGGER_HANDLER_PATH, "utf8");
 
 describe("CodeBuild build triggers", () => {
@@ -59,7 +58,7 @@ describe("CodeBuild build triggers", () => {
         ]);
     });
 
-    test.each(CONSTRUCTS.map((f) => [path.relative(PIPELINES_DIR, f), f]))(
+    test.each(CONSTRUCTS.map((f) => [pipelineSourceLabel(f), f]))(
         "%s uses the shared handler and carries no inline copy",
         (_name, file) => {
             const source = fs.readFileSync(file, "utf8");

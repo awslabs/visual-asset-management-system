@@ -374,7 +374,7 @@ describe("visualizerPlugin/CLAUDE.md catalog", () => {
             expect(/\bdisabled\b/.test(row.status)).toBe(config.enabled === false);
             const gates: string[] = config.featuresEnabledRestriction || [];
             gates.forEach((gate) => expect(row.status).toContain(gate));
-            ["ALLOWUNSAFEEVAL", "PHYSNA_ADDON"].forEach((gate) => {
+            ["ALLOWUNSAFEEVAL", "PHYSNA_ADDON", "MIRIS_ADDON"].forEach((gate) => {
                 if (row.status.includes(gate)) expect(gates).toContain(gate);
             });
         }

@@ -80,3 +80,7 @@ EDH_QUOTA_REACHED_API_MESSAGE = "The EDH quota for this operation has been reach
 # its core ones (utils/api_client.py _BUSINESS_REFUSAL_429_MESSAGES), so such a 429 is sent once and
 # reaches the add-on's own status mapping instead of the throttling backoff.
 ADDON_BUSINESS_REFUSAL_429_MESSAGES = (EDH_QUOTA_REACHED_API_MESSAGE,)
+
+# Miris Spatial Streaming
+FEATURE_MIRIS_ADDON = "MIRIS_ADDON"
+FEATURE_MIRIS_UPLOAD = "MIRIS_UPLOAD"

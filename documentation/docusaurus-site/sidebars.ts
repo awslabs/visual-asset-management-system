@@ -136,6 +136,20 @@ const sidebars: SidebarsConfig = {
                                 "developer/edh-workstations/cli-troubleshooting",
                             ],
                         },
+                        {
+                            type: "category",
+                            label: "Miris Spatial Streaming",
+                            collapsed: true,
+                            items: [
+                                "developer/addon/miris-spatial-streaming/overview",
+                                "developer/addon/miris-spatial-streaming/enable",
+                                "developer/addon/miris-spatial-streaming/how-it-works",
+                                "developer/addon/miris-spatial-streaming/upload-pipeline",
+                                "developer/addon/miris-spatial-streaming/resources",
+                                "developer/addon/miris-spatial-streaming/security-and-networking",
+                                "developer/addon/miris-spatial-streaming/uninstall",
+                            ],
+                        },
                     ],
                 },
                 {

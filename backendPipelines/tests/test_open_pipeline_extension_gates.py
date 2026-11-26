@@ -16,6 +16,7 @@ existing one, which is how the loose form spread in the first place.
 
 import contextlib
 import importlib.util
+import json
 import os
 import sys
 import types
@@ -42,6 +43,10 @@ PIPELINES = (
     ("coordinateTransform", "backendPipelines/conversion/coordinateTransform",
      "infra/lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/"
      "coordinateTransform-construct.ts"),
+    # Configured per deployment (app.addons.useMirisStreaming.upload.triggerExtensions); the shipped
+    # template carries the default the construct passes through.
+    ("mirisUpload", "backendPipelines/addon/conversion/mirisUpload",
+     "infra/config/config.template.commercial.json"),
     ("videoSopBom", "backendPipelines/genAi/videoSopBom",
      "infra/lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct.ts"),
     ("cadStepAgent", "backendPipelines/genAi/cadStepAgent",
@@ -60,6 +65,11 @@ PIPELINES = (
      "infra/lib/nestedStacks/pipelines/system/genAiMetadata/constructs/"
      "systemGenAiMetadata-construct.ts"),
 )
+
+# The config path of an allow list that a deployment configures rather than a construct declares.
+CONFIGURED_ALLOW_LISTS = {
+    "mirisUpload": ("app", "addons", "useMirisStreaming", "upload", "triggerExtensions")
+}
 
 PIPELINE_IDS = [name for name, _, _ in PIPELINES]
 
@@ -82,7 +92,7 @@ _LISTED = (".stl", ".obj", ".glb", ".STL", ".Obj")
 _TOKEN = "tok-extension-gate"
 
 # customLogging is a per-pipeline package with an identical logger in each. Stubbed once so loading
-# eight handlers does not depend on which pipeline's copy sys.path resolves first.
+# nine handlers does not depend on which pipeline's copy sys.path resolves first.
 if "customLogging" not in sys.modules:
     _cl_pkg = types.ModuleType("customLogging")
     _cl_logger = types.ModuleType("customLogging.logger")
@@ -189,12 +199,33 @@ def _invoke(mod, file_uri):
     return resp, start, send_failure
 
 
-def _cdk_allow_list(construct_rel):
+def _configured_allow_list(template_rel, keys):
+    """The allow-list string a shipped config template carries at `keys`.
+
+    Fails naming the template and the missing field, rather than with a KeyError, when the template
+    does not carry it.
+    """
+    path = os.path.join(_REPO_ROOT, *template_rel.split("/"))
+    assert os.path.isfile(path), path
+    with open(path, encoding="utf-8") as fh:
+        value = json.load(fh)
+    for depth, key in enumerate(keys):
+        if not isinstance(value, dict) or key not in value:
+            pytest.fail(
+                f"{template_rel} has no {'.'.join(keys)} field (missing at {'.'.join(keys[:depth + 1])}); "
+                "the pipeline's input-extension allow list is read from it")
+        value = value[key]
+    return value
+
+
+def _cdk_allow_list(construct_rel, name=None):
     """The allow-list string the pipeline's construct passes to its openPipeline builder.
 
     Collects every quoted segment of the declaration so a value written across several lines reads
-    the same as a single-line one.
+    the same as a single-line one. A configured allow list is read from the shipped config template.
     """
+    if name in CONFIGURED_ALLOW_LISTS:
+        return _configured_allow_list(construct_rel, CONFIGURED_ALLOW_LISTS[name])
     path = os.path.join(_REPO_ROOT, *construct_rel.split("/"))
     assert os.path.isfile(path), path
     with open(path, encoding="utf-8") as fh:
@@ -260,7 +291,7 @@ class TestExtensionGate:
         the "*" wildcard (it takes every file); the exact-membership cases above still run against the
         finite list this suite supplies, and the wildcard's own behaviour is pinned below.
         """
-        allowed = _cdk_allow_list(construct)
+        allowed = _cdk_allow_list(construct, name)
         if name in ANY_FILE_PIPELINES:
             assert allowed == "*", allowed
             return

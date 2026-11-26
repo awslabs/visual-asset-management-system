@@ -7,8 +7,8 @@
  * The viewer install scripts (web/customInstalls/<viewer>/, run by `postinstall`) decide whether to
  * fetch and bundle a viewer's vendor package with checkViewerEnabled(). It has to read the same
  * three configuration files the browser merges (core, add-on, custom), or a viewer configured in
- * the add-on file — the licensed VNTANA and VEERUM viewers — is reported as missing and its install
- * is skipped even when it is enabled.
+ * the add-on file (the licensed VNTANA and VEERUM viewers and the Miris Spatial Streaming viewer)
+ * is reported as missing and its install is skipped even when it is enabled.
  */
 
 import fs from "fs";
@@ -61,6 +61,9 @@ describe("checkViewerEnabled", () => {
             expect([viewer.id, checkViewerEnabled(viewer.id)]).toEqual([viewer.id, viewer.enabled]);
         }
         expect(checkViewerEnabled("vntana-viewer")).toBe(false);
+        // Ships enabled; its install also requires the add-on in the deployment configuration
+        // (mirisInstallGate.test.ts).
+        expect(checkViewerEnabled("miris-stream-viewer")).toBe(true);
         expect(checkViewerEnabled("threejs-viewer")).toBe(true);
     });
 

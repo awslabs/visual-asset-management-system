@@ -30,10 +30,15 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { ADDON_PIPELINES } from "../support/addonPipelines";
 
 const REPO = path.join(__dirname, "..", "..", "..");
 const PIPELINES = path.join(REPO, "backendPipelines");
 const BUILDERS = path.join(REPO, "infra", "lib", "nestedStacks", "pipelines");
+/** Add-on pipelines' builder directories, by their `backendPipelines` path, which theirs do not mirror. */
+const ADDON_PIPELINE_BUILDERS: Record<string, string> = Object.fromEntries(
+    ADDON_PIPELINES.map((p) => [p.backendPipelinesPath, p.dir])
+);
 
 /** Recursively collect files matching a predicate, skipping build and cache directories. */
 function walk(dir: string, keep: (name: string) => boolean): string[] {
@@ -157,7 +162,9 @@ function grantedHandlerStems(builderText: string): Set<string> {
 
 describe("pipeline task-token failure grants", () => {
     const reporting = handlersReportingFailure();
-    const builderFiles = walk(BUILDERS, (n) => n.endsWith(".ts"));
+    const builderFiles = [BUILDERS, ...Object.values(ADDON_PIPELINE_BUILDERS)].flatMap((dir) =>
+        walk(dir, (n) => n.endsWith(".ts"))
+    );
     const allBuilderText = builderFiles.map((f) => fs.readFileSync(f, "utf-8")).join("\n");
 
     it("finds pipeline handlers that report a task-token failure", () => {
@@ -224,7 +231,10 @@ export function buildTemplatedFunction(scope) {
         // directory serving four pipeline variants, so the match is on prefix rather than equality.
         const missing: string[] = [];
         for (const [pipeline, stems] of reporting) {
+            const addonBuilderDir = ADDON_PIPELINE_BUILDERS[pipeline];
             const owningBuilders = builderFiles.filter((file) => {
+                if (addonBuilderDir !== undefined)
+                    return file.startsWith(addonBuilderDir + path.sep);
                 const rel = path
                     .relative(BUILDERS, file)
                     .split(path.sep)

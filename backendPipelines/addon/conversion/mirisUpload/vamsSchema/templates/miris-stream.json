@@ -1,0 +1,27 @@
+{
+    "templateId": "miris-stream",
+    "templateName": "Stream with Miris",
+    "description": "Upload the selected USD asset to Miris Spatial Streaming.",
+    "configFormat": "json",
+    "configBody": "{\"mirisAssetName\":\"{{MIRIS_ASSET_NAME}}\",\"mirisTags\":{{MIRIS_TAGS}},\"triggerType\":\"{{triggerType}}\"}",
+    "allowCustomEdit": false,
+    "isDefault": true,
+    "inputInstructions": "Select a USD file of the asset. The pipeline uploads the asset's root USD file, the one no other USD file in the asset references, and packages its referenced layers and textures automatically. Leave both fields blank to use the VAMS asset name and no Miris tags. Tags starting with vams-asset- or vams-database- are reserved and dropped.",
+    "tagSchema": [
+        {
+            "tagKey": "MIRIS_ASSET_NAME",
+            "type": "string",
+            "required": false,
+            "label": "Miris asset name",
+            "description": "Name for the asset in Miris. Blank uses the VAMS asset name."
+        },
+        {
+            "tagKey": "MIRIS_TAGS",
+            "type": "string-list",
+            "required": false,
+            "default": [],
+            "label": "Miris tags",
+            "description": "Tags to apply to the asset in Miris. Blank applies none."
+        }
+    ]
+}

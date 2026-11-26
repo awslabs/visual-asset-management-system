@@ -403,6 +403,18 @@ const NON_ROOT_IMAGES: {
         // The package the entrypoint imports at run time.
         readSources: ["./cog_convert_pipeline/"],
     },
+    {
+        label: "Miris upload",
+        file: path.join(
+            PIPELINES_DIR,
+            "addon",
+            "conversion",
+            "mirisUpload",
+            "container",
+            "Dockerfile"
+        ),
+        scratchDir: "/workdir",
+    },
 ];
 
 /**
@@ -749,6 +761,61 @@ describe.each(NON_ROOT_IMAGES)(
         }
     }
 );
+
+/**
+ * The Miris upload image installs its Python dependencies from the hashed export of its uv lock.
+ *
+ * `pyproject.toml` declares the direct dependencies, `uv.lock` pins every package, and the committed
+ * `requirements.txt` is exported from the lock with every package pinned by version and hash. `pip
+ * --require-hashes` refuses a requirement that carries no hash, so the install is only as
+ * reproducible as the export is complete.
+ */
+describe("the Miris upload image installs the hashed export of its uv lock", () => {
+    const containerDir = path.join(
+        PIPELINES_DIR,
+        "addon",
+        "conversion",
+        "mirisUpload",
+        "container"
+    );
+    const dockerfile = fs.readFileSync(path.join(containerDir, "Dockerfile"), "utf-8");
+    const exported = fs.readFileSync(path.join(containerDir, "requirements.txt"), "utf-8");
+
+    /** Each requirement in the export with its continuation lines joined. */
+    const exportEntries = exported
+        .replace(/\\\r?\n\s*/g, " ")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"));
+
+    it("pip installs requirements.txt with --require-hashes", () => {
+        const installs = dockerfile
+            .replace(/\\\r?\n\s*/g, " ")
+            .split(/\r?\n/)
+            .filter((line) => /\bpip3? install\b/.test(line));
+        expect(installs.length).toBeGreaterThan(0);
+        for (const install of installs) {
+            expect(install).toContain("--require-hashes");
+            expect(install).toMatch(/-r \S*requirements\.txt\b/);
+        }
+    });
+
+    it("requirements.txt is a uv export, beside the lock it was exported from", () => {
+        expect(exported).toContain("uv export --frozen --no-emit-project --no-dev --no-annotate");
+        expect(fs.existsSync(path.join(containerDir, "uv.lock"))).toBe(true);
+        expect(fs.existsSync(path.join(containerDir, "requirements.lock"))).toBe(false);
+    });
+
+    it("every exported entry pins an exact version and carries a sha256 hash", () => {
+        // Control: an empty export would satisfy the loop below.
+        expect(exportEntries.length).toBeGreaterThanOrEqual(5);
+        for (const entry of exportEntries) {
+            const name = entry.split(" ")[0];
+            expect([name, /^[A-Za-z0-9._-]+(\[[^\]]+\])?==\S+/.test(entry)]).toEqual([name, true]);
+            expect([name, /--hash=sha256:[0-9a-f]{64}/.test(entry)]).toEqual([name, true]);
+        }
+    });
+});
 
 /**
  * The GPU images that clone an upstream repository at build time -- the five NVIDIA images and all seven

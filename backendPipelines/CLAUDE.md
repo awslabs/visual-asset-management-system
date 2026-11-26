@@ -1662,7 +1662,7 @@ so no suite there runs `--strict-markers` and an unregistered marker only warns.
 `unit` through a `pytest_configure` hook in their `conftest.py`; none registers `temporary`.
 
 **A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.**
-`test_open_pipeline_extension_gates.py` is the worked example: it loads all eight `openPipeline.py`
+`test_open_pipeline_extension_gates.py` is the worked example: it loads all nine `openPipeline.py`
 handlers by path under per-pipeline module names and asserts each tests EXACT membership of its parsed
 `ALLOWED_INPUT_FILEEXTENSIONS` list. `in` against the joined env string is substring containment, which
 admits any prefix of a listed extension (`.us` passes for `.usd,.usda`), and the loose form spread by

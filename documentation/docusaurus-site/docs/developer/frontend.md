@@ -37,7 +37,7 @@ web/src/
 
   services/               # API and data services (ONLY place to import apiClient)
     APIService.ts         # Main API service (~40+ exports)
-    addons/               # Add-on API calls (physnaAPIService.ts)
+    addons/               # Add-on API calls (physnaAPIService.ts and the other add-ons')
     apiClient.ts          # Custom fetch wrapper (internal only)
     appCache.ts           # localStorage cache (replaces Amplify Cache)
     AssetUploadService.ts
@@ -603,7 +603,7 @@ Browsers ignore `'unsafe-inline'` whenever a hash source is also present, so the
 
 ### `app.webUi.allowUnsafeEvalFeatures`
 
-Controls whether `'unsafe-eval'` is added to `script-src`. Some viewer plugins depend on WebAssembly runtimes that compile JavaScript at runtime and require this relaxation — notably the Needle USD WASM viewer, the SuperSplat Editor, the ThatOpen IFC BIM viewer, and the Three.js CAD viewer for STEP/IGES/BREP files. When this flag is `false` (the default), those viewers will not initialize. Enable only if your security posture allows it.
+Controls whether `'unsafe-eval'` is added to `script-src`. Some viewer plugins depend on WebAssembly runtimes that compile JavaScript at runtime and require this relaxation — notably the Needle USD WASM viewer, the SuperSplat Editor, the ThatOpen IFC BIM viewer, the Three.js CAD viewer for STEP/IGES/BREP files, and the Miris Spatial Streaming viewer. When this flag is `false` (the default), those viewers will not initialize. Enable only if your security posture allows it.
 
 ### `worker-src` and viewer web workers
 
@@ -611,7 +611,7 @@ The base policy sets `worker-src 'self' blob: data:`. A viewer that decodes in a
 
 ### Add-on origins
 
-When add-ons that embed external content are enabled, CSP is extended dynamically. For example, with the Physna add-on enabled the configured `apiBaseEndpoint` origin is added to both `frame-src` (so the Physna hosted viewer can be loaded in an iframe) and `connect-src` (so any auxiliary fetches to Physna succeed). See `generateContentSecurityPolicy()` in `infra/lib/helper/security.ts` for the full set of conditional rules.
+When add-ons that embed external content are enabled, CSP is extended dynamically. For example, with the Physna add-on enabled the configured `apiBaseEndpoint` origin is added to both `frame-src` (so the Physna hosted viewer can be loaded in an iframe) and `connect-src` (so any auxiliary fetches to Physna succeed). With the Miris Spatial Streaming add-on enabled, `https://*.miris.com`, `wss://*.miris.com` and `https://*.miris-content.com` (asset content) are added to `connect-src` and `blob:` to `script-src`, from which the Miris web SDK loads part of its engine. Add-on sources come from `addonCspSources()` in `infra/lib/nestedStacks/addon/addonCsp.ts`. See `generateContentSecurityPolicy()` in `infra/lib/helper/security.ts` for the full set of conditional rules.
 
 ## Anti-Patterns
 

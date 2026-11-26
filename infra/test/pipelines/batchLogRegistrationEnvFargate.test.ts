@@ -30,6 +30,7 @@ import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import { VideoSopBomConstruct } from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct";
 import { CadStepAgentConstruct } from "../../lib/nestedStacks/pipelines/genAi/cadStepAgent/constructs/cadStepAgent-construct";
 import { makePipelineHarness } from "../support/pipelineConstructHarness";
+import { makeMirisUploadHarness } from "../addon/mirisUploadHarness";
 import {
     declaredStageNames,
     jobDefinitionRefOf,
@@ -652,5 +653,36 @@ describe("genAi/cadStepAgent (fargate runtime) executeBatchJob registration envi
         for (const name of declared) {
             expect(states).toContain(name);
         }
+    });
+});
+
+describe("addon/conversion/mirisUpload openPipeline registration environment", () => {
+    let template: Template;
+
+    beforeAll(() => {
+        // With a customer managed key, so the vended group's encryption is asserted as for the peers.
+        const h = makeMirisUploadHarness("MirisUploadEnvStack", { kms: true });
+        template = Template.fromStack(h.stack);
+    });
+
+    test("registers the vended group its job definition writes to, under the job definition's own stream prefix", () => {
+        const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
+        const jobDefinitionId = expectDerivedJobDefinitionName(
+            template,
+            env.BATCH_JOB_DEFINITION_NAME
+        );
+        expectVendedGroupRegistration(
+            template,
+            jobDefinitionId,
+            env.BATCH_JOB_LOG_GROUP_NAME,
+            env.BATCH_JOB_LOG_GROUP_ARN
+        );
+    });
+
+    test("the stage the producer declares is a state of the machine", () => {
+        expectDeclaredStagesInAsl(
+            template,
+            path.join(PRODUCERS, "addon", "conversion", "mirisUpload", "lambda", "openPipeline.py")
+        );
     });
 });

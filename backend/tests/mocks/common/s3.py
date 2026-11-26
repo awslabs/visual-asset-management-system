@@ -311,11 +311,18 @@ def _accelerated_presign(ordinary_client, bucket, args, kwargs):
 
 
 class RegionRoutingS3Client:
-    def __init__(self):
+    def __init__(self, config=None):
+        self._config_override = config
+        self._clients_by_region = {}
         # Bound at construction, so a module that builds its router at import binds its
         # deployment-Region client there (which is where tests stub boto3.client).
         self._default_client = boto3.client('s3', region_name=deployment_region(),
-                                            config=S3_ASSET_CLIENT_CONFIG)
+                                            config=self._client_config())
+
+    def _client_config(self):
+        if self._config_override is None:
+            return S3_ASSET_CLIENT_CONFIG
+        return S3_ASSET_CLIENT_CONFIG.merge(self._config_override)
 
     def _client_for(self, bucket):
         if not bucket:
@@ -323,7 +330,13 @@ class RegionRoutingS3Client:
         region = bucket_region_for_name(bucket)
         if region == deployment_region():
             return self._default_client
-        return s3_client_for_region(region)
+        if self._config_override is None:
+            return s3_client_for_region(region)
+        client = self._clients_by_region.get(region)
+        if client is None:
+            client = boto3.client('s3', region_name=region, config=self._client_config())
+            self._clients_by_region[region] = client
+        return client
 
     @staticmethod
     def _bucket_from_call(args, kwargs):
@@ -419,9 +432,9 @@ class RegionRoutingS3Resource:
         return getattr(self._default_resource, name)
 
 
-def region_routing_s3_client() -> RegionRoutingS3Client:
+def region_routing_s3_client(config=None) -> RegionRoutingS3Client:
     """A new Region-routing S3 client for a handler module's module-level client."""
-    return RegionRoutingS3Client()
+    return RegionRoutingS3Client(config)
 
 
 def region_routing_s3_resource() -> RegionRoutingS3Resource:

@@ -143,6 +143,14 @@ DELIBERATE_DEPARTURES = {
     # timeouts and three attempts under the flush deadline; a record it cannot confirm goes to the
     # function log as an undelivered record instead of holding the response.
     ("customLogging/auditLogging.py", "flush_client_config"),
+    # The Miris viewer-key route answers inside API Gateway's 29 s limit: its key-table write and
+    # Integration Key read take short timeouts and two attempts so the request deadline holds.
+    ("handlers/addon/miris/mintViewerKey.py", "key_table_config"),
+    ("handlers/addon/miris/mirisIntegration.py", "_secrets_config"),
+    # The Miris status route's staleness reads (buckets table, manifest, listing) take the same short
+    # timeouts and two attempts, through a Region-routing S3 client built with that override.
+    ("handlers/addon/miris/getAssetStatus.py", "staleness_call_config"),
+    ("common/s3.py", "self._bounded_config"),
     # The resource-name sweep runs during Lambda init, which has a 10-second limit: short timeouts and
     # no botocore retries, because the sweep's page loop retries under its own SWEEP_BUDGET_SECONDS and
     # a botocore back-off sleep would run past it.

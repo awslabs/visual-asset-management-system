@@ -205,6 +205,11 @@
                 },
                 {
                     "field": "route__path",
+                    "operator": "equals",
+                    "value": "/addon/miris/asset-status"
+                },
+                {
+                    "field": "route__path",
                     "operator": "starts_with",
                     "value": "/compliance"
                 }
@@ -276,6 +281,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/workflows"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "equals",
+                    "value": "/addon/miris/viewer-key"
                 }
             ],
             "groupPermissions": [

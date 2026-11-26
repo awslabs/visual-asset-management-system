@@ -109,7 +109,7 @@ aws bedrock-agentcore-control list-agent-runtimes \
 
 ## Pre-uninstall: add-ons
 
-An add-on can create objects outside the VAMS stack, in an external system or at run time, that `cdk destroy` does not remove. When the deployment enables an add-on whose pages describe removal steps, complete them while the deployment is still running, before [Step 1](#step-1-destroy-the-cdk-stack). The [Add-ons Overview](../developer/addons-overview.md) lists each add-on with a link to its pages.
+An add-on can create objects outside the VAMS stack, in an external system or at run time, that `cdk destroy` does not remove. When the deployment enables an add-on whose pages describe removal steps, complete them while the deployment is still running, before [Step 1](#step-1-destroy-the-cdk-stack). The [Add-ons Overview](../developer/addons-overview.md) lists each add-on with a link to its pages; for the Miris Spatial Streaming add-on, see [Uninstall the Miris Add-on](../developer/addon/miris-spatial-streaming/uninstall.md).
 
 ## Pre-uninstall: Lambda functions created for pipelines
 

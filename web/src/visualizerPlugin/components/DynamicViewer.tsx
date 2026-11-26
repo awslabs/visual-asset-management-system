@@ -191,14 +191,21 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
         setError(null);
 
         // Auto-select only if there's exactly one viewer available
-        // If multiple viewers exist, force user to choose to avoid loading performance-heavy viewers
+        // If multiple viewers exist, force user to choose to avoid loading performance-heavy viewers,
+        // unless, outside compare mode, the top-priority viewer (viewerMetadata is sorted by
+        // priority) sets autoSelect and no other viewer shares its priority
         const currentId = selectedViewerIdRef.current;
         const selectionStillCompatible =
             !!currentId && viewerMetadata.some((metadata) => metadata.config.id === currentId);
         if (selectionStillCompatible) {
             return;
         }
-        if (viewerMetadata.length === 1) {
+        const autoSelectPreferred =
+            mode !== "compare" &&
+            viewerMetadata.length > 1 &&
+            viewerMetadata[0].config.autoSelect === true &&
+            viewerMetadata[0].config.priority < viewerMetadata[1].config.priority;
+        if (viewerMetadata.length === 1 || autoSelectPreferred) {
             setSelectedViewerId(viewerMetadata[0].config.id);
         } else {
             // Multiple viewers available - don't auto-select, force user choice.

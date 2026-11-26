@@ -920,7 +920,7 @@ Amazon CloudFront compresses text responses (JavaScript, CSS, HTML, JSON, SVG an
 
 ## Add-on Resources
 
-An enabled add-on can deploy resources beyond those listed above, such as tables, functions, security groups, parameters under the deployment's `resourceNames` prefix, and objects it creates at runtime. The add-on's page lists them, with their removal on teardown and whether they carry a custom name (see [Add-ons Overview](../developer/addons-overview.md)).
+An enabled add-on can deploy resources beyond those listed above, such as tables, functions, security groups, parameters under the deployment's `resourceNames` prefix, and objects it creates at runtime. The add-on's page lists them, with their removal on teardown and whether they carry a custom name (see [Add-ons Overview](../developer/addons-overview.md)). The Miris Spatial Streaming add-on's are on [Miris Add-on Resources](../developer/addon/miris-spatial-streaming/resources.md).
 
 ## Next Steps
 

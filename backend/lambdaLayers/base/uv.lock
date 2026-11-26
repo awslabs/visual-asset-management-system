@@ -38,6 +38,7 @@ dependencies = [
     { name = "mypy-boto3-stepfunctions" },
     { name = "opensearch-py" },
     { name = "pydantic" },
+    { name = "requests" },
     { name = "urllib3" },
 ]
 
@@ -52,6 +53,7 @@ requires-dist = [
     { name = "mypy-boto3-stepfunctions", specifier = "==1.43.117" },
     { name = "opensearch-py", specifier = "==2.7.1" },
     { name = "pydantic", specifier = "==1.10.13" },
+    { name = "requests", specifier = "==2.34.2" },
     { name = "urllib3", specifier = ">=2.6.0,<3" },
 ]
 

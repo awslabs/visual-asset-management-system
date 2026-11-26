@@ -1,0 +1,55 @@
+{
+    "metadataSchemaId": "miris-stream-file-schema",
+    "databaseId": "GLOBAL",
+    "metadataSchemaEntityType": "fileMetadata",
+    "schemaName": "Miris stream",
+    "fileKeyTypeRestriction": ".usd,.usda,.usdc,.usdz",
+    "enabled": true,
+    "fields": [
+        {
+            "metadataFieldKeyName": "miris_asset_uuid",
+            "metadataFieldValueType": "string",
+            "required": false,
+            "sequence": 0,
+            "dependsOnFieldKeyName": null,
+            "controlledListKeys": null,
+            "defaultMetadataFieldValue": null
+        },
+        {
+            "metadataFieldKeyName": "miris_source_version_id",
+            "metadataFieldValueType": "string",
+            "required": false,
+            "sequence": 1,
+            "dependsOnFieldKeyName": null,
+            "controlledListKeys": null,
+            "defaultMetadataFieldValue": null
+        },
+        {
+            "metadataFieldKeyName": "miris_uploaded_at",
+            "metadataFieldValueType": "date",
+            "required": false,
+            "sequence": 2,
+            "dependsOnFieldKeyName": null,
+            "controlledListKeys": null,
+            "defaultMetadataFieldValue": null
+        },
+        {
+            "metadataFieldKeyName": "miris_display_name",
+            "metadataFieldValueType": "string",
+            "required": false,
+            "sequence": 3,
+            "dependsOnFieldKeyName": null,
+            "controlledListKeys": null,
+            "defaultMetadataFieldValue": null
+        },
+        {
+            "metadataFieldKeyName": "miris_dependency_manifest",
+            "metadataFieldValueType": "string",
+            "required": false,
+            "sequence": 4,
+            "dependsOnFieldKeyName": null,
+            "controlledListKeys": null,
+            "defaultMetadataFieldValue": null
+        }
+    ]
+}

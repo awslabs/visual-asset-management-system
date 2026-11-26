@@ -52,7 +52,7 @@ backend/
       logger.py                      # safeLogger wrapper with sensitive data redaction
     custom/                          # FORK EXTENSION POINT: routes, resource names, constants (shipped empty)
     handlers/                        # Lambda handlers (one folder per domain)
-      addon/                         # Add-on handlers (Physna, Garnet)
+      addon/                         # Add-on handlers (Physna, Garnet, Miris)
       assets/assetService.py         # Gold standard handler
       auth/                          # Auth handlers (authorizer, constraints, cognito)
       authz/__init__.py              # Casbin ABAC/RBAC enforcer (CasbinEnforcer)
@@ -63,7 +63,7 @@ backend/
       workflows/                     # Step Functions workflow management
       ...                            # Additional handler domains
     models/                          # Pydantic v1 models
-      addon/                         # Add-on models (physnaViewer.py)
+      addon/                         # Add-on models (physnaViewer.py, miris.py)
       assetsV3.py                    # Gold standard model file
       common.py                      # Response helpers, error functions
       custom/                        # FORK EXTENSION POINT: a fork's models

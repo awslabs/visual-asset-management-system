@@ -86,9 +86,10 @@ CoreVAMSStack (root)
   |     |     reindexer launches the SYSTEM workflow the pipeline stack registers)
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
   |     |    (its vamsSchema registration custom resources invoke an ApiBuilder2 Lambda)
-  |     +-- AddonBuilder (one nested stack per enabled add-on) -> storage, resourceNames, ApiBuilder
+  |     +-- AddonBuilder (one nested stack per enabled add-on) -> storage, resourceNames, ApiBuilder, ApiBuilder2
   |     |    (ApiBuilder only while an add-on that mints temporary session keys through
-  |     |     apiKeyServiceFunction is on: usesApiKeyService)
+  |     |     apiKeyServiceFunction is on: usesApiKeyService; ApiBuilder2 only while an add-on
+  |     |     pipeline registers through the vamsSchema import function: invokesVamsSchemaImportFunction)
   |     +-- CustomBuilder (fork extension point)             -> storage, resourceNames
   |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)
   |     |                                                    -> storage, AuthBuilder, ApiBuilder,
@@ -132,6 +133,8 @@ Every aggregated list is composed from a core part, an add-on part beside it (th
 | Cross-stack inputs                          | `AddonBuilderNestedStackProps` (`apiKeyServiceFunction`, `registry`, ...)                                                   | `core-stack.ts`, with `addStackDependency()` on each producing stack (Rule 9); on ApiBuilder only while an enabled add-on invokes `apiKeyServiceFunction` (`usesApiKeyService`)                                       |
 
 An add-on stack registers its routes with `attachFunctionToApi(this, fn, { routePath, method, registry: props.registry })`, the registry `AddonBuilder` passes it, only while its add-on is enabled.
+
+An add-on route the seeded basic read-only role needs is a `route__path` criterion from `addonDefaultRoutes.ts`, never an edit of `dynamodb-authdefaults-ro-construct.ts`: `addonReadOnlyApiRouteCriteria()` joins its "Allow GET on API Paths" constraint and `addonReadOnlyApiPostRouteCriteria()` its "Allow POST on API Paths" constraint, for an add-on route that reads through a POST body. The core criteria's ids and order are unchanged (`test/addon/addonPostRoutes.test.ts`).
 
 `publishAddonResourceName()` and `publishCustomResourceName()`: both helpers share `nestedStacks/resourceNames/laneResourceNames.ts`, which also records each name in the deployment's `ResourceNameRegistry` (found from the construct tree with `ResourceNameRegistry.of(scope)`; `core-stack.ts` attaches it), so the name reaches the chunk parameters with no change on the fork's side.
 
@@ -1504,7 +1507,7 @@ write, including the latest/archived lifecycle of the item.
 
 ### **Pipeline Test Conventions**
 
-**A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.** Pipelines are near-copies of one another, so a loose check spreads by copying — and a per-pipeline test structurally cannot catch that. `test_open_pipeline_extension_gates.py` is the worked example: it loads all eight `openPipeline.py` handlers by path and asserts each tests EXACT membership of its parsed `ALLOWED_INPUT_FILEEXTENSIONS` list, rather than `in` against the joined env string (which is substring containment — `.us` passes for `.usd,.usda`). When the test was written it covered seven pipelines: two had been fixed and five had not, with every per-pipeline suite green. The handler count is the `PIPELINES` tuple in that file (`grep -c '^    ("[A-Za-z0-9]*", "backendPipelines/' backendPipelines/tests/test_open_pipeline_extension_gates.py`).
+**A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.** Pipelines are near-copies of one another, so a loose check spreads by copying — and a per-pipeline test structurally cannot catch that. `test_open_pipeline_extension_gates.py` is the worked example: it loads all nine `openPipeline.py` handlers by path and asserts each tests EXACT membership of its parsed `ALLOWED_INPUT_FILEEXTENSIONS` list, rather than `in` against the joined env string (which is substring containment — `.us` passes for `.usd,.usda`). When the test was written it covered seven pipelines: two had been fixed and five had not, with every per-pipeline suite green. The handler count is the `PIPELINES` tuple in that file (`grep -c '^    ("[A-Za-z0-9]*", "backendPipelines/' backendPipelines/tests/test_open_pipeline_extension_gates.py`).
 
 **Give every test module a suite-private basename.** `test_extension_gate.py`, `test_manifest_refactor.py`, `test_construct_pipeline_failure_reporting.py`, `test_open_pipeline_function_error.py`, `test_pipeline_end_token_routes.py`, `test_output_relative_subdir.py`, and both `pcPotreeViewer` `conftest.py` files each exist in two or more pipelines. No tests directory carries an `__init__.py`, so one pytest process collecting two same-named modules errors with `import file mismatch` — `pytest backendPipelines/` therefore cannot run as a single command, and under a different invocation order a suite can import another pipeline's same-named module and assert against the wrong file while passing. Prefix a new file with its pipeline (`test_splat_extension_gate.py`).
 
@@ -3015,6 +3018,8 @@ export function generateContentSecurityPolicy(
     )}; ...`;
 }
 ```
+
+Add-on sources come from `addonCspSources()` (`lib/nestedStacks/addon/addonCsp.ts`): `connectSrc` and `frameSrc` are appended to their directives and `scriptSrc` is merged into `script-src`.
 
 ### **Lambda Builder Integration in Nested Stacks**
 
