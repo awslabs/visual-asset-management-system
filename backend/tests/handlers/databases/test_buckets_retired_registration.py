@@ -19,6 +19,9 @@ from backend.backend.handlers.databases import createDatabase as handler
 from backend.backend.handlers.databases.databaseService import get_buckets
 from models.databases import CreateDatabaseRequestModel
 
+# A caller allowed to read every registration (Tier 2 `bucket` GET), so the listing shows the projection.
+READER = {"tokens": ["reader"]}
+
 _PHYSNA_COMMON = os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend", "handlers", "addon",
                               "physna", "physnaCommon.py")
 
@@ -54,9 +57,11 @@ class TestRetiredRegistration:
             {"bucketId": "cc33dd44-c092-475f-978a-d39e5d5a2657", "bucketName": "gone", "baseAssetsPrefix": "/",
              "retired": True},
         ]
-        with patch("backend.backend.handlers.databases.databaseService.dbClient") as db:
+        with patch("backend.backend.handlers.databases.databaseService.dbClient") as db, \
+                patch("backend.backend.handlers.databases.databaseService.CasbinEnforcer") as enforcer:
+            enforcer.return_value.enforce.return_value = True
             db.scan.return_value = _scan_response(rows)
-            result = get_buckets({}, {})
+            result = get_buckets({}, READER)
         assert [item.bucketName for item in result.Items] == ["current"]
 
     def test_a_database_cannot_be_created_on_a_retired_registration(self, monkeypatch):

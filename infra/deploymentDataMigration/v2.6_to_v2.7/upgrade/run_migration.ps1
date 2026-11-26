@@ -20,7 +20,7 @@ param(
     [switch]$ClearVectors,
     [switch]$Async,
     [switch]$GenerateMetadataForExistingFiles,
-    [ValidateSet("all", "assetLocationFolderKeys", "assetLocationFileToFolder", "orphanedTriggers", "vectorBackfill", "metadataBackfill", "systemPipelineRetirement", "commentSubscriptionKeys", "assetLocationIndex")]
+    [ValidateSet("all", "assetLocationFolderKeys", "assetLocationFileToFolder", "orphanedTriggers", "vectorBackfill", "metadataBackfill", "systemPipelineRetirement", "commentSubscriptionKeys", "assetLocationIndex", "bucketReadConstraints")]
     [string]$Steps,
     [int]$Limit,
     [string]$Profile,

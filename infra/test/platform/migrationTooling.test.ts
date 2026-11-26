@@ -964,16 +964,34 @@ describe("the v2.6 to v2.7 commentSubscriptionKeys step and what users did befor
         expect(deleted).toContain("if asset_id not in self._deleted:");
         expect(deleted).toContain("self._permanent_deletes().get(asset_id, {})");
         expect(deleted).not.toMatch(/\.(query|scan)\b|for database_id in self\._all_databases/);
-        expect(script).not.toContain("database_storage_table_name");
+        // The step's own code, config block and IAM clause name no database table. (bucketReadConstraints,
+        // a separate step, reads the database ids; these pins are scoped so it does not hide a regression.)
+        const commentSection = script.slice(
+            script.indexOf("\n# STEP: commentSubscriptionKeys\n"),
+            script.indexOf("\n# CLI\n")
+        );
+        expect(commentSection.length).toBeGreaterThan(1000);
+        expect(commentSection).not.toContain("database_storage_table_name");
+        expect(commentSection).not.toContain("DATABASE_STORAGE_TABLE");
         const step = pyFunction("run_comment_subscription_keys_step");
         expect(step).toContain("ResourceParamKeys.ASSET_HISTORY_STORAGE_TABLE");
         expect(step).not.toContain("ResourceParamKeys.DATABASE_STORAGE_TABLE");
         expect(config).toContain('"asset_history_storage_table_name": null');
-        expect(config).not.toContain("database_storage_table_name");
+        const commentConfig = config.slice(
+            config.indexOf('"_comment_comments_step"'),
+            config.indexOf('"_comment_index_step"')
+        );
+        expect(commentConfig).toContain('"comment_subscription_resolution_file"');
+        expect(commentConfig).not.toContain("database_storage_table_name");
         expect(readme).toContain(
             "`Scan` on the asset history table (its `permanentDelete` records)"
         );
-        expect(readme).not.toContain("`Scan` on the database table");
+        const commentIam = readme.slice(
+            readme.indexOf("commentSubscriptionKeys step: DynamoDB"),
+            readme.indexOf("bucketReadConstraints step: DynamoDB")
+        );
+        expect(commentIam).toContain("`Scan` on the asset history table");
+        expect(commentIam).not.toContain("`Scan` on the database table");
     });
 
     it("tries a failed history read once per run: it ends the step, never a row", () => {

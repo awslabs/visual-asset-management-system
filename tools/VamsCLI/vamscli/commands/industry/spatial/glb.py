@@ -18,6 +18,7 @@ from ....utils.json_output import (
 
 # Import API client
 from ....utils.api_client import APIClient
+from ....utils.upload_manager import NO_REASON_GIVEN, failed_file_reasons
 
 # Import exceptions (only business logic exceptions)
 from ....utils.exceptions import (
@@ -61,8 +62,10 @@ def raise_if_upload_failed(upload_result: Dict[str, Any]) -> None:
     """
     if upload_result.get('overall_success'):
         return
-    failed = [key for sequence in upload_result.get('sequence_results', [])
-              for key in sequence.get('failed_files', [])]
+    # Each file with the reason it was not stored (#1072), when the upload gave one.
+    failed = [entry['relative_key'] if entry['error'] == NO_REASON_GIVEN
+              else f"{entry['relative_key']} ({entry['error']})"
+              for entry in failed_file_reasons(upload_result)]
     raise FileUploadError(f"Upload failed for: {', '.join(failed) or 'the file'}")
 
 
