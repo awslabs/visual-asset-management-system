@@ -316,7 +316,7 @@ def create(ctx: click.Context, database: str, asset: str, comment: str, alias: O
     Examples:
         vamscli asset-version create -d my-db -a my-asset --comment "New version"
         vamscli asset-version create -d my-db -a my-asset --comment "New version" --alias "RC1"
-        vamscli asset-version create -d my-db -a my-asset --comment "Specific files" --files '[{"relativeKey":"file.obj","versionId":"abc123","isArchived":false}]'
+        vamscli asset-version create -d my-db -a my-asset --comment "Specific files" --no-use-latest-files --files '[{"relativeKey":"file.obj","versionId":"abc123","isArchived":false}]'
         vamscli asset-version create -d my-db -a my-asset --json-input version-data.json
         vamscli asset-version create -d my-db -a my-asset --comment "Version" --json-output
     """
