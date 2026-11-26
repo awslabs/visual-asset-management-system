@@ -51,7 +51,7 @@ interface CreateDatabaseProps {
     open: boolean;
     setOpen: (open: boolean) => void;
     setReload: (reload: boolean) => void;
-    initState?: DatabaseFields;
+    initState?: DatabaseRecord;
 }
 
 interface DatabaseFields {
@@ -60,6 +60,13 @@ interface DatabaseFields {
     defaultBucketId?: string;
     restrictMetadataOutsideSchemas?: boolean;
     restrictFileUploadsToExtensions?: string;
+}
+
+// The database as GET /database returns it: the saved fields plus the name and prefix of its bucket,
+// which the edit form shows for a bucket the role's bucket list does not include.
+interface DatabaseRecord extends DatabaseFields {
+    bucketName?: string;
+    baseAssetsPrefix?: string;
 }
 
 interface BucketOption {
@@ -385,7 +392,8 @@ export default function CreateDatabase({
     ]);
 
     // The bucket list as the API answered it. With none, the role has no bucket to choose; a database
-    // whose bucket is not in the list keeps it, and the form shows its id instead of a placeholder.
+    // whose bucket is not in the list keeps it, and the form shows the bucket name and prefix the
+    // database record carries instead of a placeholder.
     const noBucketAvailable = bucketsLoaded && !loadingBuckets && buckets.length === 0;
     const bucketListSettled =
         bucketsSettled || (!permissionsLoading && !canListBuckets && !permissionsFailed);
@@ -396,6 +404,13 @@ export default function CreateDatabase({
         formState.defaultBucketId === savedState.defaultBucketId &&
         !loadingBuckets &&
         !buckets.some((bucket) => bucket.bucketId === formState.defaultBucketId);
+    // The kept bucket as GET /database named it; never the internal bucket id.
+    const currentBucketLabel =
+        initState?.bucketName && initState.defaultBucketId === formState.defaultBucketId
+            ? `${initState.bucketName}${
+                  initState.baseAssetsPrefix ? ` - ${initState.baseAssetsPrefix}` : ""
+              }`
+            : `the bucket this ${Synonyms.database} uses now`;
 
     // An empty create form for the next database; it keeps the selected bucket so the selector and
     // the form agree.
@@ -604,7 +619,11 @@ export default function CreateDatabase({
                             </FormField>
                             <FormField
                                 label="Default Bucket and Prefix"
-                                constraintText={`Required. Select a bucket and prefix for this ${Synonyms.database}.`}
+                                constraintText={
+                                    currentBucketNotListed
+                                        ? undefined
+                                        : `Required. Select a bucket and prefix for this ${Synonyms.database}.`
+                                }
                                 errorText={
                                     !formState.defaultBucketId
                                         ? noBucketAvailable
@@ -616,7 +635,7 @@ export default function CreateDatabase({
                                 {currentBucketNotListed && (
                                     <Box margin={{ bottom: "xs" }}>
                                         <span data-testid="database-bucket-current">
-                                            Current bucket: {formState.defaultBucketId}
+                                            Current bucket: {currentBucketLabel}
                                         </span>
                                     </Box>
                                 )}
