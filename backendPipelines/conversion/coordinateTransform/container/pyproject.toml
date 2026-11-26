@@ -26,8 +26,3 @@ dependencies = [
 package = false
 required-version = "==0.13.8"
 exclude-newer = "7 days"
-
-# The packages named below were uploaded less than seven days before this lock; they are the versions
-# the image already ships, so the cutoff is lifted for them. Remove each entry once its release is older
-# than seven days: boto3 after 2026-11-25, botocore after 2026-11-25, cloudpickle after 2026-11-26, configargparse after 2026-11-25, janus after 2026-11-23, narwhals after 2026-11-25, platformdirs after 2026-11-25.
-exclude-newer-package = { boto3 = "2026-11-18T20:24:23Z", botocore = "2026-11-18T20:24:18Z", cloudpickle = "2026-11-19T10:27:18Z", configargparse = "2026-11-18T02:53:08Z", janus = "2026-11-16T23:04:45Z", narwhals = "2026-11-18T15:30:43Z", platformdirs = "2026-11-18T20:03:32Z" }

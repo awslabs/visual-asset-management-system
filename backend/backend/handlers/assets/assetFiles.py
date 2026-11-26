@@ -45,7 +45,7 @@ from common.s3PathPatterns import (
 )
 from common.assetLocations import (
     NESTED_PATH_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations,
-    aux_owner_filter, aux_scope, contains,
+    _is_preview_of, aux_owner_filter, aux_scope, contains,
     fill_location_attributes, folder_listing_prefix, held_objects, in_folder, is_folder_location,
     names_own_object, normalize_base_prefix, object_key_for, relative_path_in,
     viewer_data_prefix, viewer_data_scope,
@@ -1982,7 +1982,10 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
     return preview_files
 
 def find_newest_preview_file_for_base(bucket: str, base_key: str) -> Optional[str]:
-    """The key of the newest allowed preview object for ``base_key`` (see select_newest_preview_file)."""
+    """The key of the newest allowed preview object for ``base_key`` (see select_newest_preview_file).
+
+    Only the file's own previews count (``_is_preview_of``): the listed prefix also matches keys inside a
+    folder whose name starts with it, such as ``p/model.glb.previewFile.png/model.glb.previewFile.jpg``."""
     directory = os.path.dirname(base_key)
     prefix = f"{directory}/" if directory else ""
     pattern = f"{os.path.basename(base_key)}{PREVIEW_FILE_PATTERN}"
@@ -1991,7 +1994,7 @@ def find_newest_preview_file_for_base(bucket: str, base_key: str) -> Optional[st
         paginator = s3_client.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix + pattern):
             for obj in page.get('Contents', []):
-                if os.path.basename(obj['Key']).startswith(pattern):
+                if _is_preview_of(base_key, obj['Key']):
                     candidates.append((obj['Key'], obj.get('LastModified'), False))
     except Exception as e:
         logger.warning(f"Error finding preview files for {base_key}: {e}")

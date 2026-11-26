@@ -38,11 +38,11 @@ All VAMS Lambda functions share the same configuration:
 
 ### Authentication Limits
 
-| Parameter                | Default                   | Configurable | Configuration Key                                     |
-| ------------------------ | ------------------------- | ------------ | ----------------------------------------------------- |
-| Credential/token timeout | 3,600 seconds (1 hour)    | Yes          | `app.authProvider.useCognito.credTokenTimeoutSeconds` |
-| Presigned URL timeout    | 86,400 seconds (24 hours) | Yes          | `app.authProvider.presignedUrlTimeoutSeconds`         |
-| Upload initializations   | 20 per user per minute    | No           | Hardcoded rate limit                                  |
+| Parameter                | Default                   | Configurable                                  | Configuration Key                                     |
+| ------------------------ | ------------------------- | --------------------------------------------- | ----------------------------------------------------- |
+| Credential/token timeout | 3,600 seconds (1 hour)    | Yes, whole minutes from 300 to 86,400 seconds | `app.authProvider.useCognito.credTokenTimeoutSeconds` |
+| Presigned URL timeout    | 86,400 seconds (24 hours) | Yes                                           | `app.authProvider.presignedUrlTimeoutSeconds`         |
+| Upload initializations   | 20 per user per minute    | No                                            | Hardcoded rate limit                                  |
 
 `app.authProvider.presignedUrlTimeoutSeconds` takes a whole number from 1 to 604,800 seconds (7 days), the longest Amazon S3 allows for a presigned URL; synthesis warns about any other value. It is an upper bound: a presigned URL is signed with the Lambda function's temporary role credentials and stops working when they expire, which can be sooner than the configured timeout.
 
@@ -71,11 +71,14 @@ On-demand mode has no provisioned throughput to configure. Amazon DynamoDB autom
 | -------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | Maximum object size        | 5 TB (Amazon S3 service limit)                                                                             |
 | Maximum object key length  | 1,024 bytes of UTF-8 (Amazon S3 service limit); an asset file key over this limit is rejected with a `400` |
+| Maximum uploaded file key  | 998 bytes of UTF-8, including the asset's location, at a bucket root; less the base prefix (see below)     |
 | Multipart upload threshold | 5 GB (parts required above this size)                                                                      |
 | Maximum parts per upload   | 10,000 (Amazon S3 service limit)                                                                           |
 | Part size range            | 5 MB to 5 GB                                                                                               |
 | VAMS upload part size      | 150 MB                                                                                                     |
 | Bucket encryption          | AWS KMS (when CMK enabled) or Amazon S3-managed                                                            |
+
+VAMS stages each upload at `{baseAssetsPrefix}temp-uploads/{upload tag}/{file key}`, with a 12-character tag per upload, before it copies the file to its key. That staging key must also fit the 1,024-byte limit, so a file key, including its asset location, may be at most 998 bytes of UTF-8 in a bucket registered at its root, and the length of the bucket's base prefix less than that otherwise. Upload initialization refuses a longer key with a `400` and the message `VAMS General Error: File key is too long to upload: a file key, including its asset location, may be at most N bytes`, where N is the bound for the asset's bucket.
 
 ### Amazon OpenSearch
 
@@ -328,15 +331,15 @@ endpoint rather than the detail response.
 
 ### File Upload Restrictions
 
-| Parameter                 | Value                                                                                                                    |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Blocked file extensions   | `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat` |
-| Upload stage 1 rate limit | 20 initializations per user per minute                                                                                   |
-| File validation           | Extension and MIME type checks on API upload; extension check on the destination of a move, rename or copy               |
+| Parameter                 | Value                                                                                                                                         |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Blocked file extensions   | `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`                      |
+| Upload stage 1 rate limit | 20 initializations per user per minute                                                                                                        |
+| File validation           | Extension check on API upload and on the destination of a move, rename or copy; MIME type check on a stored object's content type (see below) |
 
 ### Blocked MIME Types
 
-The following MIME types are rejected during file upload validation:
+The following MIME types are refused when Amazon S3 reports one as a stored object's content type: when an upload completes, when a workflow output is ingested, when the large object copy engine copies a file into its asset, and when a file is downloaded, streamed, exported or added to a zip download. This list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
 
 | MIME Type                                          | Description                  |
 | -------------------------------------------------- | ---------------------------- |

@@ -644,8 +644,12 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
         expect(readme).toMatch(/run `vectorBackfill` after this step/);
     });
 
-    it("runs assetLocationFolderKeys first, gated, with a report and a checkpoint", () => {
-        expect(tuple(script, "STEP_CHOICES")[0]).toBe("assetLocationFolderKeys");
+    it("runs assetLocationFolderKeys first of the location steps, gated, with a report and a checkpoint", () => {
+        // commentSubscriptionKeys, which reads no location, runs before it (D1878-3)
+        expect(tuple(script, "STEP_CHOICES").slice(0, 2)).toEqual([
+            "commentSubscriptionKeys",
+            "assetLocationFolderKeys",
+        ]);
         const body = script.slice(script.indexOf("def main("));
         expect(body.indexOf("run_asset_location_folder_keys_step(")).toBeGreaterThan(-1);
         expect(body.indexOf("run_asset_location_folder_keys_step(")).toBeLessThan(
@@ -838,6 +842,251 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
     });
 });
 
+describe("the v2.6 to v2.7 commentSubscriptionKeys step and what users did before its first run", () => {
+    // A permanent delete on v2.7 removes an asset's row, versions and V2 comments and subscription row but not
+    // its v2.6 rows, and an unsubscribe removes the topic subscription but not the v2.6 subscriber. The first
+    // run cannot see either in the v2.6 tables. These pin that it does not then copy a deleted asset's rows onto
+    // another database's asset with the same id (#1860 D1878-1), that a single candidate's subscriber is copied
+    // only from its topic (D1878-2), and that the step runs first (D1878-3).
+    const release = MIGRATIONS.find((m) => m.dir === "v2.6_to_v2.7");
+    if (!release) throw new Error("the v2.6_to_v2.7 migration is not listed");
+    const script = readMigrationFile(release, release.script);
+    const readme = readMigrationFile(release, release.readme);
+    const config = readMigrationFile(release, "v2.6_to_v2.7_migration_config.json");
+    const history = fs.readFileSync(
+        path.join(__dirname, "..", "../../backend/backend/common/assetHistory.py"),
+        "utf8"
+    );
+    const storage = fs.readFileSync(
+        path.join(__dirname, "..", "../lib/nestedStacks/storage/storageBuilder-nestedStack.ts"),
+        "utf8"
+    );
+    const guide = fs.readFileSync(
+        path.join(DOCS_ROOT, "deployment/update-the-solution.md"),
+        "utf8"
+    );
+    const v27 = (() => {
+        const section = guide.slice(guide.indexOf("\n### v2.6 to v2.7\n"));
+        const end = section.slice(1).search(/\n#{2,3} /);
+        return end === -1 ? section : section.slice(0, end + 1);
+    })();
+
+    /** The quoted strings of a top-level Python tuple assignment (possibly spanning lines). */
+    function tuple(name: string): string[] {
+        const body = new RegExp(`^${name}\\s*=\\s*\\(([^)]*)\\)`, "m").exec(script)?.[1] ?? "";
+        return Array.from(body.matchAll(/['"]([^'"]+)['"]/g)).map((m) => m[1]);
+    }
+
+    /** The string value assigned to `name` at module level in a Python source. */
+    function pyString(source: string, name: string): string {
+        const match = new RegExp(`^${name}\\s*=\\s*(?:'([^']*)'|"([^"]*)")\\s*$`, "m").exec(source);
+        if (!match) throw new Error(`${name} is not assigned a string literal`);
+        return match[1] ?? match[2];
+    }
+
+    /** The source of one method of CommentSubscriptionCopy, up to the next method. */
+    function method(name: string): string {
+        const cls = script.slice(script.indexOf("\nclass CommentSubscriptionCopy:"));
+        const start = cls.indexOf(`\n    def ${name}(`);
+        expect(start).toBeGreaterThan(-1);
+        const next = cls.slice(start + 1).search(/\n {4}def |\n(def |class )/);
+        return cls.slice(start + 1, next < 0 ? undefined : start + 1 + next);
+    }
+
+    /** The source of one top-level Python function, up to the next top-level definition. */
+    function pyFunction(name: string): string {
+        const start = script.indexOf(`\ndef ${name}(`);
+        expect(start).toBeGreaterThan(-1);
+        const next = script.slice(start + 1).search(/\n(def |class |#{5,})/);
+        return script.slice(start + 1, next < 0 ? undefined : start + 1 + next + 1);
+    }
+
+    it("reads the permanent-delete record the backend writes, under the history table's key", () => {
+        expect(pyString(script, "ASSET_HISTORY_PERMANENT_DELETE")).toBe(
+            pyString(history, "CHANGE_SOURCE_PERMANENT_DELETE")
+        );
+        expect(history).toContain("'databaseId:assetId': f\"{database_id}:{asset_id}\"");
+        expect(history).toContain("'changeSource': change_source");
+        expect(history).toContain("'recordDate': record_date");
+        const table = storage.slice(
+            storage.indexOf('new dynamodb.Table(scope, "AssetHistoryStorageTable"')
+        );
+        expect(table.slice(0, 300)).toContain(
+            `name: "${pyString(script, "ASSET_HISTORY_PARTITION_KEY")}"`
+        );
+    });
+
+    it("counts a database whose asset with the id was permanently deleted as a candidate", () => {
+        const resolve = method("resolve");
+        const deleted = resolve.indexOf("self.deleted_databases(asset_id)");
+        expect(deleted).toBeGreaterThan(-1);
+        expect(deleted).toBeLessThan(resolve.indexOf("if len(candidates) == 1:"));
+        expect(resolve).toContain("candidates = sorted(set(live) | set(deleted))");
+        // A row the evidence or the mapping file gives to the deleted asset is not copied anywhere
+        expect(
+            resolve.match(
+                /if (?:matching\[0\]|mapped) in deleted:\s*\n\s*return None, 'noAsset', candidates/g
+            )
+        ).toHaveLength(2);
+        // Its versions are gone, so nothing rules it out for a comment made before its last delete
+        const copy = method("copy_comment");
+        expect(copy).toMatch(
+            /if database_id in self\.deleted_databases\(asset_id\):\s*\n\s*return True/
+        );
+        expect(copy).toContain("made=created");
+        expect(resolve).toContain("if not made or not _iso_before(when, made)");
+    });
+
+    it("finds those databases with one filtered scan of the history table per run, cached", () => {
+        // The cost follows the history table, not databases x asset ids (D1919-4)
+        const deletes = method("_permanent_deletes");
+        expect(deletes).toContain("if self._deletes is None:");
+        expect(deletes).toContain(
+            "_paginate(self.ddb.scan, TableName=self.cfg['asset_history_storage_table_name']"
+        );
+        expect(deletes).toContain("FilterExpression='#c = :d'");
+        expect(deletes).toContain("ASSET_HISTORY_PERMANENT_DELETE");
+        expect(deletes).toContain("ProjectionExpression='#p, #db, #a, #r'");
+        expect(deletes).not.toMatch(/\.query\b/);
+        const deleted = method("deleted_databases");
+        expect(deleted).toContain("if asset_id not in self._deleted:");
+        expect(deleted).toContain("self._permanent_deletes().get(asset_id, {})");
+        expect(deleted).not.toMatch(/\.(query|scan)\b|for database_id in self\._all_databases/);
+        expect(script).not.toContain("database_storage_table_name");
+        const step = pyFunction("run_comment_subscription_keys_step");
+        expect(step).toContain("ResourceParamKeys.ASSET_HISTORY_STORAGE_TABLE");
+        expect(step).not.toContain("ResourceParamKeys.DATABASE_STORAGE_TABLE");
+        expect(config).toContain('"asset_history_storage_table_name": null');
+        expect(config).not.toContain("database_storage_table_name");
+        expect(readme).toContain(
+            "`Scan` on the asset history table (its `permanentDelete` records)"
+        );
+        expect(readme).not.toContain("`Scan` on the database table");
+    });
+
+    it("tries a failed history read once per run: it ends the step, never a row", () => {
+        // D1919-7: a ClientError there becomes HistoryScanError, which is no ClientError, so run_table's per-row
+        // catch does not report it against the row and go on to the next row (which would scan again); the
+        // step's catch-all ends the run with exit 1 and the --resume hint, as an interruption does.
+        const deletes = method("_permanent_deletes");
+        const tried = deletes.indexOf("try:");
+        const caught = deletes.indexOf("except ClientError as e:");
+        expect(tried).toBeGreaterThan(-1);
+        expect(caught).toBeGreaterThan(deletes.indexOf("_paginate(self.ddb.scan"));
+        expect(deletes.slice(caught)).toMatch(/raise HistoryScanError\(/);
+        expect(deletes.slice(caught)).toContain(") from e");
+        expect(script).toMatch(/^class HistoryScanError\(Exception\):/m);
+        expect(script).not.toMatch(/class HistoryScanError\([^)]*ClientError/);
+        const table = method("run_table");
+        expect(table).toMatch(/records = copy\(item\)\s*\n\s*except ClientError as e:/);
+        expect(table).not.toMatch(/except (Exception|HistoryScanError)/);
+        for (const name of [
+            "copy_comment",
+            "copy_subscription",
+            "resolve",
+            "place_subscriber",
+            "deleted_databases",
+        ]) {
+            expect({
+                name,
+                catchesAll: /except (Exception|HistoryScanError)\b|except:/.test(method(name)),
+            }).toEqual({
+                name,
+                catchesAll: false,
+            });
+        }
+        const step = pyFunction("run_comment_subscription_keys_step");
+        expect(step).toMatch(
+            /except Exception as e:\s*\n\s*logger\.error\(f"\{COMMENT_SUBSCRIPTION_STEP\} step failed: \{e\}\. Re-run with --resume/
+        );
+        expect(readme).toMatch(/If that read fails, the step\s+stops at once/);
+    });
+
+    it("copies a single candidate's subscriber only when it is on that asset's topic", () => {
+        expect(tuple("COMMENT_SUBSCRIPTION_CLASSES")).toContain("notOnTopic");
+        expect(tuple("_COMMENT_SUBSCRIPTION_LEFT")).toContain("notOnTopic");
+        const place = method("place_subscriber");
+        expect(place).toMatch(/if result == 'placed' and not evidence\(database_id\):/);
+        expect(place).toContain("return None, 'notOnTopic', candidates");
+        for (const cls of tuple("COMMENT_SUBSCRIPTION_CLASSES")) {
+            expect({ cls, inReadme: readme.includes(`| \`${cls}\``) }).toEqual({
+                cls,
+                inReadme: true,
+            });
+        }
+    });
+
+    it("runs first under --steps all, and the location steps never hold it", () => {
+        expect(tuple("STEP_CHOICES")[0]).toBe("commentSubscriptionKeys");
+        const body = pyFunction("main");
+        const comments = body.indexOf("rc = run_comment_subscription_keys_step(");
+        expect(comments).toBeGreaterThan(-1);
+        expect(comments).toBeLessThan(body.indexOf("rc = run_asset_location_folder_keys_step("));
+        expect(body.slice(0, comments)).not.toContain("location_keys_unfinished = not dry_run");
+        expect(body.indexOf("step_plan.append('commentSubscriptionKeys')")).toBeLessThan(
+            body.indexOf("step_plan.append('assetLocationFolderKeys')")
+        );
+    });
+
+    it("tells the operator not to delete assets or change subscriptions before the first run", () => {
+        for (const page of [readme, v27]) {
+            expect(page).toMatch(
+                /do not permanently delete assets and do not subscribe, unsubscribe or delete\s+subscriptions/
+            );
+            expect(page).toContain("`notOnTopic`");
+        }
+        expect(readme).toContain("`deletedCandidates`");
+    });
+
+    it("says the deleted-asset handling needs the permanentDelete history record", () => {
+        for (const page of [readme, v27]) {
+            expect(page).toMatch(
+                /writes? that record last\s+and\s+best-effort|writes last and best-effort/
+            );
+        }
+    });
+
+    it("names the v2.6 causes of notOnTopic and the v2.1 noAsset edge the mapping cannot place", () => {
+        for (const page of [readme, v27]) {
+            expect(page).toMatch(/never\s+confirmed/);
+            expect(page).toContain("unsubscribe link");
+        }
+        expect(readme).toMatch(
+            /upgraded from v2\.1, a `noAsset` comment line with `deletedCandidates`/
+        );
+    });
+
+    it("says the location steps run after commentSubscriptionKeys wherever the order is stated", () => {
+        const revisions = fs.readFileSync(path.join(DOCS_ROOT, "additional/revisions.md"), "utf8");
+        const changelog = fs.readFileSync(path.join(__dirname, "..", "../../CHANGELOG.md"), "utf8");
+        for (const [name, text] of [
+            ["script", script],
+            ["readme", readme],
+            ["config", config],
+            ["guide", v27],
+            ["revisions", revisions],
+        ] as const) {
+            expect({
+                name,
+                stale: /assetLocationFolderKeys`? runs first(?! of the location steps)|assetLocationFolderKeys \(runs first\)|It runs first, before/.test(
+                    text
+                ),
+            }).toEqual({ name, stale: false });
+        }
+        expect(config).not.toMatch(/The (six|seven|eight|nine) table names/);
+        // The release record carries the window instruction too (D1919-6)
+        const note = changelog.slice(
+            changelog.indexOf("**Migration note:** comments and subscriptions move")
+        );
+        expect(note.slice(0, 1200)).toContain(
+            "do not permanently delete assets and do not subscribe"
+        );
+        expect(revisions).toMatch(
+            /not shown\. Until it has run, do not permanently delete assets and do not subscribe/
+        );
+    });
+});
+
 describe("the v2.6 to v2.7 assetLocationIndex step writes what the backend reads", () => {
     // backend/backend/common/assetLocations.py decides index_ready() from the marker this step writes,
     // and AssetLocationGSI indexes the two attributes the step sets. A renamed constant on either side
@@ -892,7 +1141,7 @@ describe("the v2.6 to v2.7 assetLocationIndex step writes what the backend reads
             (/^STEP_CHOICES\s*=\s*\(([^)]*)\)/m.exec(script)?.[1] ?? "").matchAll(/'([A-Za-z]+)'/g)
         ).map((m) => m[1]);
         expect(steps.indexOf("assetLocationIndex")).toBe(steps.indexOf("all") - 1);
-        expect(steps[0]).toBe("assetLocationFolderKeys");
+        expect(steps.slice(0, 2)).toEqual(["commentSubscriptionKeys", "assetLocationFolderKeys"]);
         expect(body).toMatch(/if run_asset_location_index and location_keys_unfinished:/);
         // A key the folder-keys step fixes after the index ran keeps its indexed key in step.
         const append = script.slice(script.indexOf("def append_location_slash("));
