@@ -782,6 +782,45 @@ def get_asset_version_info(databaseId: str, assetId: str, versionId: str) -> Opt
         logger.warning(f"Error getting version info for {databaseId}:{assetId} version {versionId}: {e}")
         return None
 
+def version_entry_key(file_key) -> str:
+    """The key a version entry is compared and deduplicated by: its path with exactly one leading '/'
+    removed, the key's part after the asset's location. The same rule as assetVersions.version_entry_key:
+    'x' and the legacy '/x' name one file, '//x' names the key with an empty segment after the location."""
+    file_key = str(file_key or '')
+    return file_key[1:] if file_key.startswith('/') else file_key
+
+
+def stored_version_entry_key(file_key) -> str:
+    """The form a version entry is stored and handed out in ('x', or '//x' for a key whose first segment
+    after the location is empty), as assetVersions.stored_version_entry_key."""
+    key = version_entry_key(file_key)
+    return '/' + key if key.startswith('/') else key
+
+
+def names_no_file(file_key) -> bool:
+    """Whether a version entry's key is made only of '/' (or is empty): the asset root, not a file."""
+    return not str(file_key or '').strip('/')
+
+
+def collapse_version_entries(items: List[Dict]) -> List[Dict]:
+    """The rows of an asset version's files, one per file, keyed by version_entry_key.
+
+    A version a file list created before #1795 can name one file both as '/a.txt' and 'a.txt' (D1),
+    and can hold a '/' row that names no file. The row stored in the current form
+    (stored_version_entry_key) wins, the first one read otherwise, and a row that names no file is
+    left out. '//a.txt' is another file and stays its own entry.
+    """
+    chosen: Dict[str, Dict] = {}
+    for item in items:
+        stored_key = str(item.get('fileKey') or '')
+        if names_no_file(stored_key):
+            continue
+        relative_key = version_entry_key(stored_key)
+        if relative_key not in chosen or stored_key == stored_version_entry_key(stored_key):
+            chosen[relative_key] = item
+    return list(chosen.values())
+
+
 def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) -> Optional[Dict]:
     """Get file versions for a specific asset version using the table PK (databaseId:assetId:assetVersionId is now the table PK)
 
@@ -807,10 +846,12 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
         if not items:
             return None
 
+        # The key is handed out in the form new entries are stored in (stored_version_entry_key), once
+        # per file; an entry stored before #1795 can carry a leading slash ('/x' for 'x').
         files = []
-        for item in items:
+        for item in collapse_version_entries(items):
             file_info = {
-                'relativeKey': item.get('fileKey'),
+                'relativeKey': stored_version_entry_key(item.get('fileKey')),
                 'versionId': item.get('versionId'),
                 'size': item.get('size'),
                 'lastModified': item.get('lastModified'),

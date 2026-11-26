@@ -2000,6 +2000,45 @@ def find_newest_preview_file_for_base(bucket: str, base_key: str) -> Optional[st
         logger.warning(f"Error finding preview files for {base_key}: {e}")
     return select_newest_preview_file(candidates)
 
+def version_entry_key(file_key) -> str:
+    """The key a version entry is compared and deduplicated by: its path with exactly one leading '/'
+    removed, the key's part after the asset's location. The same rule as assetVersions.version_entry_key:
+    'x' and the legacy '/x' name one file, '//x' names the key with an empty segment after the location."""
+    file_key = str(file_key or '')
+    return file_key[1:] if file_key.startswith('/') else file_key
+
+
+def stored_version_entry_key(file_key) -> str:
+    """The form a version entry is stored and handed out in ('x', or '//x' for a key whose first segment
+    after the location is empty), as assetVersions.stored_version_entry_key."""
+    key = version_entry_key(file_key)
+    return '/' + key if key.startswith('/') else key
+
+
+def names_no_file(file_key) -> bool:
+    """Whether a version entry's key is made only of '/' (or is empty): the asset root, not a file."""
+    return not str(file_key or '').strip('/')
+
+
+def collapse_version_entries(items: List[Dict]) -> List[Dict]:
+    """The rows of an asset version's files, one per file, keyed by version_entry_key.
+
+    A version a file list created before #1795 can name one file both as '/a.txt' and 'a.txt' (D1),
+    and can hold a '/' row that names no file. The row stored in the current form
+    (stored_version_entry_key) wins, the first one read otherwise, and a row that names no file is
+    left out. '//a.txt' is another file and stays its own entry.
+    """
+    chosen: Dict[str, Dict] = {}
+    for item in items:
+        stored_key = str(item.get('fileKey') or '')
+        if names_no_file(stored_key):
+            continue
+        relative_key = version_entry_key(stored_key)
+        if relative_key not in chosen or stored_key == stored_version_entry_key(stored_key):
+            chosen[relative_key] = item
+    return list(chosen.values())
+
+
 def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, relativeFileKey: Optional[str]) -> Optional[Dict]:
     """Get file versions for a specific asset version using the databaseIdAssetIdVersionIdIndex GSI
 
@@ -2019,28 +2058,40 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, 
 
         # Build query kwargs using the table PK directly (no IndexName needed)
         # fileKey is the table sort key, so we can use it directly in the KeyConditionExpression
-        query_kwargs = {
-            'KeyConditionExpression': Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
-        }
+        version_key_condition = Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
 
-        # Add fileKey to key condition if provided (fileKey is the table sort key)
+        # relativeFileKey is the file's key after the asset's location (version_entry_key form). An
+        # entry is stored as stored_version_entry_key of it; one a file list stored before #1795 can
+        # carry a leading slash ('/x' for 'x'), so a single-file lookup (fileKey is the table sort key)
+        # reads the stored form first and that legacy form on a miss.
         if relativeFileKey:
-            query_kwargs['KeyConditionExpression'] = Key('databaseId:assetId:assetVersionId').eq(version_composite_key) & Key('fileKey').eq(relativeFileKey)
-
-        # Page to exhaustion: a version snapshot can hold more files than fit in one
-        # 1 MB query page, and a partial file list would misreport the version. A
-        # single-file lookup (relativeFileKey set) returns one item and never pages.
-        items = query_all_items(asset_version_files_table, **query_kwargs)
+            stored_file_key = '/' + relativeFileKey if relativeFileKey.startswith('/') else relativeFileKey
+            candidates = [stored_file_key]
+            if not stored_file_key.startswith('/'):
+                candidates.append('/' + stored_file_key)
+            items = []
+            for stored_file_key in candidates:
+                # A single-file lookup returns one item and never pages.
+                items = query_all_items(
+                    asset_version_files_table,
+                    KeyConditionExpression=version_key_condition & Key('fileKey').eq(stored_file_key))
+                if items:
+                    break
+        else:
+            # Page to exhaustion: a version snapshot can hold more files than fit in one
+            # 1 MB query page, and a partial file list would misreport the version.
+            items = query_all_items(asset_version_files_table, KeyConditionExpression=version_key_condition)
 
         # If no items found, return None
         if not items:
             return None
 
-        # Reconstruct the file versions structure
+        # Reconstruct the file versions structure. The key is handed out in the form new entries are
+        # stored in (stored_version_entry_key) whatever form it is stored in (#1795), once per file.
         files = []
-        for item in items:
+        for item in collapse_version_entries(items):
             file_info = {
-                'relativeKey': item.get('fileKey'),
+                'relativeKey': stored_version_entry_key(item.get('fileKey')),
                 'versionId': item.get('versionId'),
                 'size': item.get('size'),
                 'lastModified': item.get('lastModified'),
@@ -2329,10 +2380,9 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
     deleted_count = 0
     db_asset_key = f"{databaseId}:{assetId}"
 
-    # A row's fileKey is the relativeKey its asset version was created with: without a leading
-    # slash for a version built from the current files (list_s3_files_with_versions), and as the
-    # caller wrote it for a version built from a file list. Paths are compared without the slash,
-    # and each row is deleted by the key it is stored under.
+    # A row's fileKey is the file's path without a leading slash; a version built from a file list
+    # before #1795 stored the path as the caller wrote it, often with the slash. Paths are compared
+    # without the slash, and each row is deleted by the key it is stored under.
     normalized_paths = set()
     for fp in file_paths:
         fp_clean = fp.strip()
@@ -3536,15 +3586,17 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
             version_id_to_asset_versions = {}
             pk_prefix = f"{databaseId}:{assetId}:"
 
+            # One record per asset version: a version created before #1795 can hold this file both
+            # with and without the leading slash (D1), and the row without it wins, as in the
+            # current-version check above.
+            record_by_asset_version = {}
             for record in all_version_file_records:
-                record_file_key = record.get('fileKey', '')
+                # Compared by version_entry_key: a legacy '/x' is this file's, '//x' another file's
+                stored_file_key = str(record.get('fileKey') or '')
+                record_file_key = version_entry_key(stored_file_key)
 
                 # Only include records that match this file's relative path
                 if record_file_key != relative_path_for_lookup:
-                    continue
-
-                s3_version_id = record.get('versionId')
-                if not s3_version_id:
                     continue
 
                 # Extract assetVersionId from the PK field: "databaseId:assetId:assetVersionId"
@@ -3556,6 +3608,15 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
 
                 # Skip archived asset versions
                 if asset_version_id in archived_version_ids:
+                    continue
+
+                if (asset_version_id not in record_by_asset_version
+                        or stored_file_key == stored_version_entry_key(stored_file_key)):
+                    record_by_asset_version[asset_version_id] = record
+
+            for asset_version_id, record in record_by_asset_version.items():
+                s3_version_id = record.get('versionId')
+                if not s3_version_id:
                     continue
 
                 if s3_version_id not in version_id_to_asset_versions:
