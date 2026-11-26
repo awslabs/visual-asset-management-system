@@ -133,7 +133,9 @@ def bucket(name, prefix, default=False, **extra):
 
 
 def run_case(source, stored, buckets, request_type="Update", referenced=(), asset_fail=False,
-             page_size=100, with_asset_table=True):
+             page_size=100, with_asset_table=True, timestamp=None, old_timestamp=None):
+    """`timestamp` / `old_timestamp`: the synth timestamps of ResourceProperties and OldResourceProperties.
+    A rollback sends the previous (older) properties, so its timestamp is the older of the two."""
     buckets_table = FakeBucketsTable(stored, page_size)
     asset_table = FakeAssetTable(referenced, asset_fail)
 
@@ -164,7 +166,11 @@ def run_case(source, stored, buckets, request_type="Update", referenced=(), asse
     properties = {"tableName": "buckets", "buckets": json.dumps(buckets)}
     if with_asset_table:
         properties.update({"assetTableName": "assets", "assetTableBucketIdIndex": "BucketIdGSI"})
+    if timestamp:
+        properties["timestamp"] = timestamp
     event = {"RequestType": request_type, "ResourceProperties": properties}
+    if old_timestamp:
+        event["OldResourceProperties"] = {"timestamp": old_timestamp}
     outcome = {"ok": True, "error": None, "data": None}
     try:
         outcome["data"] = namespace["lambda_handler"](event, None).get("Data")
@@ -337,6 +343,41 @@ def main():
             source,
             [row("id-old", "b", "assets/", retired=True), row("id-c", "c", "/", isDefault=True)],
             [bucket("c", "/", default=True, defaultSyncDatabaseId="db1")],
+        ),
+        # #1978 D2: configuring a retired registration again makes it active now, so it is checked like
+        # an added one: a retired b:assets/ re-activated over an active b:assets/team1/ ...
+        "reactivateOverActive": run_case(
+            source,
+            [row("id-wide", "b", "assets/", retired=True), row("id-team", "b", "assets/team1/", isDefault=True)],
+            [bucket("b", "assets/", default=True, defaultSyncDatabaseId="db1")],
+            timestamp="2026-11-26T02:00:00.000Z", old_timestamp="2026-11-25T02:00:00.000Z",
+        ),
+        # ... and over a retired b:assets/team1/.
+        "reactivateOverRetired": run_case(
+            source,
+            [row("id-wide", "b", "assets/", retired=True), row("id-team", "b", "assets/team1/", retired=True),
+             row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "assets/", defaultSyncDatabaseId="db1")],
+        ),
+        # A rollback re-activates a pair the failed update retired (b:assets/team1/ was configured, with a
+        # stored overlap on the retired b:assets/): it is reported, not refused, so the stack rolls back.
+        "rollbackReactivatesOverlap": run_case(
+            source,
+            [row("id-wide", "b", "assets/", retired=True), row("id-team", "b", "assets/team1/", retired=True),
+             row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "assets/team1/", defaultSyncDatabaseId="db1")],
+            timestamp="2026-11-25T02:00:00.000Z", old_timestamp="2026-11-26T02:00:00.000Z",
+        ),
+        # The same input as a forward update is refused.
+        "forwardReactivatesOverlap": run_case(
+            source,
+            [row("id-wide", "b", "assets/", retired=True), row("id-team", "b", "assets/team1/", retired=True),
+             row("id-c", "c", "/", isDefault=True)],
+            [bucket("c", "/", default=True, defaultSyncDatabaseId="db1"),
+             bucket("b", "assets/team1/", defaultSyncDatabaseId="db1")],
+            timestamp="2026-11-26T02:00:00.000Z", old_timestamp="2026-11-25T02:00:00.000Z",
         ),
         "deleteSkipsOverlapCheck": run_case(
             source,

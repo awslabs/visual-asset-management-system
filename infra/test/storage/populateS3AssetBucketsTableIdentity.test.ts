@@ -370,6 +370,34 @@ describe("overlap with stored registrations (#1978)", () => {
         expect(rowOf(result, "id-t")[0]).toMatchObject({ retired: null, isDefault: true });
     });
 
+    test.each([
+        ["reactivateOverActive", "assets/", "assets/team1/", "no longer configured", "id-team"],
+        ["reactivateOverRetired", "assets/", "assets/team1/", "retired", "id-team"],
+        ["forwardReactivatesOverlap", "assets/team1/", "assets/", "retired", "id-wide"],
+    ])(
+        "%s: configuring a retired registration again is refused when it overlaps (D2)",
+        (name, configured, stored, state, storedId) => {
+            const result = results[name];
+            expect(result.ok).toBe(false);
+            expect(result.error).toContain(
+                `cannot be registered under the prefix ${configured}: it overlaps the prefix ${stored} ` +
+                    `of the stored registration ${storedId} (${state})`
+            );
+            // Refused before any write: every row is as stored.
+            expect(result.calls.filter((call) => call.op !== "scan")).toEqual([]);
+        }
+    );
+
+    test("a rollback that re-activates an overlapping registration is reported, not refused", () => {
+        const result = results.rollbackReactivatesOverlap;
+        expect(result.ok).toBe(true);
+        expect(rowOf(result, "id-team")[0]).toMatchObject({ retired: null });
+        expect(rowOf(result, "id-wide")[0].retired).toBe(true);
+        expect(result.data?.StoredOverlaps).toBe(
+            "b prefix assets/team1/ overlaps stored registration id-wide (prefix assets/)"
+        );
+    });
+
     test("the rollback of a refused addition succeeds", () => {
         const result = results.rollbackAfterRefusedAdd;
         expect(result.ok).toBe(true);

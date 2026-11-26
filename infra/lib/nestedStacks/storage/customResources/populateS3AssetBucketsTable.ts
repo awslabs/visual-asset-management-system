@@ -141,21 +141,38 @@ def prefixes_overlap(first, second):
         return True
     return first == second or first.startswith(second) or second.startswith(first)
 
-def stored_overlap_error(configured_pairs, existing_groups, runtime_rows):
-    """The failure message for the first registration this deployment adds (a configured pair with no
-    stored row) whose prefix equals or nests with the prefix of a stored row of the same bucket that
-    the configuration does not include (a retired row, a row this deployment retires, or a runtime
-    row), or None. Assets of that row keep its bucketId and their locations under its prefix, so a
-    second registration over the same objects would leave a file with two owners.
+def activated_pairs(configured_pairs, existing_groups):
+    """The configured pairs this deployment makes active: a pair with no stored row, or one whose
+    stored rows are all retired (a registration configured again)."""
+    return [pair for pair in configured_pairs
+            if pair not in existing_groups or all(row.get(RETIRED_FIELD) is True for row in existing_groups[pair])]
 
-    A configured pair that already has a row is not refused (stored_overlap_warnings reports it): its
-    overlap is already stored, for example by a release that kept a removed registration active, and
+def is_rollback(event):
+    """Whether an Update is CloudFormation rolling a failed update back. A rollback sends the previous
+    properties as ResourceProperties and the failed update's as OldResourceProperties, so its synth
+    timestamp is the older one; a forward update's is newer."""
+    new_stamp = str((event.get('ResourceProperties') or {}).get('timestamp') or '')
+    old_stamp = str((event.get('OldResourceProperties') or {}).get('timestamp') or '')
+    return event.get('RequestType') == 'Update' and bool(new_stamp) and bool(old_stamp) and new_stamp < old_stamp
+
+def stored_overlap_error(configured_pairs, existing_groups, runtime_rows):
+    """The failure message for the first registration this deployment makes active (activated_pairs: a
+    configured pair with no stored row, or with only retired rows) whose prefix equals or nests with the
+    prefix of a stored row of the same bucket that the configuration does not include (a retired row, a
+    row this deployment retires, or a runtime row), or None. Assets of that row keep its bucketId and
+    their locations under its prefix, so a second registration over the same objects would leave a file
+    with two owners.
+
+    A configured pair that already has an active row is not refused (stored_overlap_warnings reports it):
+    its overlap is already stored, for example by a release that kept a removed registration active, and
     refusing it would fail that deployment's upgrade and every later deployment. It would also fail the
     rollback: CloudFormation rolls a failed update back by sending the previous properties to this
-    (already updated) function, and those name the same stored pairs."""
+    (already updated) function, and those name the same stored pairs. A pair with only retired rows is
+    not exempt, because re-activating it creates the overlap now. The caller skips this check on a
+    rollback (is_rollback): a rollback can re-activate a pair the failed update retired, and refusing it
+    would leave the stack unable to roll back."""
     unmatched = unconfigured_rows(configured_pairs, existing_groups, runtime_rows)
-    added = [pair for pair in configured_pairs if pair not in existing_groups]
-    for bucket_name, prefix in sorted(added):
+    for bucket_name, prefix in sorted(activated_pairs(configured_pairs, existing_groups)):
         for row in overlapping_rows(bucket_name, prefix, unmatched):
             other_prefix = registration_pair(row)[1]
             if is_runtime(row):
@@ -185,13 +202,14 @@ def overlapping_rows(bucket_name, prefix, rows):
     return [row for row in sorted(rows, key=lambda r: str(r.get('bucketId')))
             if registration_pair(row)[0] == bucket_name and prefixes_overlap(prefix, registration_pair(row)[1])]
 
-def stored_overlap_warnings(configured_pairs, existing_groups, runtime_rows):
-    """One line per configured pair that already has a row and overlaps a stored row of the same bucket
-    that the configuration does not include. Such an overlap was stored before the deployment checked
-    for it; it is reported, not refused (stored_overlap_error)."""
+def stored_overlap_warnings(configured_pairs, existing_groups, runtime_rows, rollback=False):
+    """One line per configured pair that is not refused for an overlap (one with an active stored row,
+    or every pair on a rollback) and overlaps a stored row of the same bucket that the configuration
+    does not include. Such an overlap is reported, not refused (stored_overlap_error)."""
     unmatched = unconfigured_rows(configured_pairs, existing_groups, runtime_rows)
+    checked = set() if rollback else set(activated_pairs(configured_pairs, existing_groups))
     lines = []
-    for bucket_name, prefix in sorted(pair for pair in configured_pairs if pair in existing_groups):
+    for bucket_name, prefix in sorted(pair for pair in configured_pairs if pair not in checked):
         for row in overlapping_rows(bucket_name, prefix, unmatched):
             lines.append(str(bucket_name) + " prefix " + prefix + " overlaps stored registration " +
                          str(row.get('bucketId')) + " (prefix " + registration_pair(row)[1] + ")")
@@ -386,10 +404,14 @@ def lambda_handler(event, context):
                     f"for {len(existing_groups)} bucket name and prefix pairs, and {len(runtime_rows)} "
                     "rows added at run time")
 
-        # A registration the configuration adds may not overlap a stored registration of the same
-        # bucket that the configuration does not include. Checked before any row is written, on Create
-        # and Update only, so a Delete (and the cleanup after a rollback) is never blocked.
-        if request_type in ('Create', 'Update'):
+        # A registration the configuration makes active may not overlap a stored registration of the
+        # same bucket that the configuration does not include. Checked before any row is written, on
+        # Create and Update only, so a Delete (and the cleanup after a rollback) is never blocked, and
+        # not on a rollback, which restores the configuration of the last successful deployment.
+        rolling_back = is_rollback(event)
+        if rolling_back:
+            logger.info("Rolling back to the previous configuration; overlaps are reported, not refused")
+        if request_type in ('Create', 'Update') and not rolling_back:
             overlap = stored_overlap_error(
                 {(b.get('bucketName'), canonical_prefix(b.get('prefix'))) for b in buckets},
                 existing_groups, runtime_rows)
@@ -398,7 +420,7 @@ def lambda_handler(event, context):
                 raise Exception(overlap)
         stored_overlaps = stored_overlap_warnings(
             {(b.get('bucketName'), canonical_prefix(b.get('prefix'))) for b in buckets},
-            existing_groups, runtime_rows) if request_type in ('Create', 'Update') else []
+            existing_groups, runtime_rows, rollback=rolling_back) if request_type in ('Create', 'Update') else []
         for line in stored_overlaps:
             logger.warning("Stored overlapping registrations: " + line + ". Review the assets of the stored "
                            "registration; see 'Overlapping bucket registrations' in the external bucket setup guide.")

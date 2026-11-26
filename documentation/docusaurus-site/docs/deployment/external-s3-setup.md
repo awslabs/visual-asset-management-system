@@ -705,13 +705,13 @@ rejects overlapping prefixes during configuration validation, before any notific
 
 A registration stays in the S3 Asset Buckets table after its entry leaves the configuration (it is **retired**), so the assets and databases that name its `bucketId` keep resolving. Their files stay under its prefix. A new registration whose prefix equals or nests with that prefix would cover the same objects, and a file would have two owners.
 
-The deployment therefore checks every registration it adds (a bucket and prefix with no stored row) against the stored rows of the same bucket that the configuration does not include: retired rows, rows the same deployment retires, and rows registered at run time. Prefixes are compared with one trailing `/`, and the bucket root (`/`) overlaps every prefix. On an overlap the deployment fails before it writes any row, with a message such as:
+The deployment therefore checks every registration it makes active (a bucket and prefix with no stored row, or a retired registration configured again) against the stored rows of the same bucket that the configuration does not include: retired rows, rows the same deployment retires, and rows registered at run time. Prefixes are compared with one trailing `/`, and the bucket root (`/`) overlaps every prefix. On an overlap the deployment fails before it writes any row, with a message such as:
 
 ```text
 Configuration Error: bucket my-bucket cannot be registered under the prefix assets/team1/: it overlaps the prefix assets/ of the stored registration 1a2b... (retired), and two registrations of one bucket cannot hold the same objects. Choose a prefix that does not overlap assets/, or configure assets/ again in place of this entry.
 ```
 
-The stack update rolls back. A registration that already has a row is not refused, so an overlap stored before this check existed (for example a prefix moved inside an earlier one before v2.7, when the earlier row stayed active) blocks neither the upgrade nor its rollback. The deployment logs each such overlap as a warning in the `PopulateS3AssetBucketsTable` function's log group; review the assets of the stored registration it names.
+The stack update rolls back. A registration that already has an active row is not refused, and neither is a rollback to the previous configuration, so an overlap stored before this check existed (for example a prefix moved inside an earlier one before v2.7, when the earlier row stayed active) blocks neither the upgrade nor its rollback. The deployment logs each such overlap as a warning in the `PopulateS3AssetBucketsTable` function's log group; review the assets of the stored registration it names.
 
 To deploy:
 
