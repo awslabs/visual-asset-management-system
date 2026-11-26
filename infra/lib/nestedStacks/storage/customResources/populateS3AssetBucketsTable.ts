@@ -44,6 +44,7 @@ import boto3
 import uuid
 import logging
 from datetime import datetime, timezone
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 # Configure logging
@@ -150,6 +151,9 @@ def activated_pairs(configured_pairs, existing_groups):
 # The stack statuses in which an Update of this resource is CloudFormation rolling a failed update
 # back: it then sends the previous properties to this function.
 ROLLBACK_IN_PROGRESS_STATUSES = ('UPDATE_ROLLBACK_IN_PROGRESS', 'ROLLBACK_IN_PROGRESS', 'IMPORT_ROLLBACK_IN_PROGRESS')
+# A status read that fails runs the forward overlap check, so it is retried more than the default: a
+# throttled DescribeStacks during a rollback would otherwise refuse a re-activation the rollback needs.
+CLOUDFORMATION_CLIENT_CONFIG = Config(retries={'mode': 'standard', 'max_attempts': 10})
 
 def described_stack(cloudformation, stack_id):
     """The DescribeStacks entry of one stack, by its id."""
@@ -170,7 +174,7 @@ def is_rollback(event):
         logger.warning("The event names no stack, so a rollback cannot be recognised; the overlap check runs")
         return False
     try:
-        cloudformation = boto3.client('cloudformation')
+        cloudformation = boto3.client('cloudformation', config=CLOUDFORMATION_CLIENT_CONFIG)
         stack = described_stack(cloudformation, stack_id)
         statuses = [(stack_id, stack.get('StackStatus'))]
         parent_id = stack.get('ParentId')

@@ -129,6 +129,13 @@ class FakeCloudFormation:
         return {"Stacks": [stack]}
 
 
+class Config:
+    """botocore.config.Config: records the options a client is built with."""
+
+    def __init__(self, **kwargs):
+        self.options = kwargs
+
+
 class FakeS3:
     def get_bucket_versioning(self, Bucket):
         return {"Status": "Enabled"}
@@ -166,6 +173,13 @@ def run_case(source, stored, buckets, request_type="Update", referenced=(), asse
     buckets_table = FakeBucketsTable(stored, page_size)
     asset_table = FakeAssetTable(referenced, asset_fail)
     cloudformation = FakeCloudFormation({STACK_ID: stack_status, PARENT_ID: parent_status}, stack_error, nested)
+    client_configs = []
+
+    def make_client(service, region_name=None, config=None, **kwargs):
+        if service == "cloudformation":
+            client_configs.append({"service": service, "config": config.options if config else None})
+            return cloudformation
+        return FakeS3()
 
     class FakeResource:
         def Table(self, name):
@@ -173,8 +187,7 @@ def run_case(source, stored, buckets, request_type="Update", referenced=(), asse
 
     fake_boto3 = types.ModuleType("boto3")
     fake_boto3.resource = lambda *args, **kwargs: FakeResource()
-    fake_boto3.client = lambda service, region_name=None, **kwargs: (
-        cloudformation if service == "cloudformation" else FakeS3())
+    fake_boto3.client = make_client
     fake_dynamodb = types.ModuleType("boto3.dynamodb")
     fake_conditions = types.ModuleType("boto3.dynamodb.conditions")
     fake_conditions.Key = FakeKey
@@ -184,11 +197,15 @@ def run_case(source, stored, buckets, request_type="Update", referenced=(), asse
     fake_exceptions = types.ModuleType("botocore.exceptions")
     fake_exceptions.ClientError = ClientError
     fake_botocore.exceptions = fake_exceptions
+    fake_config = types.ModuleType("botocore.config")
+    fake_config.Config = Config
+    fake_botocore.config = fake_config
     sys.modules["boto3"] = fake_boto3
     sys.modules["boto3.dynamodb"] = fake_dynamodb
     sys.modules["boto3.dynamodb.conditions"] = fake_conditions
     sys.modules["botocore"] = fake_botocore
     sys.modules["botocore.exceptions"] = fake_exceptions
+    sys.modules["botocore.config"] = fake_config
 
     namespace = {}
     exec(compile(source, "populator_inline.py", "exec"), namespace)
@@ -232,6 +249,7 @@ def run_case(source, stored, buckets, request_type="Update", referenced=(), asse
     outcome["calls"] = buckets_table.calls
     outcome["assetCalls"] = asset_table.calls
     outcome["describeStacks"] = cloudformation.calls
+    outcome["cloudformationClients"] = client_configs
     return outcome
 
 

@@ -56,6 +56,7 @@ interface CaseResult {
     calls: { op: string; bucketId?: string; sortKey?: string; start?: unknown }[];
     assetCalls: { index: string; key: string; value: string; limit: number | null }[];
     describeStacks: string[];
+    cloudformationClients: { service: string; config: Record<string, unknown> | null }[];
 }
 
 // The stack the harness event names (the storage nested stack) and its parent.
@@ -416,6 +417,23 @@ describe("overlap with stored registrations (#1978)", () => {
         expect(results.notNestedForward.describeStacks).toEqual([STACK_ID]);
         // A Create is never a rollback, and no stack is read for it.
         expect(results.newRegistration.describeStacks).toEqual([]);
+    });
+
+    test("the status is read with the standard retry mode and ten attempts (L4)", () => {
+        for (const name of [
+            "forwardReactivatesOverlap",
+            "rollbackReactivatesOverlap",
+            "stackStatusUnreadable",
+        ]) {
+            expect(results[name].cloudformationClients).toEqual([
+                {
+                    service: "cloudformation",
+                    config: { retries: { mode: "standard", max_attempts: 10 } },
+                },
+            ]);
+        }
+        // No CloudFormation client is built for a Create.
+        expect(results.newRegistration.cloudformationClients).toEqual([]);
     });
 
     test("a rollback status is a rollback whatever the synth timestamps say", () => {
