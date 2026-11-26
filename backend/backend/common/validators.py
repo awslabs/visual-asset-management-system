@@ -27,7 +27,7 @@ sagemaker_notebook_name_pattern = '^[a-zA-Z0-9](-*[a-zA-Z0-9])*'
 email_pattern = r'^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$'
 
 file_type_pattern = '^[\\.]([a-zA-Z0-9]){1,7}$'
-filename_pattern = r'^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$'
+filename_pattern = r'^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[\w.,\'-]$'
 
 relative_file_path_pattern = r'^\/.*$'
 bucket_existing_key_pattern = r'^[a-zA-Z0-9._\-/]{1,1024}$'
