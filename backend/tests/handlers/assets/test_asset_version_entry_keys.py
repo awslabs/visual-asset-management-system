@@ -149,7 +149,7 @@ class TestFileInfo:
         monkeypatch.setattr(af, "query_asset_version_history_map", lambda database_id, asset_id: {})
         monkeypatch.setattr(af, "get_all_asset_versions", lambda database_id, asset_id: [
             {"assetVersionId": "1"}, {"assetVersionId": "2", "versionAlias": "RC1"}])
-        monkeypatch.setattr(af, "find_newest_preview_file_for_base", lambda bucket, key: None)
+        monkeypatch.setattr(af, "find_preview_files_for_base", lambda bucket, key: [])
         response = af.get_file_info(DB, ASSET, file_path, True, CLAIMS)
         return {v.versionId: (v.currentAssetVersionFileVersionMismatch, v.assetVersionIds)
                 for v in response.versions}
