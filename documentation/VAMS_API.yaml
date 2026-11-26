@@ -14068,7 +14068,7 @@ components:
                 defaultBucketId:
                     #example: 550e8400-e29b-41d4-a716-446655440000
                     $ref: '#/components/schemas/uuid_regex'
-                    description: "The bucket configuration of the database, from GET /buckets. The caller needs GET on it through a `bucket` permission constraint. An unknown, retired or unreadable id gets the same 400 (Bucket ID not found or not available for new databases)."
+                    description: "The bucket configuration of the database, from GET /buckets. The caller needs GET on it through a `bucket` permission constraint. An unknown, retired or unreadable id gets the same 400 (Bucket ID not found or not available)."
                 restrictMetadataOutsideSchemas:
                     type: boolean
                     default: false
@@ -14104,7 +14104,7 @@ components:
                     description: "Updated database description (optional)"
                 defaultBucketId:
                     $ref: '#/components/schemas/uuid_regex'
-                    description: "Updated default bucket ID (optional). Moving the database to another bucket configuration needs GET on it through a `bucket` permission constraint; an unknown, retired or unreadable id gets the same 400 (Bucket ID not found or not available for new databases)."
+                    description: "Updated default bucket ID (optional). Moving the database to another bucket configuration needs GET on it through a `bucket` permission constraint; an unknown, retired or unreadable id gets the same 400 (Bucket ID not found or not available)."
                 restrictMetadataOutsideSchemas:
                     type: boolean
                     description: "Whether user and API metadata writes may add only keys defined in schemas. Keys already stored on a record pass; pipeline write-backs are not restricted (optional)"

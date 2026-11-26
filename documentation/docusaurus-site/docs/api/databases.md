@@ -212,7 +212,7 @@ POST /database
 }
 ```
 
-An unknown bucket id, a retired one and one the role may not read all get the same `400` with the message `Bucket ID not found or not available for new databases`, so the answer does not tell them apart.
+An unknown bucket id, one that is not active (retired, or a bucket registered at run time that is pending or disabled) and one the role may not read all get the same `400` with the body `{"message": "Bucket ID not found or not available"}`, so the answer does not tell them apart. [Update a database](#update-a-database) answers a move to such a bucket the same way.
 
 ### Error responses
 
@@ -274,11 +274,11 @@ A caller who may call this route but is not permitted to update the database its
 
 ### Error responses
 
-| Status | Description                                                                    |
-| ------ | ------------------------------------------------------------------------------ |
-| `400`  | Validation error, no updatable field supplied, or database or bucket not found |
-| `403`  | Not authorized                                                                 |
-| `500`  | Internal server error                                                          |
+| Status | Description                                                                                                                                                                                           |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, no updatable field supplied, database not found, or the bucket is unknown, not active or not readable to you (`{"message": "Bucket ID not found or not available"}`, as for create) |
+| `403`  | Not authorized                                                                                                                                                                                        |
+| `500`  | Internal server error                                                                                                                                                                                 |
 
 ---
 

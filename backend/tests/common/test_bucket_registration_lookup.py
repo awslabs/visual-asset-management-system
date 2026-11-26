@@ -118,4 +118,4 @@ class TestBucketAuthorization:
 
     def test_the_refusal_names_no_id(self):
         message = _brg().BUCKET_NOT_AVAILABLE_MESSAGE
-        assert message == 'Bucket ID not found or not available for new databases'
+        assert message == 'Bucket ID not found or not available'

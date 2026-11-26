@@ -35,7 +35,7 @@ TEAM_A = "aa11bb22-c092-475f-978a-d39e5d5a2657"
 TEAM_B = "bb22cc33-c092-475f-978a-d39e5d5a2657"
 RETIRED = "cc33dd44-c092-475f-978a-d39e5d5a2657"
 UNKNOWN = "dd44ee55-c092-475f-978a-d39e5d5a2657"
-REFUSAL = "Bucket ID not found or not available for new databases"
+REFUSAL = "Bucket ID not found or not available"
 
 ROWS = {
     TEAM_A: {"bucketId": TEAM_A, "bucketName": "team-a-assets", "baseAssetsPrefix": "/",
@@ -231,14 +231,24 @@ class TestDatabaseUpdate:
                                                                                   bucket_id):
         audit = role(ALL_DATABASES, TEAM_A_BUCKETS)
         table, run = _update(wire, bucket_id)
-        with pytest.raises(svc.VAMSGeneralErrorResponse) as raised:
+        with pytest.raises(svc.BucketNotAvailableError):
             run()
-        # The update handler answers str(error): "VAMS General Error: " + the sentence, for all three.
-        assert str(raised.value) == "VAMS General Error: " + REFUSAL
         assert table.update_item_calls == []
         assert table.stored()["defaultBucketId"] == TEAM_A
         if bucket_id == TEAM_B:
             assert _audited_buckets(audit) == [TEAM_B]
+
+    @pytest.mark.parametrize("bucket_id", [TEAM_B, RETIRED, UNKNOWN])
+    def test_the_update_route_answers_as_create_does(self, role, wire, bucket_id):  # noqa: F811
+        # PUT /database/{databaseId}: the same 400 body as POST /database, for all three cases.
+        role(ALL_DATABASES, TEAM_A_BUCKETS)
+        table = FakeDatabaseTable(_stored_database(defaultBucketId=TEAM_A))
+        wire(table, bucket_items=[ROWS[bucket_id]] if bucket_id in ROWS else [])
+        response = svc.update_database_handler({}, {"databaseId": DATABASE_ID}, {"defaultBucketId": bucket_id},
+                                               CLAIMS)
+        assert response["statusCode"] == 400
+        assert json.loads(response["body"]) == {"message": REFUSAL}
+        assert table.update_item_calls == []
 
     def test_an_edit_that_keeps_the_bucket_is_not_checked_on_it(self, role, wire):  # noqa: F811
         # The edit form sends the current bucket with every save; a role that may not read it still

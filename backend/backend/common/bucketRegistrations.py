@@ -51,9 +51,10 @@ _RUNTIME_STATES = (STATE_PENDING, STATE_ACTIVE, STATE_DISABLED)
 # listing and the bucket a database is put on. Never on asset, file, sync, indexing or workflow paths.
 BUCKET_OBJECT_TYPE = "bucket"
 
-# The one answer database create and update give for a bucket id that does not exist, is retired, or
-# the caller may not read, so the answer does not tell the three apart.
-BUCKET_NOT_AVAILABLE_MESSAGE = "Bucket ID not found or not available for new databases"
+# The one answer database create and update give for a bucket id that does not exist, is not active,
+# or the caller may not read, so the answer does not tell them apart. Both answer it as the same 400
+# body ({"message": BUCKET_NOT_AVAILABLE_MESSAGE}).
+BUCKET_NOT_AVAILABLE_MESSAGE = "Bucket ID not found or not available"
 
 
 def is_retired(row: Optional[Dict[str, Any]]) -> bool:

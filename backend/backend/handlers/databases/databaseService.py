@@ -307,6 +307,11 @@ class DatabaseAccessDeniedError(VAMSGeneralErrorResponse):
     """An object-level authorization denial on a database, answered with 403 rather than 400."""
 
 
+class BucketNotAvailableError(VAMSGeneralErrorResponse):
+    """The bucket an update moves the database to is unknown, not active or not readable to the caller.
+    Answered as database create answers it: 400 {"message": BUCKET_NOT_AVAILABLE_MESSAGE}."""
+
+
 def update_database(database_id, update_data, claims_and_roles=None, event=None):
     """Update an existing database with new data
     
@@ -351,12 +356,12 @@ def update_database(database_id, update_data, claims_and_roles=None, event=None)
             items = bucket_response.get('Items') or []
             moving = update_data['defaultBucketId'] != database.get('defaultBucketId')
             if not items:
-                raise VAMSGeneralErrorResponse(BUCKET_NOT_AVAILABLE_MESSAGE)
+                raise BucketNotAvailableError(BUCKET_NOT_AVAILABLE_MESSAGE)
             if moving:
                 registration = choosable_registration(items)
                 if registration is None or not casbin_enforcer.enforce(
                         bucket_authorization_object(registration), "GET"):
-                    raise VAMSGeneralErrorResponse(BUCKET_NOT_AVAILABLE_MESSAGE)
+                    raise BucketNotAvailableError(BUCKET_NOT_AVAILABLE_MESSAGE)
         
         updates = {
             field: update_data[field]
@@ -601,6 +606,8 @@ def update_database_handler(event, path_parameters, body, claims_and_roles):
 
     except DatabaseAccessDeniedError:
         return authorization_error(event=event)
+    except BucketNotAvailableError:
+        return validation_error(body={'message': BUCKET_NOT_AVAILABLE_MESSAGE}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
