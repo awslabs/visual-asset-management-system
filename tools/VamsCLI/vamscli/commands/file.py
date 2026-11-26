@@ -26,7 +26,7 @@ from ..utils.file_processor import (
     create_upload_sequences, validate_file_for_upload, 
     validate_preview_files_have_base_files, get_upload_summary, format_file_size
 )
-from ..utils.upload_manager import UploadManager, UploadProgress, format_duration
+from ..utils.upload_manager import UploadManager, UploadProgress, failed_file_reasons, format_duration
 from ..utils.api_client import APIClient
 from ..utils.profile import ProfileManager
 from ..constants import DEFAULT_PARALLEL_UPLOADS, DEFAULT_RETRY_ATTEMPTS, DEFAULT_ASYNC_INGESTION_TIMEOUT_SECONDS
@@ -611,6 +611,12 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
                         'successful_files': seq_result.get('successful_files', 0),
                         'failed_files': seq_result.get('failed_files', [])
                     }
+                    # Why each failed file was not stored (#1072), and the sequence's own error
+                    # when the whole sequence failed (for example a 400 or 403 at initialization).
+                    if seq_result.get('error'):
+                        clean_seq['error'] = seq_result['error']
+                    if seq_result.get('failed_file_errors'):
+                        clean_seq['failed_file_errors'] = seq_result['failed_file_errors']
                     if 'completion_result' in seq_result:
                         clean_seq['completion_result'] = seq_result['completion_result']
                     clean_sequence_results.append(clean_seq)
@@ -682,15 +688,12 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             lines.append(f"  Duration: {format_duration(data['upload_duration'])}")
             lines.append(f"  Average speed: {data['average_speed_formatted']}")
             
-            # Show failed files if any
-            failed_files = []
-            for seq_result in data["sequence_results"]:
-                failed_files.extend(seq_result.get("failed_files", []))
-            
+            # Show each failed file with the reason it was not stored (#1072)
+            failed_files = failed_file_reasons(data)
             if failed_files:
                 lines.append("\nFailed files:")
                 for failed_file in failed_files:
-                    lines.append(f"  - {failed_file}")
+                    lines.append(f"  - {failed_file['relative_key']}: {failed_file['error']}")
 
             lines.extend(format_async_ingestion_lines(data.get("async_ingestion") or []))
             
