@@ -61,6 +61,18 @@ def test_list_buckets_passes_the_acceleration_flag_through(real_paginate_client)
     )
 
 
+def test_list_buckets_passes_the_source_and_status_through(real_paginate_client):
+    """`source` and `status` (#1978) reach the agent as the API sent them, and the description names
+    both."""
+    rows = [{"bucketId": "b1", "bucketName": "n1", "source": "static", "status": "active"},
+            {"bucketId": "b2", "bucketName": "n2", "source": "runtime", "status": "pending"}]
+    real_paginate_client.api.list_buckets.return_value = {"message": {"Items": rows}}
+    result = server.list_buckets()
+    assert [(r["source"], r["status"]) for r in result["Items"]] == [("static", "active"), ("runtime", "pending")]
+    for field in ("source", "status"):
+        assert re.search(rf"\b{field}\b", server.list_buckets.__doc__ or ""), field
+
+
 def test_get_asset_calls_api(mock_client):
     mock_client.api.get_asset.return_value = {"assetId": "a1"}
     result = server.get_asset("db1", "a1")

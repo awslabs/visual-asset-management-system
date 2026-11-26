@@ -96,3 +96,64 @@ describe("populateS3AssetBucketsTable s3:GetBucketVersioning grant", () => {
         expect(findGetBucketVersioningResources(Template.fromStack(stack))).toHaveLength(0);
     });
 });
+
+// Every statement that names cloudformation:DescribeStacks, with its resource list.
+const findDescribeStacksStatements = (template: Template): any[] =>
+    Object.values(template.findResources("AWS::IAM::Policy"))
+        .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
+        .filter((s: any) => JSON.stringify(s.Action ?? "").includes("cloudformation:"));
+
+describe("populateS3AssetBucketsTable rollback status read", () => {
+    beforeEach(() => {
+        s3AssetBucketRecords.length = 0;
+    });
+
+    test("is DescribeStacks on the stack that holds the resource only, when it is not nested", () => {
+        const { stack, table } = buildStack();
+        createPopulateS3AssetBucketsTableCustomResource(
+            stack,
+            "PopulateS3AssetBucketsTable",
+            table
+        );
+        const statements = findDescribeStacksStatements(Template.fromStack(stack));
+        expect(statements).toHaveLength(1);
+        expect(statements[0]).toMatchObject({
+            Effect: "Allow",
+            Action: "cloudformation:DescribeStacks",
+            Resource: { Ref: "AWS::StackId" },
+        });
+    });
+
+    test("is DescribeStacks on the nested stack and its parent, by their stack ids, with no wildcard", () => {
+        const app = newTestApp();
+        const parent = new cdk.Stack(app, "ParentStack", {
+            env: { account: "111111111111", region: "us-east-1" },
+        });
+        const nested = new cdk.NestedStack(parent, "StorageNested");
+        const table = new dynamodb.Table(nested, "S3AssetBucketsStorageTable", {
+            partitionKey: { name: "bucketId", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "bucketName:baseAssetsPrefix", type: dynamodb.AttributeType.STRING },
+        });
+        createPopulateS3AssetBucketsTableCustomResource(
+            nested,
+            "PopulateS3AssetBucketsTable",
+            table
+        );
+
+        const nestedTemplate = Template.fromStack(nested);
+        const statements = findDescribeStacksStatements(nestedTemplate);
+        expect(statements).toHaveLength(1);
+        expect(statements[0].Action).toBe("cloudformation:DescribeStacks");
+        const [own, parentRef] = statements[0].Resource;
+        expect(statements[0].Resource).toHaveLength(2);
+        expect(own).toEqual({ Ref: "AWS::StackId" });
+        // The parent's stack id reaches the nested template as a parameter the parent sets to its own id.
+        const parameter = parentRef.Ref as string;
+        expect(Object.keys(nestedTemplate.toJSON().Parameters ?? {})).toContain(parameter);
+        const nestedResource = Object.values(
+            Template.fromStack(parent).findResources("AWS::CloudFormation::Stack")
+        )[0] as any;
+        expect(nestedResource.Properties.Parameters[parameter]).toEqual({ Ref: "AWS::StackId" });
+        expect(JSON.stringify(statements[0])).not.toContain("*");
+    });
+});

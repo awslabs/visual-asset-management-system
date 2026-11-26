@@ -44,6 +44,7 @@ import boto3
 import uuid
 import logging
 from datetime import datetime, timezone
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 # Configure logging
@@ -64,6 +65,19 @@ RETIRED_AT_FIELD = 'retiredAt'
 # spelling changed. It names the row that answers lookups by name and prefix (the primary).
 DUPLICATE_OF_FIELD = 'duplicateOfBucketId'
 REPORT_FIELD_MAX_CHARS = 1000
+# Where a row came from: 'static' for a row this function writes from the configuration, 'runtime'
+# for a registration added at run time. A runtime row is never matched, rewritten or retired here.
+SOURCE_FIELD = 'source'
+SOURCE_STATIC = 'static'
+SOURCE_RUNTIME = 'runtime'
+# The attributes a deployment owns on a row it writes from the configuration. Each is set from the
+# configuration, or removed when the configuration does not give it; any other attribute of the row
+# is left as it is.
+OWNED_FIELDS = (
+    'bucketName', 'baseAssetsPrefix', 'isVersioningEnabled', 'isDefault', 'bucketRegion',
+    'bucketAccountId', 'isAccelerated', 'tagSyncedObjects', 'syncCreatedQueueUrl', DUPLICATE_OF_FIELD,
+    SOURCE_FIELD, 'defaultSyncDatabaseId', 'bucketKmsKeyArn', RETIRED_FIELD, RETIRED_AT_FIELD,
+)
 
 def s3_client_for_region(region):
     """An S3 client for the bucket's Region. A bucket in another Region answers GetBucketVersioning
@@ -95,22 +109,165 @@ def registration_pair(item):
         prefix = prefix if prefix is not None else stored_prefix
     return bucket_name, canonical_prefix(prefix)
 
+def is_runtime(item):
+    """Whether a row is a registration added at run time rather than from the configuration."""
+    return item.get(SOURCE_FIELD) == SOURCE_RUNTIME
+
 def get_existing_entries(table_name):
-    """Every stored row, grouped by registration pair (bucket name, canonical prefix). The scan is
-    paged to the end, so a table larger than one page does not re-mint the ids of later rows."""
+    """The stored rows: the configuration's rows grouped by registration pair (bucket name, canonical
+    prefix), and the runtime rows, which are kept apart so they are never matched or retired. The
+    scan is paged to the end, so a table larger than one page does not re-mint the ids of later rows."""
     table = dynamodb.Table(table_name)
     groups = {}
+    runtime_rows = []
     scan_kwargs = {}
     while True:
         response = table.scan(**scan_kwargs)
         for item in response.get('Items') or []:
             if not item.get('bucketId'):
                 continue
+            if is_runtime(item):
+                runtime_rows.append(item)
+                continue
             groups.setdefault(registration_pair(item), []).append(item)
         if 'LastEvaluatedKey' not in response:
             break
         scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
-    return groups
+    return groups, runtime_rows
+
+def prefixes_overlap(first, second):
+    """Whether two canonical prefixes of one bucket can hold the same object: equal, one inside the
+    other, or either is the bucket root."""
+    if first == '/' or second == '/':
+        return True
+    return first == second or first.startswith(second) or second.startswith(first)
+
+def activated_pairs(configured_pairs, existing_groups):
+    """The configured pairs this deployment makes active: a pair with no stored row, or one whose
+    stored rows are all retired (a registration configured again)."""
+    return [pair for pair in configured_pairs
+            if pair not in existing_groups or all(row.get(RETIRED_FIELD) is True for row in existing_groups[pair])]
+
+# The stack statuses in which an Update of this resource is CloudFormation rolling a failed update
+# back: it then sends the previous properties to this function.
+ROLLBACK_IN_PROGRESS_STATUSES = ('UPDATE_ROLLBACK_IN_PROGRESS', 'ROLLBACK_IN_PROGRESS', 'IMPORT_ROLLBACK_IN_PROGRESS')
+# A status read that fails runs the forward overlap check, so it is retried more than the default: a
+# throttled DescribeStacks during a rollback would otherwise refuse a re-activation the rollback needs.
+CLOUDFORMATION_CLIENT_CONFIG = Config(retries={'mode': 'standard', 'max_attempts': 10})
+
+def described_stack(cloudformation, stack_id):
+    """The DescribeStacks entry of one stack, by its id."""
+    stacks = cloudformation.describe_stacks(StackName=stack_id).get('Stacks') or []
+    if not stacks:
+        raise Exception('DescribeStacks returned no stack for ' + str(stack_id))
+    return stacks[0]
+
+def is_rollback(event):
+    """Whether an Update is CloudFormation rolling a failed update back, read from the status of the
+    stack that holds this resource (the event's StackId) and, when that stack is nested, of its parent:
+    a nested stack is rolled back as part of its parent's rollback. When a status cannot be read the
+    answer is False, so the overlap check runs as on a forward deployment."""
+    if event.get('RequestType') != 'Update':
+        return False
+    stack_id = event.get('StackId')
+    if not stack_id:
+        logger.warning("The event names no stack, so a rollback cannot be recognised; the overlap check runs")
+        return False
+    try:
+        cloudformation = boto3.client('cloudformation', config=CLOUDFORMATION_CLIENT_CONFIG)
+        stack = described_stack(cloudformation, stack_id)
+        statuses = [(stack_id, stack.get('StackStatus'))]
+        parent_id = stack.get('ParentId')
+        if stack.get('StackStatus') not in ROLLBACK_IN_PROGRESS_STATUSES and parent_id:
+            statuses.append((parent_id, described_stack(cloudformation, parent_id).get('StackStatus')))
+    except Exception as e:
+        logger.warning("Could not read the stack status (" + str(e) + "); the overlap check runs as on a "
+                       "forward deployment")
+        return False
+    for checked_id, status in statuses:
+        logger.info("Stack " + str(checked_id) + " status: " + str(status))
+        if status in ROLLBACK_IN_PROGRESS_STATUSES:
+            return True
+    return False
+
+def stored_overlap_error(configured_pairs, existing_groups, runtime_rows):
+    """The failure message for the first registration this deployment makes active (activated_pairs: a
+    configured pair with no stored row, or with only retired rows) whose prefix equals or nests with the
+    prefix of a stored row of the same bucket that the configuration does not include (a retired row, a
+    row this deployment retires, or a runtime row), or None. Assets of that row keep its bucketId and
+    their locations under its prefix, so a second registration over the same objects would leave a file
+    with two owners.
+
+    A configured pair that already has an active row is not refused (stored_overlap_warnings reports it):
+    its overlap is already stored, for example by a release that kept a removed registration active, and
+    refusing it would fail that deployment's upgrade and every later deployment. It would also fail the
+    rollback: CloudFormation rolls a failed update back by sending the previous properties to this
+    (already updated) function, and those name the same stored pairs. A pair with only retired rows is
+    not exempt, because re-activating it creates the overlap now. The caller skips this check on a
+    rollback (is_rollback): a rollback can re-activate a pair the failed update retired, and refusing it
+    would leave the stack unable to roll back."""
+    unmatched = unconfigured_rows(configured_pairs, existing_groups, runtime_rows)
+    for bucket_name, prefix in sorted(activated_pairs(configured_pairs, existing_groups)):
+        for row in overlapping_rows(bucket_name, prefix, unmatched):
+            other_prefix = registration_pair(row)[1]
+            if is_runtime(row):
+                state, way_out = 'added at run time', ''
+            elif row.get(RETIRED_FIELD) is True:
+                state, way_out = 'retired', ', or configure ' + other_prefix + ' again in place of this entry'
+            else:
+                state, way_out = 'no longer configured', ', or keep ' + other_prefix + ' in the configuration in place of this entry'
+            return (
+                "Configuration Error: bucket " + str(bucket_name) + " cannot be registered under the prefix " +
+                prefix + ": it overlaps the prefix " + other_prefix + " of the stored registration " +
+                str(row.get('bucketId')) + " (" + state + "), and two registrations of one bucket cannot hold "
+                "the same objects. Choose a prefix that does not overlap " + other_prefix + way_out +
+                ". See 'Overlapping bucket registrations' in the external bucket setup guide."
+            )
+    return None
+
+def unconfigured_rows(configured_pairs, existing_groups, runtime_rows):
+    """The stored rows the configuration does not include: rows of pairs it does not name (retired, or
+    retired by this deployment) and every runtime row."""
+    unmatched = [row for pair, rows in existing_groups.items() if pair not in configured_pairs
+                 for row in rows]
+    return unmatched + list(runtime_rows)
+
+def overlapping_rows(bucket_name, prefix, rows):
+    """The rows of bucket_name whose canonical prefix equals or nests with prefix, by bucketId."""
+    return [row for row in sorted(rows, key=lambda r: str(r.get('bucketId')))
+            if registration_pair(row)[0] == bucket_name and prefixes_overlap(prefix, registration_pair(row)[1])]
+
+def stored_overlap_warnings(configured_pairs, existing_groups, runtime_rows, rollback=False):
+    """One line per configured pair that is not refused for an overlap (one with an active stored row,
+    or every pair on a rollback) and overlaps a stored row of the same bucket that the configuration
+    does not include. Such an overlap is reported, not refused (stored_overlap_error)."""
+    unmatched = unconfigured_rows(configured_pairs, existing_groups, runtime_rows)
+    checked = set() if rollback else set(activated_pairs(configured_pairs, existing_groups))
+    lines = []
+    for bucket_name, prefix in sorted(pair for pair in configured_pairs if pair not in checked):
+        for row in overlapping_rows(bucket_name, prefix, unmatched):
+            lines.append(str(bucket_name) + " prefix " + prefix + " overlaps stored registration " +
+                         str(row.get('bucketId')) + " (prefix " + registration_pair(row)[1] + ")")
+    return lines
+
+def write_owned_fields(table, key, item):
+    """Write a configured row: SET every owned field the item carries and REMOVE every owned field it
+    does not, leaving any other attribute of a stored row in place (merge, not replace). Creates the
+    row when it does not exist."""
+    names, values, sets, removes = {}, {}, [], []
+    for index, field in enumerate(OWNED_FIELDS):
+        name = '#f' + str(index)
+        names[name] = field
+        if field in item:
+            values[':v' + str(index)] = item[field]
+            sets.append(name + ' = :v' + str(index))
+        else:
+            removes.append(name)
+    expression = 'SET ' + ', '.join(sets)
+    if removes:
+        expression += ' REMOVE ' + ', '.join(removes)
+    table.update_item(Key=key, UpdateExpression=expression, ExpressionAttributeNames=names,
+                      ExpressionAttributeValues=values)
 
 def referenced_bucket_ids(bucket_ids, asset_table_name, asset_bucket_index):
     """The ids among bucket_ids that at least one asset row names: one Query of one item per id on
@@ -277,9 +434,31 @@ def lambda_handler(event, context):
         # A registration is matched on its bucket name and canonical prefix, read from the stored
         # rows, so a prefix whose spelling changed ('assets' to 'assets/') keeps its bucketId.
         logger.info(f"Scanning table {table_name} for existing entries...")
-        existing_groups = get_existing_entries(table_name)
+        existing_groups, runtime_rows = get_existing_entries(table_name)
         logger.info(f"Existing registrations: {sum(len(rows) for rows in existing_groups.values())} rows "
-                    f"for {len(existing_groups)} bucket name and prefix pairs")
+                    f"for {len(existing_groups)} bucket name and prefix pairs, and {len(runtime_rows)} "
+                    "rows added at run time")
+
+        # A registration the configuration makes active may not overlap a stored registration of the
+        # same bucket that the configuration does not include. Checked before any row is written, on
+        # Create and Update only, so a Delete (and the cleanup after a rollback) is never blocked, and
+        # not on a rollback, which restores the configuration of the last successful deployment.
+        rolling_back = is_rollback(event)
+        if rolling_back:
+            logger.info("Rolling back to the previous configuration; overlaps are reported, not refused")
+        if request_type in ('Create', 'Update') and not rolling_back:
+            overlap = stored_overlap_error(
+                {(b.get('bucketName'), canonical_prefix(b.get('prefix'))) for b in buckets},
+                existing_groups, runtime_rows)
+            if overlap:
+                logger.error(overlap)
+                raise Exception(overlap)
+        stored_overlaps = stored_overlap_warnings(
+            {(b.get('bucketName'), canonical_prefix(b.get('prefix'))) for b in buckets},
+            existing_groups, runtime_rows, rollback=rolling_back) if request_type in ('Create', 'Update') else []
+        for line in stored_overlaps:
+            logger.warning("Stored overlapping registrations: " + line + ". Review the assets of the stored "
+                           "registration; see 'Overlapping bucket registrations' in the external bucket setup guide.")
 
         # Process each bucket
         table = dynamodb.Table(table_name)
@@ -355,8 +534,9 @@ def lambda_handler(event, context):
             if is_accelerated and event.get('RequestType') in ('Create', 'Update'):
                 verify_transfer_acceleration(bucket_name, bucket_region)
 
-            # Create or update the record in DynamoDB. put_item replaces the whole item, so a row
-            # that was retired and is configured again loses the retired flag here.
+            # Create or update the record in DynamoDB. Only the owned fields are written, so an
+            # attribute something else stored on the row stays; a row that was retired and is
+            # configured again loses the retired flag here, because the item does not carry it.
             for row_key in rows_to_write:
                 item = {
                     'bucketId': row_key['bucketId'],
@@ -382,7 +562,16 @@ def lambda_handler(event, context):
                 # request for the files already at a bucketExistingKey.
                 if bucket.get('syncCreatedQueueUrl'):
                     item['syncCreatedQueueUrl'] = bucket['syncCreatedQueueUrl']
-                table.put_item(Item=item)
+                item[SOURCE_FIELD] = SOURCE_STATIC
+                # The registration's fallback database for bucket sync, and the bucket's customer
+                # managed key when one is configured, so code that serves a registration reads them
+                # from the row.
+                if bucket.get('defaultSyncDatabaseId'):
+                    item['defaultSyncDatabaseId'] = bucket['defaultSyncDatabaseId']
+                if bucket.get('bucketKmsKeyArn'):
+                    item['bucketKmsKeyArn'] = bucket['bucketKmsKeyArn']
+                write_owned_fields(table, {'bucketId': row_key['bucketId'], SORT_KEY: row_key[SORT_KEY]},
+                                   {k: v for k, v in item.items() if k not in ('bucketId', SORT_KEY)})
             logger.info(f"Successfully added/updated record for bucket: {bucket_name} (region: {bucket_region}, versioning: {is_versioning_enabled}, default: {is_default})")
 
         # Rows whose registration left the configuration are retired, never deleted. Only on Create
@@ -410,6 +599,7 @@ def lambda_handler(event, context):
                 'Message': f"Successfully processed {len(buckets)} buckets",
                 'RetiredRegistrations': ', '.join(sorted(retired))[:REPORT_FIELD_MAX_CHARS],
                 'DuplicateRegistrations': '; '.join(duplicate_reports)[:REPORT_FIELD_MAX_CHARS],
+                'StoredOverlaps': '; '.join(stored_overlaps)[:REPORT_FIELD_MAX_CHARS],
             }
         }
     except Exception as e:
@@ -420,6 +610,21 @@ def lambda_handler(event, context):
 
     // Grant the Lambda function permissions to read/write to the DynamoDB table
     table.grantReadWriteData(populateS3AssetBucketsTableLambda);
+
+    // Whether an Update is a rollback is read from the status of the stack that holds the resource and,
+    // when it is nested, of its parent (is_rollback): DescribeStacks on exactly those two stacks.
+    const holdingStack = cdk.Stack.of(scope);
+    const statusStackIds = [holdingStack.stackId];
+    if (holdingStack.nestedStackParent) {
+        statusStackIds.push(holdingStack.nestedStackParent.stackId);
+    }
+    populateS3AssetBucketsTableLambda.addToRolePolicy(
+        new iam.PolicyStatement({
+            actions: ["cloudformation:DescribeStacks"],
+            resources: statusStackIds,
+            effect: iam.Effect.ALLOW,
+        })
+    );
 
     // Which of two rows for one registration assets reference: Query on the asset table's bucketId
     // index only (no table read, no scan), plus decrypt when the table uses the customer managed key.
@@ -493,6 +698,10 @@ def lambda_handler(event, context):
             tagSyncedObjects: record.tagSyncedObjects,
             ...(record.syncCreatedQueueUrl
                 ? { syncCreatedQueueUrl: record.syncCreatedQueueUrl }
+                : {}),
+            defaultSyncDatabaseId: record.defaultSyncDatabaseId,
+            ...(record.kmsKeyArn || record.registrationKmsKeyArn
+                ? { bucketKmsKeyArn: record.kmsKeyArn || record.registrationKmsKeyArn }
                 : {}),
         }));
 

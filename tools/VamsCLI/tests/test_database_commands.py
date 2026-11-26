@@ -979,6 +979,38 @@ class TestDatabaseListBucketsCommand:
             assert result.exit_code == 0
             assert json.loads(result.output)['Items'][0]['isAccelerated'] is True
 
+    def test_list_buckets_shows_the_source_and_status(self, cli_runner, generic_command_mocks):
+        """Source and Status (#1978) as the API returns them; a row from an earlier API reads static/active."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [
+                    {'bucketId': 'b1', 'bucketName': 'a', 'baseAssetsPrefix': '/', 'source': 'static',
+                     'status': 'active'},
+                    {'bucketId': 'b2', 'bucketName': 'b', 'baseAssetsPrefix': '/', 'source': 'runtime',
+                     'status': 'disabled'},
+                    {'bucketId': 'b3', 'bucketName': 'c', 'baseAssetsPrefix': '/'},
+                ]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets'])
+
+            assert result.exit_code == 0
+            lines = [l for l in result.output.splitlines() if l.startswith(('Source:', 'Status:'))]
+            assert lines == ['Source: static', 'Status: active', 'Source: runtime', 'Status: disabled',
+                             'Source: static', 'Status: active']
+
+    def test_list_buckets_json_output_carries_the_source_and_status(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [{'bucketId': 'b1', 'bucketName': 'a', 'source': 'runtime', 'status': 'pending'}]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets', '--json-output'])
+
+            assert result.exit_code == 0
+            item = json.loads(result.output)['Items'][0]
+            assert (item['source'], item['status']) == ('runtime', 'pending')
+
     def test_list_buckets_empty(self, cli_runner, generic_command_mocks):
         """Test bucket listing with no buckets."""
         with generic_command_mocks('database') as mocks:

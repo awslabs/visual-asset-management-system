@@ -150,6 +150,7 @@ class TestDatabaseCreateRecord:
         monkeypatch.setattr(create_svc, "create_database",
                             lambda model: create_svc.CreateDatabaseResponseModel(databaseId=model.databaseId,
                                                                                  message="ok"))
+        monkeypatch.setattr(create_svc, "bucket_choice_allowed", lambda casbin_enforcer, bucket_id: True)
         body = {"databaseId": DATABASE_ID, "description": "a new database",
                 "defaultBucketId": "00000000-0000-4000-8000-000000000000"}
         event = {"body": json.dumps(body),

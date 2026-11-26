@@ -727,8 +727,9 @@ def list_buckets(ctx: click.Context, page_size: Optional[int], max_items: Option
     """
     List available S3 bucket configurations.
     
-    This command lists all S3 bucket configurations available for use with
-    databases in VAMS.
+    This command lists the S3 bucket configurations available for use with
+    databases in VAMS that your role may read (a `bucket` permission
+    constraint). A role without one gets an empty list.
     
     Examples:
         # Basic listing (uses API defaults)
@@ -867,6 +868,10 @@ def list_buckets(ctx: click.Context, page_size: Optional[int], max_items: Option
             # The default bucket houses pipeline template data and execution run I/O, so call it out
             # rather than leaving the operator to infer it.
             lines.append(f"VAMS Default Bucket: {'Yes' if bucket.get('isDefault') else 'No'}")
+            # Where the registration comes from (static: the deployment's configuration) and its state;
+            # a response from an earlier release carries neither.
+            lines.append(f"Source: {bucket.get('source') or 'static'}")
+            lines.append(f"Status: {bucket.get('status') or 'active'}")
             lines.append("-" * 80)
         
         # Show nextToken for manual pagination
