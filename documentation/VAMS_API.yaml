@@ -3182,7 +3182,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters. A missing or already archived file also answers 400.
+                    description: Invalid parameters. A missing or already archived file also answers 400, as does the top-level asset folder (`/` or a prefix that resolves to the asset's location folder); an empty filePath is an invalid parameter.
                     content:
                         application/json:
                             schema:
@@ -3283,7 +3283,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or confirmation required. A missing file also answers 400.
+                    description: Invalid parameters or confirmation required. A missing file also answers 400, as does the top-level asset folder (`/` or a prefix that resolves to the asset's location folder); an empty filePath is an invalid parameter.
                     content:
                         application/json:
                             schema:
