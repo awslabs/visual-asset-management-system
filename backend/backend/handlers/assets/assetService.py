@@ -1349,7 +1349,9 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
     logger.info(f"Updating asset {assetId} in database {databaseId}")
     
     # Update only the editable fields. `edited_attributes` accumulates exactly what this
-    # request changes, so the write below touches nothing else on the record.
+    # request changes, so the write below touches nothing else on the record. `stored_asset` is
+    # the row as read, before the edits below are applied to `asset`.
+    stored_asset = dict(asset)
     edited_attributes = {}
 
     # A name and a tag list can carry object-level authority, so the check above, made against
