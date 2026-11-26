@@ -563,9 +563,11 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
                 'updateType': update_type
             }
             
-            # Add filePath and type for file metadata/attributes
+            # Add filePath and type for file metadata/attributes. The path is the file's path in the
+            # asset, sent with a leading '/' so the metadata service reads it as a path and never as one
+            # of the asset's keys (a file in a subfolder named like the location keeps its own records, #1943)
             if file_path:
-                request_body['filePath'] = file_path
+                request_body['filePath'] = "/" + file_path.lstrip("/")
                 request_body['type'] = metadata_type
             
             # Build Lambda event for metadata service PUT endpoint. The synthetic route is built
