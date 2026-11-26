@@ -26,7 +26,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from vamscli.main import cli
-from vamscli.utils.exceptions import InvalidAssetDataError, PartUploadError, PermissionDeniedError
+from vamscli.utils.exceptions import InvalidAssetDataError, PartUploadError
 from vamscli.utils.file_processor import FileInfo, UploadSequence
 from vamscli.utils.logging import REDACTED
 from vamscli.utils.upload_manager import (
@@ -34,12 +34,24 @@ from vamscli.utils.upload_manager import (
     UploadProgress, failed_file_reasons,
 )
 
+from tests.test_api_403_classification import _client, _response
 from tests.test_sync_commands import mock_asyncio_run, setup_api_defaults
 
-KEY_TOO_LONG = ("Invalid upload data: VAMS General Error: File key is too long to upload: a file key, "
-                "including its asset location, may be at most 998 bytes")
+# What the API answers, and what the real `APIClient.initialize_upload` raises for it: the reasons below
+# are asserted against the client's own wording, so a change of that wording fails these tests.
+KEY_TOO_LONG_BODY = {"message": "VAMS General Error: File key is too long to upload: a file key, "
+                                "including its asset location, may be at most 998 bytes"}
+KEY_TOO_LONG = f"Invalid request (400): {KEY_TOO_LONG_BODY['message']}"
 NOT_AUTHORIZED = "Access forbidden. Not Authorized"
 FAKE_SESSION_TOKEN = "IQoJb3JpZ2luX2VjEFAKEFAKEFAKEFAKEFAKE"
+
+
+def _refusing_initialize_upload(status, body):
+    """The real `APIClient.initialize_upload`, its session answering `status` with `body`."""
+    client = _client()
+    client.session.request = lambda method, url, **kwargs: _response(body, status=status)
+    client._try_refresh_token = lambda token_before=None: False
+    return client.initialize_upload
 
 
 def _sequence(keys, size=1024, sequence_id=0):
@@ -94,7 +106,7 @@ def _upload_all(manager, sequences):
 class TestEachFailedFileCarriesItsReason:
     def test_a_sequence_refused_at_initialization_names_the_refusal_for_every_file(self):
         api_client = MagicMock()
-        api_client.initialize_upload.side_effect = InvalidAssetDataError(KEY_TOO_LONG)
+        api_client.initialize_upload.side_effect = _refusing_initialize_upload(400, KEY_TOO_LONG_BODY)
         sequence = _sequence(["/a.bin", "/b.bin"])
 
         summary = _upload_all(UploadManager(api_client), [sequence])
@@ -103,12 +115,13 @@ class TestEachFailedFileCarriesItsReason:
         reasons = {e["relative_key"]: e["error"] for e in failed_file_reasons(summary)}
         assert set(reasons) == {"/a.bin", "/b.bin"}
         for reason in reasons.values():
-            assert "File key is too long to upload" in reason and "998 bytes" in reason
+            # The client's "Failed to initialize upload: " is not repeated after the sequence's own.
+            assert reason == f"Failed to initialize upload for sequence 0: {KEY_TOO_LONG}"
         assert summary["sequence_results"][0]["failed_file_errors"]
 
     def test_a_permission_denial_at_initialization_is_named(self):
         api_client = MagicMock()
-        api_client.initialize_upload.side_effect = PermissionDeniedError(NOT_AUTHORIZED)
+        api_client.initialize_upload.side_effect = _refusing_initialize_upload(403, {"message": "Not Authorized"})
 
         summary = _upload_all(UploadManager(api_client), [_sequence(["/a.bin"])])
 
@@ -162,13 +175,18 @@ class TestEachFailedFileCarriesItsReason:
 
 
 class TestAReasonIsSafeToPrint:
-    def test_an_s3_error_body_is_reduced_to_its_status_and_code(self):
-        manager, _api_client = _manager()
+    S3_REFUSAL = ("<Error><Code>SignatureDoesNotMatch</Code><SignatureProvided>0123abcd</SignatureProvided>"
+                  "<CanonicalRequest>PUT /a.bin "
+                  f"X-Amz-Security-Token={FAKE_SESSION_TOKEN}&amp;X-Amz-Signature=abc</CanonicalRequest>"
+                  "<CanonicalRequestBytes>50 55 54</CanonicalRequestBytes>"
+                  "<RequestId>ABC123DEF456</RequestId><HostId>h0st/Id+=</HostId></Error>")
+
+    def _refused_part(self, manager):
+        """Run `_upload_single_part` against a session whose PUT answers 403 with `S3_REFUSAL`."""
         sequence = _sequence(["/a.bin"])
         part = PartUploadInfo(sequence.files[0], sequence.file_parts["/a.bin"][0],
                               "https://s3.invalid/0", 0)
-        body = ("<Error><Code>SignatureDoesNotMatch</Code><CanonicalRequest>PUT /a.bin "
-                f"X-Amz-Security-Token={FAKE_SESSION_TOKEN}&amp;X-Amz-Signature=abc</CanonicalRequest></Error>")
+        body = self.S3_REFUSAL
 
         class _Response:
             status = 403
@@ -192,9 +210,38 @@ class TestAReasonIsSafeToPrint:
                 asyncio.run(manager._upload_single_part(part))
         finally:
             os.unlink(handle.name)
+        return raised.value
 
-        assert str(raised.value) == "Amazon S3 answered HTTP 403 (SignatureDoesNotMatch)"
-        assert FAKE_SESSION_TOKEN not in str(raised.value)
+    def test_an_s3_error_body_is_reduced_to_its_status_and_code(self):
+        manager, _api_client = _manager()
+
+        error = self._refused_part(manager)
+
+        assert str(error) == "Amazon S3 answered HTTP 403 (SignatureDoesNotMatch)"
+        assert FAKE_SESSION_TOKEN not in str(error)
+
+    def test_the_debug_log_never_carries_the_s3_error_body(self):
+        # A refused presigned request echoes its canonical request (with the URL's session token), its
+        # signature and the canonical request's bytes; the log file and the --verbose console get the
+        # status, the code and the request id only.
+        manager, _api_client = _manager()
+
+        with patch("vamscli.utils.upload_manager.log_debug") as log_debug:
+            self._refused_part(manager)
+
+        logged = " ".join(str(c.args[0]) for c in log_debug.call_args_list)
+        for secret in (FAKE_SESSION_TOKEN, "0123abcd", "CanonicalRequest", "50 55 54", "h0st"):
+            assert secret not in logged, logged
+        assert "HTTP 403 (SignatureDoesNotMatch)" in logged and "ABC123DEF456" in logged
+
+    def test_a_percent_encoded_presigned_secret_is_masked(self):
+        api_client = MagicMock()
+        api_client.initialize_upload.side_effect = InvalidAssetDataError(
+            f"refused https%3A%2F%2Fs3.invalid%2Fk%3FX-Amz-Security-Token%3D{FAKE_SESSION_TOKEN}%26x%3D1")
+
+        summary = _upload_all(UploadManager(api_client), [_sequence(["/a.bin"])])
+
+        assert FAKE_SESSION_TOKEN not in failed_file_reasons(summary)[0]["error"]
 
     def test_credential_shapes_in_a_reason_are_masked(self):
         api_client = MagicMock()
@@ -245,7 +292,8 @@ class TestFileUploadPrintsTheReason:
         with generic_command_mocks("file") as mocks:
             mocks["api_client"].get_database.return_value = {
                 "databaseId": "test-db", "restrictFileUploadsToExtensions": ""}
-            mocks["api_client"].initialize_upload.side_effect = InvalidAssetDataError(KEY_TOO_LONG)
+            mocks["api_client"].initialize_upload.side_effect = _refusing_initialize_upload(
+                400, KEY_TOO_LONG_BODY)
             result = cli_runner.invoke(cli, ["file", "upload", "-d", "test-db", "-a", "test-asset",
                                              local_file, *extra])
         return result

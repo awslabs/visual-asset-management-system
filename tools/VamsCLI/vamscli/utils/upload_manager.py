@@ -12,7 +12,7 @@ from ..constants import DEFAULT_PARALLEL_UPLOADS, DEFAULT_RETRY_ATTEMPTS
 from .exceptions import FileUploadError, PartUploadError
 from .file_processor import UploadSequence, FileInfo, format_file_size
 from .api_client import APIClient
-from .logging import log_debug, log_warning, scrub_text
+from .logging import log_debug, log_warning, mask_presigned_url_secrets, scrub_text
 
 
 # Why a file was not stored, as `file upload` and `sync file push` print it (#1072). The reasons reach
@@ -21,11 +21,12 @@ from .logging import log_debug, log_warning, scrub_text
 # echo the canonical request, which carries the URL's security token.
 MAX_FAILURE_REASON_CHARS = 500
 NO_REASON_GIVEN = "no reason given"
+_INITIALIZE_FAILED_PREFIX = "Failed to initialize upload: "
 
 
 def _failure_reason(message: Any) -> str:
     """`message` as a reason a command can print: masked, bounded, never empty."""
-    text = scrub_text(str(message).strip()) if message else ""
+    text = mask_presigned_url_secrets(scrub_text(str(message).strip())) if message else ""
     if not text:
         return NO_REASON_GIVEN
     if len(text) > MAX_FAILURE_REASON_CHARS:
@@ -60,14 +61,16 @@ def failed_file_reasons(result: Optional[Dict[str, Any]]) -> List[Dict[str, str]
     return entries
 
 
-def _s3_error_code(body: str) -> Optional[str]:
-    """The `<Code>` of an Amazon S3 XML error body, if it has one."""
-    start = body.find("<Code>") if isinstance(body, str) else -1
+def _s3_error_field(body: str, tag: str) -> Optional[str]:
+    """The `<Code>` or `<RequestId>` of an Amazon S3 XML error body, when it is a short alphanumeric
+    value. Nothing else of the body is read: its other elements can carry credentials."""
+    opening, closing = f"<{tag}>", f"</{tag}>"
+    start = body.find(opening) if isinstance(body, str) else -1
     if start < 0:
         return None
-    end = body.find("</Code>", start)
-    code = body[start + len("<Code>"):end] if end > start else ""
-    return code if code.isalnum() and len(code) <= 64 else None
+    end = body.find(closing, start)
+    value = body[start + len(opening):end] if end > start else ""
+    return value if value.isalnum() and len(value) <= 64 else None
 
 
 class PartUploadInfo:
@@ -265,7 +268,12 @@ class UploadManager:
                     database_id, asset_id, upload_type, api_files
                 )
         except Exception as e:
-            raise FileUploadError(f"Failed to initialize upload for sequence {sequence.sequence_id}: {e}")
+            # `APIClient.initialize_upload` wraps most refusals as "Failed to initialize upload: ...";
+            # the sequence's message says that already, so the reason does not repeat it (#1072).
+            detail = str(e)
+            if detail.startswith(_INITIALIZE_FAILED_PREFIX):
+                detail = detail[len(_INITIALIZE_FAILED_PREFIX):]
+            raise FileUploadError(f"Failed to initialize upload for sequence {sequence.sequence_id}: {detail}")
         
         upload_id = init_response["uploadId"]
         
@@ -594,13 +602,17 @@ class UploadManager:
         # Upload to S3
         async with self.session.put(part_upload.upload_url, data=data) as response:
             if response.status != 200:
-                # The error's text becomes the file's printed reason, so it names the status and the
-                # S3 error code only. The body goes to the debug log, which masks credentials: a
-                # refused presigned request can echo its canonical request, security token included.
+                # Neither the printed reason nor the log carries the body: a refused presigned
+                # request echoes its canonical request (security token included), its signature and
+                # the canonical request's bytes. The status, the S3 error code and the request id are
+                # what S3 support needs, and none of them is a credential.
                 body = await response.text()
+                code = _s3_error_field(body, "Code")
+                request_id = _s3_error_field(body, "RequestId")
                 log_debug(f"Part {part_upload.part_number} of {part_upload.file_info.relative_key} "
-                          f"answered HTTP {response.status}: {body}")
-                code = _s3_error_code(body)
+                          f"answered HTTP {response.status}"
+                          + (f" ({code})" if code else "")
+                          + (f", S3 request id {request_id}" if request_id else ""))
                 raise PartUploadError(
                     f"Amazon S3 answered HTTP {response.status}" + (f" ({code})" if code else "")
                 )
