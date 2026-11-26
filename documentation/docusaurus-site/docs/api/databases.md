@@ -97,7 +97,7 @@ Returns a single database object in the same format as the items in the list res
 
 ## Bucket configurations
 
-A database is created against a **bucket configuration** — a registered pairing of an Amazon S3 bucket and a base prefix. Bucket configurations are registered at deployment time from the `app.assetBuckets` deployment configuration, covering both the bucket the deployment creates and any external buckets it is given, and cannot be created, changed, or removed through the API. This endpoint lists them so you can obtain the `defaultBucketId` a database requires. A registration whose entry was removed from `app.assetBuckets` is kept as retired and is not listed. Only the configurations your role may read through a `bucket` permission constraint are listed.
+A database is created against a **bucket configuration** — a registered pairing of an Amazon S3 bucket and a base prefix. Bucket configurations are registered at deployment time from the `app.assetBuckets` deployment configuration, covering both the bucket the deployment creates and any external buckets it is given, and cannot be created, changed, or removed through the API. This endpoint lists them so you can obtain the `defaultBucketId` a database requires. A registration whose entry was removed from `app.assetBuckets` is kept as retired and is not listed, and neither is a bucket registered at run time that is pending or disabled. Only the configurations your role may read through a `bucket` permission constraint are listed.
 
 ### List bucket configurations
 
@@ -115,17 +115,17 @@ GET /buckets
 
 #### Response
 
-| Field              | Type    | Description                                                                                                                                                                             |
-| ------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bucketId`         | string  | Identifier of the bucket configuration. This is the value to supply as `defaultBucketId` when creating or updating a database.                                                          |
-| `bucketName`       | string  | Name of the Amazon S3 bucket used for asset storage.                                                                                                                                    |
-| `baseAssetsPrefix` | string  | Base prefix within the bucket under which assets are stored. Empty when assets are stored at the bucket root.                                                                           |
-| `isDefault`        | boolean | Whether this is the VAMS default asset bucket, which holds pipeline template data and execution-time run input and output under the `pipelines/` prefix. Exactly one bucket is default. |
-| `bucketRegion`     | string  | The AWS Region the bucket is in; presigned URLs and Amazon S3 requests for the bucket are signed for it. `null` on a row written without a Region, which is the deployment Region.      |
-| `bucketAccountId`  | string  | The 12-digit AWS account that owns the bucket when it is not the deployment account; `null` otherwise.                                                                                  |
-| `isAccelerated`    | boolean | Whether S3 Transfer Acceleration is on for the bucket. Uploads and downloads for an accelerated bucket use its accelerate endpoint. `false` when the registration does not say.         |
-| `source`           | string  | Where the configuration comes from: `static` (the deployment configuration). `runtime` is reserved for buckets registered at run time.                                                  |
-| `status`           | string  | The state of the configuration: `active` for every listed static configuration. `pending` and `disabled` are reserved for buckets registered at run time.                               |
+| Field              | Type    | Description                                                                                                                                                                                       |
+| ------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bucketId`         | string  | Identifier of the bucket configuration. This is the value to supply as `defaultBucketId` when creating or updating a database.                                                                    |
+| `bucketName`       | string  | Name of the Amazon S3 bucket used for asset storage.                                                                                                                                              |
+| `baseAssetsPrefix` | string  | Base prefix within the bucket under which assets are stored. Empty when assets are stored at the bucket root.                                                                                     |
+| `isDefault`        | boolean | Whether this is the VAMS default asset bucket, which holds pipeline template data and execution-time run input and output under the `pipelines/` prefix. Exactly one bucket is default.           |
+| `bucketRegion`     | string  | The AWS Region the bucket is in; presigned URLs and Amazon S3 requests for the bucket are signed for it. `null` on a row written without a Region, which is the deployment Region.                |
+| `bucketAccountId`  | string  | The 12-digit AWS account that owns the bucket when it is not the deployment account; `null` otherwise.                                                                                            |
+| `isAccelerated`    | boolean | Whether S3 Transfer Acceleration is on for the bucket. Uploads and downloads for an accelerated bucket use its accelerate endpoint. `false` when the registration does not say.                   |
+| `source`           | string  | Where the configuration comes from: `static` (the deployment configuration). `runtime` is reserved for buckets registered at run time.                                                            |
+| `status`           | string  | The state of the configuration. Only active configurations are listed, so the value is `active`; a retired one, and a bucket registered at run time that is `pending` or `disabled`, is left out. |
 
 ```json
 {

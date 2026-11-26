@@ -14,7 +14,6 @@ from common.bucketRegistrations import (
     BUCKET_NOT_AVAILABLE_MESSAGE,
     bucket_authorization_object,
     choosable_registration,
-    is_retired,
 )
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -60,9 +59,9 @@ def create_database(request_model: CreateDatabaseRequestModel):
             KeyConditionExpression=Key('bucketId').eq(request_model.defaultBucketId)
         )
         
-        # A retired registration (it left the configuration) is not offered for a new database, so it
-        # is refused here as an unknown one.
-        if not bucket_response.get('Items') or all(is_retired(item) for item in bucket_response['Items']):
+        # A registration that is not active (retired, or a runtime one that is pending or disabled) is
+        # not offered for a new database, so it is refused here as an unknown one.
+        if choosable_registration(bucket_response.get('Items') or []) is None:
             raise VAMSGeneralErrorResponse(BUCKET_NOT_AVAILABLE_MESSAGE)
         
         # Create database with put_item and conditional expression

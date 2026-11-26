@@ -19555,7 +19555,7 @@ components:
                 status:
                     type: string
                     enum: [active, retired, pending, disabled]
-                    description: "The state of the configuration. Every listed static configuration is active; pending and disabled are reserved for buckets registered at run time."
+                    description: "The state of the configuration. Only active configurations are listed, so the value is active; retired ones, and buckets registered at run time that are pending or disabled, are left out."
                     default: active
             required:
                 - bucketId

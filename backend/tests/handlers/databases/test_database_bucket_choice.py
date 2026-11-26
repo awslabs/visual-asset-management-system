@@ -44,6 +44,18 @@ ROWS = {
              "bucketRegion": "us-west-2"},
     RETIRED: {"bucketId": RETIRED, "bucketName": "team-a-old", "baseAssetsPrefix": "/", "retired": True},
 }
+# Runtime registrations (#1735) that are not active, and one that is: only the active one is offered.
+PENDING = "ee55ff66-c092-475f-978a-d39e5d5a2657"
+DISABLED = "ff66aa77-c092-475f-978a-d39e5d5a2657"
+RUNTIME_ACTIVE = "aa77bb88-c092-475f-978a-d39e5d5a2657"
+ROWS.update({
+    PENDING: {"bucketId": PENDING, "bucketName": "team-a-rt-pending", "baseAssetsPrefix": "/",
+              "source": "runtime", "status": "pending"},
+    DISABLED: {"bucketId": DISABLED, "bucketName": "team-a-rt-disabled", "baseAssetsPrefix": "/",
+               "source": "runtime", "status": "disabled"},
+    RUNTIME_ACTIVE: {"bucketId": RUNTIME_ACTIVE, "bucketName": "team-a-rt-active", "baseAssetsPrefix": "/",
+                     "source": "runtime", "status": "active"},
+})
 
 # Role descriptions: the object types the role holds, and for `bucket` the bucket-name prefix it reads.
 ALL_ROUTES = ("api",)
@@ -131,11 +143,15 @@ class TestBucketListing:
 
     def test_items_carry_source_and_status(self, role):
         role(ALL_BUCKETS)
-        runtime = {"bucketId": UNKNOWN, "bucketName": "rt", "baseAssetsPrefix": "/", "source": "runtime",
-                   "status": "disabled"}
-        items = {i.bucketId: i.dict() for i in _list([ROWS[TEAM_A], runtime])}
+        items = {i.bucketId: i.dict() for i in _list([ROWS[TEAM_A], ROWS[RUNTIME_ACTIVE]])}
         assert (items[TEAM_A]["source"], items[TEAM_A]["status"]) == ("static", "active")
-        assert (items[UNKNOWN]["source"], items[UNKNOWN]["status"]) == ("runtime", "disabled")
+        assert (items[RUNTIME_ACTIVE]["source"], items[RUNTIME_ACTIVE]["status"]) == ("runtime", "active")
+
+    def test_runtime_registrations_that_are_not_active_are_left_out(self, role):
+        role(ALL_BUCKETS)
+        rows = [ROWS[TEAM_A], ROWS[PENDING], ROWS[DISABLED], ROWS[RUNTIME_ACTIVE],
+                {"bucketId": UNKNOWN, "bucketName": "rt-no-status", "baseAssetsPrefix": "/", "source": "runtime"}]
+        assert [i.bucketId for i in _list(rows)] == [TEAM_A, RUNTIME_ACTIVE]
 
     def test_the_next_token_survives_a_filtered_page(self, role):
         role(TEAM_A_BUCKETS)
@@ -179,7 +195,7 @@ class TestDatabaseCreate:
         create_tables.put_item.assert_called_once()
         assert create_tables.put_item.call_args.kwargs["Item"]["defaultBucketId"] == TEAM_A
 
-    @pytest.mark.parametrize("bucket_id", [TEAM_B, RETIRED, UNKNOWN])
+    @pytest.mark.parametrize("bucket_id", [TEAM_B, RETIRED, UNKNOWN, PENDING, DISABLED])
     def test_an_unreadable_retired_or_unknown_bucket_gets_one_answer(self, role, create_tables, bucket_id):
         role(ALL_ROUTES, ALL_DATABASES, TEAM_A_BUCKETS)
         response = create_handler.lambda_handler(_create_event(bucket_id), None)
@@ -201,6 +217,18 @@ class TestDatabaseCreate:
     def test_a_role_without_a_bucket_constraint_cannot_choose_any_bucket(self, role, create_tables):
         role(ALL_ROUTES, ALL_DATABASES)
         assert create_handler.lambda_handler(_create_event(TEAM_A), None)["statusCode"] == 400
+        create_tables.put_item.assert_not_called()
+
+    def test_an_active_runtime_registration_is_accepted(self, role, create_tables):
+        role(ALL_ROUTES, ALL_DATABASES, TEAM_A_BUCKETS)
+        assert create_handler.lambda_handler(_create_event(RUNTIME_ACTIVE), None)["statusCode"] == 200
+
+    @pytest.mark.parametrize("bucket_id", [PENDING, DISABLED, RETIRED])
+    def test_the_inner_create_refuses_a_registration_that_is_not_active(self, role, create_tables, bucket_id):
+        role()
+        with pytest.raises(create_handler.VAMSGeneralErrorResponse):
+            create_handler.create_database(create_handler.CreateDatabaseRequestModel(
+                databaseId="auto-db", description="auto database", defaultBucketId=bucket_id))
         create_tables.put_item.assert_not_called()
 
     def test_bucket_syncs_own_creation_is_not_checked(self, role, create_tables):
@@ -226,7 +254,7 @@ class TestDatabaseUpdate:
         run()
         assert table.stored()["defaultBucketId"] == TEAM_B
 
-    @pytest.mark.parametrize("bucket_id", [TEAM_B, RETIRED, UNKNOWN])
+    @pytest.mark.parametrize("bucket_id", [TEAM_B, RETIRED, UNKNOWN, PENDING, DISABLED])
     def test_a_move_onto_an_unreadable_retired_or_unknown_bucket_gets_one_answer(self, role, wire,  # noqa: F811
                                                                                   bucket_id):
         audit = role(ALL_DATABASES, TEAM_A_BUCKETS)

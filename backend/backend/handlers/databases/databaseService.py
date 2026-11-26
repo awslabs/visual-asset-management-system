@@ -18,7 +18,7 @@ from common.bucketRegistrations import (
     BUCKET_NOT_AVAILABLE_MESSAGE,
     bucket_authorization_object,
     choosable_registration,
-    is_retired,
+    STATE_ACTIVE,
     registration_source,
     registration_state,
 )
@@ -694,10 +694,11 @@ def get_buckets(query_params, claims_and_roles=None):
         items = []
         for item in response.get('Items', []):
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
-            # A retired registration left the configuration: no bucket sync and no grants serve it, so
-            # it is not offered for a database. Its row stays for the assets that name its bucketId.
-            # A page can therefore hold fewer rows than its size; NextToken still continues the scan.
-            if is_retired(deserialized_document):
+            # Only an active registration is offered for a database. A retired one left the
+            # configuration (no bucket sync and no grants serve it; its row stays for the assets that
+            # name its bucketId), and a runtime one that is pending or disabled is not connected. A page
+            # can therefore hold fewer rows than its size; NextToken still continues the scan.
+            if registration_state(deserialized_document) != STATE_ACTIVE:
                 continue
 
             # Tier 2: the row is listed only when the caller may read the registration.
