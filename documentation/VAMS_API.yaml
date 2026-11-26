@@ -13474,7 +13474,7 @@ components:
                     description: "Whether the asset can be downloaded."
                 assetId:
                     $ref: '#/components/schemas/asset_id_regex'
-                    description: "Explicit asset identifier (2-255 characters). ASCII characters only, and cannot contain forward slashes. Auto-generated when omitted. The ASCII rule applies where a caller names a new asset; an identifier already stored stays valid on every other operation. An identifier equal to a folder name VAMS reserves for system use (pipeline, pipelines, preview, previews, temp-upload, temp-uploads, workspace, workspaces, vams.preparedDownloads) is refused with 400."
+                    description: "Explicit asset identifier (2-255 characters). ASCII characters only, and cannot contain forward slashes. Auto-generated when omitted. The ASCII rule, and the rule that the last character is a letter, digit, underscore, comma, apostrophe or hyphen, apply where a caller names a new asset; an identifier already stored stays valid on every other operation. An identifier equal to a folder name VAMS reserves for system use (pipeline, pipelines, preview, previews, temp-upload, temp-uploads, workspace, workspaces, vams.preparedDownloads) is refused with 400."
                 tags:
                     type: array
                     items:
@@ -16618,7 +16618,7 @@ components:
             pattern: ^(?:[0-9a-f]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$
         asset_id_regex:
             type: string
-            pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[\w.,\'-]$
+            pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$
         ingest_asset:
             description: "Asset ingest request. The presence of uploadId selects the complete stage; its absence selects the initialize stage."
             oneOf:
@@ -16636,7 +16636,7 @@ components:
                     pattern: "^[-_a-zA-Z0-9]{3,63}$"
                 assetId:
                     type: string
-                    description: "Asset identifier, ASCII characters only. Every file relativeKey must begin with '{assetId}/'. When the asset already exists the identifier must match it exactly."
+                    description: "Asset identifier, ASCII characters only. Every file relativeKey must begin with '{assetId}/'. When the asset already exists the identifier must match it exactly; a new asset's identifier must end with a letter, digit, underscore, comma, apostrophe or hyphen."
                     minLength: 2
                     maxLength: 255
                 assetName:
@@ -23440,7 +23440,7 @@ components:
                 assetId:
                     type: string
                     maxLength: 256
-                    pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[\w.,\'-]$
+                    pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$
                     description: "Asset whose downstream assets are re-evaluated."
                 reason:
                     type: string
