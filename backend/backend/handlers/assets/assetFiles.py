@@ -1539,7 +1539,9 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
     # ({key}.bak, {key}_tiles/...) are never read and cannot fill a page.
     location = prefix
     single_object = not is_folder_location(location)
-    single_object_filter = (query_params.get('prefix') or '').lstrip('/')
+    # The prefix filter is a path in the asset: exactly one leading '/' is dropped, so '//' is the folder of the
+    # keys with an empty segment after the location ('A1//'), not the whole asset (#1977)
+    single_object_filter = version_entry_key(query_params.get('prefix') or '')
 
     def _listed(key):
         if nested and not nested.keep(key):
@@ -1547,13 +1549,13 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         if not single_object:
             return True
         return (contains(location, key)
-                and relative_path_in(location, key).lstrip('/').startswith(single_object_filter))
+                and version_entry_key(relative_path_in(location, key)).startswith(single_object_filter))
     
     # If prefix filter is provided, append it to the base prefix
     if query_params.get('prefix') and not single_object:
         if not prefix.endswith('/'):
             prefix = prefix + '/'
-        prefix = prefix + query_params['prefix'].lstrip('/')
+        prefix = prefix + version_entry_key(query_params['prefix'])
     
     # List objects with pagination
     result = {

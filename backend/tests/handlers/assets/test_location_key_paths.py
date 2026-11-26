@@ -551,6 +551,24 @@ class TestTheFileListNamesAnEmptySegmentKeyByItsOwnPath:
         listing = af.list_s3_objects_with_archive_status(BUCKET, LOCATION, {"prefix": "sub/"}, basic_mode=True)
         assert sorted(item["relativePath"] for item in listing["items"]) == ["//y.las", "/x.las"]
 
+    @pytest.mark.parametrize("prefix_filter, expected", [
+        ("//", ["/cloud.las"]),
+        ("/", ["/A1/cloud.las", "/A1/other.las", "//cloud.las", "/cloud.las"]),
+        ("/A1/", ["/cloud.las", "/other.las"]),
+        ("A1/", ["/cloud.las", "/other.las"]),
+    ])
+    def test_the_prefix_filter_drops_one_leading_slash(self, af, prefix_filter, expected):
+        """L5: '--prefix //' lists the 'A1//' folder (its paths relative to the filter, as for any folder
+        filter); it stripped every '/' and listed the whole asset."""
+        listing = af.list_s3_objects_with_archive_status(BUCKET, LOCATION, {"prefix": prefix_filter}, basic_mode=True)
+        assert sorted(item["relativePath"] for item in listing["items"]) == sorted(expected)
+
+    def test_a_single_file_assets_prefix_filter_drops_one_leading_slash(self, af):
+        for key in ("p/model.glb", "p/model.glb/x.bin", "p/model.glb//y.bin"):
+            af.test_client.put_object(Bucket=BUCKET, Key=key, Body=b"x")
+        listing = af.list_s3_objects_with_archive_status(BUCKET, "p/model.glb", {"prefix": "//"}, basic_mode=True)
+        assert [item["key"] for item in listing["items"]] == ["p/model.glb//y.bin"]
+
     @pytest.mark.parametrize("prefix,key,expected", [
         ("A1/", "A1/x", "/x"), ("A1/", "A1//x", "//x"), ("A1/", "A1/", "/"),
         ("A1/sub", "A1/sub/x", "/x"), ("A1/sub", "A1/subway.glb", "/way.glb"),
