@@ -126,6 +126,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **File paths that start with the asset's location key** — A path such as `/a1/cloud.las` for an asset stored at `a1/` names the file in the root subfolder named like the asset (`a1/a1/cloud.las`) on every file route, in file metadata, in asset version metadata snapshots and reverts, and in workflow inputs and outputs, instead of the root file `a1/cloud.las`, which an upload replaced, a delete, archive or rename acted on, and a revert to a version of the subfolder file reset while it lost that file's metadata and attributes. A delete, copy or move by a file's full key keys its metadata, attributes and version records by the path the file is listed at. (issues #1943, #1912)
 -   **Re-run on a single-file asset's own preview** — Re-running a workflow whose input was the own preview file of an asset created from a single Amazon S3 object runs on that preview again instead of answering that the input file does not exist. (issue #2012)
 -   **CLI asset-version help** — The `vamscli asset-version create` example that uses `--files` includes `--no-use-latest-files`, so copying it no longer fails. (issue #1941)
+-   **Upload sequence in CLI JSON output** — `vamscli file upload --json-output` reports each sequence result's `sequence_number` (the upload sequence it belongs to) instead of `null`. (issue #1988)
 
 **Other changes:**
 
