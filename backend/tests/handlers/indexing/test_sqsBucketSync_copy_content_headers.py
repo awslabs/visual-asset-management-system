@@ -130,8 +130,8 @@ class TestMetadataStampKeepsContentHeaders:
         # The first head 404s, the second finds the object, and the copy writes that key with
         # that object's content type.
         stored_key = "x-asset-1/my model.glb"
-        m, fake = _wire(monkeypatch, {stored_key: {**OBJECT_FIELDS, "ContentType": "model/gltf-binary",
-                                                    "Metadata": {}}})
+        head = {**OBJECT_FIELDS, "ContentType": "model/gltf-binary", "Metadata": {}}
+        m, fake = _wire(monkeypatch, {stored_key: head})
 
         assert m.update_s3_metadata(BUCKET, "x-asset-1/my+model.glb", "db1", "x-asset-1") is True
 
@@ -143,8 +143,8 @@ class TestMetadataStampKeepsContentHeaders:
 
     def test_an_object_already_stamped_is_not_copied(self, monkeypatch):
         # Control: the "already matches" skip is unchanged and writes no new version.
-        m, fake = _wire(monkeypatch, {KEY: {**OBJECT_FIELDS, "ContentType": "model/gltf-binary",
-                                             "Metadata": _stamped({})}})
+        head = {**OBJECT_FIELDS, "ContentType": "model/gltf-binary", "Metadata": _stamped({})}
+        m, fake = _wire(monkeypatch, {KEY: head})
 
         assert m.update_s3_metadata(BUCKET, KEY, "db1", "x-asset-1") is True
 
