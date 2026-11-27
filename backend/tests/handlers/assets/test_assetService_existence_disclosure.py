@@ -77,7 +77,7 @@ _SITES = [
         "/deleteAsset",
         {"confirmPermanentDelete": True},
         "DELETE",
-        400,
+        404,
     ),
 ]
 _SITE_IDS = [site[0] for site in _SITES]

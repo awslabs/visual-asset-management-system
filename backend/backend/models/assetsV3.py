@@ -1502,6 +1502,9 @@ class AssetUploadTableModel(BaseModel, extra='ignore'):
     # relativeKeys the upload was initialized with. Completion accepts only these; a record
     # without the attribute predates the binding and is completed without the membership check.
     files: Optional[List[str]] = None
+    # "perUpload" (UPLOAD_STAGING_LAYOUT_PER_UPLOAD) when the files stage per upload; a record without
+    # it was initialized before per-upload staging, and only such an upload uses the legacy staging key.
+    stagingLayout: Optional[str] = None
     
     def to_dict(self):
         """Convert model to dictionary for DynamoDB storage"""
@@ -1525,6 +1528,8 @@ class AssetUploadTableModel(BaseModel, extra='ignore'):
             result["UserId"] = self.UserId
         if self.files is not None:
             result["files"] = self.files
+        if self.stagingLayout:
+            result["stagingLayout"] = self.stagingLayout
             
         return result
 

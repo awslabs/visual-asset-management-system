@@ -3604,7 +3604,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters. A missing or already archived file also answers 400, as does the top-level asset folder (`/` or a prefix that resolves to the asset's location folder); an empty filePath is an invalid parameter.
+                    description: Invalid parameters. A missing or already archived file also answers 400, as does the top-level asset folder (`/`, or a path that resolves to the asset's location folder or to a single-object asset's companion folder, with or without isPrefix); an empty filePath is an invalid parameter.
                     content:
                         application/json:
                             schema:
@@ -3705,7 +3705,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or confirmation required. A missing file also answers 400, as does the top-level asset folder (`/` or a prefix that resolves to the asset's location folder); an empty filePath is an invalid parameter. A delete Amazon S3 does not complete also answers 400; the files it deleted lose their records and the remaining files are kept.
+                    description: Invalid parameters or confirmation required. A missing file also answers 400, as does the top-level asset folder (`/`, or a path that resolves to the asset's location folder or to a single-object asset's companion folder, with or without isPrefix); an empty filePath is an invalid parameter. A delete Amazon S3 does not complete also answers 400; the files it deleted lose their records and the remaining files are kept.
                     content:
                         application/json:
                             schema:

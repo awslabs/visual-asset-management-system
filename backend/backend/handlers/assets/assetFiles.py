@@ -2406,14 +2406,14 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
             else:
                 break
 
-        # Batch delete the matching records; the count is the rows written once the batch flushed
-        with asset_version_files_table.batch_writer() as batch:
-            for item in records_to_delete:
-                batch.delete_item(Key={
-                    'databaseId:assetId:assetVersionId': item['databaseId:assetId:assetVersionId'],
-                    'fileKey': item['fileKey']
-                })
-        deleted_count = len(records_to_delete)
+        # One DeleteItem per row (one per asset version that lists the file): the role holds
+        # DeleteItem on this table and no batch write. The count is the rows deleted.
+        for item in records_to_delete:
+            asset_version_files_table.delete_item(Key={
+                'databaseId:assetId:assetVersionId': item['databaseId:assetId:assetVersionId'],
+                'fileKey': item['fileKey']
+            })
+            deleted_count += 1
 
         if deleted_count > 0:
             logger.info(f"Deleted {deleted_count} version snapshot records for {len(normalized_paths)} file(s) in {db_asset_key}")
@@ -2552,8 +2552,9 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
 
-    # A prefix that resolves to the location folder itself is the top-level asset folder
-    if is_prefix and is_folder_location(base_key) and full_key == base_key:
+    # The key listed at '/' is the top-level asset folder, named as a folder or as a single key: a folder
+    # location itself, or a single-file location's companion folder {key}/
+    if relative_path_in(base_key, full_key) == "/":
         raise VAMSGeneralErrorResponse("Cannot delete the top-level asset folder")
 
     # In a single-file asset a folder is selected by asset-relative path (a folder named like the
@@ -2758,8 +2759,9 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
 
-    # A prefix that resolves to the location folder itself is the top-level asset folder
-    if is_prefix and is_folder_location(base_key) and full_key == base_key:
+    # The key listed at '/' is the top-level asset folder, named as a folder or as a single key: a folder
+    # location itself, or a single-file location's companion folder {key}/
+    if relative_path_in(base_key, full_key) == "/":
         raise VAMSGeneralErrorResponse("Cannot archive the top-level asset folder")
 
     # In a single-file asset a folder is selected by asset-relative path (a folder named like the
