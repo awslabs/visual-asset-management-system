@@ -29,7 +29,7 @@ from common.assetProvenance import (
     METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
     METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE,
 )
-from common.dynamodb import get_asset_record, asset_authorization_object
+from common.dynamodb import get_asset_record, asset_authorization_object, database_authorization_object
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -961,8 +961,9 @@ def find_database(database_id: str):
 def authorize_database(database_id: str, action, claims_and_roles: dict, refusal_message: str) -> dict:
     """Resolve a database for a metadata route and decide Tier 2 on it before its existence is reported
 
-    The record is read, then Tier 2 is decided on it, or on the requested id when no record exists,
-    so a refused caller gets the same answer whether or not the database exists.
+    The record is read, then Tier 2 is decided on its common.dynamodb.database_authorization_object (the
+    record, or the requested id when no record exists), so a refused caller gets the same answer whether
+    or not the database exists.
 
     Args:
         action: The Tier 2 action, or a list of actions that must all be granted (REPLACE_ALL)
@@ -975,8 +976,7 @@ def authorize_database(database_id: str, action, claims_and_roles: dict, refusal
         VAMSGeneralErrorResponse: If the caller is allowed and the database is not found
     """
     database = find_database(database_id)
-    authorization_object = ({**database, 'object__type': 'database'} if database
-                            else {'databaseId': database_id, 'object__type': 'database'})
+    authorization_object = database_authorization_object(database, database_id)
     if not entity_authorized(authorization_object, action, claims_and_roles):
         raise PermissionError(refusal_message)
     if not database:
