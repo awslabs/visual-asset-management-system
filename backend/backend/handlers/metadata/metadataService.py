@@ -2975,6 +2975,9 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
         
         if not check_entity_authorization(asset, "GET", claims_and_roles):
             raise PermissionError("Not authorized to view metadata for this file")
+
+        # Key the request by the path the file is listed at
+        file_path = file_record_path(database_id, asset_id, file_path)
         
         composite_key = f"{database_id}:{asset_id}:{file_path}"
         table_name = asset_file_metadata_table_name if metadata_type == 'metadata' else file_attribute_table_name
@@ -3083,6 +3086,9 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
         if not check_entity_authorization(asset, "GET", claims_and_roles):
             raise PermissionError("Not authorized to view metadata for this file")
 
+        # Key the request by the path the file is listed at
+        file_path = file_record_path(database_id, asset_id, file_path)
+
         # Validate asset version exists before querying metadata
         validate_asset_version_exists(database_id, asset_id, asset_version_id)
 
@@ -3166,6 +3172,8 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
 def create_file_metadata(database_id: str, asset_id: str, request_model: CreateFileMetadataRequestModel, claims_and_roles: dict):
     """Create metadata or attributes for a file (bulk operation)"""
     try:
+        # Key the request by the path the file is listed at
+        request_model.filePath = file_record_path(database_id, asset_id, request_model.filePath)
         validate_file_exists(database_id, asset_id, request_model.filePath)
         asset = validate_asset_exists(database_id, asset_id)
         asset.update({"object__type": "asset"})
@@ -3385,6 +3393,8 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
 def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateFileMetadataRequestModel, claims_and_roles: dict):
     """Update metadata or attributes for a file (bulk operation) - Supports UPDATE and REPLACE_ALL modes"""
     try:
+        # Key the request by the path the file is listed at
+        request_model.filePath = file_record_path(database_id, asset_id, request_model.filePath)
         validate_file_exists(database_id, asset_id, request_model.filePath)
         asset = validate_asset_exists(database_id, asset_id)
         asset.update({"object__type": "asset"})
@@ -3791,6 +3801,9 @@ def delete_file_metadata(database_id: str, asset_id: str, request_model: DeleteF
         
         if not check_entity_authorization(asset, "DELETE", claims_and_roles):
             raise PermissionError("Not authorized to delete metadata for this file")
+
+        # Key the request by the path the file is listed at
+        request_model.filePath = file_record_path(database_id, asset_id, request_model.filePath)
         
         # NEW: Schema validation for deletion
         composite_key = f"{database_id}:{asset_id}:{request_model.filePath}"
@@ -3967,12 +3980,8 @@ def handle_file_metadata_get(event):
         # Parse query parameters - validation handled in model (adds leading slash)
         query_request_model = parse(query_parameters, model=GetFileMetadataRequestModel)
         
-        # Key the request by the path the file is listed at (after model validation)
-        file_path = file_record_path(path_request_model.databaseId, path_request_model.assetId,
-                                     query_request_model.filePath)
-        
         query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId}
-        response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
+        response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, query_request_model.filePath, query_request_model.type, query_params, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -4007,10 +4016,6 @@ def handle_file_metadata_post(event):
         
         # Parse request model - validation handled in model (adds leading slash)
         request_model = parse(body, model=CreateFileMetadataRequestModel)
-        
-        # Key the request by the path the file is listed at (after model validation)
-        request_model.filePath = file_record_path(path_request_model.databaseId, path_request_model.assetId,
-                                                  request_model.filePath)
         
         response = create_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
@@ -4048,10 +4053,6 @@ def handle_file_metadata_put(event):
         # Parse request model - validation handled in model (adds leading slash)
         request_model = parse(body, model=UpdateFileMetadataRequestModel)
         
-        # Key the request by the path the file is listed at (after model validation)
-        request_model.filePath = file_record_path(path_request_model.databaseId, path_request_model.assetId,
-                                                  request_model.filePath)
-        
         response = update_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
     except ValidationError as v:
@@ -4087,10 +4088,6 @@ def handle_file_metadata_delete(event):
         
         # Parse request model - validation handled in model (adds leading slash)
         request_model = parse(body, model=DeleteFileMetadataRequestModel)
-        
-        # Key the request by the path the file is listed at (after model validation)
-        request_model.filePath = file_record_path(path_request_model.databaseId, path_request_model.assetId,
-                                                  request_model.filePath)
         
         response = delete_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
         return success(body=response.dict())
