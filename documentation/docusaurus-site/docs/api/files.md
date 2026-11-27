@@ -75,7 +75,7 @@ Returns a list of all files in the specified asset, including file metadata, siz
 
 `key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns.
 
-An asset created from one Amazon S3 object (a `bucketExistingKey` without a trailing `/`) lists that object at `/{file name}` and its previews at `/{file name}.previewFile.{ext}`, and every file route takes that path or the object's `key`. Its other files are in its companion folder `{key}/` and keep the path after `{key}`. While the companion folder holds a file of the object's own name (`{key}/{file name}`), that file keeps the path `/{file name}`, and the object keeps the path `/` that no file route reaches.
+An asset created from one Amazon S3 object (a `bucketExistingKey` without a trailing `/`) lists that object at `/{file name}` and its previews at `/{file name}.previewFile.{ext}`, and every file route takes that path or the object's `key`. Its other files are in its companion folder `{key}/` and keep the path after `{key}`. While the companion folder holds a file of the object's own name (`{key}/{file name}`), that file keeps the path `/{file name}`, and the object keeps the path `/`, which no file route except download by the location key reaches.
 
 `changeSource` and `changeUserId` describe how the current version of each file was created. When `changeSource` is `workflowExecution`, `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote it; they are `null` for every other change source, and in `basic` mode, which performs no per-object read.
 
