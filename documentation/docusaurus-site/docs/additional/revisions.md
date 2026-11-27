@@ -274,6 +274,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 
 **Key fixes:**
 
+-   **Asset ID rule** — A new asset ID's last character now follows the same rule as the rest of the ID (not only `!` and `#`). Assets created earlier are not affected: an ID ending in `#` stays readable, editable and deletable. Upgrade note: bucket sync creates no asset for a new first-level folder whose name ends in a character the rule refuses there (such as `#` or `%`), and logs each file written there at INFO, as for any other folder name the rule refuses, so such a file belongs to no asset. To import the files, copy them to a folder whose name the rule accepts. (issue #1946)
 -   **A folder delete that names the whole asset** — A folder delete or archive whose path resolves to the asset's own location folder, such as `a1/` (its full key) for an asset stored at `a1/`, is refused like `/` instead of deleting or archiving every file in the asset. `/a1/` is the root subfolder named like the asset (key `a1/a1/`) and deletes or archives only that subfolder. (issue #1943)
 -   **CLI asset-version help** — The `vamscli asset-version create` example that uses `--files` includes `--no-use-latest-files`, so copying it no longer fails. (issue #1941)
 -   **Why an upload failed** — `vamscli file upload` and `vamscli sync file push` print the reason each failed file was not stored, such as a permission denial or a file key over the upload bound, instead of the file name alone; `--json-output` lists the reasons under `failed_file_errors`. (issue #1072)
