@@ -8,8 +8,8 @@ PipelineStorageTableV2 / WorkflowStorageTableV2 (PK databaseId, SK pipelineId/wo
 deleted (archived=true), so the guard must read those tables and ignore archived rows.
 
 The guard runs after the database record is read and the caller is authorized to delete it, so a
-caller who is denied on the database, or names one that does not exist, learns nothing about what
-it contains: the answer is 403 or 404 whatever the contents.
+caller who is denied on the database learns nothing about what it contains or whether it exists
+(403), and an authorized caller who names one that does not exist gets 404, whatever the contents.
 """
 
 import boto3
@@ -157,7 +157,20 @@ class TestDeleteGuardRunsAfterAuthorization:
 
         assert result.statusCode == 404
         assert checks == []
-        assert enforcer.calls == []
+        # Authorization is decided on the requested id before the database is reported missing
+        assert enforcer.calls == [("database", "db2", "DELETE")]
+
+    def test_a_denied_caller_on_a_missing_database_is_refused_before_the_content_checks(
+            self, enforcer, tables, checks):
+        """db2 has no record but owns a pipeline row; the refusal is the same 403 as for db1."""
+        svc.dynamodb.Table(svc.pipeline_database).put_item(
+            Item={"databaseId": "db2", "pipelineId": "p2"})
+        enforcer.verdict = False
+
+        result = svc.delete_database("db2", claims_and_roles=AUTHENTICATED)
+
+        assert (result.statusCode, result.message) == (403, "Action not allowed")
+        assert checks == []
 
     def test_an_empty_identity_is_refused_without_consulting_casbin(self, enforcer, tables, checks):
         result = svc.delete_database("db1", claims_and_roles={"tokens": [], "roles": []})
