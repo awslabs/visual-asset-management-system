@@ -274,6 +274,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 
 **Key fixes:**
 
+-   **Asset ID rule** — A new asset ID's last character now follows the same rule as the rest of the ID (not only `!` and `#`). Assets created earlier are not affected: an ID ending in `#` stays readable, editable and deletable. Upgrade note: bucket sync creates no asset for a new first-level folder whose name ends in a character the rule refuses there (such as `#` or `%`), and logs each file written there at INFO, as for any other folder name the rule refuses, so such a file belongs to no asset. To import the files, copy them to a folder whose name the rule accepts. (issue #1946)
 -   **Download links save the file** — **Download File**, a file version's download, the download API's file URLs and the asset export's file URLs save the file under its own name. A file stored with a viewable type such as PNG, PDF, MP4 or text no longer opens in the browser tab, and a download name stored with the file no longer renames it; viewers still display files. (issue #2026)
 -   **A folder delete that names the whole asset** — A folder delete or archive whose path resolves to the asset's own location folder, such as `a1/` (its full key) for an asset stored at `a1/`, is refused like `/` instead of deleting or archiving every file in the asset. `/a1/` is the root subfolder named like the asset (key `a1/a1/`) and deletes or archives only that subfolder. (issue #1943)
 -   **CLI asset-version help** — The `vamscli asset-version create` example that uses `--files` includes `--no-use-latest-files`, so copying it no longer fails. (issue #1941)
@@ -678,6 +679,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **CloudFront viewer TLS** — The web distribution sets its `TLSv1.2_2021` minimum viewer TLS version only with a custom domain, so synthesis no longer warns that it is ignored. The default `*.cloudfront.net` domain uses the `TLSv1` policy CloudFront applies there (TLS 1.0 and later); the security and configuration docs say which domain accepts which versions. (issue #434)
 -   **Supported npm range** — The `package.json` files declare `engines.npm` `>=11.10.0 <12` and the deployment prerequisites state the range: npm 12 blocks dependency install scripts (here `esbuild` and `@parcel/watcher`) unless an `allowScripts` entry approves them, and VAMS has not approved or tested any, so builds are supported on npm 11 only until that is done. With `engine-strict`, npm 12 stops with `EBADENGINE` instead. (issue #439)
 -   **Upload sequence in CLI JSON output** — `vamscli file upload --json-output` reports each sequence result's `sequence_number` (the upload sequence it belongs to) instead of `null`. (issue #1988)
+-   **Login cancelled at the version prompt** — `vamscli auth login` cancels the login when the version-mismatch prompt is ended with Ctrl+C or end of input, instead of reporting a failed version check and signing the user in. (issue #1911)
 
 **Documentation:**
 
@@ -691,6 +693,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Blocked MIME types** — The [security](../architecture/security.md#blocked-file-types), quotas, files and versions, FAQ, known limitations, files API and architecture pages say that the blocked MIME type list is checked against a stored object's content type, including an upload's staged object when the upload completes, and does not refuse an upload, because VAMS stages it as `application/octet-stream`. Adding `application/octet-stream` to the list in a fork refuses every upload. (issue #371)
 -   **Sign-in with Amazon Cognito federation** — The [FAQ](../troubleshooting/faq.md#how-do-i-connect-vams-to-my-existing-authentication-system), [API authentication](../api/authentication.md), [configuration reference](../deployment/configuration-reference.md), [deployment](../deployment/deploy-the-solution.md) and [getting started](../user-guide/getting-started.mdx) pages say that with SAML or OIDC federation the web login page shows only the federated button, and that native user pool accounts, including the initial administrator, sign in with VamsCLI. (issue #652)
 -   **Role-name rule** — The [permissions](../user-guide/permissions.md#creating-a-custom-role) user guide, the CLI troubleshooting page and the API reference give the role-name rule the API applies: 1-256 characters of letters, numbers, spaces, hyphens, periods and underscores. (issue #378)
+-   **Create folder response field** — The API reference names the create-folder response field `relativeKey`, the field the API returns, instead of `keyPath`. (issue #2013)
 
 **Other changes:**
 
@@ -758,6 +761,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Docs match the code** — The permission model lists the Download as Zip, audit log search, execution detail and EDH Workstations routes; the pipeline, CLI command group and viewer counts are corrected; the configuration reference gives the order in which CDK context, `config.json` and environment variables apply; and the notices add CuMesh, FlexGEMM, opencv-python-headless, xformers and the conda-forge base images. The docs site's configuration builder requires a VPC for Image to 3D, and nine permission templates drop criteria that match no route without changing what they grant. (PR #1776)
 -   **Backend test subsets** — A test run that collects the Physna add-on tests before another test imports the audit logging module, such as `tests/handlers` alone, no longer fails at collection. (issue #1451)
 -   **Audit log search tests on long runs** — The audit log search service tests take their timestamps when each test runs, so a backend test run that reaches them more than about 1,000 seconds after collection no longer fails. (issue #1752)
+-   **3D Preview Thumbnail docstring** — The `finite_points` docstring says what the function returns and when it raises. (issue #1518)
 
 **Known issues:**
 
