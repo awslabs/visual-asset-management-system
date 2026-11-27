@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Metadata | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/api/metadata"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Metadata | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="This page documents the metadata management endpoints in the VAMS API. VAMS provides a centralized metadata service that handles metadata across four entity types: assets, files, databases, and asset links."><meta data-rh="true" property="og:description" content="This page documents the metadata management endpoints in the VAMS API. VAMS provides a centralized metadata service that handles metadata across four entity types: assets, files, databases, and asset links."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.8/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/api/metadata"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/api/metadata" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/api/metadata" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Metadata","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.8/api/metadata"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.8/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.8/assets/js/runtime~main.d00692e0.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.8/assets/js/runtime~main.60b7c00e.js" defer="defer"></script>
 <script src="/visual-asset-management-system/release-2.6.8/assets/js/main.88e94686.js" defer="defer"></script>
 </head>
 <body>
@@ -22,6 +22,7 @@
 <li class=""><strong>File Metadata vs. File Attributes</strong>: Both use the same API path with a <code>type</code> query parameter. File metadata stores descriptive information, while file attributes store operational data (e.g., <code>primaryType</code>).</li>
 <li class=""><strong>Bulk Operations</strong>: All create, update, and delete operations support bulk processing of multiple metadata items in a single request. Responses include partial success information.</li>
 <li class=""><strong>Schema Validation</strong>: When metadata schemas are configured, metadata values are validated against the schema on create and update operations.</li>
+<li class=""><strong>Authorization Before Existence</strong>: Every metadata endpoint decides whether the caller may act on the asset, the database or both linked assets before it reports whether they exist. A caller who is not allowed receives <code>403</code> whether or not they exist; only an allowed caller is told that an asset or database is not found. For an asset ID that does not exist, the decision uses the database and asset IDs alone, so a role allowed assets only by asset name, type or tags receives <code>403</code> for it.</li>
 </ul>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="supported-value-types">Supported Value Types<a href="#supported-value-types" class="hash-link" aria-label="Direct link to Supported Value Types" title="Direct link to Supported Value Types" translate="no">​</a></h3>
 
@@ -191,11 +192,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or pagination token.</td></tr><tr><td><code>403</code></td><td>Not authorized to view metadata for this asset.</td></tr><tr><td><code>404</code></td><td>Asset not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or pagination token, or asset not found.</td></tr><tr><td><code>403</code></td><td>Not authorized to view metadata for this asset.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="create-asset-metadata">Create Asset Metadata<a href="#create-asset-metadata" class="hash-link" aria-label="Direct link to Create Asset Metadata" title="Direct link to Create Asset Metadata" translate="no">​</a></h3>
 <p><code>POST /database/{databaseId}/assets/{assetId}/metadata</code></p>
@@ -294,11 +291,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters, validation error, or schema validation failure.</td></tr><tr><td><code>403</code></td><td>Not authorized to create metadata for this asset.</td></tr><tr><td><code>404</code></td><td>Asset not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr><tr><td><code>503</code></td><td>The existing record count could not be checked, so nothing was written. Retry the request.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters, validation error, schema validation failure, or asset not found.</td></tr><tr><td><code>403</code></td><td>Not authorized to create metadata for this asset.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr><tr><td><code>503</code></td><td>The existing record count could not be checked, so nothing was written. Retry the request.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="update-asset-metadata">Update Asset Metadata<a href="#update-asset-metadata" class="hash-link" aria-label="Direct link to Update Asset Metadata" title="Direct link to Update Asset Metadata" translate="no">​</a></h3>
 <p><code>PUT /database/{databaseId}/assets/{assetId}/metadata</code></p>
@@ -382,11 +375,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or validation error.</td></tr><tr><td><code>403</code></td><td>Not authorized to update metadata for this asset.</td></tr><tr><td><code>404</code></td><td>Asset not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or validation error, or asset not found.</td></tr><tr><td><code>403</code></td><td>Not authorized to update metadata for this asset.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="delete-asset-metadata">Delete Asset Metadata<a href="#delete-asset-metadata" class="hash-link" aria-label="Direct link to Delete Asset Metadata" title="Direct link to Delete Asset Metadata" translate="no">​</a></h3>
 <p><code>DELETE /database/{databaseId}/assets/{assetId}/metadata</code></p>
@@ -463,11 +452,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters.</td></tr><tr><td><code>403</code></td><td>Not authorized to delete metadata for this asset.</td></tr><tr><td><code>404</code></td><td>Asset not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or asset not found.</td></tr><tr><td><code>403</code></td><td>Not authorized to delete metadata for this asset.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="file-metadata">File Metadata<a href="#file-metadata" class="hash-link" aria-label="Direct link to File Metadata" title="Direct link to File Metadata" translate="no">​</a></h2>
 <p>File-level metadata is attached to individual files within an asset. The same endpoint path handles both file metadata and file attributes, distinguished by a <code>type</code> query parameter.</p>
@@ -568,11 +553,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or missing <code>filePath</code>.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>404</code></td><td>Asset or file not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or missing <code>filePath</code>, or asset not found.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="create-file-metadata">Create File Metadata<a href="#create-file-metadata" class="hash-link" aria-label="Direct link to Create File Metadata" title="Direct link to Create File Metadata" translate="no">​</a></h3>
 <p><code>POST /database/{databaseId}/assets/{assetId}/metadata/file</code></p>
@@ -665,11 +646,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>404</code></td><td>Asset or file not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr><tr><td><code>503</code></td><td>The existing record count could not be checked, so nothing was written. Retry the request.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or asset or file not found.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr><tr><td><code>503</code></td><td>The existing record count could not be checked, so nothing was written. Retry the request.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="update-file-metadata">Update File Metadata<a href="#update-file-metadata" class="hash-link" aria-label="Direct link to Update File Metadata" title="Direct link to Update File Metadata" translate="no">​</a></h3>
 <p><code>PUT /database/{databaseId}/assets/{assetId}/metadata/file</code></p>
@@ -701,11 +678,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>404</code></td><td>Asset or file not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or asset or file not found.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="delete-file-metadata">Delete File Metadata<a href="#delete-file-metadata" class="hash-link" aria-label="Direct link to Delete File Metadata" title="Direct link to Delete File Metadata" translate="no">​</a></h3>
 <p><code>DELETE /database/{databaseId}/assets/{assetId}/metadata/file</code></p>
@@ -737,11 +710,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>404</code></td><td>Asset or file not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or asset not found.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="database-metadata">Database Metadata<a href="#database-metadata" class="hash-link" aria-label="Direct link to Database Metadata" title="Direct link to Database Metadata" translate="no">​</a></h2>
 <p>Database-level metadata is attached to a database and applies to the entire collection.</p>
@@ -814,11 +783,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters.</td></tr><tr><td><code>403</code></td><td>Not authorized to view metadata for this database.</td></tr><tr><td><code>404</code></td><td>Database not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or database not found.</td></tr><tr><td><code>403</code></td><td>Not authorized to view metadata for this database.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="create-database-metadata">Create Database Metadata<a href="#create-database-metadata" class="hash-link" aria-label="Direct link to Create Database Metadata" title="Direct link to Create Database Metadata" translate="no">​</a></h3>
 <p><code>POST /database/{databaseId}/metadata</code></p>
@@ -874,11 +839,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or schema validation failure.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>404</code></td><td>Database not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr><tr><td><code>503</code></td><td>The existing record count could not be checked, so nothing was written. Retry the request.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or schema validation failure, or database not found.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr><tr><td><code>503</code></td><td>The existing record count could not be checked, so nothing was written. Retry the request.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="update-database-metadata">Update Database Metadata<a href="#update-database-metadata" class="hash-link" aria-label="Direct link to Update Database Metadata" title="Direct link to Update Database Metadata" translate="no">​</a></h3>
 <p><code>PUT /database/{databaseId}/metadata</code></p>
@@ -909,11 +870,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>404</code></td><td>Database not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or database not found.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="delete-database-metadata">Delete Database Metadata<a href="#delete-database-metadata" class="hash-link" aria-label="Direct link to Delete Database Metadata" title="Direct link to Delete Database Metadata" translate="no">​</a></h3>
 <p><code>DELETE /database/{databaseId}/metadata</code></p>
@@ -944,11 +901,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>404</code></td><td>Database not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or database not found.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="asset-link-metadata">Asset Link Metadata<a href="#asset-link-metadata" class="hash-link" aria-label="Direct link to Asset Link Metadata" title="Direct link to Asset Link Metadata" translate="no">​</a></h2>
 <p>Metadata can be attached to asset links (relationships between assets).</p>
@@ -1021,11 +974,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or pagination token.</td></tr><tr><td><code>403</code></td><td>Not authorized to view metadata for this asset link.</td></tr><tr><td><code>404</code></td><td>Asset link not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or pagination token, or asset link or linked asset not found.</td></tr><tr><td><code>403</code></td><td>Not authorized to view metadata for this asset link.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="create-asset-link-metadata">Create Asset Link Metadata<a href="#create-asset-link-metadata" class="hash-link" aria-label="Direct link to Create Asset Link Metadata" title="Direct link to Create Asset Link Metadata" translate="no">​</a></h3>
 <p><code>POST /asset-links/{assetLinkId}/metadata</code></p>
@@ -1081,11 +1030,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or validation error.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>404</code></td><td>Asset link not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr><tr><td><code>503</code></td><td>The existing record count could not be checked, so nothing was written. Retry the request.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters or validation error, or asset link or linked asset not found.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr><tr><td><code>503</code></td><td>The existing record count could not be checked, so nothing was written. Retry the request.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="update-asset-link-metadata">Update Asset Link Metadata<a href="#update-asset-link-metadata" class="hash-link" aria-label="Direct link to Update Asset Link Metadata" title="Direct link to Update Asset Link Metadata" translate="no">​</a></h3>
 <p><code>PUT /asset-links/{assetLinkId}/metadata</code></p>
@@ -1161,11 +1106,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>404</code></td><td>Asset link not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters, or asset link or linked asset not found.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="delete-asset-link-metadata">Delete Asset Link Metadata<a href="#delete-asset-link-metadata" class="hash-link" aria-label="Direct link to Delete Asset Link Metadata" title="Direct link to Delete Asset Link Metadata" translate="no">​</a></h3>
 <p><code>DELETE /asset-links/{assetLinkId}/metadata</code></p>
@@ -1217,11 +1158,7 @@
 
 
 
-
-
-
-
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>404</code></td><td>Asset link not found.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters, or asset link or linked asset not found.</td></tr><tr><td><code>403</code></td><td>Not authorized.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="metadata-schemas">Metadata Schemas<a href="#metadata-schemas" class="hash-link" aria-label="Direct link to Metadata Schemas" title="Direct link to Metadata Schemas" translate="no">​</a></h2>
 <p>A metadata schema declares the fields that metadata on a given entity type should carry, along with each field&#x27;s value type, display order, dependencies, and default value. Schemas drive the schema-enrichment fields on the metadata <code>GET</code> responses, and a database that sets <code>restrictMetadataOutsideSchemas</code> accepts only metadata keys an applicable schema declares.</p>
