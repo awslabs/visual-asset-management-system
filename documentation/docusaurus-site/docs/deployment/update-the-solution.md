@@ -916,7 +916,7 @@ From v2.6.8, the Isaac Lab training compute environment launches only the instan
 From v2.6.8, the default `instanceTypes` of the GR00T fine-tuning pipeline are `g6e.4xlarge` and `g6e.12xlarge`, without `g5.12xlarge`. A fine-tune job reserves one GPU, and on the 24 GB A10G of a `g5.12xlarge` the default fine-tune runs out of GPU memory at step 0.
 
 -   **A `config.json` that copied the earlier default keeps `g5.12xlarge`** in `app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes`, and `cdk synth` prints a warning that names it. The deployment still succeeds. Remove the type to stop jobs landing there. See [NVIDIA Gr00t Fine-Tuning](../pipelines/nvidia-gr00t-finetune.md).
--   **A deployment that sets no `instanceTypes`, or copies the new shipped file or a template, gets the two `g6e` types.** Its AWS Batch compute environment changes its instance types on the next deploy.
+-   **A deployment that copies the new shipped `config.json` or a template gets the two `g6e` types.** Its AWS Batch compute environment changes its instance types on the next deploy. With the GR00T fine-tune enabled and no `instanceTypes`, configuration validation stops `cdk synth`.
 -   **Deploy when no GR00T fine-tune is running.** When the update changes the compute environment's instance types, AWS Batch replaces the environment's instances and stops a fine-tune still running 30 minutes after the update starts.
 
 ## Breaking changes checklist
