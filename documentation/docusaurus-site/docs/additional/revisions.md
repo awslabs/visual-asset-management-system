@@ -274,6 +274,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 
 **Key fixes:**
 
+-   **Word and JavaScript files with their real type** — A `.docx` or `.js` file stored with its real content type, such as a pipeline output or a file written straight to an asset bucket, downloads, streams, exports, zips and is ingested as a workflow output like the same file uploaded through VAMS. Macro-enabled Word documents stay blocked, and a deployment can block either type again in its add-on or custom upload deny list. (issue #2033)
 -   **A folder delete that names the whole asset** — A folder delete or archive whose path resolves to the asset's own location folder, such as `a1/` (its full key) for an asset stored at `a1/`, is refused like `/` instead of deleting or archiving every file in the asset. `/a1/` is the root subfolder named like the asset (key `a1/a1/`) and deletes or archives only that subfolder. (issue #1943)
 -   **CLI asset-version help** — The `vamscli asset-version create` example that uses `--files` includes `--no-use-latest-files`, so copying it no longer fails. (issue #1941)
 -   **Why an upload failed** — `vamscli file upload` and `vamscli sync file push` print the reason each failed file was not stored, such as a permission denial or a file key over the upload bound, instead of the file name alone; `--json-output` lists the reasons under `failed_file_errors`. (issue #1072)

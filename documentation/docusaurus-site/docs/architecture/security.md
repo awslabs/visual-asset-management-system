@@ -735,7 +735,9 @@ VAMS checks the file name of every upload, and the destination file name of a mo
 
 ### Blocked MIME Types
 
-`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/javascript`, `application/x-powershell`, `application/vbscript`, and additional potentially dangerous MIME types.
+`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/x-powershell`, `application/vbscript`, `application/vnd.ms-word.document.macroEnabled.12`, and additional potentially dangerous MIME types.
+
+Word documents (`.docx`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`) and JavaScript files (`.js`, `application/javascript`) are on neither list, so a stored file of either type is downloaded, streamed, exported, zipped and ingested as a workflow output like any other file. Macro-enabled Word documents stay blocked by their extension and their MIME type.
 
 A deployment can add entries to both lists in its add-on or fork constants files; it cannot remove one. Added entries are matched the same way as the shipped ones. See [Upload deny lists](../developer/customizing-vams.md#upload-deny-lists).
 
