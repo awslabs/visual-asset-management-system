@@ -274,6 +274,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 
 **Key fixes:**
 
+-   **Download links save the file** — **Download File**, a file version's download, the download API's file URLs and the asset export's file URLs save the file under its own name. A file stored with a viewable type such as PNG, PDF, MP4 or text no longer opens in the browser tab, and a download name stored with the file no longer renames it; viewers still display files. (issue #2026)
 -   **A folder delete that names the whole asset** — A folder delete or archive whose path resolves to the asset's own location folder, such as `a1/` (its full key) for an asset stored at `a1/`, is refused like `/` instead of deleting or archiving every file in the asset. `/a1/` is the root subfolder named like the asset (key `a1/a1/`) and deletes or archives only that subfolder. (issue #1943)
 -   **CLI asset-version help** — The `vamscli asset-version create` example that uses `--files` includes `--no-use-latest-files`, so copying it no longer fails. (issue #1941)
 -   **Why an upload failed** — `vamscli file upload` and `vamscli sync file push` print the reason each failed file was not stored, such as a permission denial or a file key over the upload bound, instead of the file name alone; `--json-output` lists the reasons under `failed_file_errors`. (issue #1072)
