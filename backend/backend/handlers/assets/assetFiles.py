@@ -2406,14 +2406,14 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
             else:
                 break
 
-        # Batch delete the matching records; the count is the rows written once the batch flushed
-        with asset_version_files_table.batch_writer() as batch:
-            for item in records_to_delete:
-                batch.delete_item(Key={
-                    'databaseId:assetId:assetVersionId': item['databaseId:assetId:assetVersionId'],
-                    'fileKey': item['fileKey']
-                })
-        deleted_count = len(records_to_delete)
+        # One DeleteItem per row (one per asset version that lists the file): the role holds
+        # DeleteItem on this table and no batch write. The count is the rows deleted.
+        for item in records_to_delete:
+            asset_version_files_table.delete_item(Key={
+                'databaseId:assetId:assetVersionId': item['databaseId:assetId:assetVersionId'],
+                'fileKey': item['fileKey']
+            })
+            deleted_count += 1
 
         if deleted_count > 0:
             logger.info(f"Deleted {deleted_count} version snapshot records for {len(normalized_paths)} file(s) in {db_asset_key}")
