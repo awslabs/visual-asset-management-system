@@ -1327,10 +1327,12 @@ def _asset_root_key(asset):
 
 
 def _resolve_full_key(asset_root_key, relative_file_key, paths=None):
-    """Full S3 key for an input file (``common.assetLocations.AssetFilePaths.request_key_for``): the
-    asset-relative key under the asset root, or the key itself when it already starts with the root.
-    ``paths`` is the root's mapping for this request; without it a single-file root keeps its earlier
-    mapping. Raises VAMSGeneralErrorResponse for a key that names nothing in the asset."""
+    """Full S3 key for an input file (``common.assetLocations.AssetFilePaths.request_key_for``): the key
+    the input's path in the asset names under the asset root. The execute request's key always has a
+    leading '/', so it is a path in the asset and never a full key: ``/{root}x`` is the file of a
+    subfolder named like the root. ``paths`` is the root's mapping for this request; without it a
+    single-file root keeps its earlier mapping. Raises VAMSGeneralErrorResponse for a key that names
+    nothing in the asset."""
     if not asset_root_key:
         return (relative_file_key or "").lstrip("/")
     key = (paths or AssetFilePaths(asset_root_key)).request_key_for("/" + (relative_file_key or "").lstrip("/"))
