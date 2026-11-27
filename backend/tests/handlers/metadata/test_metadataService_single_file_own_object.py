@@ -65,14 +65,12 @@ class TestFileRecordPath:
     """The web sends a file's full key; every accepted form keys the record by the path the file is listed at."""
 
     def _path(self, file_path, companion=False, location=LOCATION, asset_found=True):
+        # The route hands over the asset record it already authorized (None stands for no record)
         s3 = MagicMock()
         s3.list_object_versions.return_value = _versions_listing(companion)
-        table = MagicMock()
-        table.get_item.return_value = {"Item": _asset(location)} if asset_found else {}
-        with patch.object(metadataService, "asset_storage_table", table), \
-                patch.object(metadataService, "get_bucket_details", return_value={"bucketName": "b"}), \
+        with patch.object(metadataService, "get_bucket_details", return_value={"bucketName": "b"}), \
                 patch.object(metadataService, "s3", s3):
-            return metadataService.file_record_path("db1", "asset1", file_path)
+            return metadataService.file_record_path(_asset(location) if asset_found else None, "asset1", file_path)
 
     # The request models keep the caller's form (#1943): the web sends the full key without a leading '/'
     @pytest.mark.parametrize("file_path", ["/model.glb", "p1/model.glb"])

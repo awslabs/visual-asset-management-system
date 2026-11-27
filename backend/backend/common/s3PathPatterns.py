@@ -101,6 +101,10 @@ AUXILIARY_PREVIEW_PREFIX = "preview/"
 # ---------------------------------------------------------------------------
 UPLOAD_STAGING_TAG_LENGTH = 12
 
+# The upload record's ``stagingLayout`` value for an upload that stages per upload. A record without it
+# was initialized before per-upload staging, and only such an upload falls back to the legacy key.
+UPLOAD_STAGING_LAYOUT_PER_UPLOAD = "perUpload"
+
 # Bytes a staging key adds to the final key besides the bucket's prefix.
 UPLOAD_STAGING_KEY_OVERHEAD_BYTES = len(TEMPORARY_UPLOAD_PREFIX.encode("utf-8")) + UPLOAD_STAGING_TAG_LENGTH + 1
 
@@ -131,8 +135,8 @@ def max_uploaded_file_key_bytes(base_assets_prefix: str) -> int:
 
 def legacy_staged_upload_key(base_assets_prefix: str, final_s3_key: str) -> str:
     """LEGACY STAGING KEY (#1928): the per-path key every upload staged under before per-upload
-    staging. Read only to complete or abort an upload initialized before the upgrade; nothing is
-    created under it any more.
+    staging. Read only to complete or abort an upload initialized before the upgrade, whose record
+    carries no ``stagingLayout`` (UPLOAD_STAGING_LAYOUT_PER_UPLOAD); nothing is created under it any more.
 
     Remove it, and the fallbacks in ``handlers/assets/uploadFile.py`` that use it, once no supported
     upgrade starts from a release that staged per path (2.6.7 and earlier). Until then an upload

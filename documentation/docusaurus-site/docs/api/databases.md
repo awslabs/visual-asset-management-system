@@ -243,7 +243,7 @@ At least one field must be provided. The `databaseId` cannot be changed after cr
 }
 ```
 
-A caller who may call this route but is not permitted to update the database itself receives `403`, and nothing is written.
+A caller who may call this route but is not permitted to update the database itself receives `403` whether or not the database exists, and nothing is written. An allowed caller receives `400` for a database that does not exist.
 
 ### Error responses
 
@@ -273,7 +273,7 @@ DELETE /database/{databaseId}
 A database cannot be deleted if it contains active assets, pipelines, or workflows. Remove all dependent resources before deleting the database.
 :::
 
-The dependency check runs after the database is found and the caller is authorized to delete it, so a caller who is not authorized receives `403`, and a database that does not exist returns `404`, whatever the database contains.
+Permission is decided before the API reports whether the database exists, and the dependency check runs after the database is found and the caller is authorized to delete it, so a caller who is not authorized receives `403` whether or not the database exists and whatever it contains, and an allowed caller receives `404` for a database that does not exist.
 
 ### Response
 
