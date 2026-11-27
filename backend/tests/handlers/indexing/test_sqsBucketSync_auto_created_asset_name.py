@@ -10,6 +10,11 @@ characters once the folder name is longer than 233. Bucket sync used the folder 
 a folder the create failed validation, bucket sync logged an error and the file was attributed to no asset.
 The name is now the folder name with each character the name rule refuses replaced by `_`, the description
 is cut to its limit, and the asset ID stays the folder name.
+
+A folder whose name has a non-ASCII character still gets no asset: bucket sync stamps the asset ID into the
+file's S3 user metadata, which takes ASCII only, so such an asset would be left without its files' stamp,
+asset type and change history. Bucket sync logs the folder at INFO, creates nothing and forwards the record
+to the indexers, as for a folder the asset ID rule refuses.
 """
 
 import json
@@ -32,6 +37,12 @@ FOLDERS = {
     LONG: LONG.replace(",", "_"),
 }
 NAMED = pytest.mark.parametrize("folder", list(FOLDERS), ids=["comma", "apostrophe", "latin-1", "cjk", "long"])
+# The folders bucket sync creates an asset for (their names are ASCII)
+ASCII_NAMED = pytest.mark.parametrize("folder", [f for f in FOLDERS if f.isascii()],
+                                      ids=["comma", "apostrophe", "long"])
+# Folders the asset ID rule accepts whose names are not ASCII; S3 user metadata cannot hold them
+NON_ASCII = pytest.mark.parametrize("folder", ["Ünïcødé Ordner", "名前-2026", "café", "site-01\u00a0b"],
+                                    ids=["latin-1", "cjk", "one-accent", "no-break-space"])
 
 
 @pytest.fixture
@@ -146,7 +157,7 @@ class TestCreateNewAsset:
 class TestADirectWrite:
     """The created-events handler, with the real ID check and create_new_asset (createAsset's create mocked)."""
 
-    @NAMED
+    @ASCII_NAMED
     def test_the_file_is_attributed_to_the_new_asset_and_no_error_is_logged(self, m, folder):
         _wire_direct_write(m)
         create_asset = _real_create(m)
@@ -179,3 +190,65 @@ class TestAFolderTheIdRuleRefuses:
         m.update_s3_metadata.assert_not_called()
         m.logger.error.assert_not_called()
         assert any("is not valid" in str(c.args[0]) for c in m.logger.info.call_args_list)
+
+
+@pytest.mark.unit
+class TestANonAsciiFolder:
+    """A folder the asset ID rule accepts but whose name is not ASCII, which S3 user metadata cannot hold.
+
+    `update_s3_metadata` is the real one here, on a mocked S3 client, so an attempted stamp would show as a
+    head or copy call.
+    """
+
+    @NON_ASCII
+    def test_the_id_rule_accepts_the_folder(self, m, folder):
+        assert m.validate_asset_id(folder) is True
+        assert not folder.isascii()
+
+    @NON_ASCII
+    def test_no_asset_or_database_is_created_and_no_metadata_write_is_attempted(self, m, folder):
+        real_update_s3_metadata = m.update_s3_metadata
+        _wire_direct_write(m)
+        create_asset = _real_create(m)
+        stamp = MagicMock(wraps=real_update_s3_metadata)
+        m.update_s3_metadata = stamp
+        m.s3_resource = MagicMock()
+
+        response = _handle(m, f"{folder}/f.txt")
+
+        assert response["batchItemFailures"] == []
+        assert _created(create_asset) == set()
+        m.get_or_create_database_for_bucket.assert_not_called()
+        stamp.assert_not_called()
+        m.s3_resource.Object.assert_not_called()
+        m.s3_client.head_object.assert_not_called()
+        m.update_asset_type.assert_not_called()
+        assert _history_files(m) == set()
+        m.logger.error.assert_not_called()
+        m.logger.exception.assert_not_called()
+        assert any(f"Asset ID {folder} has non-ASCII characters" in str(c.args[0])
+                   for c in m.logger.info.call_args_list)
+
+    @NON_ASCII
+    def test_the_record_is_still_forwarded_to_the_indexers(self, m, folder):
+        _wire_direct_write(m)
+        _real_create(m)
+
+        _handle(m, f"{folder}/f.txt")
+
+        [published] = [c.args[0] for c in m.publish_to_file_indexer_sns.call_args_list]
+        [record] = json.loads(json.loads(published["Records"][0]["body"])["Message"])["Records"]
+        assert record["s3"]["object"]["key"] == f"{folder}/f.txt"
+
+    @NON_ASCII
+    def test_control_an_existing_asset_with_the_id_is_not_affected(self, m, folder):
+        # The check covers only the asset bucket sync would create; a file of an asset already
+        # stored under the ID is processed as before.
+        _wire_direct_write(m)
+        create_asset = _real_create(m)
+        m.lookup_asset = MagicMock(return_value={"databaseId": DATABASE, "assetId": folder})
+
+        _handle(m, f"{folder}/f.txt")
+
+        assert _created(create_asset) == set()
+        m.update_s3_metadata.assert_called_once_with(BUCKET, f"{folder}/f.txt", DATABASE, folder)

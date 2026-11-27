@@ -1858,6 +1858,16 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
                     )
                     database_id_to_use = restored_database_id
             if not database_id_to_use:
+                # Step 4 writes the asset ID into the object's S3 user metadata as plain text, which S3
+                # accepts in ASCII only, so no asset is created for a folder whose name is not ASCII. The
+                # record is still forwarded to the indexers, as for an asset ID the ID rule refuses.
+                if not asset_id.isascii():
+                    logger.info(
+                        f"Asset ID {asset_id} has non-ASCII characters, which bucket sync cannot write to S3 "
+                        "object metadata; no asset created, skipping processing but forwarding to indexers"
+                    )
+                    return False, True, f"Asset ID {asset_id} has non-ASCII characters"
+
                 # Get or create database for this bucket/prefix
                 database_id_to_use = get_or_create_database_for_bucket(bucket_id, bucket_name, prefix)
 
