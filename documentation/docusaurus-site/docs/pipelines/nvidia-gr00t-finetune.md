@@ -115,7 +115,7 @@ graph LR
 
     The template body takes precedence over asset metadata because it is what the operator supplies on the execute screen, while the metadata keys are a standing default saved on the asset. A field left blank in the template falls through to the metadata value. The `gr00t_config.json` file is merged last, inside the container, so it overrides both.
 
-4. **Fine-Tuning (AWS Batch on GPU Instances)** -- The container loads the base model from Amazon EFS, resolves the user-provided dataset (in LeRobot v2.1 format) from the asset, and runs fine-tuning using the gr00t training framework. Runs on the one GPU the job reserves, with LoRA or full fine-tuning and configurable training hyperparameters.
+4. **Fine-Tuning (AWS Batch on GPU Instances)** -- The container loads the base model from Amazon EFS, resolves the user-provided dataset (in LeRobot v2.1 format) from the asset, and runs fine-tuning using the gr00t training framework. Reserves one GPU, with LoRA or full fine-tuning and configurable training hyperparameters.
 
 5. **Output Upload** -- Training checkpoints are uploaded to the asset S3 bucket in a structured folder: `gr00tOutput_N1.5-3B_trainingjob_{TIMESTAMP}_{JOBID}/`. All intermediate checkpoints (e.g., `checkpoint-2000/`, `checkpoint-4000/`, `checkpoint-6000/`) are included.
 
@@ -461,7 +461,7 @@ LoRA (Low-Rank Adaptation) fine-tunes a small number of additional parameters wh
 
 ### Full Fine-Tuning
 
-Full fine-tuning updates all selected model components and needs more GPU memory than LoRA. It runs on the one GPU the job reserves. VAMS has not measured a fine-tune of every component on one 48 GB GPU; if the run runs out of GPU memory, lower `batchSize`.
+Full fine-tuning updates all selected model components and needs more GPU memory than LoRA. The job reserves one GPU. VAMS has not measured a fine-tune of every component on one 48 GB GPU; if the run runs out of GPU memory, lower `batchSize`.
 
 **Recommended settings:**
 
