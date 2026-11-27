@@ -115,7 +115,7 @@ class TestStoredBytesAreSaved:
         assert request_headers[0].get("Accept-Encoding") == "identity"
 
     def test_a_download_of_encoded_and_plain_files_completes(self, tmp_path):
-        """The path `assets download`, `assets export --download` and `sync file pull` share."""
+        """Shared by `assets download`, `assets export --download-files` and `sync file pull`."""
         stored, headers = _encoded("gzip")
         objects = {"model-gz.glb": (stored, headers), "model.glb": _plain()}
 
