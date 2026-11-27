@@ -273,6 +273,17 @@ class TestTheObjectOfASingleObjectAssetIsNotGuarded:
         assert _live_keys(af.test_client) == sorted(set(ALL_KEYS) - {"m/model.glb"})
         assert _version_keys(af.test_client) == sorted(ALL_KEYS)
 
+    @pytest.mark.parametrize("path", ["/sub/n.txt", "m/model.glb/sub/n.txt"], ids=["path", "full-key"])
+    def test_a_companion_file_deletes_by_its_path_or_its_key(self, af, path):
+        af.delete_file("db1", "M", path, False, True, CLAIMS)
+        assert _version_keys(af.test_client) == sorted(set(ALL_KEYS) - {"m/model.glb/sub/n.txt"})
+
+    @pytest.mark.parametrize("path", ["/sub/n.txt", "m/model.glb/sub/n.txt"], ids=["path", "full-key"])
+    def test_a_companion_file_archives_by_its_path_or_its_key(self, af, path):
+        af.archive_file("db1", "M", path, False, CLAIMS)
+        assert _live_keys(af.test_client) == sorted(set(ALL_KEYS) - {"m/model.glb/sub/n.txt"})
+        assert _version_keys(af.test_client) == sorted(ALL_KEYS)
+
     def test_a_companion_subfolder_deletes_with_a_prefix(self, af):
         af.delete_file("db1", "M", "/sub/", True, True, CLAIMS)
         assert _version_keys(af.test_client) == sorted(set(ALL_KEYS) - {"m/model.glb/sub/n.txt"})
