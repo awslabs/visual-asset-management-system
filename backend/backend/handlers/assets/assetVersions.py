@@ -36,6 +36,7 @@ from common.assetLocations import (
 )
 from common.fileAttribution import nested_locations_of_asset
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
+from common.s3MetadataKeys import build_change_metadata, VAMS_CHANGE_SOURCE_FILE_REVERT, replace_metadata_copy_args
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
     GetAssetVersionRequestModel, GetAssetVersionsRequestModel, AssetVersionFileModel,
@@ -539,7 +540,9 @@ def validate_s3_files_exist(bucket: str, prefix: str, files: List[AssetFileVersi
     return invalid_files
 
 def copy_s3_object_version(source_bucket: str, source_key: str, source_version_id: str, 
-                          dest_bucket: str, dest_key: str) -> Optional[str]:
+                          dest_bucket: str, dest_key: str,
+                          change_source: Optional[str] = None,
+                          user_id: Optional[str] = None) -> Optional[str]:
     """Copy a specific version of an S3 object
     
     Args:
@@ -548,11 +551,29 @@ def copy_s3_object_version(source_bucket: str, source_key: str, source_version_i
         source_version_id: Source object version ID
         dest_bucket: Destination bucket name
         dest_key: Destination object key
+        change_source: VAMS change source to record on the new version, if any
+        user_id: Acting user for the change source
         
     Returns:
         New version ID if successful, None otherwise
     """
     try:
+        # Preserve the source object's metadata by default. When a change source
+        # is given, replace the provenance entries so the new version says what
+        # wrote it (for example fileRevert) instead of inheriting the source's.
+        extra_args = {
+            # Grant the bucket owner full control so a version written into a
+            # cross-account asset bucket is owned/readable by that account.
+            'ACL': 'bucket-owner-full-control'
+        }
+        if change_source:
+            source_head = s3_client.head_object(
+                Bucket=source_bucket, Key=source_key, VersionId=source_version_id
+            )
+            metadata = source_head.get('Metadata', {}).copy()
+            metadata.update(build_change_metadata(change_source, user_id, from_version=source_version_id))
+            extra_args.update(replace_metadata_copy_args(source_head, metadata))
+
         # Copy the object with the specified version using managed transfer for large files
         s3_resource.meta.client.copy(
             CopySource={
@@ -562,9 +583,7 @@ def copy_s3_object_version(source_bucket: str, source_key: str, source_version_i
             },
             Bucket=dest_bucket,
             Key=dest_key,
-            # Grant the bucket owner full control so a version written into a
-            # cross-account asset bucket is owned/readable by that account.
-            ExtraArgs={'ACL': 'bucket-owner-full-control'}
+            ExtraArgs=extra_args
         )
         
         # Get the new version ID by checking the object after copy
@@ -2042,9 +2061,12 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
                 return None, relative_key
 
             # Copy the file version to make it current
+            acting_user = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
             new_version_id = copy_s3_object_version(
                 bucket, full_key, source_version_id,
-                bucket, full_key
+                bucket, full_key,
+                change_source=VAMS_CHANGE_SOURCE_FILE_REVERT,
+                user_id=acting_user,
             )
 
             if not new_version_id:

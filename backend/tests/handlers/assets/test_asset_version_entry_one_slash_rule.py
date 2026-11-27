@@ -142,8 +142,8 @@ class TestCounting:
         monkeypatch.setattr(av, "asset_file_versions_table", _versions_table(ROWS))
         copies = []
 
-        def _copy(source_bucket, source_key, source_version_id, dest_bucket, dest_key):
-            copies.append((source_key, source_version_id))
+        def _copy(source_bucket, source_key, source_version_id, dest_bucket, dest_key, **kwargs):
+            copies.append((source_key, source_version_id, kwargs))
             return f"new-{source_version_id}"
 
         request = av.RevertAssetVersionRequestModel(assetVersionId="1", comment="back")
@@ -160,8 +160,15 @@ class TestCounting:
                 patch.object(av, "finalize_asset_version"), \
                 patch.object(av, "send_subscription_email"):
             response = av.revert_asset_version(DB, ASSET, request, {"tokens": ["alice"]})
-        assert sorted(copies) == [(f"{PREFIX}/x.txt", "v-empty-segment"), (f"{PREFIX}x.txt", "v-plain"),
-                                  (f"{PREFIX}y.txt", "v-legacy")]
+        assert sorted((key, version) for key, version, _ in copies) == [
+            (f"{PREFIX}/x.txt", "v-empty-segment"),
+            (f"{PREFIX}x.txt", "v-plain"),
+            (f"{PREFIX}y.txt", "v-legacy"),
+        ]
+        assert all(
+            kwargs == {"change_source": "fileRevert", "user_id": "alice"}
+            for _, _, kwargs in copies
+        )
         assert not response.skippedFiles
         assert response.message == "Successfully reverted to version 1 with 3 files"
 

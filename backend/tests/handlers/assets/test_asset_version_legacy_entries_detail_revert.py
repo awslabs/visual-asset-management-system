@@ -54,8 +54,8 @@ class TestARevert:
         copies = []
         saved = []
 
-        def _copy(source_bucket, source_key, source_version_id, dest_bucket, dest_key):
-            copies.append((source_key, source_version_id))
+        def _copy(source_bucket, source_key, source_version_id, dest_bucket, dest_key, **kwargs):
+            copies.append((source_key, source_version_id, kwargs))
             return f"new-{source_version_id}"
 
         request = av.RevertAssetVersionRequestModel(assetVersionId="1", comment="back")
@@ -75,7 +75,11 @@ class TestARevert:
                 patch.object(av, "send_subscription_email"):
             response = av.revert_asset_version(DB, ASSET, request, CLAIMS)
 
-        assert sorted(copies) == [(f"{PREFIX}a.txt", "v-a"), (f"{PREFIX}c.txt", "v-c")]
+        assert sorted((key, version) for key, version, _ in copies) == [
+            (f"{PREFIX}a.txt", "v-a"),
+            (f"{PREFIX}c.txt", "v-c"),
+        ]
+        assert all(kwargs["change_source"] == "fileRevert" for _, _, kwargs in copies)
         assert sorted((f["relativeKey"], f["versionId"]) for f in saved) == [("a.txt", "new-v-a"),
                                                                              ("c.txt", "new-v-c")]
         assert response.skippedFiles is None

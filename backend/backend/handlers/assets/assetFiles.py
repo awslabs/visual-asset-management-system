@@ -17,6 +17,7 @@ from common.constants import STANDARD_JSON_RESPONSE
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
+    build_change_metadata,
     VAMS_PRIMARY_TYPE_METADATA_KEY,
     VAMS_CHANGE_SOURCE_METADATA_KEY,
     VAMS_CHANGE_USER_ID_METADATA_KEY,
@@ -492,36 +493,6 @@ def check_destination_file_exists(bucket: str, key: str, path_display: str) -> b
         # For any other error, log details and raise a user-friendly message
         logger.exception(f"Error checking destination file {key} in bucket {bucket}: {e}")
         raise VAMSGeneralErrorResponse(f"Error accessing destination path. Please verify the folder exists.")
-
-def build_change_metadata(change_source, user_id, from_db=None, from_asset=None, from_path=None, from_version=None):
-    """Build a full change-provenance metadata dict for a new file version.
-
-    Every provenance key is set explicitly (relevant ones filled, the rest blank)
-    so stale values from a prior version never carry forward on a REPLACE copy.
-
-    Args:
-        change_source: One of the VAMS change source values.
-        user_id: Acting user id; None falls back to "SYSTEM_USER".
-        from_db/from_asset/from_path: Source provenance for copy/move/rename.
-        from_version: Source S3 version id for copy/move/rename/revert, or the
-            version a metadata-only rewrite was copied from.
-
-    Returns:
-        Dict of all vams-change* keys.
-    """
-    # Source path as a leading-slash asset-relative path (blank when not provided).
-    normalized_from_path = normalize_history_file_path(from_path) if from_path else ""
-    return {
-        VAMS_CHANGE_SOURCE_METADATA_KEY: change_source,
-        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM_USER",
-        VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY: "",
-        VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: "",
-        VAMS_CHANGE_ASSET_ID_FROM_METADATA_KEY: from_asset or "",
-        VAMS_CHANGE_DATABASE_ID_FROM_METADATA_KEY: from_db or "",
-        VAMS_CHANGE_ASSET_FILE_PATH_FROM_METADATA_KEY: normalized_from_path,
-        VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY: from_version or "",
-    }
-
 
 def classify_move_change_source(source_path, dest_path):
     """Return fileRename if the parent directory is unchanged, else fileMove."""
