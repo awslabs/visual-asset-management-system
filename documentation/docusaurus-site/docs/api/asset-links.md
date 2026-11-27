@@ -167,6 +167,16 @@ When `childTreeView=true`, the `children` field contains a recursive tree struct
 One tree read walks at most 100 levels and returns at most 10,000 nodes. A hierarchy that reaches either ceiling comes back with the nodes gathered so far and `treeTruncated` set to `true`; walk the remainder by requesting the tree for an asset further down it. A walk that fails partway returns a `400` response rather than a partial tree, so a failed read is distinguishable from an asset that has no children.
 :::
 
+Permission on the asset is decided before the API reports whether it exists, so a caller who may not view the asset receives `403` whether or not it exists.
+
+### Error responses
+
+| Status | Description                                                                                        |
+| ------ | -------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, asset not found (`Asset not found in database`), or the child tree walk failed |
+| `403`  | Not authorized (requires GET permission on the asset)                                              |
+| `500`  | Internal server error                                                                              |
+
 ---
 
 ## Get a single asset link
