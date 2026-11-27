@@ -13,6 +13,7 @@ For asset management, see [Assets](assets.md). For file operations, see [Files](
 -   **File Metadata vs. File Attributes**: Both use the same API path with a `type` query parameter. File metadata stores descriptive information, while file attributes store operational data (e.g., `primaryType`).
 -   **Bulk Operations**: All create, update, and delete operations support bulk processing of multiple metadata items in a single request. Responses include partial success information.
 -   **Schema Validation**: When metadata schemas are configured, metadata values are validated against the schema on create and update operations.
+-   **Authorization Before Existence**: Every metadata endpoint decides whether the caller may act on the asset, the database or both linked assets before it reports whether they exist. A caller who is not allowed receives `403` whether or not they exist; only an allowed caller is told that an asset or database is not found. For an asset ID that does not exist, the decision uses the database and asset IDs alone, so a role allowed assets only by asset name, type or tags receives `403` for it.
 
 ### Supported Value Types
 
@@ -104,12 +105,11 @@ When a metadata schema applies to the entity, each metadata item is enriched wit
 
 **Error Responses:**
 
-| Status | Description                                     |
-| ------ | ----------------------------------------------- |
-| `400`  | Invalid parameters or pagination token.         |
-| `403`  | Not authorized to view metadata for this asset. |
-| `404`  | Asset not found.                                |
-| `500`  | Internal server error.                          |
+| Status | Description                                                 |
+| ------ | ----------------------------------------------------------- |
+| `400`  | Invalid parameters or pagination token, or asset not found. |
+| `403`  | Not authorized to view metadata for this asset.             |
+| `500`  | Internal server error.                                      |
 
 ---
 
@@ -171,9 +171,8 @@ Adds new metadata items to an asset. Supports bulk creation of multiple items in
 
 | Status | Description                                                                                |
 | ------ | ------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, validation error, or schema validation failure.                        |
+| `400`  | Invalid parameters, validation error, schema validation failure, or asset not found.       |
 | `403`  | Not authorized to create metadata for this asset.                                          |
-| `404`  | Asset not found.                                                                           |
 | `500`  | Internal server error.                                                                     |
 | `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
 
@@ -233,12 +232,11 @@ The `replace_all` update type deletes all existing metadata and replaces it with
 
 **Error Responses:**
 
-| Status | Description                                       |
-| ------ | ------------------------------------------------- |
-| `400`  | Invalid parameters or validation error.           |
-| `403`  | Not authorized to update metadata for this asset. |
-| `404`  | Asset not found.                                  |
-| `500`  | Internal server error.                            |
+| Status | Description                                                 |
+| ------ | ----------------------------------------------------------- |
+| `400`  | Invalid parameters or validation error, or asset not found. |
+| `403`  | Not authorized to update metadata for this asset.           |
+| `500`  | Internal server error.                                      |
 
 ---
 
@@ -286,9 +284,8 @@ Removes metadata items from an asset by key.
 
 | Status | Description                                       |
 | ------ | ------------------------------------------------- |
-| `400`  | Invalid parameters.                               |
+| `400`  | Invalid parameters or asset not found.            |
 | `403`  | Not authorized to delete metadata for this asset. |
-| `404`  | Asset not found.                                  |
 | `500`  | Internal server error.                            |
 
 ---
@@ -335,12 +332,11 @@ Retrieves metadata for a specific file within an asset.
 
 **Error Responses:**
 
-| Status | Description                               |
-| ------ | ----------------------------------------- |
-| `400`  | Invalid parameters or missing `filePath`. |
-| `403`  | Not authorized.                           |
-| `404`  | Asset or file not found.                  |
-| `500`  | Internal server error.                    |
+| Status | Description                                                   |
+| ------ | ------------------------------------------------------------- |
+| `400`  | Invalid parameters or missing `filePath`, or asset not found. |
+| `403`  | Not authorized.                                               |
+| `500`  | Internal server error.                                        |
 
 ---
 
@@ -387,9 +383,8 @@ Returns a bulk operation response (same format as asset metadata).
 
 | Status | Description                                                                                |
 | ------ | ------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters.                                                                        |
+| `400`  | Invalid parameters or asset or file not found.                                             |
 | `403`  | Not authorized.                                                                            |
-| `404`  | Asset or file not found.                                                                   |
 | `500`  | Internal server error.                                                                     |
 | `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
 
@@ -426,12 +421,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description              |
-| ------ | ------------------------ |
-| `400`  | Invalid parameters.      |
-| `403`  | Not authorized.          |
-| `404`  | Asset or file not found. |
-| `500`  | Internal server error.   |
+| Status | Description                                    |
+| ------ | ---------------------------------------------- |
+| `400`  | Invalid parameters or asset or file not found. |
+| `403`  | Not authorized.                                |
+| `500`  | Internal server error.                         |
 
 ---
 
@@ -459,12 +453,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description              |
-| ------ | ------------------------ |
-| `400`  | Invalid parameters.      |
-| `403`  | Not authorized.          |
-| `404`  | Asset or file not found. |
-| `500`  | Internal server error.   |
+| Status | Description                            |
+| ------ | -------------------------------------- |
+| `400`  | Invalid parameters or asset not found. |
+| `403`  | Not authorized.                        |
+| `500`  | Internal server error.                 |
 
 ---
 
@@ -513,9 +506,8 @@ Retrieves metadata items for the specified database, one page at a time.
 
 | Status | Description                                        |
 | ------ | -------------------------------------------------- |
-| `400`  | Invalid parameters.                                |
+| `400`  | Invalid parameters or database not found.          |
 | `403`  | Not authorized to view metadata for this database. |
-| `404`  | Database not found.                                |
 | `500`  | Internal server error.                             |
 
 ---
@@ -554,9 +546,8 @@ Returns a bulk operation response.
 
 | Status | Description                                                                                |
 | ------ | ------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters or schema validation failure.                                           |
+| `400`  | Invalid parameters or schema validation failure, or database not found.                    |
 | `403`  | Not authorized.                                                                            |
-| `404`  | Database not found.                                                                        |
 | `500`  | Internal server error.                                                                     |
 | `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
 
@@ -589,12 +580,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `400`  | Invalid parameters.    |
-| `403`  | Not authorized.        |
-| `404`  | Database not found.    |
-| `500`  | Internal server error. |
+| Status | Description                               |
+| ------ | ----------------------------------------- |
+| `400`  | Invalid parameters or database not found. |
+| `403`  | Not authorized.                           |
+| `500`  | Internal server error.                    |
 
 ---
 
@@ -618,12 +608,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `400`  | Invalid parameters.    |
-| `403`  | Not authorized.        |
-| `404`  | Database not found.    |
-| `500`  | Internal server error. |
+| Status | Description                               |
+| ------ | ----------------------------------------- |
+| `400`  | Invalid parameters or database not found. |
+| `403`  | Not authorized.                           |
+| `500`  | Internal server error.                    |
 
 ---
 
@@ -665,12 +654,11 @@ Retrieves metadata items for the specified asset link, one page at a time.
 
 **Error Responses:**
 
-| Status | Description                                          |
-| ------ | ---------------------------------------------------- |
-| `400`  | Invalid parameters or pagination token.              |
-| `403`  | Not authorized to view metadata for this asset link. |
-| `404`  | Asset link not found.                                |
-| `500`  | Internal server error.                               |
+| Status | Description                                                                      |
+| ------ | -------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters or pagination token, or asset link or linked asset not found. |
+| `403`  | Not authorized to view metadata for this asset link.                             |
+| `500`  | Internal server error.                                                           |
 
 ---
 
@@ -708,9 +696,8 @@ Returns a bulk operation response.
 
 | Status | Description                                                                                |
 | ------ | ------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters or validation error.                                                    |
+| `400`  | Invalid parameters or validation error, or asset link or linked asset not found.           |
 | `403`  | Not authorized.                                                                            |
-| `404`  | Asset link not found.                                                                      |
 | `500`  | Internal server error.                                                                     |
 | `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
 
@@ -754,12 +741,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `400`  | Invalid parameters.    |
-| `403`  | Not authorized.        |
-| `404`  | Asset link not found.  |
-| `500`  | Internal server error. |
+| Status | Description                                                  |
+| ------ | ------------------------------------------------------------ |
+| `400`  | Invalid parameters, or asset link or linked asset not found. |
+| `403`  | Not authorized.                                              |
+| `500`  | Internal server error.                                       |
 
 ---
 
@@ -789,12 +775,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `400`  | Invalid parameters.    |
-| `403`  | Not authorized.        |
-| `404`  | Asset link not found.  |
-| `500`  | Internal server error. |
+| Status | Description                                                  |
+| ------ | ------------------------------------------------------------ |
+| `400`  | Invalid parameters, or asset link or linked asset not found. |
+| `403`  | Not authorized.                                              |
+| `500`  | Internal server error.                                       |
 
 ---
 

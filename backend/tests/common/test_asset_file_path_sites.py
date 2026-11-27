@@ -23,6 +23,7 @@ HANDLERS = os.path.join(os.path.dirname(__file__), "..", "..", "backend", "handl
 # The handlers whose routes take an asset-relative file path (or return one for a key)
 FILE_PATH_SITES = (
     "assets/assetFiles.py",
+    "assets/assetVersions.py",
     "assets/downloadAsset.py",
     "assets/streamAsset.py",
     "assets/streamAuxiliaryPreviewAsset.py",
