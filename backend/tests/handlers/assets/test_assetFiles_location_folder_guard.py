@@ -1,16 +1,20 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A prefix delete or archive whose path resolves to the asset's own location folder names the whole
-asset, so it is refused like the top-level folder `/` and nothing in the bucket changes (#1943). A real
-subfolder, including one named like the asset, still deletes and archives. A path with a leading `/` is a
-path in the asset (PR #1965), so `/A/` is the subfolder named like the asset (`A/A/`), not the location
-folder, and the `//` folder (`A//`, keys with an empty segment after the location, #1977) is a subfolder too.
+"""A delete or archive whose path resolves to the key the file list shows at `/` names the asset's top-level
+folder, so it is refused like `/` and nothing in the bucket changes (#1943): a folder location itself (its
+folder marker, which every created asset has), or a single-file location's companion folder `{key}/`, named
+as a folder (`isPrefix` true) or as a single key (`isPrefix` false). A real subfolder, including one named
+like the asset, still deletes and archives. A path with a leading `/` is a path in the asset (PR #1965), so
+`/A/` is the subfolder named like the asset (`A/A/`), not the location folder, and the `//` folder (`A//`,
+keys with an empty segment after the location, #1977) is a subfolder too.
 
-Layout (bucket `vams-guard`, versioned): asset `A` (database db1) at `A/` holds `x.txt`, `sub/y.txt` and a
-root subfolder named like the asset, `A/z.txt` (key `A/A/z.txt`). Asset `A2` (db1) sits below a parent
-folder, at `base/A2/`, and holds `x.txt` and `sub/y.txt`. Asset `M` (db1) was created from one object: its
-location `m/model.glb` is not a folder, so the guard does not apply, and its companion folder holds `sub/n.txt`.
+Layout (bucket `vams-guard`, versioned): asset `A` (database db1) at `A/` holds its folder marker `A/`,
+`x.txt`, `sub/y.txt` and a root subfolder named like the asset, `A/z.txt` (key `A/A/z.txt`). Asset `A2` (db1)
+sits below a parent folder, at `base/A2/`, and holds its marker, `x.txt` and `sub/y.txt`. Asset `L` (db1) has a
+location stored with a leading `/`, `/lead/`, and holds the marker `lead/` and `x.txt`. Asset `M` (db1) was
+created from one object: its location `m/model.glb` is not a folder, so the object's own key is the location
+and still deletes and archives; its companion folder `m/model.glb/` holds a marker and `sub/n.txt`.
 """
 
 import sys
@@ -36,13 +40,15 @@ al = sys.modules['common.assetLocations']
 fa = sys.modules['common.fileAttribution']
 
 BUCKET = "vams-guard"
-A_KEYS = ("A/x.txt", "A/sub/y.txt", "A/A/z.txt")
-A2_KEYS = ("base/A2/x.txt", "base/A2/sub/y.txt")
-M_KEYS = ("m/model.glb", "m/model.glb/sub/n.txt")
-ALL_KEYS = A_KEYS + A2_KEYS + M_KEYS
+A_KEYS = ("A/", "A/x.txt", "A/sub/y.txt", "A/A/z.txt")
+A2_KEYS = ("base/A2/", "base/A2/x.txt", "base/A2/sub/y.txt")
+L_KEYS = ("lead/", "lead/x.txt")
+M_KEYS = ("m/model.glb", "m/model.glb/", "m/model.glb/sub/n.txt")
+ALL_KEYS = A_KEYS + A2_KEYS + L_KEYS + M_KEYS
 ROWS = {
     "A": asset_row("db1", "A", "reg-1", "A/", BUCKET),
     "A2": asset_row("db1", "A2", "reg-1", "base/A2/", BUCKET),
+    "L": asset_row("db1", "L", "reg-1", "/lead/", BUCKET),
     "M": asset_row("db1", "M", "reg-1", "m/model.glb", BUCKET),
 }
 CLAIMS = {"tokens": ["tester"], "roles": []}
@@ -101,7 +107,8 @@ def af(monkeypatch):
 @pytest.mark.unit
 class TestAPrefixThatNamesTheLocationFolderIsRefused:
     @pytest.mark.parametrize("asset_id,path", [
-        ("A", "A/"), ("A", "A"), ("A2", "base/A2/"), ("A2", "base/A2"),
+        ("A", "A/"), ("A", "A"), ("A2", "base/A2/"), ("A2", "base/A2"), ("L", "lead/"), ("L", "lead"),
+        ("M", "m/model.glb/"),
     ])
     def test_a_prefix_delete_is_refused_and_no_version_is_removed(self, af, asset_id, path):
         before = _state(af.test_client)
@@ -112,7 +119,8 @@ class TestAPrefixThatNamesTheLocationFolderIsRefused:
         assert _state(af.test_client) == before
 
     @pytest.mark.parametrize("asset_id,path", [
-        ("A", "A/"), ("A", "A"), ("A2", "base/A2/"), ("A2", "base/A2"),
+        ("A", "A/"), ("A", "A"), ("A2", "base/A2/"), ("A2", "base/A2"), ("L", "lead/"), ("L", "lead"),
+        ("M", "m/model.glb/"),
     ])
     def test_a_prefix_archive_is_refused_and_nothing_is_archived(self, af, asset_id, path):
         before = _state(af.test_client)
@@ -131,17 +139,55 @@ class TestAPrefixThatNamesTheLocationFolderIsRefused:
                 af.archive_file("db1", "A", path, True, CLAIMS)
             assert str(raised.value).endswith(ARCHIVE_REFUSAL)
 
-    def test_authorization_is_checked_before_the_path(self, af, monkeypatch):
+    @pytest.mark.parametrize("is_prefix", [True, False], ids=["prefix", "single-key"])
+    def test_authorization_is_checked_before_the_path(self, af, monkeypatch, is_prefix):
         def deny(*args, **kwargs):
             raise af.VAMSAuthorizationDeniedResponse()
 
         monkeypatch.setattr(af, "get_asset_with_permissions", deny)
         before = _state(af.test_client)
         with pytest.raises(af.VAMSAuthorizationDeniedResponse):
-            af.delete_file("db1", "A", "A/", True, True, CLAIMS)
+            af.delete_file("db1", "A", "A/", is_prefix, True, CLAIMS)
         with pytest.raises(af.VAMSAuthorizationDeniedResponse):
-            af.archive_file("db1", "A", "A/", True, CLAIMS)
+            af.archive_file("db1", "A", "A/", is_prefix, CLAIMS)
         assert _state(af.test_client) == before
+
+
+SINGLE_KEY_REFUSED = [("A", "A/"), ("A2", "base/A2/"), ("L", "lead/"), ("M", "m/model.glb/")]
+
+
+@pytest.mark.unit
+class TestASingleKeyRequestForTheTopLevelFolderIsRefused:
+    """With `isPrefix` false, the path names the key itself: the location folder's marker, or a single-file
+    asset's companion folder marker. Both are the entry the file list shows at `/`."""
+
+    @pytest.mark.parametrize("asset_id,path", SINGLE_KEY_REFUSED)
+    def test_a_single_key_delete_is_refused_and_no_version_is_removed(self, af, asset_id, path):
+        before = _state(af.test_client)
+        with pytest.raises(af.VAMSGeneralErrorResponse) as raised:
+            af.delete_file("db1", asset_id, path, False, True, CLAIMS)
+        assert str(raised.value).endswith(DELETE_REFUSAL)
+        assert raised.value.status_code == 400
+        assert _state(af.test_client) == before
+
+    @pytest.mark.parametrize("asset_id,path", SINGLE_KEY_REFUSED)
+    def test_a_single_key_archive_is_refused_and_nothing_is_archived(self, af, asset_id, path):
+        before = _state(af.test_client)
+        with pytest.raises(af.VAMSGeneralErrorResponse) as raised:
+            af.archive_file("db1", asset_id, path, False, CLAIMS)
+        assert str(raised.value).endswith(ARCHIVE_REFUSAL)
+        assert raised.value.status_code == 400
+        assert _state(af.test_client) == before
+
+    def test_the_marker_of_the_subfolder_named_like_the_asset_still_deletes_by_its_path(self, af):
+        """'/A/' is the path of 'A/A/', so its folder marker is a single key of a subfolder, not the location."""
+        af.test_client.put_object(Bucket=BUCKET, Key="A/A/", Body=b"")
+        af.delete_file("db1", "A", "/A/", False, True, CLAIMS)
+        assert _version_keys(af.test_client) == sorted(ALL_KEYS)
+
+    def test_a_file_of_an_asset_with_a_leading_slash_location_still_deletes(self, af):
+        af.delete_file("db1", "L", "/x.txt", False, True, CLAIMS)
+        assert _version_keys(af.test_client) == sorted(set(ALL_KEYS) - {"lead/x.txt"})
 
 
 @pytest.mark.unit
@@ -196,16 +242,18 @@ class TestARealSubfolderStillDeletesAndArchives:
 
 
 @pytest.mark.unit
-class TestASingleObjectAssetIsNotGuarded:
+class TestTheObjectOfASingleObjectAssetIsNotGuarded:
     """The object's own key is the location here, so a request naming the object resolves to the location key
     and must still act on the object."""
 
-    def test_the_object_deletes_by_its_path(self, af):
-        af.delete_file("db1", "M", "/model.glb", False, True, CLAIMS)
+    @pytest.mark.parametrize("path", ["/model.glb", "m/model.glb"], ids=["path", "full-key"])
+    def test_the_object_deletes_by_its_path_or_its_key(self, af, path):
+        af.delete_file("db1", "M", path, False, True, CLAIMS)
         assert _version_keys(af.test_client) == sorted(set(ALL_KEYS) - {"m/model.glb"})
 
-    def test_the_object_archives_by_its_path(self, af):
-        af.archive_file("db1", "M", "/model.glb", False, CLAIMS)
+    @pytest.mark.parametrize("path", ["/model.glb", "m/model.glb"], ids=["path", "full-key"])
+    def test_the_object_archives_by_its_path_or_its_key(self, af, path):
+        af.archive_file("db1", "M", path, False, CLAIMS)
         assert _live_keys(af.test_client) == sorted(set(ALL_KEYS) - {"m/model.glb"})
         assert _version_keys(af.test_client) == sorted(ALL_KEYS)
 
