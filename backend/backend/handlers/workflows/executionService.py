@@ -22,6 +22,7 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_actions
 from common.dynamodb import validate_pagination_info
 from common.logRedaction import redact_log_text, redact_log_events
+from common.assetLocations import AssetFilePaths, normalize_location
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
 from common.workflows import subExecutionStages as ses
@@ -5033,7 +5034,10 @@ def get_global_executions(event, query_params):
 def _to_asset_relative_key(full_key, asset_root_s3_key):
     """Convert a stored FULL asset-bucket key (assetRootS3Key + relative) back to the asset-relative
     key the execute request expects (leading '/'; '/' = whole asset). Strips the asset root prefix
-    when present; a whole-asset root ('/assetId/') collapses back to '/'."""
+    when present; a whole-asset root ('/assetId/') collapses back to '/'. A single-file asset's own
+    preview ('{file key}.previewFile.{ext}', outside '{file key}/') becomes the path it is listed at,
+    '/{file name}.previewFile.{ext}', which the execute request reads back to that key; '/' followed
+    by the key would be read as a path in the asset and name a companion entry instead."""
     fk = "/" + (full_key or "").lstrip("/")
     root = (asset_root_s3_key or "").strip("/")
     if root:
@@ -5042,6 +5046,13 @@ def _to_asset_relative_key(full_key, asset_root_s3_key):
             return "/"
         if body.startswith(root + "/"):
             return "/" + body[len(root) + 1:]
+        location = normalize_location(asset_root_s3_key)
+        if not location.endswith("/"):
+            # The first run named this preview by its listed path, so the object was listed at its
+            # file name (no companion entry of that name); the mapping is built on that, with no S3 read.
+            listed_path = AssetFilePaths(location, key_exists=lambda key: False).path_for(body)
+            if listed_path is not None:
+                return listed_path
     return fk
 
 

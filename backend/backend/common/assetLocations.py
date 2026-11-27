@@ -22,7 +22,9 @@ than with the prefix match alone. Code that decides whether two locations overla
 names (``a/x`` and ``a/x.previewFile`` both hold ``a/x.previewFile.previewFile.z``).
 
 ``AssetFilePaths`` is the one mapping between asset-relative file paths and S3 keys
-that every handler uses.
+that every handler uses. A file path in a request names a key by ``request_key_for``:
+with a leading ``/`` it is the file's path in the asset, without one it is the file's
+full key when it is one of the location's keys and otherwise the path in the asset.
 
 Pure functions, no AWS calls (``AssetFilePaths`` takes its one S3 read as a callable).
 """
@@ -195,18 +197,25 @@ class AssetFilePaths:
         return self._key_for_relative(raw.lstrip("/"))
 
     def request_key_for(self, value: Optional[str]) -> Optional[str]:
-        """The S3 key a file route's path names, or None: after one leading ``/`` is dropped, a key under the
-        location folder as given, the own key (no leading ``/``) for the listed object, else ``key_for``."""
+        """The S3 key a file path from a request names, or None.
+
+        A value with a leading ``/`` is the file's path in the asset (one ``/`` dropped), never a full key, so
+        ``/{location}x`` is the file ``{location}{location}x`` of a subfolder named like the location, and in a
+        single-file asset ``/{file key}/x`` is the companion entry ``{file key}/{file key}/x``. A value
+        without one is the file's full key when it is a key under the location folder (single file: under
+        ``{file key}/``) or, for the listed object, the location key itself; any other value is the path in the
+        asset."""
         raw = value or ""
         loc = self.location
         if not loc or _has_traversal_segment(raw):
             return None
+        if raw.startswith("/"):
+            return self._key_for_relative(raw[1:])
         if raw == loc and self.object_listed():
             return loc
-        rel = raw[1:] if raw.startswith("/") else raw
-        if rel.startswith(loc if loc.endswith("/") else loc + "/"):
-            return self._held(rel)
-        return self._key_for_relative(rel)
+        if raw.startswith(loc if loc.endswith("/") else loc + "/"):
+            return self._held(raw)
+        return self._key_for_relative(raw)
 
     def download_key_for(self, value: Optional[str]) -> Optional[str]:
         """The S3 key the download route's ``key`` names, or None: the location key and keys under its folder

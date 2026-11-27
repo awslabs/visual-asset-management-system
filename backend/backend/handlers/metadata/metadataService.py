@@ -668,25 +668,27 @@ def validate_asset_exists(database_id: str, asset_id: str) -> dict:
 
 
 def file_record_path(database_id: str, asset_id: str, file_path: str) -> str:
-    """The path a file's metadata and attributes are keyed by: the path the file is listed at, for a request
-    path in any form the file routes accept (the web sends the file's full key). A path that starts with
-    ``/{assetId}/`` drops that segment, as before; when the asset or its location cannot be read the path is
-    used as given, so existence and authorization stay with the caller's checks."""
-    if file_path.startswith(f"/{asset_id}/"):
-        return file_path[len(asset_id) + 1:]
+    """The path a file's metadata and attributes are keyed by: the path the file is listed at.
+
+    A request names a file by that path (the CLI, with its leading slash) or by its full S3 key (the web's
+    file panel, without one); the request models keep the form the caller sent. The path names a key by the
+    rule of the file routes (``AssetFilePaths.request_key_for``: a leading ``/`` marks a path in the asset,
+    never a full key) and the records are keyed by that key's listed path, so both forms of one file name the
+    same records, and ``/{location}x`` keys the file of a subfolder named like the location. When the
+    asset or its location cannot be read, or the path names no key the location holds, the path is used as
+    given with a leading slash, so existence and authorization stay with the caller's checks."""
+    given = file_path if file_path.startswith('/') else '/' + file_path
     try:
         asset = asset_storage_table.get_item(Key={'databaseId': database_id, 'assetId': asset_id}).get('Item')
         location = ((asset or {}).get('assetLocation') or {}).get('Key')
         if not location:
-            return file_path
+            return given
         paths = AssetFilePaths(location, key_exists=lambda key: key_has_any_version(
             get_bucket_details(asset['bucketId'])['bucketName'], key, client=s3))
-        # The request model adds a leading '/', so the full key of a single file's object arrives as '/{key}'
-        value = file_path[1:] if file_path[1:] == paths.location else file_path
-        return paths.path_for(paths.request_key_for(value)) or file_path
+        return paths.path_for(paths.request_key_for(file_path)) or given
     except Exception as e:
         logger.warning(f"Could not read the location of asset {asset_id}; keying metadata by the path given: {e}")
-        return file_path
+        return given
 
 
 def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> bool:
@@ -3977,7 +3979,7 @@ def handle_file_metadata_get(event):
         # Parse and validate path parameters (validation in model)
         path_request_model = parse(path_parameters, model=FileMetadataPathRequestModel)
         
-        # Parse query parameters - validation handled in model (adds leading slash)
+        # Parse query parameters - validation handled in model (filePath keeps the caller's form)
         query_request_model = parse(query_parameters, model=GetFileMetadataRequestModel)
         
         query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId}
@@ -4014,7 +4016,7 @@ def handle_file_metadata_post(event):
                 logger.exception(f"Invalid JSON in request body: {e}")
                 return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
-        # Parse request model - validation handled in model (adds leading slash)
+        # Parse request model - validation handled in model (filePath keeps the caller's form)
         request_model = parse(body, model=CreateFileMetadataRequestModel)
         
         response = create_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
@@ -4050,7 +4052,7 @@ def handle_file_metadata_put(event):
                 logger.exception(f"Invalid JSON in request body: {e}")
                 return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
-        # Parse request model - validation handled in model (adds leading slash)
+        # Parse request model - validation handled in model (filePath keeps the caller's form)
         request_model = parse(body, model=UpdateFileMetadataRequestModel)
         
         response = update_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
@@ -4086,7 +4088,7 @@ def handle_file_metadata_delete(event):
                 logger.exception(f"Invalid JSON in request body: {e}")
                 return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
-        # Parse request model - validation handled in model (adds leading slash)
+        # Parse request model - validation handled in model (filePath keeps the caller's form)
         request_model = parse(body, model=DeleteFileMetadataRequestModel)
         
         response = delete_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
