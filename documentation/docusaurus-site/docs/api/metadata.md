@@ -13,7 +13,7 @@ For asset management, see [Assets](assets.md). For file operations, see [Files](
 -   **File Metadata vs. File Attributes**: Both use the same API path with a `type` query parameter. File metadata stores descriptive information, while file attributes store operational data (e.g., `primaryType`).
 -   **Bulk Operations**: All create, update, and delete operations support bulk processing of multiple metadata items in a single request. Responses include partial success information.
 -   **Schema Validation**: When metadata schemas are configured, metadata values are validated against the schema on create and update operations.
--   **Authorization Before Existence**: Every metadata endpoint decides whether the caller may act on the asset, the database or both linked assets before it reports whether they exist. A caller who is not allowed receives `403` whether or not they exist; only an allowed caller is told that an asset or database is not found.
+-   **Authorization Before Existence**: Every metadata endpoint decides whether the caller may act on the asset, the database or both linked assets before it reports whether they exist. A caller who is not allowed receives `403` whether or not they exist; only an allowed caller is told that an asset or database is not found. For an asset ID that does not exist, the decision uses the database and asset IDs alone, so a role allowed assets only by asset name, type or tags receives `403` for it.
 
 ### Supported Value Types
 
