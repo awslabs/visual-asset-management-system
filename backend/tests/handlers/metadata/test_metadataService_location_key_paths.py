@@ -70,9 +70,10 @@ def _keyed_path(method, location, value):
             patch.object(metadataService, "claims_and_roles", {"tokens": ["tester"], "roles": []}), \
             patch.object(metadataService, record_function, recorder):
         result = handler(event)
-    assert result["statusCode"] == 200, result
-    keyed = recorder.call_args.args[2]
-    return keyed if isinstance(keyed, str) else keyed.filePath
+        assert result["statusCode"] == 200, result
+        handed = recorder.call_args.args[2]
+        # The record function resolves the path it is handed to the path the file is listed at
+        return metadataService.file_record_path("db1", "A1", handed if isinstance(handed, str) else handed.filePath)
 
 
 @pytest.mark.unit
