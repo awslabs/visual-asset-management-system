@@ -314,19 +314,13 @@ paths:
                                   - $ref: "#/components/schemas/getAssetLinksResponse"
                                   - $ref: "#/components/schemas/getAssetLinksTreeViewResponse"
                 "400":
-                    description: Invalid parameters, or the child tree walk failed and no partial tree is returned in its place.
+                    description: "Invalid parameters, the child tree walk failed and no partial tree is returned in its place, or, for a caller allowed on the asset, the asset does not exist ('Asset not found in database')."
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to view asset links.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset not found.
+                    description: "Not authorized to view asset links. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists."
                     content:
                         application/json:
                             schema:

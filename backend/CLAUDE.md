@@ -788,7 +788,11 @@ only after both. The single asset link GET and the asset link update
 (`assetLinksService.get_single_asset_link`, `update_asset_link`) decide `GET` / `PUT` on both ends
 through `authorize_link_ends` (`asset_authorization_object` per end, the link's stored ids standing in
 for a missing asset) before they answer 400 `One or both linked assets no longer exist`; a link id
-that names no link still answers `Asset link not found` first.
+that names no link still answers `Asset link not found` first. The per-asset link list
+(`get_asset_links_for_asset`) decides `GET` on the queried asset's `asset_authorization_object` (with
+`showArchived`, the archived stand-in) before it answers 400 `Asset not found in database`; links whose
+other end the caller may not view or that no longer exists are left out and counted in
+`unauthorizedCounts`, as before.
 
 ---
 
