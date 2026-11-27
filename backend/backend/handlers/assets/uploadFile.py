@@ -33,6 +33,7 @@ from common.s3PathPatterns import (
     ALLOWED_PREVIEW_FILE_EXTENSIONS,
     PREVIEW_PREFIX,
     legacy_staged_upload_key,
+    UPLOAD_STAGING_LAYOUT_PER_UPLOAD,
     max_uploaded_file_key_bytes,
     staged_upload_key,
 )
@@ -327,6 +328,15 @@ def update_asset_attributes(databaseId, assetId, updates):
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error saving asset.")
+
+
+def legacy_staging_key_for(upload_details, base_assets_prefix, final_s3_key):
+    """The per-path staging key (LEGACY STAGING KEY, #1928) an upload may still be open under, or None
+    for an upload whose record says it stages per upload, which never staged there."""
+    if upload_details.get('stagingLayout') == UPLOAD_STAGING_LAYOUT_PER_UPLOAD:
+        return None
+    return legacy_staged_upload_key(base_assets_prefix, final_s3_key)
+
 
 def save_upload_details(upload_data):
     """Save upload details to DynamoDB"""
@@ -1343,7 +1353,8 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         totalParts=total_parts,
         status="initialized",
         UserId=user_id,  # Include user ID for rate limiting
-        files=[file.relativeKey for file in request_model.files]
+        files=[file.relativeKey for file in request_model.files],
+        stagingLayout=UPLOAD_STAGING_LAYOUT_PER_UPLOAD,
     )
     save_upload_details(upload_record)
     
@@ -2061,7 +2072,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                                 
                                 abort_staged_multipart_upload(
                                     bucket_name, temp_s3_key, file.uploadIdS3,
-                                    legacy_staged_upload_key(baseAssetsPrefix, final_s3_key))
+                                    legacy_staging_key_for(upload_details, baseAssetsPrefix, final_s3_key))
                             except Exception as abort_error:
                                 logger.warning(f"Error aborting multipart upload for invalid extension: {abort_error}")
                         continue
@@ -2076,12 +2087,13 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 filename = os.path.basename(file.relativeKey)
                 final_s3_key = f"{baseAssetsPrefix}{PREVIEW_PREFIX}{assetId}/{filename}"
                 
-            # The file's staging key in this upload's own folder (as initialization built it), and the
-            # per-path key an upload initialized before per-upload staging used (LEGACY STAGING KEY,
-            # #1928): a multipart upload found only under the legacy key is completed or aborted there.
+            # The file's staging key in this upload's own folder (as initialization built it), and, for
+            # an upload initialized before per-upload staging, the per-path key it used (LEGACY STAGING
+            # KEY, #1928): a multipart upload found only under the legacy key is completed or aborted
+            # there. An upload initialized since has no legacy key.
             # A zero-byte file is created by this completion, so it always uses the per-upload key.
             temp_s3_key = staged_upload_key(baseAssetsPrefix, uploadId, final_s3_key)
-            legacy_temp_s3_key = legacy_staged_upload_key(baseAssetsPrefix, final_s3_key)
+            legacy_temp_s3_key = legacy_staging_key_for(upload_details, baseAssetsPrefix, final_s3_key)
             
             # The branches below can create an object under final_s3_key -- the zero-byte branch
             # writes one directly, the multipart branch completes one -- so the name-level

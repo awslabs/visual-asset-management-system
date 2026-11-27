@@ -560,3 +560,98 @@ class TestAbortsReachTheRightUpload:
         assert _results(response) == {RELATIVE_KEY: (True, None)}
         queue.assert_called_once()
         assert queue.call_args.args[0]["tempS3Key"] == key != LEGACY_STAGING_KEY
+
+
+class _KeysCalled:
+    """The S3 client, recording the Key of every multipart call (ListParts, AbortMultipartUpload,
+    CompleteMultipartUpload, UploadPart)."""
+
+    def __init__(self, s3):
+        self._s3 = s3
+        self.keys = []
+
+    def __getattr__(self, name):
+        attr = getattr(self._s3, name)
+        if name not in _KeyBoundS3._BOUND:
+            return attr
+
+        def recorded(**kwargs):
+            self.keys.append((name, kwargs.get("Key")))
+            return attr(**kwargs)
+        return recorded
+
+
+def _open_under_the_per_path_key(env, relative_key=RELATIVE_KEY):
+    """A multipart upload open under the per-path staging key of `relative_key`, with one part sent:
+    its S3 upload id and its completion parts."""
+    key = STAGING_PREFIX + "asset-1/" + relative_key.lstrip("/")
+    upload_id_s3 = env["s3"].create_multipart_upload(
+        Bucket=BUCKET, Key=key, ContentType="application/octet-stream")["UploadId"]
+    etag = env["s3"].upload_part(Bucket=BUCKET, Key=key, UploadId=upload_id_s3, PartNumber=1,
+                                 Body=b"P" * 16)["ETag"]
+    return key, upload_id_s3, [{"PartNumber": 1, "ETag": etag}]
+
+
+@pytest.mark.unit
+class TestAnUploadInitializedWithPerUploadStaging:
+    """An upload initialized with per-upload staging never staged under the per-path key, so its
+    completion and its aborts use its own staging key only."""
+
+    def test_its_record_says_it_stages_per_upload(self, env):
+        upload_id, _ = _start(b"N" * 16)
+
+        record = env["table"].get_item(Key={"uploadId": upload_id, "assetId": ASSET_ID})["Item"]
+        assert record["stagingLayout"] == uf.UPLOAD_STAGING_LAYOUT_PER_UPLOAD == "perUpload"
+
+    def test_completing_it_does_not_complete_a_multipart_upload_under_the_per_path_key(self, env):
+        legacy_key, legacy_upload, legacy_parts = _open_under_the_per_path_key(env)
+        upload_id, _ = _start(b"N" * 16)
+        recorder = _KeysCalled(env["s3"])
+
+        with patch.object(uf, "s3", recorder):
+            results = _results(_complete(upload_id, {"relativeKey": RELATIVE_KEY, "uploadIdS3": legacy_upload,
+                                                     "parts": legacy_parts}))
+
+        assert results[RELATIVE_KEY][0] is False
+        assert [key for _, key in recorder.keys if key == legacy_key] == []
+        assert (legacy_key, legacy_upload) in _open_uploads(env)
+        assert _bodies_of_versions(env, FINAL_KEY) == []
+
+    def test_cancelling_it_does_not_abort_a_multipart_upload_under_the_per_path_key(self, env):
+        legacy_key, legacy_upload, _ = _open_under_the_per_path_key(env)
+        upload_id, _ = _start(b"N" * 16)
+        recorder = _KeysCalled(env["s3"])
+
+        with patch.object(uf, "s3", recorder):
+            results = _results(_complete(upload_id, {"relativeKey": RELATIVE_KEY, "uploadIdS3": legacy_upload,
+                                                     "parts": []}))
+
+        assert results[RELATIVE_KEY][0] is False
+        assert [key for _, key in recorder.keys if key == legacy_key] == []
+        assert (legacy_key, legacy_upload) in _open_uploads(env)
+
+    def test_one_refused_by_its_name_does_not_abort_under_the_per_path_key(self, env):
+        legacy_key, legacy_upload, legacy_parts = _open_under_the_per_path_key(env)
+        upload_id, _ = _start(b"N" * 16)
+        recorder = _KeysCalled(env["s3"])
+
+        with patch.object(uf, "s3", recorder), \
+                patch.object(uf, "validateUnallowedFileExtensionAndContentType", return_value=False):
+            results = _results(_complete(upload_id, {"relativeKey": RELATIVE_KEY, "uploadIdS3": legacy_upload,
+                                                     "parts": legacy_parts}))
+
+        assert results[RELATIVE_KEY][0] is False
+        assert [key for _, key in recorder.keys if key == legacy_key] == []
+        assert (legacy_key, legacy_upload) in _open_uploads(env)
+
+    def test_its_own_completion_still_lands_with_no_per_path_read(self, env):
+        """Positive control: the change leaves the ordinary completion as it was."""
+        upload_id, entry = _start(b"N" * 16)
+        recorder = _KeysCalled(env["s3"])
+
+        with patch.object(uf, "s3", recorder):
+            assert _results(_complete(upload_id, entry)) == {RELATIVE_KEY: (True, None)}
+
+        assert _bodies_of_versions(env, FINAL_KEY) == [b"N" * 16]
+        assert [key for _, key in recorder.keys if key == LEGACY_STAGING_KEY] == []
+        assert _open_uploads(env) == []

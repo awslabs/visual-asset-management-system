@@ -356,9 +356,11 @@ class TestPrefixOperationsStayInTheCompanionFolder:
 
 @pytest.mark.unit
 class TestCompanionFolderDeleteAuxData:
-    def test_deleting_the_companion_folder_by_its_key_keeps_the_objects_viewer_data(self, af):
-        """D2: the companion folder's files lose their viewer data; the object keeps the file and its data."""
-        af.delete_file("db1", "a1", "p1/model.glb/", True, True, CLAIMS)
+    def test_deleting_a_companion_subfolder_keeps_the_objects_viewer_data(self, af):
+        """D2: the companion folder's files lose their viewer data; the object keeps the file and its data. The
+        companion folder as a whole (`p1/model.glb/`) is the top-level folder and is refused
+        (test_assetFiles_location_folder_guard.py), so its files are deleted by their own folder."""
+        af.delete_file("db1", "a1", "/sub/", True, True, CLAIMS)
         assert _live(af.test_client, LOCATION) and not _live(af.test_client, COMPANION)
         assert _live(af.test_client, "db1/p1/model.glb/preview/PotreeViewer/m.json", AUX_BUCKET)
         assert _versions(af.test_client, "db1/p1/model.glb/sub/x.obj/preview/PotreeViewer/m.json", AUX_BUCKET) == []
