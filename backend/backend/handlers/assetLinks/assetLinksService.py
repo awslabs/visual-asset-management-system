@@ -187,6 +187,28 @@ def check_asset_permission(asset: Dict, claims_and_roles: Dict, action: str = "G
         logger.exception(f"Error checking asset permission: {e}")
         return False
 
+def authorize_link_ends(link_item: Dict, claims_and_roles: Dict, action: str, refusal_message: str) -> None:
+    """Decide Tier 2 on both ends of an asset link before reporting that either no longer exists
+
+    Each end is read, then decided on its record or, when the asset is gone, on the link's stored ids
+    for it, so a refused caller gets the same 403 whether or not an end exists. Only a caller allowed
+    both ends is told that one no longer exists.
+
+    Raises:
+        PermissionError: With refusal_message, if the caller is refused either end
+        ValueError: If the caller is allowed both ends and one of them no longer exists
+    """
+    ends = [(link_item['fromAssetDatabaseId'], link_item['fromAssetId']),
+            (link_item['toAssetDatabaseId'], link_item['toAssetId'])]
+    records = [get_asset_details(asset_id, database_id) for database_id, asset_id in ends]
+    for record, (database_id, asset_id) in zip(records, ends):
+        authorization_object = record or {'databaseId': database_id, 'assetId': asset_id}
+        if not check_asset_permission(authorization_object, claims_and_roles, action):
+            raise PermissionError(refusal_message)
+    if not all(records):
+        raise ValueError("One or both linked assets no longer exist")
+
+
 def delete_asset_link_metadata(asset_link_id: str):
     """Delete all metadata associated with an asset link"""
     try:
@@ -230,17 +252,8 @@ def get_single_asset_link(asset_link_id: str, claims_and_roles: Dict) -> GetSing
             
         link_item = response['Item']
         
-        # Check permissions for both assets
-        from_asset = get_asset_details(link_item['fromAssetId'], link_item['fromAssetDatabaseId'])
-        to_asset = get_asset_details(link_item['toAssetId'], link_item['toAssetDatabaseId'])
-        
-        if not from_asset or not to_asset:
-            raise ValueError("One or both linked assets no longer exist")
-            
-        # Check permissions
-        if not (check_asset_permission(from_asset, claims_and_roles) and 
-                check_asset_permission(to_asset, claims_and_roles)):
-            raise PermissionError("Not authorized to view this asset link")
+        # Both linked assets are authorized before either's existence is reported
+        authorize_link_ends(link_item, claims_and_roles, "GET", "Not authorized to view this asset link")
         
         # Create response model
         asset_link = AssetLinkModel(
@@ -572,17 +585,9 @@ def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestM
             
         link_item = response['Item']
         
-        # Check permissions for both assets
-        from_asset = get_asset_details(link_item['fromAssetId'], link_item['fromAssetDatabaseId'])
-        to_asset = get_asset_details(link_item['toAssetId'], link_item['toAssetDatabaseId'])
-        
-        if not from_asset or not to_asset:
-            raise ValueError("One or both linked assets no longer exist")
-            
-        # Check permissions - user must have PUT permission on both assets
-        if not (check_asset_permission(from_asset, claims_and_roles, "PUT") and 
-                check_asset_permission(to_asset, claims_and_roles, "PUT")):
-            raise PermissionError("Not authorized to update this asset link")
+        # The user must have PUT permission on both linked assets, decided before either's
+        # existence is reported
+        authorize_link_ends(link_item, claims_and_roles, "PUT", "Not authorized to update this asset link")
         
         # Check if assetLinkAliasId is being updated
         if request_model.assetLinkAliasId is not None:
