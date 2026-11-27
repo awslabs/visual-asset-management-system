@@ -303,19 +303,13 @@ paths:
                                   - $ref: "#/components/schemas/getAssetLinksResponse"
                                   - $ref: "#/components/schemas/getAssetLinksTreeViewResponse"
                 "400":
-                    description: Invalid parameters, or the child tree walk failed and no partial tree is returned in its place.
+                    description: Invalid parameters, asset not found, or the child tree walk failed and no partial tree is returned in its place.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to view asset links.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset not found.
+                    description: Not authorized to view asset links. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -360,19 +354,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/getSingleAssetLinkResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters, asset link not found, or a linked asset no longer exists.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to view this asset link.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset link not found.
+                    description: Not authorized to view this asset link. Decided before the linked assets are looked up, so a refused caller gets this whether or not they exist.
                     content:
                         application/json:
                             schema:
@@ -410,19 +398,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/updateAssetLinkResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters or alias conflict, asset link not found, or a linked asset no longer exists.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update this asset link.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset link not found.
+                    description: Not authorized to update this asset link. Decided before the linked assets are looked up, so a refused caller gets this whether or not they exist.
                     content:
                         application/json:
                             schema:
@@ -446,19 +428,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/deleteAssetLinkResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: Invalid parameters, or asset link not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
                     description: Not authorized to delete asset link.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset link not found.
                     content:
                         application/json:
                             schema:
@@ -490,19 +466,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/getAssetLinkMetadataResponse"
                 "400":
-                    description: Invalid parameters or pagination token.
+                    description: Invalid parameters or pagination token, or asset link or linked asset not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to view metadata for this asset link.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset link not found.
+                    description: Not authorized to view metadata for this asset link. Decided before the linked assets are looked up, so a refused caller gets this whether or not they exist.
                     content:
                         application/json:
                             schema:
@@ -542,19 +512,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters or validation error.
+                    description: Invalid parameters or validation error, or asset link or linked asset not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create metadata for this asset link.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset link not found.
+                    description: Not authorized to create metadata for this asset link. Decided before the linked assets are looked up, so a refused caller gets this whether or not they exist.
                     content:
                         application/json:
                             schema:
@@ -597,19 +561,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters or validation error.
+                    description: Invalid parameters or validation error, or asset link or linked asset not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update metadata for this asset link.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset link not found.
+                    description: Not authorized to update metadata for this asset link. Decided before the linked assets are looked up, so a refused caller gets this whether or not they exist.
                     content:
                         application/json:
                             schema:
@@ -646,19 +604,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters or validation error.
+                    description: Invalid parameters or validation error, or asset link or linked asset not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to delete metadata for this asset link.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset link not found.
+                    description: Not authorized to delete metadata for this asset link. Decided before the linked assets are looked up, so a refused caller gets this whether or not they exist.
                     content:
                         application/json:
                             schema:
@@ -1719,7 +1671,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update database. Nothing is written.
+                    description: Not authorized to update database. Nothing is written. Decided before the database is looked up, so a refused caller gets this whether or not the database exists.
                     content:
                         application/json:
                             schema:
@@ -1741,14 +1693,14 @@ paths:
               - DefaultCognitoAuthorizer: []
         delete:
             summary: "Delete a database (soft-delete)."
-            description: "The dependency check runs after the database is found and the caller is authorized to delete it, so an unauthorized caller receives 403 and a missing database 404 whatever the database contains."
+            description: "Permission is decided before the API reports whether the database exists, and the dependency check runs after the database is found and the caller is authorized to delete it, so a refused caller receives 403 whether or not the database exists and whatever it contains, and an allowed caller receives 404 for a missing database."
             responses:
                 "200":
                     description: Database deleted.
                 "400":
                     description: Database contains an active workflow, pipeline, or assets.
                 "403":
-                    description: Action not allowed or not authorized.
+                    description: Action not allowed or not authorized. Decided before the database is looked up, so a refused caller gets this whether or not the database exists.
                 "404":
                     description: Database not found.
                     content:
@@ -5340,19 +5292,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/getAssetMetadataResponse"
                 "400":
-                    description: Invalid parameters or pagination token.
+                    description: Invalid parameters or pagination token, or asset not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to view metadata for this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset not found.
+                    description: Not authorized to view metadata for this asset. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5404,19 +5350,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters or validation error.
+                    description: Invalid parameters or validation error, or asset not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create metadata for this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset not found.
+                    description: Not authorized to create metadata for this asset. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5465,19 +5405,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters or validation error.
+                    description: Invalid parameters or validation error, or asset not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update metadata for this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset not found.
+                    description: Not authorized to update metadata for this asset. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5520,19 +5454,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters or validation error.
+                    description: Invalid parameters or validation error, or asset not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to delete metadata for this asset.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset not found.
+                    description: Not authorized to delete metadata for this asset. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5570,19 +5498,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/getFileMetadataResponse"
                 "400":
-                    description: Invalid parameters, pagination token, or file path is a folder.
+                    description: Invalid parameters, pagination token, file path is a folder, or asset not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to view metadata for this file.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset or file not found.
+                    description: Not authorized to view metadata for this file. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5647,19 +5569,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters, validation error, or file path is a folder.
+                    description: Invalid parameters, validation error, file path is a folder, or asset or file not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create metadata for this file.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset or file not found.
+                    description: Not authorized to create metadata for this file. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5708,19 +5624,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters, validation error, or file path is a folder.
+                    description: Invalid parameters, validation error, file path is a folder, or asset or file not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update metadata for this file.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset or file not found.
+                    description: Not authorized to update metadata for this file. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5763,19 +5673,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters, validation error, or file path is a folder.
+                    description: Invalid parameters, validation error, file path is a folder, or asset not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to delete metadata for this file.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Asset or file not found.
+                    description: Not authorized to delete metadata for this file. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5813,19 +5717,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/getDatabaseMetadataResponse"
                 "400":
-                    description: Invalid parameters or pagination token.
+                    description: Invalid parameters or pagination token, or database not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to view metadata for this database.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Database not found.
+                    description: Not authorized to view metadata for this database. Decided before the database is looked up, so a refused caller gets this whether or not the database exists.
                     content:
                         application/json:
                             schema:
@@ -5865,19 +5763,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters or validation error.
+                    description: Invalid parameters or validation error, or database not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create metadata for this database.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Database not found.
+                    description: Not authorized to create metadata for this database. Decided before the database is looked up, so a refused caller gets this whether or not the database exists.
                     content:
                         application/json:
                             schema:
@@ -5920,19 +5812,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters or validation error.
+                    description: Invalid parameters or validation error, or database not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update metadata for this database.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Database not found.
+                    description: Not authorized to update metadata for this database. Decided before the database is looked up, so a refused caller gets this whether or not the database exists.
                     content:
                         application/json:
                             schema:
@@ -5969,19 +5855,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/bulkMetadataOperationResponse"
                 "400":
-                    description: Invalid parameters or validation error.
+                    description: Invalid parameters or validation error, or database not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to delete metadata for this database.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Database not found.
+                    description: Not authorized to delete metadata for this database. Decided before the database is looked up, so a refused caller gets this whether or not the database exists.
                     content:
                         application/json:
                             schema:
