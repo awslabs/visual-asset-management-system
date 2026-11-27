@@ -747,6 +747,12 @@ def validate_asset_link_exists(asset_link_id: str) -> dict:
         raise VAMSGeneralErrorResponse("Error validating asset link")
 
 
+def asset_link_ends(asset_link: dict) -> list:
+    """The (database_id, asset_id) pairs of an asset link's two ends, from end first"""
+    return [(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId']),
+            (asset_link['toAssetDatabaseId'], asset_link['toAssetId'])]
+
+
 def validate_asset_exists(database_id: str, asset_id: str, include_archived: bool = False) -> dict:
     """Validate that an asset exists and return it
     
@@ -782,36 +788,62 @@ def find_asset(database_id: str, asset_id: str, include_archived: bool = False):
         raise VAMSGeneralErrorResponse("Error validating asset")
 
 
-def authorize_asset_read(database_id: str, asset_id: str, claims_and_roles: dict, refusal_message: str,
-                         include_archived: bool = False) -> dict:
-    """Resolve an asset for a metadata read and decide Tier 2 GET on it
+def entity_authorized(entity: dict, action, claims_and_roles: dict) -> bool:
+    """Decide Tier 2 for one action, or for a list of actions that must all be granted"""
+    if isinstance(action, (list, tuple)):
+        return check_multi_action_authorization(entity, list(action), claims_and_roles)
+    return check_entity_authorization(entity, action, claims_and_roles)
 
-    Without include_archived the asset must exist before it is authorized, as on every metadata
-    route. With include_archived authorization is decided first, on a stand-in when no record
-    exists, so a refused caller cannot tell an archived asset from a missing one.
+
+def authorize_assets(asset_ids: list, action, claims_and_roles: dict, refusal_message: str,
+                     include_archived: bool = False) -> list:
+    """Resolve the assets a metadata route names and decide Tier 2 on each before any is reported missing
+
+    Every record is read, then Tier 2 is decided on each asset's asset_authorization_object: the
+    record when it exists, otherwise the request's identifiers (with include_archived, carrying the
+    archived "<databaseId>#deleted" id). Only when every asset is allowed is a missing one reported,
+    so a refused caller gets the same answer whether or not an asset exists.
+
+    Args:
+        asset_ids: The (database_id, asset_id) pairs, e.g. both ends of an asset link
+        action: The Tier 2 action, or a list of actions that must all be granted (REPLACE_ALL)
+        claims_and_roles: User claims and roles
+        refusal_message: The PermissionError message for a refused caller
+        include_archived: Also resolve an archived asset's record (reads asked with showArchived);
+            writes leave it False, so an archived asset stays not found
+
+    Returns:
+        The asset records, in order, each annotated with object__type 'asset'
+
+    Raises:
+        PermissionError: With refusal_message, if the caller is refused any of the assets
+        VAMSGeneralErrorResponse: If the caller is allowed every asset and one is not found
+    """
+    records = [find_asset(database_id, asset_id, include_archived=include_archived)
+               for database_id, asset_id in asset_ids]
+    for record, (database_id, asset_id) in zip(records, asset_ids):
+        authorization_object = asset_authorization_object(record, database_id, asset_id,
+                                                          include_archived=include_archived)
+        if not entity_authorized(authorization_object, action, claims_and_roles):
+            raise PermissionError(refusal_message)
+    if not all(records):
+        raise VAMSGeneralErrorResponse("Asset not found")
+    for record in records:
+        record.update({"object__type": "asset"})
+    return records
+
+
+def authorize_asset(database_id: str, asset_id: str, action, claims_and_roles: dict, refusal_message: str,
+                    include_archived: bool = False) -> dict:
+    """Resolve one asset for a metadata route and decide Tier 2 on it before its existence is reported
+
+    See authorize_assets.
 
     Returns:
         The asset record annotated with object__type 'asset'
-
-    Raises:
-        PermissionError: With refusal_message, if the caller may not read the asset
-        VAMSGeneralErrorResponse: If the asset is not found
     """
-    if not include_archived:
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        if not check_entity_authorization(asset, "GET", claims_and_roles):
-            raise PermissionError(refusal_message)
-        return asset
-
-    asset = find_asset(database_id, asset_id, include_archived=True)
-    authorization_object = asset_authorization_object(asset, database_id, asset_id, include_archived=True)
-    if not check_entity_authorization(authorization_object, "GET", claims_and_roles):
-        raise PermissionError(refusal_message)
-    if not asset:
-        raise VAMSGeneralErrorResponse("Asset not found")
-    asset.update({"object__type": "asset"})
-    return asset
+    return authorize_assets([(database_id, asset_id)], action, claims_and_roles, refusal_message,
+                            include_archived=include_archived)[0]
 
 
 def file_record_path(asset: dict, asset_id: str, file_path: str) -> str:
@@ -904,20 +936,53 @@ def validate_database_exists(database_id: str) -> dict:
     Raises:
         VAMSGeneralErrorResponse: If database not found
     """
+    database = find_database(database_id)
+    if not database:
+        raise VAMSGeneralErrorResponse("Database not found")
+    return database
+
+
+def find_database(database_id: str):
+    """Read a database record, or None when it does not exist
+
+    Raises:
+        VAMSGeneralErrorResponse: If the read fails
+    """
     try:
         response = database_storage_table.get_item(
             Key={'databaseId': database_id}
         )
-        
-        if 'Item' not in response:
-            raise VAMSGeneralErrorResponse("Database not found")
-        
-        return response['Item']
-    except VAMSGeneralErrorResponse:
-        raise
+        return response.get('Item')
     except Exception as e:
         logger.exception(f"Error validating database: {e}")
         raise VAMSGeneralErrorResponse("Error validating database")
+
+
+def authorize_database(database_id: str, action, claims_and_roles: dict, refusal_message: str) -> dict:
+    """Resolve a database for a metadata route and decide Tier 2 on it before its existence is reported
+
+    The record is read, then Tier 2 is decided on it, or on the requested id when no record exists,
+    so a refused caller gets the same answer whether or not the database exists.
+
+    Args:
+        action: The Tier 2 action, or a list of actions that must all be granted (REPLACE_ALL)
+
+    Returns:
+        The database record annotated with object__type 'database'
+
+    Raises:
+        PermissionError: With refusal_message, if the caller may not act on the database
+        VAMSGeneralErrorResponse: If the caller is allowed and the database is not found
+    """
+    database = find_database(database_id)
+    authorization_object = ({**database, 'object__type': 'database'} if database
+                            else {'databaseId': database_id, 'object__type': 'database'})
+    if not entity_authorized(authorization_object, action, claims_and_roles):
+        raise PermissionError(refusal_message)
+    if not database:
+        raise VAMSGeneralErrorResponse("Database not found")
+    database.update({"object__type": "database"})
+    return database
 
 
 def get_database_config(database_id: str) -> dict:
@@ -957,30 +1022,11 @@ def get_asset_link_metadata(asset_link_id: str, query_params: dict, claims_and_r
         # Validate asset link exists and check authorization
         asset_link = validate_asset_link_exists(asset_link_id)
         
-        # Check permissions on both assets. showArchived also resolves an end that is archived,
-        # which is then authorized as its stored archived record
-        if query_params.get('showArchived', False):
-            # Both ends are authorized before either's existence is reported
-            ends = [(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId']),
-                    (asset_link['toAssetDatabaseId'], asset_link['toAssetId'])]
-            records = [find_asset(database_id, asset_id, include_archived=True) for database_id, asset_id in ends]
-            if not all(check_entity_authorization(
-                    asset_authorization_object(record, database_id, asset_id, include_archived=True),
-                    "GET", claims_and_roles)
-                    for record, (database_id, asset_id) in zip(records, ends)):
-                raise PermissionError("Not authorized to view metadata for this asset link")
-            if not all(records):
-                raise VAMSGeneralErrorResponse("Asset not found")
-        else:
-            from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'])
-            to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'])
-            
-            from_asset.update({"object__type": "asset"})
-            to_asset.update({"object__type": "asset"})
-            
-            if not (check_entity_authorization(from_asset, "GET", claims_and_roles) and 
-                    check_entity_authorization(to_asset, "GET", claims_and_roles)):
-                raise PermissionError("Not authorized to view metadata for this asset link")
+        # Both ends are authorized before either's existence is reported. showArchived also
+        # resolves an end that is archived, which is then authorized as its stored archived record
+        authorize_assets(asset_link_ends(asset_link), "GET", claims_and_roles,
+                         "Not authorized to view metadata for this asset link",
+                         include_archived=bool(query_params.get('showArchived', False)))
         
         # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
@@ -1081,16 +1127,9 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
         # Validate asset link exists and check authorization
         asset_link = validate_asset_link_exists(asset_link_id)
         
-        # Check permissions on both assets
-        from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'])
-        to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'])
-        
-        from_asset.update({"object__type": "asset"})
-        to_asset.update({"object__type": "asset"})
-        
-        if not (check_entity_authorization(from_asset, "POST", claims_and_roles) and 
-                check_entity_authorization(to_asset, "POST", claims_and_roles)):
-            raise PermissionError("Not authorized to create metadata for this asset link")
+        # Both ends are authorized before either's existence is reported
+        authorize_assets(asset_link_ends(asset_link), "POST", claims_and_roles,
+                         "Not authorized to create metadata for this asset link")
         
         # Validate 500 record limit: Fetch existing + count with new
         try:
@@ -1306,24 +1345,15 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
         # Validate asset link exists and check authorization
         asset_link = validate_asset_link_exists(asset_link_id)
         
-        # Check permissions on both assets
-        from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'])
-        to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'])
-        
-        from_asset.update({"object__type": "asset"})
-        to_asset.update({"object__type": "asset"})
-        
-        # Check authorization based on updateType
+        # Both ends are authorized before either's existence is reported, based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL requires PUT, POST, and DELETE permissions
-            if not (check_multi_action_authorization(from_asset, ["PUT", "POST", "DELETE"], claims_and_roles) and 
-                    check_multi_action_authorization(to_asset, ["PUT", "POST", "DELETE"], claims_and_roles)):
-                raise PermissionError("REPLACE_ALL requires PUT, POST, and DELETE permissions on both assets")
+            authorize_assets(asset_link_ends(asset_link), ["PUT", "POST", "DELETE"], claims_and_roles,
+                             "REPLACE_ALL requires PUT, POST, and DELETE permissions on both assets")
         else:
             # UPDATE mode requires only PUT permission
-            if not (check_entity_authorization(from_asset, "PUT", claims_and_roles) and 
-                    check_entity_authorization(to_asset, "PUT", claims_and_roles)):
-                raise PermissionError("Not authorized to update metadata for this asset link")
+            authorize_assets(asset_link_ends(asset_link), "PUT", claims_and_roles,
+                             "Not authorized to update metadata for this asset link")
         
         # Check if user is SYSTEM_USER - bypass schema validation
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -1671,16 +1701,9 @@ def delete_asset_link_metadata(asset_link_id: str, request_model: DeleteAssetLin
         # Validate asset link exists and check authorization
         asset_link = validate_asset_link_exists(asset_link_id)
         
-        # Check permissions on both assets
-        from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'])
-        to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'])
-        
-        from_asset.update({"object__type": "asset"})
-        to_asset.update({"object__type": "asset"})
-        
-        if not (check_entity_authorization(from_asset, "DELETE", claims_and_roles) and 
-                check_entity_authorization(to_asset, "DELETE", claims_and_roles)):
-            raise PermissionError("Not authorized to delete metadata for this asset link")
+        # Both ends are authorized before either's existence is reported
+        authorize_assets(asset_link_ends(asset_link), "DELETE", claims_and_roles,
+                         "Not authorized to delete metadata for this asset link")
         
         # NEW: Schema validation for deletion
         try:
@@ -2092,10 +2115,10 @@ def get_asset_metadata(database_id: str, asset_id: str, query_params: dict, clai
         )
 
     try:
-        # Validate asset exists and check authorization
-        asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
-                                     "Not authorized to view metadata for this asset",
-                                     include_archived=bool(query_params.get('showArchived')))
+        # Authorize the asset before its existence is reported
+        asset = authorize_asset(database_id, asset_id, "GET", claims_and_roles,
+                                "Not authorized to view metadata for this asset",
+                                include_archived=bool(query_params.get('showArchived')))
         
         # Build composite key for query
         composite_key = f"{database_id}:{asset_id}:/"
@@ -2182,10 +2205,10 @@ def get_asset_metadata_from_version(database_id: str, asset_id: str, asset_versi
                                     query_params: dict, claims_and_roles: dict) -> GetAssetMetadataResponseModel:
     """Get asset metadata from a specific version snapshot"""
     try:
-        # Validate asset exists and check authorization
-        asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
-                                     "Not authorized to view metadata for this asset",
-                                     include_archived=bool(query_params.get('showArchived')))
+        # Authorize the asset before its existence is reported
+        asset = authorize_asset(database_id, asset_id, "GET", claims_and_roles,
+                                "Not authorized to view metadata for this asset",
+                                include_archived=bool(query_params.get('showArchived')))
 
         # Validate asset version exists before querying metadata
         validate_asset_version_exists(database_id, asset_id, asset_version_id)
@@ -2278,12 +2301,9 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
         BulkOperationResponseModel with operation results
     """
     try:
-        # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "POST", claims_and_roles):
-            raise PermissionError("Not authorized to create metadata for this asset")
+        # Authorize the asset before its existence is reported
+        authorize_asset(database_id, asset_id, "POST", claims_and_roles,
+                        "Not authorized to create metadata for this asset")
         
         # Validate 500 record limit: Fetch existing + count with new
         composite_key = f"{database_id}:{asset_id}:/"
@@ -2501,19 +2521,15 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
         BulkOperationResponseModel with operation results
     """
     try:
-        # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        # Check authorization based on updateType
+        # Authorize the asset before its existence is reported, based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL requires PUT, POST, and DELETE permissions
-            if not check_multi_action_authorization(asset, ["PUT", "POST", "DELETE"], claims_and_roles):
-                raise PermissionError("REPLACE_ALL requires PUT, POST, and DELETE permissions")
+            authorize_asset(database_id, asset_id, ["PUT", "POST", "DELETE"], claims_and_roles,
+                            "REPLACE_ALL requires PUT, POST, and DELETE permissions")
         else:
             # UPDATE mode requires only PUT permission
-            if not check_entity_authorization(asset, "PUT", claims_and_roles):
-                raise PermissionError("Not authorized to update metadata for this asset")
+            authorize_asset(database_id, asset_id, "PUT", claims_and_roles,
+                            "Not authorized to update metadata for this asset")
         
         # Check if user is SYSTEM_USER - bypass schema validation
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -2868,12 +2884,9 @@ def delete_asset_metadata(database_id: str, asset_id: str, request_model: Delete
         BulkOperationResponseModel with operation results
     """
     try:
-        # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "DELETE", claims_and_roles):
-            raise PermissionError("Not authorized to delete metadata for this asset")
+        # Authorize the asset before its existence is reported
+        authorize_asset(database_id, asset_id, "DELETE", claims_and_roles,
+                        "Not authorized to delete metadata for this asset")
         
         # NEW: Schema validation for deletion
         composite_key = f"{database_id}:{asset_id}:/"
@@ -3242,9 +3255,9 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
 
     try:
         # No S3 validation for GET - metadata can exist even if file doesn't
-        asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
-                                     "Not authorized to view metadata for this file",
-                                     include_archived=bool(query_params.get('showArchived')))
+        asset = authorize_asset(database_id, asset_id, "GET", claims_and_roles,
+                                "Not authorized to view metadata for this file",
+                                include_archived=bool(query_params.get('showArchived')))
         file_path = file_record_path(asset, asset_id, file_path)
         
         composite_key = f"{database_id}:{asset_id}:{file_path}"
@@ -3352,9 +3365,9 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
         (page, record path), as get_file_metadata
     """
     try:
-        asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
-                                     "Not authorized to view metadata for this file",
-                                     include_archived=bool(query_params.get('showArchived')))
+        asset = authorize_asset(database_id, asset_id, "GET", claims_and_roles,
+                                "Not authorized to view metadata for this file",
+                                include_archived=bool(query_params.get('showArchived')))
         file_path = file_record_path(asset, asset_id, file_path)
 
         # Validate asset version exists before querying metadata
@@ -3440,12 +3453,9 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
 def create_file_metadata(database_id: str, asset_id: str, request_model: CreateFileMetadataRequestModel, claims_and_roles: dict):
     """Create metadata or attributes for a file (bulk operation)"""
     try:
-        # Authorize the asset before the file is checked
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "POST", claims_and_roles):
-            raise PermissionError("Not authorized to create metadata for this file")
+        # Authorize the asset before its existence is reported and before the file is checked
+        asset = authorize_asset(database_id, asset_id, "POST", claims_and_roles,
+                                "Not authorized to create metadata for this file")
 
         request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
         validate_file_exists(database_id, asset_id, request_model.filePath)
@@ -3668,19 +3678,16 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
     A REPLACE_ALL that removes stored keys also checks the route's DELETE on ``event``.
     """
     try:
-        # Authorize the asset before the file is checked
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        # Check authorization based on updateType
+        # Authorize the asset before its existence is reported and before the file is checked,
+        # based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL requires PUT, POST, and DELETE permissions
-            if not check_multi_action_authorization(asset, ["PUT", "POST", "DELETE"], claims_and_roles):
-                raise PermissionError("REPLACE_ALL requires PUT, POST, and DELETE permissions")
+            asset = authorize_asset(database_id, asset_id, ["PUT", "POST", "DELETE"], claims_and_roles,
+                                    "REPLACE_ALL requires PUT, POST, and DELETE permissions")
         else:
             # UPDATE mode requires only PUT permission
-            if not check_entity_authorization(asset, "PUT", claims_and_roles):
-                raise PermissionError("Not authorized to update metadata for this file")
+            asset = authorize_asset(database_id, asset_id, "PUT", claims_and_roles,
+                                    "Not authorized to update metadata for this file")
 
         request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
         validate_file_exists(database_id, asset_id, request_model.filePath)
@@ -4080,12 +4087,10 @@ def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, 
 def delete_file_metadata(database_id: str, asset_id: str, request_model: DeleteFileMetadataRequestModel, claims_and_roles: dict):
     """Delete metadata or attributes for a file (bulk operation)"""
     try:
-        # No S3 validation for DELETE - allow deleting metadata even if file doesn't exist
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "DELETE", claims_and_roles):
-            raise PermissionError("Not authorized to delete metadata for this file")
+        # Authorize the asset before its existence is reported. No S3 validation for DELETE - allow
+        # deleting metadata even if file doesn't exist
+        asset = authorize_asset(database_id, asset_id, "DELETE", claims_and_roles,
+                                "Not authorized to delete metadata for this file")
 
         request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
         
@@ -4411,11 +4416,9 @@ def handle_file_metadata_delete(event):
 def get_database_metadata(database_id: str, query_params: dict, claims_and_roles: dict):
     """Get metadata for a database - Returns one page of records"""
     try:
-        database = validate_database_exists(database_id)
-        database.update({"object__type": "database"})
-        
-        if not check_entity_authorization(database, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this database")
+        # Authorize the database before its existence is reported
+        authorize_database(database_id, "GET", claims_and_roles,
+                           "Not authorized to view metadata for this database")
         
         # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
@@ -4496,11 +4499,9 @@ def get_database_metadata(database_id: str, query_params: dict, claims_and_roles
 def create_database_metadata(database_id: str, request_model: CreateDatabaseMetadataRequestModel, claims_and_roles: dict):
     """Create metadata for a database (bulk operation)"""
     try:
-        database = validate_database_exists(database_id)
-        database.update({"object__type": "database"})
-        
-        if not check_entity_authorization(database, "POST", claims_and_roles):
-            raise PermissionError("Not authorized to create metadata for this database")
+        # Authorize the database before its existence is reported
+        authorize_database(database_id, "POST", claims_and_roles,
+                           "Not authorized to create metadata for this database")
         
         # Validate 500 record limit: Fetch existing + count with new
         try:
@@ -4686,18 +4687,15 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
     A REPLACE_ALL that removes stored keys also checks the route's DELETE on ``event``.
     """
     try:
-        database = validate_database_exists(database_id)
-        database.update({"object__type": "database"})
-        
-        # Check authorization based on updateType
+        # Authorize the database before its existence is reported, based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL requires PUT, POST, and DELETE permissions
-            if not check_multi_action_authorization(database, ["PUT", "POST", "DELETE"], claims_and_roles):
-                raise PermissionError("REPLACE_ALL requires PUT, POST, and DELETE permissions")
+            authorize_database(database_id, ["PUT", "POST", "DELETE"], claims_and_roles,
+                               "REPLACE_ALL requires PUT, POST, and DELETE permissions")
         else:
             # UPDATE mode requires only PUT permission
-            if not check_entity_authorization(database, "PUT", claims_and_roles):
-                raise PermissionError("Not authorized to update metadata for this database")
+            authorize_database(database_id, "PUT", claims_and_roles,
+                               "Not authorized to update metadata for this database")
         
         # Check if user is SYSTEM_USER - bypass schema validation
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -5031,11 +5029,9 @@ def _replace_all_database_metadata(database_id: str, metadata_items: list, claim
 def delete_database_metadata(database_id: str, request_model: DeleteDatabaseMetadataRequestModel, claims_and_roles: dict):
     """Delete metadata for a database (bulk operation)"""
     try:
-        database = validate_database_exists(database_id)
-        database.update({"object__type": "database"})
-        
-        if not check_entity_authorization(database, "DELETE", claims_and_roles):
-            raise PermissionError("Not authorized to delete metadata for this database")
+        # Authorize the database before its existence is reported
+        authorize_database(database_id, "DELETE", claims_and_roles,
+                           "Not authorized to delete metadata for this database")
         
         # NEW: Schema validation for deletion
         try:
