@@ -278,13 +278,16 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
     try:
         asset_key = f"{database_id}:{asset_id}"
         
-        # Verify the target asset exists and user has permission
+        # Authorize the target asset before its existence is reported: it is decided on its record
+        # or, when there is none, on the requested ids, so a refused caller gets the same 403 for a
+        # missing asset as for an existing one
         target_asset = get_asset_details(asset_id, database_id)
+        authorization_object = target_asset or {'databaseId': database_id, 'assetId': asset_id}
+        if not check_asset_permission(authorization_object, claims_and_roles):
+            raise PermissionError("Not authorized to view links for this asset")
+
         if not target_asset:
             raise ValueError("Asset not found in database")
-            
-        if not check_asset_permission(target_asset, claims_and_roles):
-            raise PermissionError("Not authorized to view links for this asset")
         
         # Get all links where this asset is the 'from' asset (children/related going out)
         from_items = query_all_items(

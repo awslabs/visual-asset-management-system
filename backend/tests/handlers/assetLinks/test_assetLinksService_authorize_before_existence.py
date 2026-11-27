@@ -127,3 +127,51 @@ class TestAllowedCallers:
         response = run.call("PUT")
         assert response["statusCode"] == 200, response
         assert run.wrote()
+
+
+# `GET /database/{databaseId}/assets/{assetId}/asset-links`: the per-asset link list decides the asset first.
+_ASSET = (_CLOSED, "listed-asset")
+
+
+class _ListRun(_Run):
+    """The asset links list for one asset, with the link GSI queries recorded."""
+
+    def __init__(self, monkeypatch, assets, granted=(_OPEN,)):
+        super().__init__(monkeypatch, assets, granted=granted, links=())
+        self.queries = []
+        monkeypatch.setattr(svc, "query_all_items", lambda table, **kwargs: self.queries.append(kwargs) or [])
+
+    def list(self, end=_ASSET):
+        database_id, asset_id = end
+        event = {
+            "requestContext": {"http": {"method": "GET",
+                                        "path": f"/database/{database_id}/assets/{asset_id}/asset-links"}},
+            "pathParameters": {"databaseId": database_id, "assetId": asset_id},
+            "queryStringParameters": None,
+        }
+        return svc.lambda_handler(event, MagicMock())
+
+
+@pytest.mark.unit
+class TestAssetLinksListForAnAsset:
+    def test_a_refused_caller_gets_the_same_answer_for_a_missing_asset(self, monkeypatch):
+        existing = _ListRun(monkeypatch, [_asset(_ASSET)]).list()
+        assert existing["statusCode"] == 403, existing
+        missing_run = _ListRun(monkeypatch, [])
+        assert _answer(missing_run.list()) == _answer(existing)
+        assert missing_run.decided == [({"databaseId": _CLOSED, "assetId": "listed-asset", "object__type": "asset"},
+                                        "GET")]
+        assert missing_run.queries == []
+
+    def test_an_allowed_caller_is_told_the_asset_is_missing(self, monkeypatch):
+        run = _ListRun(monkeypatch, [], granted=(_CLOSED,))
+        assert _answer(run.list()) == (400, "Asset not found in database")
+        assert [o["databaseId"] for o, _a in run.decided] == [_CLOSED]
+        assert run.queries == []
+
+    def test_an_allowed_caller_on_an_existing_asset_gets_its_links(self, monkeypatch):
+        run = _ListRun(monkeypatch, [_asset(_ASSET)], granted=(_CLOSED,))
+        response = run.list()
+        assert response["statusCode"] == 200, response
+        assert run.decided[0][0]["assetName"] == "listed-asset"
+        assert len(run.queries) == 2
