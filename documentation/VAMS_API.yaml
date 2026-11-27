@@ -4605,7 +4605,8 @@ paths:
                                         example: "Folder created successfully"
                                     relativeKey:
                                         type: string
-                                        example: "asset-id/folder/subfolder/"
+                                        description: "The folder's path in the asset, as the request sent it."
+                                        example: "/models/v2/"
                 "400":
                     description: Invalid parameters or key path. A missing asset also answers 400.
                     content:
