@@ -21,6 +21,7 @@ _CLOSED = "dbclosed"  # a database the caller is refused
 _ASSET = "asset-1"
 _LINK = "link-1"
 _ITEM = {"metadataKey": "k", "metadataValue": "v", "metadataValueType": "string"}
+_ALL_ACTIONS = ("GET", "POST", "PUT", "DELETE")
 
 
 class _Table:
@@ -56,16 +57,19 @@ def _event(method, path, path_parameters, query=None, body=None):
 class _Run:
     """Runs lambda_handler with the tables, S3 and both authorization tiers stubbed.
 
-    Tier 1 always passes. Tier 2 grants an object when its databaseId is in ``granted``, through
-    both check_entity_authorization and the enforcer the multi-action (REPLACE_ALL) check uses.
+    Tier 1 always passes. Tier 2 grants an action on an object when the object's databaseId is in
+    ``granted`` and the action is in ``actions``, through both check_entity_authorization and the
+    enforcer the multi-action (REPLACE_ALL) check uses.
     """
 
-    def __init__(self, assets=(), databases=(), links=(), granted=(_OPEN,)):
+    def __init__(self, assets=(), databases=(), links=(), granted=(_OPEN,), actions=_ALL_ACTIONS):
         self.asset_table = _Table(("databaseId", "assetId"), *assets)
         self.database_table = _Table(("databaseId",), *databases)
         self.link_table = _Table(("assetLinkId",), *links)
         self.granted = set(granted)
+        self.actions = set(actions)
         self.decided = []
+        self.decided_actions = []
         self.queries = []
         self.client = MagicMock()
         self.client.get_paginator.side_effect = self._paginator
@@ -85,9 +89,10 @@ class _Run:
 
         return _Pages()
 
-    def _decide(self, entity, *_args):
+    def _decide(self, entity, action, *_args):
         self.decided.append(dict(entity))
-        return entity.get("databaseId") in self.granted
+        self.decided_actions.append(action)
+        return entity.get("databaseId") in self.granted and action in self.actions
 
     def call(self, event):
         enforcer = MagicMock()
@@ -281,3 +286,69 @@ class TestDatabaseRoutes:
         response = run.call(_database_event(route, _OPEN))
         assert response["statusCode"] == 200, response
         assert run.decided[0]["object__type"] == "database"
+
+
+# Each replace_all route as (id, the run's records when it exists, its records when the asset or database
+# is missing, its event). Both link ends are in granted databases, so only the action decides.
+_REPLACE_ALL_BODY = {"metadata": [_ITEM], "updateType": "replace_all"}
+_REPLACE_ALL_ROUTES = [
+    ("asset", {"assets": [_asset(_OPEN)]}, {},
+     lambda: _asset_event(("asset", "PUT", "/metadata", None, _REPLACE_ALL_BODY), _OPEN)),
+    ("file", {"assets": [_asset(_OPEN)]}, {},
+     lambda: _asset_event(("file", "PUT", "/metadata/file", None,
+                           {"filePath": "/a.txt", "type": "metadata", **_REPLACE_ALL_BODY}), _OPEN)),
+    ("database", {"databases": [_database(_OPEN)]}, {},
+     lambda: _database_event(("database", "PUT", _REPLACE_ALL_BODY), _OPEN)),
+    ("asset-link", {"assets": [_asset(*_FROM), _asset(*_TO)], "links": [_link_row()]},
+     {"assets": [_asset(*_FROM)], "links": [_link_row()]},
+     lambda: _link_event(("asset-link", "PUT", _REPLACE_ALL_BODY))),
+]
+_REPLACE_ALL_IDS = [route[0] for route in _REPLACE_ALL_ROUTES]
+_BOTH_ENDS = (_OPEN, _CLOSED)
+
+
+@pytest.mark.unit
+class TestReplaceAllNeedsPutPostAndDelete:
+    """replace_all is decided on PUT, POST and DELETE together, for a missing record as for an existing one."""
+
+    @pytest.mark.parametrize("route", _REPLACE_ALL_ROUTES, ids=_REPLACE_ALL_IDS)
+    @pytest.mark.parametrize("withheld", ["PUT", "POST", "DELETE"])
+    def test_a_role_without_one_of_the_three_is_refused_whether_or_not_the_record_exists(self, route, withheld):
+        _id, existing_records, missing_records, event = route
+        actions = [action for action in _ALL_ACTIONS if action != withheld]
+        existing_run = _Run(granted=_BOTH_ENDS, actions=actions, **existing_records)
+        existing = existing_run.call(event())
+        missing_run = _Run(granted=_BOTH_ENDS, actions=actions, **missing_records)
+        missing = missing_run.call(event())
+        assert existing["statusCode"] == 403, existing
+        assert _answer(missing) == _answer(existing)
+        assert withheld in existing_run.decided_actions
+        assert withheld in missing_run.decided_actions
+        for run in (existing_run, missing_run):
+            assert run.queries == []
+            run.client.batch_write_item.assert_not_called()
+
+    @pytest.mark.parametrize("route", _REPLACE_ALL_ROUTES, ids=_REPLACE_ALL_IDS)
+    def test_a_role_with_all_three_replaces(self, route):
+        _id, existing_records, _missing, event = route
+        run = _Run(granted=_BOTH_ENDS, actions=("PUT", "POST", "DELETE"), **existing_records)
+        response = run.call(event())
+        assert response["statusCode"] == 200, response
+        assert {"PUT", "POST", "DELETE"} <= set(run.decided_actions)
+
+    @pytest.mark.parametrize("route", _REPLACE_ALL_ROUTES, ids=_REPLACE_ALL_IDS)
+    def test_a_role_with_all_three_is_told_the_record_is_missing(self, route):
+        _id, _existing, missing_records, event = route
+        response = _Run(granted=_BOTH_ENDS, actions=("PUT", "POST", "DELETE"), **missing_records).call(event())
+        assert _answer(response)[0] == 400
+        assert "not found" in _answer(response)[1]
+
+    @pytest.mark.parametrize("route", _REPLACE_ALL_ROUTES, ids=_REPLACE_ALL_IDS)
+    def test_an_update_needs_put_only(self, route):
+        _id, existing_records, _missing, event = route
+        update = event()
+        body = json.loads(update["body"])
+        body["updateType"] = "update"
+        update["body"] = json.dumps(body)
+        response = _Run(granted=_BOTH_ENDS, actions=("PUT",), **existing_records).call(update)
+        assert response["statusCode"] == 200, response
