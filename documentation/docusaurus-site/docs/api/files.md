@@ -253,7 +253,7 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files. It also removes the file's metadata, attributes and version records, so the asset's versions no longer list the file.
 
-A `filePath` of `/` names the top-level asset folder, and so does a prefix (`isPrefix` `true`) whose path resolves to the asset's own location folder: for an asset stored at `a1/`, its full key `a1/` resolves to it. These requests return `400` with a `message` that contains `Cannot delete the top-level asset folder`, and nothing is deleted. A path with a leading `/` is a path in the asset, so `/a1/` is the subfolder named like the asset (key `a1/a1/`) and deletes only that subfolder; `/a1` and `a1`, without the trailing `/`, are the path prefix `a1/a1` under the location. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
+A `filePath` of `/` names the top-level asset folder, and so does a path that resolves to the entry the file list shows at `/`, whether `isPrefix` is `true` or `false`: for an asset stored at `a1/`, its full key `a1/`, and for an asset created from one Amazon S3 object, its companion folder `{key}/`. These requests return `400` with a `message` that contains `Cannot delete the top-level asset folder`, and nothing is deleted. A path with a leading `/` is a path in the asset, so `/a1/` is the subfolder named like the asset (key `a1/a1/`) and deletes only that subfolder; `/a1` and `a1`, without the trailing `/`, are the path prefix `a1/a1` under the location. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
 
 :::danger[Irreversible Operation]
 This permanently deletes the file and all its versions. Consider using [Archive File](#archive-file) for soft-deletion instead.
@@ -308,7 +308,7 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 
 Soft-deletes a file by creating an S3 delete marker. The file can be restored using [Unarchive File](#unarchive-file).
 
-A `filePath` of `/`, or a prefix (`isPrefix` `true`) whose path resolves to the asset's own location folder, such as `a1/` (its full key) for an asset stored at `a1/`, returns `400` with a `message` that contains `Cannot archive the top-level asset folder`, and nothing is archived. `/a1/` is the subfolder named like the asset (key `a1/a1/`) and archives only that subfolder; `/a1` and `a1`, without the trailing `/`, are the path prefix `a1/a1` under the location. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
+A `filePath` of `/`, or a path that resolves to the entry the file list shows at `/` (`isPrefix` `true` or `false`), such as `a1/` (its full key) for an asset stored at `a1/` or the companion folder `{key}/` of an asset created from one Amazon S3 object, returns `400` with a `message` that contains `Cannot archive the top-level asset folder`, and nothing is archived. `/a1/` is the subfolder named like the asset (key `a1/a1/`) and archives only that subfolder; `/a1` and `a1`, without the trailing `/`, are the path prefix `a1/a1` under the location. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
 
 **Request Parameters:**
 
