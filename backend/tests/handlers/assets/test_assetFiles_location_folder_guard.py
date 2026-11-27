@@ -154,6 +154,16 @@ class TestAPrefixThatNamesTheLocationFolderIsRefused:
 
 
 SINGLE_KEY_REFUSED = [("A", "A/"), ("A2", "base/A2/"), ("L", "lead/"), ("M", "m/model.glb/")]
+RECORD_HELPERS = ("delete_assetAuxiliary_files", "delete_file_metadata", "delete_files_metadata",
+                  "delete_file_version_records", "send_subscription_email")
+
+
+def _record_helper_calls(af, monkeypatch):
+    """The viewer-data, metadata, version-record and notification calls a request makes."""
+    calls = []
+    for name in RECORD_HELPERS:
+        monkeypatch.setattr(af, name, lambda *args, _name=name, **kwargs: calls.append(_name))
+    return calls
 
 
 @pytest.mark.unit
@@ -162,28 +172,34 @@ class TestASingleKeyRequestForTheTopLevelFolderIsRefused:
     asset's companion folder marker. Both are the entry the file list shows at `/`."""
 
     @pytest.mark.parametrize("asset_id,path", SINGLE_KEY_REFUSED)
-    def test_a_single_key_delete_is_refused_and_no_version_is_removed(self, af, asset_id, path):
+    def test_a_single_key_delete_is_refused_and_no_version_is_removed(self, af, monkeypatch, asset_id, path):
+        calls = _record_helper_calls(af, monkeypatch)
         before = _state(af.test_client)
         with pytest.raises(af.VAMSGeneralErrorResponse) as raised:
             af.delete_file("db1", asset_id, path, False, True, CLAIMS)
         assert str(raised.value).endswith(DELETE_REFUSAL)
         assert raised.value.status_code == 400
         assert _state(af.test_client) == before
+        assert calls == []
 
     @pytest.mark.parametrize("asset_id,path", SINGLE_KEY_REFUSED)
-    def test_a_single_key_archive_is_refused_and_nothing_is_archived(self, af, asset_id, path):
+    def test_a_single_key_archive_is_refused_and_nothing_is_archived(self, af, monkeypatch, asset_id, path):
+        calls = _record_helper_calls(af, monkeypatch)
         before = _state(af.test_client)
         with pytest.raises(af.VAMSGeneralErrorResponse) as raised:
             af.archive_file("db1", asset_id, path, False, CLAIMS)
         assert str(raised.value).endswith(ARCHIVE_REFUSAL)
         assert raised.value.status_code == 400
         assert _state(af.test_client) == before
+        assert calls == []
 
-    def test_the_marker_of_the_subfolder_named_like_the_asset_still_deletes_by_its_path(self, af):
+    def test_the_marker_of_the_subfolder_named_like_the_asset_still_deletes_by_its_path(self, af, monkeypatch):
         """'/A/' is the path of 'A/A/', so its folder marker is a single key of a subfolder, not the location."""
+        calls = _record_helper_calls(af, monkeypatch)
         af.test_client.put_object(Bucket=BUCKET, Key="A/A/", Body=b"")
         af.delete_file("db1", "A", "/A/", False, True, CLAIMS)
         assert _version_keys(af.test_client) == sorted(ALL_KEYS)
+        assert "delete_file_version_records" in calls
 
     def test_a_file_of_an_asset_with_a_leading_slash_location_still_deletes(self, af):
         af.delete_file("db1", "L", "/x.txt", False, True, CLAIMS)
