@@ -172,10 +172,12 @@ class _FakeCopyEngine:
         self.batch = {}
 
     def start(self, file_info, head_response, change_metadata, batch_id, _workflow_database_id):
-        job_id = loc.job_id_for(batch_id, file_info["relativeKey"])
+        # As uploadFile.start_output_copy_job: the job keys the output by its path without the leading '/'
+        relative_key = file_info["relativeKey"].lstrip("/")
+        job_id = loc.job_id_for(batch_id, relative_key)
         self.starts.append(job_id)
         self.jobs.setdefault(job_id, {
-            "jobId": job_id, "relativeKey": file_info["relativeKey"], "status": loc.STATUS_QUEUED,
+            "jobId": job_id, "relativeKey": relative_key, "status": loc.STATUS_QUEUED,
             "batchId": batch_id, "sourceBucket": file_info["sourceBucketName"],
             "sourceKey": file_info["tempS3Key"], "sourceVersionId": head_response.get("VersionId") or "",
             "sourceSize": int(head_response.get("ContentLength", 0) or 0),
@@ -242,7 +244,8 @@ def _run(first_attempt, with_preview=False, with_large=False, old_code_first=Fal
     def invoke_upload(payload):
         context = MagicMock(**{"get_remaining_time_in_millis.return_value": 900_000})
         ingestion_calls.append(threading.current_thread().name)
-        handed.append((attempt[0], sorted(f["relativeKey"] for f in json.loads(payload["body"])["files"])))
+        # Each output is sent as its path in the asset with a leading '/'; recorded here by its name
+        handed.append((attempt[0], sorted(f["relativeKey"].lstrip("/") for f in json.loads(payload["body"])["files"])))
         if attempt[0] == 0 and first_attempt == "before_upload":
             # Killed after it claimed its outputs, before the upload handler wrote anything.
             raise _Killed()

@@ -6,13 +6,14 @@
 An asset version can hold `x` (the key `{folder}x`) and `//x` (the key `{folder}/x`, with an empty segment after
 the folder). Both used to read as `x` here, so whichever entry came later in the version's key order supplied the
 version id the archive pinned for `{folder}x`, and a name sorting before `/` (`.gitignore`) took the other file's
-version. Each entry is now keyed with exactly one leading `/` removed; a `//x` entry is left out, because this
-route resolves a member's key from its path with every leading `/` dropped and would read `{folder}x`.
+version. Each entry is now keyed with exactly one leading `/` removed, and a `//x` entry is pinned as its own
+member, the key `{folder}/x` at its own version (#1977).
 """
 
 import json
 import sys
 import types
+
 
 from backend.tests.handlers.zipDownloads import zipHarness as h
 from backend.tests.handlers.zipDownloads.test_zipDownloadService import _create, env  # noqa: F401
@@ -35,6 +36,7 @@ def _pinned(env):  # noqa: F811
 class TestTwoFilesOneName:
     def test_the_whole_asset_pins_the_files_own_version(self, env, monkeypatch):  # noqa: F811
         env.s3.add("xasset1/.gitignore", size=5, version="v-own")
+        env.s3.add("xasset1//.gitignore", size=7, version="v-other")
         # Key order: '.gitignore' sorts before '//.gitignore', so the other file's entry came last
         _versions(monkeypatch, [
             {"relativeKey": ".gitignore", "versionId": "v-own", "size": 5},
@@ -42,7 +44,8 @@ class TestTwoFilesOneName:
         ])
         response = _create(env, {"selection": [{"type": "asset", "relativePath": "/"}], "assetVersionId": "3"})
         assert response["statusCode"] == 200
-        assert _pinned(env) == [("/.gitignore", "xasset1/.gitignore", "v-own")]
+        assert _pinned(env) == [("/.gitignore", "xasset1/.gitignore", "v-own"),
+                                ("//.gitignore", "xasset1//.gitignore", "v-other")]
 
     def test_a_selected_file_is_its_own_entry(self, env, monkeypatch):  # noqa: F811
         """Control in the other key order: the plain file's entry comes last."""

@@ -13,6 +13,7 @@ For asset-level operations, see [Assets](assets.md). For file metadata, see [Met
 -   **Primary File Type**: A designation that marks a file as the primary representative of a particular type within an asset (e.g., the primary `.ifc` file).
 -   **Preview File**: A generated or uploaded preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file. `previewFile` names the file's newest preview that is not archived; a listing with `includeArchived=true` names the newest archived preview when the file has no other.
 -   **Archive**: Soft-deletion of a file using S3 delete markers. Archived files can be unarchived.
+-   **File path**: How a request names a file of the asset (`filePath`, `sourcePath`, `destinationPath`, an upload's `relativeKey`, a stream path, a download key, a workflow input's `relativeFileKey`). Send the file's path in the asset with its leading `/`, the file list's `relativePath`. A value with a leading `/` is always a path in the asset: `/a1/cloud.laz` in an asset stored at `a1/` is the file `a1/a1/cloud.laz` of a subfolder named like the asset, and `/` followed by the asset's location key is a path too. A value without a leading `/` is the file's full S3 key (the file list's `key`) when it is one of the asset's keys, and otherwise a path in the asset. Exactly one leading `/` is the marker, so `//x` names the key `a1//x` (an empty segment right after the location); the file list shows such a file at `//x`, and the web file manager shows it in a folder named `/`. Every value names a key inside the requesting asset; a value with a `..` segment is refused.
 
 ---
 
@@ -254,6 +255,8 @@ Permanently deletes a file from the asset. This removes all versions of the file
 
 When Amazon S3 does not delete every version of every file under a prefix, the request returns `400`. The files that were deleted lose their metadata, attributes, version records and auxiliary data, and the remaining files keep theirs, so the delete can be retried. When Amazon S3 does not delete every version of a single file, or its previews cannot be listed, the request returns `400` and the file keeps its previews, auxiliary data and records. When the file is deleted but one of its previews is not, the request returns `400`: the file loses its metadata, version records and auxiliary data, the preview that was kept keeps its version records, and deleting the file again removes it.
 
+A `filePath` of `/` names the top-level asset folder, and so does a folder (`isPrefix` `true`) whose path resolves to the asset's own location folder: for an asset stored at `a1/`, its full key `a1/` resolves to it. These requests return `400` with a `message` that contains `Cannot delete the top-level asset folder`, and nothing is deleted. A path with a leading `/` is a path in the asset, so `/a1/` is the subfolder named like the asset (key `a1/a1/`) and deletes only that subfolder. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
+
 :::danger[Irreversible Operation]
 This permanently deletes the file and all its versions. Consider using [Archive File](#archive-file) for soft-deletion instead.
 :::
@@ -293,11 +296,11 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                              |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, file not found, or Amazon S3 did not delete every version of the file or of every file under the prefix. |
-| `403`  | Not authorized to delete files in this asset.                                                                                                                            |
-| `500`  | Internal server error.                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                          |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, the top-level asset folder, file not found, or Amazon S3 did not delete every version of the file or of every file under the prefix. |
+| `403`  | Not authorized to delete files in this asset.                                                                                                                                                        |
+| `500`  | Internal server error.                                                                                                                                                                               |
 
 ---
 
@@ -306,6 +309,8 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 `DELETE /database/{databaseId}/assets/{assetId}/archiveFile`
 
 Soft-deletes a file by creating an S3 delete marker. The file can be restored using [Unarchive File](#unarchive-file).
+
+A `filePath` of `/`, or a folder (`isPrefix` `true`) whose path resolves to the asset's own location folder, such as `a1/` (its full key) for an asset stored at `a1/`, returns `400` with a `message` that contains `Cannot archive the top-level asset folder`, and nothing is archived. `/a1/` is the subfolder named like the asset (key `a1/a1/`) and archives only that subfolder. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
 
 **Request Parameters:**
 
@@ -340,11 +345,11 @@ Soft-deletes a file by creating an S3 delete marker. The file can be restored us
 
 **Error Responses:**
 
-| Status | Description                                                |
-| ------ | ---------------------------------------------------------- |
-| `400`  | Invalid parameters, or file not found or already archived. |
-| `403`  | Not authorized to archive files in this asset.             |
-| `500`  | Internal server error.                                     |
+| Status | Description                                                                            |
+| ------ | -------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, the top-level asset folder, or file not found or already archived. |
+| `403`  | Not authorized to archive files in this asset.                                         |
+| `500`  | Internal server error.                                                                 |
 
 ---
 
@@ -572,7 +577,7 @@ Each entry in `files` is an object:
 
 | Field         | Type    | Required | Description                                                                           |
 | ------------- | ------- | -------- | ------------------------------------------------------------------------------------- |
-| `relativeKey` | string  | Yes      | Relative file path for the upload.                                                    |
+| `relativeKey` | string  | Yes      | The file's path in the asset, with its leading `/` ([file path](#concepts)).          |
 | `file_size`   | integer | No       | File size in bytes. Either `file_size` or `num_parts` must be provided.               |
 | `num_parts`   | integer | No       | Number of multipart upload parts. Either `file_size` or `num_parts` must be provided. |
 
@@ -837,7 +842,7 @@ A file's viewer data lives in its own `preview/` folder, so the path is the file
 -   its path in the asset with its leading `/`, the file list's `relativePath` (`/scans/site.laz`, so the request path has two slashes after `stream`);
 -   its full S3 key, the `key` the file list returns (`vams/a1/scans/site.laz` for an asset in a bucket registered under the base prefix `vams/`), the form the web viewers send for a file the list showed.
 
-A leading `/` marks the path in the asset: `/a1/cloud.laz` in an asset stored at `a1/` is the file `a1/a1/cloud.laz` of a subfolder named like the asset, never `a1/cloud.laz`. A path without a leading `/` that starts with the asset's location key is read as the full key, and any other path as the path in the asset. URL-encode each segment and keep the slashes, so a viewer that reads the files beside `metadata.json` can resolve them. A path that names no file of this asset is refused with `400` and a `message` that contains `Requested file is not part of this asset`, and the data of another asset nested in this asset's folder answers `404`.
+The file part follows the [file path](#concepts) rule: a leading `/` marks the path in the asset, so `/a1/cloud.laz` in an asset stored at `a1/` is the file `a1/a1/cloud.laz` of a subfolder named like the asset, never `a1/cloud.laz`. A path without a leading `/` that starts with the asset's location key is read as the full key, and any other path as the path in the asset. URL-encode each segment and keep the slashes, so a viewer that reads the files beside `metadata.json` can resolve them. A path that names no file of this asset is refused with `400` and a `message` that contains `Requested file is not part of this asset`, and the data of another asset nested in this asset's folder answers `404`.
 
 **Response:**
 

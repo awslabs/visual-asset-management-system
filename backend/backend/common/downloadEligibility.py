@@ -38,7 +38,7 @@ from typing import Callable, Optional, Tuple
 
 from botocore.exceptions import ClientError
 
-from common.assetLocations import contains, is_folder_location, object_key_for, relative_path_in
+from common.assetLocations import is_folder_location, object_key_for_request, relative_path_in
 from common.s3 import list_all_objects, validateUnallowedFileExtensionAndContentType
 from common.s3MetadataKeys import (
     VAMS_STATUS_METADATA_KEY,
@@ -177,48 +177,26 @@ def asset_prefix(asset_base_key: str) -> str:
 
 
 def resolve_asset_file_key(asset_base_key: str, raw_key: Optional[str]) -> str:
-    """Resolve a caller-supplied key to the full S3 key, refusing keys outside the asset.
+    """Resolve a caller-supplied key to the full S3 key, always a key the asset's location holds.
 
-    Accepted shapes: a leading-slash asset-relative path (CLI), the full S3 key under the asset
-    prefix (web viewers pass listFiles keys), ``/`` (whole-asset prefix), or no key (the base key
-    verbatim, whatever its shape). A base key that names one object (no trailing ``/``) is a
-    single-file asset (``common.assetLocations``): ``/`` and no key resolve to its object, an
-    asset-relative path or a key it holds resolves per ``object_key_for``, and a bucket-root key that
-    only shares its characters is outside the asset.
+    No key names the whole asset (the base key verbatim, whatever its shape), and so does ``/`` in a
+    single-file asset (``common.assetLocations``), whose base key names its object. Any other key is
+    read by ``object_key_for_request``: with a leading ``/`` it is the file's path in the asset (the
+    CLI's form; ``/`` is a folder asset's whole prefix); without one it is the file's full key when
+    the location holds it (web viewers pass listFiles keys), else the path in the asset, so a key that
+    only shares the location's characters (``assets/pfxOTHER/x`` against ``assets/pfx/``) is a path
+    inside this asset, never another asset's object.
 
     Raises:
-        VAMSGeneralErrorResponse: the key is a bucket-root key outside the asset's prefix, or the
+        VAMSGeneralErrorResponse: the key names no key of the asset (a ``..`` segment), or the
             resolved key exceeds the S3 object key limit
     """
-    asset_base_prefix = asset_base_key.rstrip('/')
-    prefix = asset_base_prefix + '/'
-
-    if asset_base_key and not is_folder_location(asset_base_key):
-        # A single-file asset: no key and '/' name its object; a bucket-root key that only shares
-        # its characters belongs to something else
-        if raw_key in (None, '', '/'):
-            final_key = asset_base_key
-        elif (not raw_key.startswith('/') and raw_key.startswith(asset_base_key)
-              and not contains(asset_base_key, raw_key)):
-            raise VAMSGeneralErrorResponse(MSG_KEY_OUTSIDE_ASSET)
-        else:
-            final_key = object_key_for(asset_base_key, raw_key)
+    if raw_key in (None, '') or (raw_key == '/' and asset_base_key and not is_folder_location(asset_base_key)):
+        final_key = asset_base_key
+    else:
+        final_key = object_key_for_request(asset_base_key, raw_key)
         if final_key is None:
             raise VAMSGeneralErrorResponse(MSG_KEY_OUTSIDE_ASSET)
-    elif raw_key:
-        if raw_key == asset_base_key or raw_key.startswith(prefix):
-            # The asset's own base key, or already carries the base path: use it as-is
-            final_key = raw_key
-        elif not raw_key.startswith('/') and raw_key.startswith(asset_base_prefix):
-            # Bucket-root key that shares the base key's characters without sitting under the
-            # asset prefix - a different asset's or database's object. Asset-relative keys carry
-            # a leading '/' and are never in this shape.
-            raise VAMSGeneralErrorResponse(MSG_KEY_OUTSIDE_ASSET)
-        else:
-            # Relative key: combine with the base path
-            final_key = normalize_s3_path(asset_base_key, raw_key)
-    else:
-        final_key = asset_base_key
 
     # The request model bounded the asset-relative key; the resolved key carries the asset prefix
     # as well and is what S3 measures. Refuse it here so an over-long key never reaches
@@ -229,17 +207,18 @@ def resolve_asset_file_key(asset_base_key: str, raw_key: Optional[str]) -> str:
 
 
 def asset_relative_key(final_key: str, asset_base_key: str) -> str:
-    """The key relative to the asset prefix, without a leading slash.
+    """The file's path in the asset (leading ``/``), the path an asset-version snapshot is searched by.
 
-    This is how ``fileKey`` / ``relativeKey`` is matched in asset-version snapshot records.
+    The snapshot lookup reads it with exactly one leading ``/`` dropped (``version_entry_key``), so
+    ``{prefix}/x`` (``//x``) and ``{prefix}x`` (``/x``) are two files (#1977). A key outside the asset's
+    prefix is returned as it is.
     """
     if asset_base_key and not is_folder_location(asset_base_key):
-        return (relative_path_in(asset_base_key, final_key) or final_key).lstrip('/')
+        return relative_path_in(asset_base_key, final_key) or final_key
     prefix = asset_prefix(asset_base_key)
-    relative = final_key
-    if relative.startswith(prefix):
-        relative = relative[len(prefix):]
-    return relative.lstrip('/')
+    if final_key.startswith(prefix):
+        return '/' + final_key[len(prefix):]
+    return final_key
 
 
 #######################

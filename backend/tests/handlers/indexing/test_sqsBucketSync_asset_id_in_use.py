@@ -399,3 +399,31 @@ class TestTheTroubleshootingGuide:
         section = text.split(f"### {SECTION}", 1)[1].split("\n### ", 1)[0]
         assert "in any database or bucket" not in section
         assert "same database" in section
+
+
+@pytest.mark.unit
+class TestANewAssetIdWhoseLastCharacterIsNotAdmitted:
+    """The folder name is the new asset id; its last character follows the body rule."""
+
+    @pytest.mark.parametrize("asset_id", ["part%", "part)", "part!", "part™"])
+    def test_no_asset_is_created(self, asset_id, monkeypatch):
+        m = _load()
+        monkeypatch.setattr(m, "database_asset_id_rows", MagicMock(side_effect=AssertionError("must not read")))
+        monkeypatch.setattr(m, "create_asset", MagicMock(side_effect=AssertionError("must not create")))
+
+        assert m.create_new_asset("bucket-1", "db1", asset_id) is None
+        m.create_asset.assert_not_called()
+
+    @pytest.mark.parametrize("asset_id", ["part%", "part#"])
+    def test_its_folder_is_skipped_at_info_like_an_invalid_name(self, asset_id, monkeypatch):
+        m = _load()
+        _wire_rows(m, [OUTER])
+        logger = MagicMock()
+        monkeypatch.setattr(m, "logger", logger)
+
+        assert m.process_s3_record(_record(f"{asset_id}/model.glb")) == (
+            False, True, f"Asset ID {asset_id} is not valid")
+        m.create_new_asset.assert_not_called()
+        m.get_or_create_database_for_bucket.assert_not_called()
+        logger.error.assert_not_called()
+        logger.exception.assert_not_called()

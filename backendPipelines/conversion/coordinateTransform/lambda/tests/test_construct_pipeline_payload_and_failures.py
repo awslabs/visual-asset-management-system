@@ -403,3 +403,23 @@ class TestCompressLazMustAgreeWithOutputFormats:
         assert params["compressLaz"] is False, (
             f"a metadata string reached the container unnormalized: "
             f"{params.get('compressLaz')!r}")
+
+
+@pytest.mark.unit
+class TestTheMetadataFileKey:
+    """#1977: the input's metadata is looked up by its manifest relativePath as given. '//cloud.las' is the
+    file whose key has an empty segment after the asset's folder (A1//cloud.las), and its record is not the
+    record of '/cloud.las' (A1/cloud.las)."""
+
+    @pytest.mark.parametrize("relative_path, expected", [
+        ("//cloud.las", "//cloud.las"),
+        ("/cloud.las", "/cloud.las"),
+        ("cloud.las", "/cloud.las"),
+    ])
+    def test_the_relative_path_keeps_its_slashes(self, relative_path, expected):
+        mod = _load()
+        assert mod._asset_relative_file_key("A1//cloud.las", "A1", relative_path) == expected
+
+    def test_without_a_relative_path_the_key_is_sliced_at_the_asset_id(self):
+        mod = _load()
+        assert mod._asset_relative_file_key("db/A1/sub/cloud.las", "A1") == "/sub/cloud.las"

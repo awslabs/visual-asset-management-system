@@ -11,6 +11,7 @@ import {
     inputFileCompatibility,
     inputFileKey,
     isCompleteInputFile,
+    normalizeRelativeKey,
     parsePastedKeys,
     rowsByAsset,
     summarizeInputFiles,
@@ -151,8 +152,13 @@ describe("rowsByAsset and filterRows", () => {
 describe("parsePastedKeys", () => {
     it("normalizes one key per line, keeps folders, drops blanks and duplicates", () => {
         expect(
-            parsePastedKeys("scans/1.e57\n /scans/2.e57 \r\n\n//scans/1.e57\ndocs/\n/\n")
+            parsePastedKeys("scans/1.e57\n /scans/2.e57 \r\n\n/scans/1.e57\ndocs/\n/\n")
         ).toEqual(["/scans/1.e57", "/scans/2.e57", "/docs/", "/"]);
+        // "//x" names the file whose key has an empty segment after the asset's folder, its own key (#1977)
+        expect(parsePastedKeys("//scans/1.e57\n/scans/1.e57")).toEqual([
+            "//scans/1.e57",
+            "/scans/1.e57",
+        ]);
     });
 
     it("yields nothing for empty input", () => {
@@ -166,5 +172,16 @@ describe("describeKey", () => {
         expect(describeKey("/")).toBe("Whole asset (all files)");
         expect(describeKey("/docs/")).toBe("/docs/ (folder)");
         expect(describeKey("/a.glb")).toBe("/a.glb");
+    });
+});
+
+describe("normalizeRelativeKey keeps an empty segment after the asset's folder (#1977)", () => {
+    it.each([
+        ["//cloud.las", "//cloud.las"],
+        ["cloud.las", "/cloud.las"],
+        ["/cloud.las", "/cloud.las"],
+        ["  /sub/  ", "/sub/"],
+    ])("maps %p to %p", (input, expected) => {
+        expect(normalizeRelativeKey(input)).toBe(expected);
     });
 });

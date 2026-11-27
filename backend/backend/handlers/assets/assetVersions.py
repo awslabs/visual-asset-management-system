@@ -32,7 +32,7 @@ from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResp
 from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_object
 from common.assetProvenance import ASSET_VERSION_STAMPED_FIELDS, stamp_asset_version_provenance
 from common.assetLocations import (
-    NestedLocations, contains, normalize_base_prefix, object_key_for, relative_path_in, viewer_data_scope,
+    NestedLocations, contains, normalize_base_prefix, object_key_for_path, relative_path_in, viewer_data_scope,
 )
 from common.fileAttribution import nested_locations_of_asset
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
@@ -447,7 +447,9 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
             if key.endswith('/') or not contains(location, key) or (nested and not nested.keep(key)):
                 continue
 
-            relative_key = relative_path_in(location, key).lstrip('/')
+            # Stored form (stored_version_entry_key): 'x' for '{location}x', '//x' for '{location}/x', so
+            # the two are two entries (#1977)
+            relative_key = stored_version_entry_key(relative_path_in(location, key))
             result.append({
                 'relativeKey': relative_key,
                 'key': key,
@@ -480,7 +482,7 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
                 if key.endswith('/') or not contains(location, key) or (nested and not nested.keep(key)):
                     continue
 
-                relative_key = relative_path_in(location, key).lstrip('/')
+                relative_key = stored_version_entry_key(relative_path_in(location, key))
                 # Most recent content version behind the delete marker (if any).
                 candidates = content_versions_by_key.get(key, [])
                 latest_content = max(candidates, key=lambda v: v['LastModified'], default=None)
@@ -516,7 +518,7 @@ def validate_s3_files_exist(bucket: str, prefix: str, files: List[AssetFileVersi
     invalid_files = []
     
     for file in files:
-        full_key = object_key_for(prefix, file.relativeKey)
+        full_key = object_key_for_path(prefix, file.relativeKey)
         
         try:
             # Check if file exists with specified version
@@ -1288,6 +1290,21 @@ def finalize_asset_version(asset: Dict, new_assetVersionId: str, databaseId: str
     return asset
 
 
+def versioned_metadata_paths(files_to_version: List[Dict]) -> set:
+    """The metadata ``filePath`` of each file a version holds, and ``/`` for the asset's own record.
+
+    A file's metadata is keyed by its listed path, which is ``/`` + its version entry with exactly one leading
+    ``/`` removed (``version_entry_key``): ``x`` and a legacy ``/x`` are ``/x``, and ``//x`` (the key with an
+    empty segment after the location) is ``//x`` (#1977). An entry that starts with the asset ID is a path in
+    the asset like any other (``A1/x`` is ``/A1/x``, the file of a subfolder named like the asset, #1943); it
+    was read as ``/x``, so a version kept or restored the root file's metadata for it.
+    """
+    paths = {"/"}
+    for file in files_to_version:
+        paths.add("/" + version_entry_key(file['relativeKey']))
+    return paths
+
+
 def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: str, 
                                files_to_version: List[Dict]) -> bool:
     """Save a snapshot of current asset and file metadata/attributes for a version
@@ -1312,22 +1329,8 @@ def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: s
         return False
     
     try:
-        # Build set of file paths from files_to_version
-        versioned_file_paths = set()
-        versioned_file_paths.add("/")  # Always include asset-level metadata
-        
-        for file in files_to_version:
-            relative_key = file['relativeKey']
-            
-            # Remove asset ID prefix if present
-            if relative_key.startswith(assetId + '/'):
-                path_without_asset = relative_key[len(assetId) + 1:]
-            else:
-                path_without_asset = relative_key
-            
-            # Prepend "/" to match metadata filePath format
-            file_path = "/" + path_without_asset.lstrip('/')
-            versioned_file_paths.add(file_path)
+        # The metadata filePath of each versioned file, plus the asset-level record
+        versioned_file_paths = versioned_metadata_paths(files_to_version)
         
         logger.info(f"Versioning metadata for {len(versioned_file_paths)} file paths (including asset-level)")
         logger.info(f"Versioned file paths: {versioned_file_paths}")
@@ -1632,22 +1635,8 @@ def revert_asset_metadata_version(databaseId: str, assetId: str, target_assetVer
         return False
     
     try:
-        # Build set of file paths from files_to_version
-        versioned_file_paths = set()
-        versioned_file_paths.add("/")  # Always include asset-level metadata
-        
-        for file in files_to_version:
-            relative_key = file['relativeKey']
-            
-            # Remove asset ID prefix if present
-            if relative_key.startswith(assetId + '/'):
-                path_without_asset = relative_key[len(assetId) + 1:]
-            else:
-                path_without_asset = relative_key
-            
-            # Prepend "/" to match metadata filePath format
-            file_path = "/" + path_without_asset.lstrip('/')
-            versioned_file_paths.add(file_path)
+        # The metadata filePath of each versioned file, plus the asset-level record
+        versioned_file_paths = versioned_metadata_paths(files_to_version)
         
         logger.info(f"Reverting metadata for {len(versioned_file_paths)} file paths (including asset-level)")
         logger.info(f"Versioned file paths: {versioned_file_paths}")
@@ -1917,14 +1906,14 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
         invalid_files = validate_s3_files_exist(bucket, prefix, request_model.files)
         invalid_files.extend(file.relativeKey for file in request_model.files
                              if file.relativeKey not in invalid_files
-                             and not nested.keep(object_key_for(prefix, file.relativeKey) or ''))
+                             and not nested.keep(object_key_for_path(prefix, file.relativeKey) or ''))
         
         # Add valid files to version
         for file in request_model.files:
             if file.relativeKey not in invalid_files:
                 # Get additional metadata
                 try:
-                    full_key = object_key_for(prefix, file.relativeKey)
+                    full_key = object_key_for_path(prefix, file.relativeKey)
                     response = s3_client.head_object(
                         Bucket=bucket,
                         Key=full_key,
@@ -2041,13 +2030,9 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         (None, relative_key) when the file should be skipped."""
         relative_key = file['relativeKey']
         source_version_id = file['versionId']
-        if version_entry_key(relative_key).startswith('/'):
-            # A stored '//x' names '{location}/x', but object_key_for drops every leading slash and would
-            # copy '{location}x' under it. Skipped and reported until the location-key work (PR #1965)
-            # moves this resolution to the one-slash rule; create refuses such a path for the same reason.
-            logger.info(f"Revert of {databaseId}:{assetId} skips an entry whose path starts with two slashes")
-            return None, relative_key
-        full_key = object_key_for(prefix, relative_key)
+        # Exactly one leading '/' is dropped: a stored '//x' is '{location}/x', 'x' and a legacy '/x' are
+        # '{location}x' (#1977)
+        full_key = object_key_for_path(prefix, relative_key)
         if not full_key or not nested.keep(full_key):
             return None, relative_key
 
@@ -2314,7 +2299,7 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     # A snapshot taken before nested assets were left out can name a nested asset's files; they are not shown
     nested = nested_locations_for(asset, bucket, prefix)
     snapshot_files = [file for file in file_versions.get('files', [])
-                      if not nested or nested.keep(object_key_for(prefix, file.get('relativeKey', '')) or '')]
+                      if not nested or nested.keep(object_key_for_path(prefix, file.get('relativeKey', '')) or '')]
     existing_version_ids = set()
     archived_keys = set()
 
@@ -2333,7 +2318,7 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     files = []
     for file in snapshot_files:
         # Construct full S3 key
-        full_key = object_key_for(prefix, file['relativeKey'])
+        full_key = object_key_for_path(prefix, file['relativeKey'])
 
         files.append(AssetVersionFileModel(
             relativeKey=file['relativeKey'],

@@ -441,6 +441,40 @@ class TestZipArchiveRunMode:
         with zipfile.ZipFile(io.BytesIO(s3.completed[(ASSETS, result["archiveKey"])])) as z:
             assert sorted(z.namelist()) == ["scan", "tex/t1.png", "tex/t2.png"]
 
+    def test_a_pinned_empty_segment_entry_reads_its_own_key(self, s3, monkeypatch):
+        """D7 (#1977): a version entry stored as '//x.las' is the key '{base}/x.las' at its version; it was read
+        as '{base}x.las' at that version id and failed ("/x.las was not found")."""
+        monkeypatch.setenv("ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME", "versions")
+        s3.add(BASE + "/x.las", b"EMPTY-SEGMENT")
+        s3.add(BASE + "m.txt", b"M", content_type="text/plain")
+        rows = [{"fileKey": "//x.las", "versionId": "v1", "size": 13}, {"fileKey": "m.txt", "versionId": "v1", "size": 1}]
+        job = self._job(s3, [{"bucket": ASSETS, "key": BASE, "versionId": ""}],
+                        {"format": "zip", "assetVersionId": "10"}, FakeDynamo(FakeVersionsTable(rows)))
+        assert sorted(m["key"] for m in job._pinned_members(job._run_inputs(job.definition["archiveRun"]), "10")) == [
+            BASE + "/x.las", BASE + "m.txt"]
+        result = job.run()
+        with zipfile.ZipFile(io.BytesIO(s3.completed[(ASSETS, result["archiveKey"])])) as z:
+            assert sorted(z.namelist()) == ["m.txt", "x.las"]
+            assert z.read("x.las") == b"EMPTY-SEGMENT"
+
+    @pytest.mark.parametrize("plain", ["x.las", "/x.las"], ids=["stored", "legacy"])
+    def test_a_version_holding_both_files_is_refused_naming_both(self, s3, monkeypatch, plain):
+        """D6: '/x.las' and '//x.las' would both be the member 'x.las'; the run is refused with both paths,
+        never archived with one file read at the other's key or version."""
+        monkeypatch.setenv("ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME", "versions")
+        s3.add(BASE + "/x.las", b"EMPTY-SEGMENT")
+        s3.add(BASE + "x.las", b"ROOT")
+        rows = [{"fileKey": "//x.las", "versionId": "v1", "size": 13}, {"fileKey": plain, "versionId": "v1", "size": 4}]
+        job = self._job(s3, [{"bucket": ASSETS, "key": BASE, "versionId": ""}],
+                        {"format": "zip", "assetVersionId": "10"}, FakeDynamo(FakeVersionsTable(rows)))
+        assert sorted(m["key"] for m in job._pinned_members(job._run_inputs(job.definition["archiveRun"]), "10")) == [
+            BASE + "/x.las", BASE + "x.las"]
+        with pytest.raises(runner.ArchiveFailure) as failure:
+            job.run()
+        assert failure.value.refusal
+        message = str(failure.value)
+        assert "'//x.las'" in message and "'/x.las'" in message and "download them separately" in message
+
     def test_archive_into_outputs(self, s3):
         job = self._job(s3, [{"bucket": ASSETS, "key": BASE, "versionId": ""}],
                         {"format": "zip", "outputFileName": "../bundle", "excludePatterns": ["*.png"]})

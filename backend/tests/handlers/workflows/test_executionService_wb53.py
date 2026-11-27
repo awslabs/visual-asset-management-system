@@ -317,6 +317,23 @@ class TestRerunReconstruction:
         assert le._to_asset_relative_key("/custom/root/f.txt", "custom/root/") == "/f.txt"
         assert le._to_asset_relative_key("/x.glb", "") == "/x.glb"        # no root -> unchanged
 
+    @pytest.mark.parametrize("full_key,root,expected", [
+        # A subfolder named like the asset: its path, which the execute request reads back to the same key
+        ("/a1/a1/x.glb", "a1/", "/a1/x.glb"),
+        ("/vams/b1/vams/b1/x.glb", "vams/b1/", "/vams/b1/x.glb"),
+        # A single-file asset: the object, its own preview and a companion entry named like its file
+        ("/p/model.glb", "p/model.glb", "/"),
+        ("/p/model.glb.previewFile.png", "p/model.glb", "/model.glb.previewFile.png"),
+        ("/p/model.glb/model.glb", "p/model.glb", "/model.glb/model.glb"),
+        ("/p/model.glb/sub/x.obj", "p/model.glb", "/sub/x.obj"),
+    ])
+    def test_a_rerun_names_each_input_by_the_path_that_reads_back_to_its_key(self, full_key, root, expected):
+        """#1943: a re-run sends each input's path in the asset, never '/' followed by a full key."""
+        assert le._to_asset_relative_key(full_key, root) == expected
+        if expected != "/":
+            from common.assetLocations import object_key_for_request
+            assert object_key_for_request(root, expected) == full_key.lstrip("/")
+
     def test_reconstructs_template_less_override(self):
         # A template-less override run: no templateId; re-run must carry the raw (untruncated) override.
         with patch(f"{MOD}._query_all", side_effect=[

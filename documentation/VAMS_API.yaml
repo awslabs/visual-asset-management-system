@@ -3012,7 +3012,7 @@ paths:
                       $ref: '#/components/schemas/id_regex'
                 - name: "proxy+"
                   in: "path"
-                  description: "File path within the asset to stream. Can include subdirectories and filename."
+                  description: "The file to stream: its path in the asset with a leading / (the file list's relativePath, so the request path has two slashes after stream), or its full S3 key (the file list's key). A value with a leading / is always a path in the asset: /a1/cloud.laz in an asset stored at a1/ is the file a1/a1/cloud.laz of a subfolder named like the asset. A value without one is the full key when it is one of the asset's keys, else a path in the asset."
                   required: true
                   schema:
                     type: "string"
@@ -3652,7 +3652,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters. A missing or already archived file also answers 400.
+                    description: Invalid parameters. A missing or already archived file also answers 400, as does the top-level asset folder (`/` or a prefix that resolves to the asset's location folder); an empty filePath is an invalid parameter.
                     content:
                         application/json:
                             schema:
@@ -3753,7 +3753,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or confirmation required. A missing file also answers 400, as does a delete Amazon S3 does not complete; the files it deleted lose their records and the remaining files are kept.
+                    description: Invalid parameters or confirmation required. A missing file also answers 400, as does the top-level asset folder (`/` or a prefix that resolves to the asset's location folder); an empty filePath is an invalid parameter. A delete Amazon S3 does not complete also answers 400; the files it deleted lose their records and the remaining files are kept.
                     content:
                         application/json:
                             schema:
@@ -4579,7 +4579,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/createFolder:
         post:
             summary: "Create a folder in S3 for the specified asset"
-            description: "Creates a folder (zero-byte object with trailing slash) in S3 for the specified asset. The key path must be a folder prefix (ends with a slash) and must contain the base assetlocation key as the start of the path."
+            description: "Creates a folder (zero-byte object with trailing slash) in S3 for the specified asset. relativeKey is the folder's path in the asset with a leading / and a trailing / (/models/v2/). A value with a leading / is always a path in the asset, so / followed by the asset's location key names a subfolder of that name; a value without one is the folder's full S3 key when it is one of the asset's keys, else a path in the asset. Exactly one leading / is the marker. A value with a .. segment is refused."
             requestBody:
                 required: true
                 content:
@@ -4587,11 +4587,11 @@ paths:
                         schema:
                             type: object
                             required:
-                                - keyPath
+                                - relativeKey
                             properties:
-                                keyPath:
+                                relativeKey:
                                     type: string
-                                    description: "The key path for the folder to create. Must end with a slash and start with the asset's base key."
+                                    description: "The folder's path in the asset, with a leading / and ending with / (for example /models/v2/)."
             responses:
                 "200":
                     description: Folder created successfully.
@@ -4603,9 +4603,10 @@ paths:
                                     message:
                                         type: string
                                         example: "Folder created successfully"
-                                    keyPath:
+                                    relativeKey:
                                         type: string
-                                        example: "asset-id/folder/subfolder/"
+                                        description: "The folder's path in the asset, as the request sent it."
+                                        example: "/models/v2/"
                 "400":
                     description: Invalid parameters or key path. A missing asset also answers 400.
                     content:
@@ -6152,7 +6153,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                     $ref: "#/components/schemas/id_regex"
               - name: "filePath"
                 in: "query"
-                description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. The exception is a file whose listed path starts with the asset ID as a folder (/{assetId}/...) or with the asset's location (assetLocation.Key): that listed path is read as another file's path, so name such a file by its full key. Must not end with / (a folder)."
+                description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. A value with a leading / is always the file's path in the asset (/{assetId}/x.glb in an asset stored at {assetId}/ is the file in the subfolder {assetId}/); a value without one is the full key when it is one of the asset's keys, else a path in the asset. Must not end with / (a folder)."
                 required: true
                 schema:
                     type: string
@@ -13474,7 +13475,7 @@ components:
                     description: "Whether the asset can be downloaded."
                 assetId:
                     $ref: '#/components/schemas/asset_id_regex'
-                    description: "Explicit asset identifier (2-255 characters). ASCII characters only, and cannot contain forward slashes. Auto-generated when omitted. The ASCII rule applies where a caller names a new asset; an identifier already stored stays valid on every other operation. An identifier equal to a folder name VAMS reserves for system use (pipeline, pipelines, preview, previews, temp-upload, temp-uploads, workspace, workspaces, vams.preparedDownloads) is refused with 400."
+                    description: "Explicit asset identifier (2-255 characters). ASCII characters only, and cannot contain forward slashes. Auto-generated when omitted. The ASCII rule, and the rule that the last character is a letter, digit, underscore, comma, apostrophe or hyphen, apply where a caller names a new asset; an identifier already stored stays valid on every other operation. An identifier equal to a folder name VAMS reserves for system use (pipeline, pipelines, preview, previews, temp-upload, temp-uploads, workspace, workspaces, vams.preparedDownloads) is refused with 400."
                 tags:
                     type: array
                     items:
@@ -16636,7 +16637,7 @@ components:
                     pattern: "^[-_a-zA-Z0-9]{3,63}$"
                 assetId:
                     type: string
-                    description: "Asset identifier, ASCII characters only. Every file relativeKey must begin with '{assetId}/'. When the asset already exists the identifier must match it exactly."
+                    description: "Asset identifier, ASCII characters only. Every file relativeKey must begin with '{assetId}/'. When the asset already exists the identifier must match it exactly; a new asset's identifier must end with a letter, digit, underscore, comma, apostrophe or hyphen."
                     minLength: 2
                     maxLength: 255
                 assetName:
@@ -19466,7 +19467,7 @@ components:
             properties:
                 relativeKey:
                     type: string
-                    description: "Path relative to the asset root, with or without one leading slash (/a.txt and a.txt name one file). The version stores it without that slash; two entries that name the same file are refused as duplicates, and a path starting with two slashes is refused"
+                    description: "Path relative to the asset root, with or without one leading slash (/a.txt and a.txt name one file). The version stores it without that slash; two entries that name the same file are refused as duplicates. A path starting with two slashes names the file whose key has an empty segment after the asset's folder (//x is {location}/x) and is stored with them"
                 versionId:
                     type: string
                     description: "S3 version ID"
@@ -20263,7 +20264,7 @@ components:
             properties:
                 filePath:
                     type: string
-                    description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. The exception is a file whose listed path starts with the asset ID as a folder (/{assetId}/...) or with the asset's location (assetLocation.Key): that listed path is read as another file's path, so name such a file by its full key. Must not end with / (a folder)."
+                    description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. A value with a leading / is always the file's path in the asset (/{assetId}/x.glb in an asset stored at {assetId}/ is the file in the subfolder {assetId}/); a value without one is the full key when it is one of the asset's keys, else a path in the asset. Must not end with / (a folder)."
                 type:
                     type: string
                     enum: [metadata, attribute]
@@ -20295,7 +20296,7 @@ components:
             properties:
                 filePath:
                     type: string
-                    description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. The exception is a file whose listed path starts with the asset ID as a folder (/{assetId}/...) or with the asset's location (assetLocation.Key): that listed path is read as another file's path, so name such a file by its full key. Must not end with / (a folder)."
+                    description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. A value with a leading / is always the file's path in the asset (/{assetId}/x.glb in an asset stored at {assetId}/ is the file in the subfolder {assetId}/); a value without one is the full key when it is one of the asset's keys, else a path in the asset. Must not end with / (a folder)."
                 type:
                     type: string
                     enum: [metadata, attribute]
@@ -20330,7 +20331,7 @@ components:
             properties:
                 filePath:
                     type: string
-                    description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. The exception is a file whose listed path starts with the asset ID as a folder (/{assetId}/...) or with the asset's location (assetLocation.Key): that listed path is read as another file's path, so name such a file by its full key. Must not end with / (a folder)."
+                    description: "The file's path as the file list shows it (relativePath), or its full S3 key (key); both name the same records. A value with a leading / is always the file's path in the asset (/{assetId}/x.glb in an asset stored at {assetId}/ is the file in the subfolder {assetId}/); a value without one is the full key when it is one of the asset's keys, else a path in the asset. Must not end with / (a folder)."
                 type:
                     type: string
                     enum: [metadata, attribute]

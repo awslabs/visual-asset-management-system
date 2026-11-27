@@ -35,6 +35,7 @@ import {
 } from "../../../../context/ArchivedAssetContext";
 import { useViewerRegistryReady } from "../../../../visualizerPlugin/core/useViewerRegistryReady";
 import { downloadRefusalReason } from "../../../../visualizerPlugin/core/streamFailure";
+import { versionFilePath } from "../versionFilePath";
 
 export const FileVersionsList: React.FC = () => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
@@ -139,7 +140,7 @@ export const FileVersionsList: React.FC = () => {
         // to fetch the exact bytes; omitting it on the right side fetches the current content.
         const snapshotEntry: FileInfo = {
             filename,
-            key: file.relativeKey,
+            key: versionFilePath(file.relativeKey),
             isDirectory: false,
             assetId: assetId || undefined,
             databaseId: databaseId || undefined,
@@ -150,7 +151,7 @@ export const FileVersionsList: React.FC = () => {
         };
         const currentEntry: FileInfo = {
             filename,
-            key: file.relativeKey,
+            key: versionFilePath(file.relativeKey),
             isDirectory: false,
             assetId: assetId || undefined,
             databaseId: databaseId || undefined,
@@ -273,7 +274,9 @@ export const FileVersionsList: React.FC = () => {
             return;
         }
 
-        const encodedPath = encodeURIComponent(file.relativeKey);
+        // The file page names the file by its path in the asset with its leading "/" (versionFilePath)
+        const filePath = versionFilePath(file.relativeKey);
+        const encodedPath = encodeURIComponent(filePath);
         const assetVersionId = selectedVersion?.Version;
         let url = `/databases/${databaseId}/assets/${encodeURIComponent(
             String(assetId)
@@ -287,7 +290,7 @@ export const FileVersionsList: React.FC = () => {
         navigate(url, {
             state: {
                 filename: file.relativeKey.split("/").pop() || file.relativeKey,
-                key: file.relativeKey,
+                key: filePath,
                 isDirectory: false,
                 versionId: assetVersionId ? undefined : file.versionId,
                 assetVersionId: assetVersionId,
@@ -314,7 +317,7 @@ export const FileVersionsList: React.FC = () => {
             const response = await downloadAsset({
                 assetId: assetId!,
                 databaseId: databaseId!,
-                key: file.relativeKey,
+                key: versionFilePath(file.relativeKey),
                 versionId: file.versionId,
                 assetVersionId: (selectedVersion?.Version || undefined) as any,
                 downloadType: "assetFile",

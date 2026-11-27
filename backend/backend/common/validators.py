@@ -28,6 +28,12 @@ email_pattern = r'^[\w\-\.\+]+@([\w-]+\.)+[\w-]{2,4}$'
 
 file_type_pattern = '^[\\.]([a-zA-Z0-9]){1,7}$'
 filename_pattern = r'^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$'
+# A NEW asset id must use the same character set in every position: its last
+# character is not the broader [^.\s] the shared pattern keeps. The shared
+# pattern is still used by ASSET_ID on every read path, so an id an earlier
+# release stored (for example one ending in '#') stays addressable; this
+# pattern is used only where a caller or bucket sync names a new asset.
+new_asset_id_pattern = r'^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[\w.,\'-]$'
 
 relative_file_path_pattern = r'^\/.*$'
 bucket_existing_key_pattern = r'^[a-zA-Z0-9._\-/]{1,1024}$'
@@ -121,6 +127,7 @@ email_regex = re.compile(email_pattern)
 file_type_regex = re.compile(file_type_pattern)
 filename_regex = re.compile(filename_pattern)
 asset_id_regex = re.compile(filename_pattern)
+new_asset_id_regex = re.compile(new_asset_id_pattern)
 
 relative_file_path_regex = re.compile(relative_file_path_pattern)
 asset_path_regex = re.compile(asset_path_pattern)
@@ -238,12 +245,24 @@ def validate_asset_path(name, value, isFolder):
         return (False, _s3_object_key_limit_message(name))
     return (True, '')
 
+def _auxiliarypreview_empty_segments_allowed(value):
+    """Whether the '//' in an auxiliary preview path, if any, is the one shape a file path may have: a single
+    empty segment, at the start of a path in the asset ('//x/preview/...', the path of the key '{location}/x')
+    or inside a full key ('A1//x/preview/...'). The stream handler checks that a full key's empty segment sits
+    right after the asset's location; '///' and a second '//' are refused here."""
+    if '//' not in value:
+        return True
+    if '///' in value or value.count('//') > 1:
+        return False
+    # A path in the asset has its empty segment only right after the leading '/'
+    return not value.startswith('/') or value.startswith('//')
+
 def validate_asset_auxiliarypreview_path(name, value):
     if not asset_auxiliarypreview_path_regex.fullmatch(value):
         return (False, name + " is invalid. Must follow the regexp "+asset_auxiliarypreview_path_pattern)
     elif value.count('..') > 0:
         return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
-    elif '//' in value:
+    elif not _auxiliarypreview_empty_segments_allowed(value):
         return (False, name + " is invalid. Cannot contain consecutive forward slashes (//).")
     elif exceeds_s3_object_key_limit(value):
         return (False, _s3_object_key_limit_message(name))

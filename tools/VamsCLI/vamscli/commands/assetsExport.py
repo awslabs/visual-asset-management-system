@@ -25,7 +25,7 @@ from ..utils.exceptions import (
 )
 from ..utils.download_manager import (
     DownloadManager, DownloadFileInfo, DownloadProgress, format_file_size, format_duration,
-    parse_remote_timestamp, confined_local_path, DOWNLOAD_PATH_OUTSIDE_TARGET_REASON,
+    parse_remote_timestamp, confined_local_paths,
 )
 
 
@@ -260,9 +260,12 @@ async def download_export_files(
     """
     # Extract download info from export result
     download_files = []
-    # Files whose path would put them outside local_path: reported as failed, never written.
+    # Files whose path would put them outside local_path, or at the local path of another file of this
+    # download: reported as failed, never written.
     refused_files = []
     skipped_unauthorized = 0
+    # (asset id, file, path under local_path) of every file with a download URL, in export order
+    candidates = []
     
     for asset in export_result.get('assets', []):
         # Skip unauthorized assets (they don't have file data)
@@ -289,22 +292,28 @@ async def download_export_files(
             else:
                 # Preserve full structure
                 relative_target = f"{asset_id}/{file['relativePath'].lstrip('/')}"
-            file_local_path = confined_local_path(local_path, relative_target)
-            if file_local_path is None:
-                refused_files.append({
-                    "relative_key": f"{asset_id}/{file['relativePath']}",
-                    "local_path": "",
-                    "error": DOWNLOAD_PATH_OUTSIDE_TARGET_REASON,
-                })
-                continue
+            candidates.append((asset_id, file, relative_target))
 
-            download_files.append(DownloadFileInfo(
-                relative_key=f"{asset_id}/{file['relativePath']}",
-                local_path=file_local_path,
-                download_url=presigned_url,
-                file_size=file.get('size'),
-                last_modified=parse_remote_timestamp(file.get('dateCreatedCurrentVersion'))
-            ))
+    # No two files share a local path (confined_local_paths): '/x' and '//x' of one asset, or two files of
+    # one name in a flattened or per-asset download, never replace each other on disk.
+    placements = confined_local_paths(
+        local_path, [(file['relativePath'], target) for _, file, target in candidates])
+    for (asset_id, file, _), (file_local_path, refusal) in zip(candidates, placements):
+        if file_local_path is None:
+            refused_files.append({
+                "relative_key": f"{asset_id}/{file['relativePath']}",
+                "local_path": "",
+                "error": refusal,
+            })
+            continue
+
+        download_files.append(DownloadFileInfo(
+            relative_key=f"{asset_id}/{file['relativePath']}",
+            local_path=file_local_path,
+            download_url=file.get('presignedFileDownloadUrl'),
+            file_size=file.get('size'),
+            last_modified=parse_remote_timestamp(file.get('dateCreatedCurrentVersion'))
+        ))
     
     if not download_files and not refused_files:
         message = 'No files to download'
