@@ -25,7 +25,7 @@ from backend.backend.handlers.metadata import metadataService
 
 LOCATION = "p1/model.glb"
 LISTED_PATH = "/model.glb"
-FULL_KEY_PATH = "/p1/model.glb"
+FULL_KEY_PATH = "p1/model.glb"
 PATH_PARAMETERS = {"databaseId": "db1", "assetId": "asset1"}
 LISTED_RECORD_KEY = "db1:asset1:" + LISTED_PATH
 
