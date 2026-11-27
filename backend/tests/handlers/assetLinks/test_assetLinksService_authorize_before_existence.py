@@ -130,3 +130,84 @@ class TestLinkEndsAuthorizedBeforeExistence:
         assert response["statusCode"] == 200, response
         links.update_item.assert_called_once()
         assert [act for _obj, act in decided] == ["PUT", "PUT"]
+
+
+# The per-asset link list: GET /database/{databaseId}/assets/{assetId}/asset-links
+_TARGET = (_CLOSED, "target-asset")
+_OWN = (_OPEN, "own-asset")
+
+
+def _list_event(database_id, asset_id):
+    return {"pathParameters": {"databaseId": database_id, "assetId": asset_id}, "queryStringParameters": None,
+            "requestContext": {"http": {"method": "GET",
+                                        "path": f"/database/{database_id}/assets/{asset_id}/asset-links"}}}
+
+
+def _related(link_id, other):
+    return {"assetLinkId": link_id, "fromAssetDatabaseId": _OWN[0], "fromAssetId": _OWN[1],
+            "toAssetDatabaseId": other[0], "toAssetId": other[1], "relationshipType": "related"}
+
+
+class _LinkIndex:
+    """The link table's GSIs: the from-index lists ``links``, the to-index nothing."""
+
+    def __init__(self, links=()):
+        self.links = list(links)
+        self.queries = 0
+
+    def query(self, **kwargs):
+        self.queries += 1
+        return {"Items": [dict(link) for link in self.links] if kwargs["IndexName"] == "fromAssetGSI" else []}
+
+
+def _list(target, ends=(), links=(), granted=(_OPEN,)):
+    decided = []
+
+    def _enforce(obj, act):
+        decided.append((dict(obj), act))
+        return obj.get("databaseId") in granted
+
+    enforcer = MagicMock()
+    enforcer.return_value.enforceAPI.return_value = True
+    enforcer.return_value.enforce.side_effect = _enforce
+    assets = _AssetTable(*ends)
+    index = _LinkIndex(links)
+    details = {":".join(end): assets.rows[end] for end in ends}
+    with patch.object(assetLinksService, "asset_storage_table", assets), \
+            patch.object(assetLinksService, "asset_links_table", index), \
+            patch.object(assetLinksService, "batch_get_asset_details", return_value=(details, [])), \
+            patch.object(assetLinksService, "CasbinEnforcer", enforcer), \
+            patch.object(assetLinksService, "log_action", MagicMock()), \
+            patch.object(assetLinksService, "request_to_claims",
+                         return_value={"tokens": ["alice"], "roles": []}):
+        response = assetLinksService.lambda_handler(_list_event(*target), MagicMock())
+    return response, decided, index
+
+
+@pytest.mark.unit
+class TestAssetLinkListAuthorizedBeforeExistence:
+    def test_a_refused_caller_gets_the_same_answer_for_a_missing_asset(self):
+        existing, _, existing_index = _list(_TARGET, ends=(_TARGET,))
+        missing, decided, missing_index = _list(_TARGET)
+        assert existing["statusCode"] == 403, existing
+        assert _answer(missing) == _answer(existing)
+        assert decided == [({"databaseId": _CLOSED, "assetId": "target-asset", "object__type": "asset"}, "GET")]
+        assert existing_index.queries == missing_index.queries == 0
+
+    def test_an_allowed_caller_is_told_the_asset_is_missing(self):
+        response, decided, index = _list(_OWN)
+        assert _answer(response) == (400, "Asset not found in database")
+        assert decided == [({"databaseId": _OPEN, "assetId": "own-asset", "object__type": "asset"}, "GET")]
+        assert index.queries == 0
+
+    def test_the_per_link_filtering_is_unchanged(self):
+        """A link whose other end the caller may not see, or that no longer exists, is left out and counted."""
+        visible = (_OPEN, "visible-asset")
+        refused = (_CLOSED, "refused-asset")
+        gone = (_OPEN, "gone-asset")
+        response, _, _ = _list(_OWN, ends=(_OWN, visible, refused), links=[
+            _related("l-visible", visible), _related("l-refused", refused), _related("l-gone", gone)])
+        assert response["statusCode"] == 200, response
+        body = json.loads(response["body"])
+        assert [node["assetLinkId"] for node in body["related"]] == ["l-visible"]
+        assert body["unauthorizedCounts"]["related"] == 2

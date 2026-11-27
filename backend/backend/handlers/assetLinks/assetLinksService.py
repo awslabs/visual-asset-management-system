@@ -269,24 +269,19 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
     try:
         asset_key = f"{database_id}:{asset_id}"
         
-        # Verify the target asset exists and user has permission
+        # Authorization on the target asset is decided before its existence is reported, on the record
+        # or, when there is none, the requested ids, so a refused caller gets the same 403 for an
+        # existing and a missing asset (with showArchived, for an archived one too)
         if show_archived:
-            # Authorization is decided before existence, so a refused caller cannot tell an
-            # archived asset from a missing one
             target_asset = get_asset_record(asset_storage_table, database_id, asset_id, include_archived=True)
-            if not check_asset_permission(
-                    asset_authorization_object(target_asset, database_id, asset_id, include_archived=True),
-                    claims_and_roles):
-                raise PermissionError("Not authorized to view links for this asset")
-            if not target_asset:
-                raise ValueError("Asset not found in database")
         else:
             target_asset = get_asset_details(asset_id, database_id)
-            if not target_asset:
-                raise ValueError("Asset not found in database")
-                
-            if not check_asset_permission(target_asset, claims_and_roles):
-                raise PermissionError("Not authorized to view links for this asset")
+        if not check_asset_permission(
+                asset_authorization_object(target_asset, database_id, asset_id, include_archived=show_archived),
+                claims_and_roles):
+            raise PermissionError("Not authorized to view links for this asset")
+        if not target_asset:
+            raise ValueError("Asset not found in database")
         
         # Get all links where this asset is the 'from' asset (children/related going out)
         from_items = query_all_items(
