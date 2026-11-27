@@ -118,15 +118,34 @@ def list_all_objects(bucket, prefix, client=None, max_objects=None):
 
 
 # Same rule as the real module: presigned asset/preview downloads of an SVG key carry the SVG
-# response type and an attachment disposition; every other key is unchanged.
+# response type and an attachment disposition; a download URL (attachment=True) carries an
+# attachment disposition naming the file; every other key is unchanged.
 SVG_RESPONSE_CONTENT_TYPE = 'image/svg+xml'
 SVG_RESPONSE_CONTENT_DISPOSITION = 'attachment'
+ATTACHMENT_DISPOSITION_MAX_LENGTH = 1024
 
 
-def presigned_get_object_params(params):
+def attachment_content_disposition(key):
+    """Mirror of the real helper (pure function, no AWS calls)."""
+    from urllib.parse import quote
+    name = str(key or '').rsplit('/', 1)[-1]
+    if not name:
+        return 'attachment'
+    fallback = ''.join(ch if ' ' <= ch <= '~' else '_' for ch in name)
+    fallback = fallback.replace('\\', '\\\\').replace('"', '\\"')
+    value = "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (fallback, quote(name, safe=''))
+    if len(value) > ATTACHMENT_DISPOSITION_MAX_LENGTH:
+        return 'attachment'
+    return value
+
+
+def presigned_get_object_params(params, attachment=False):
     """Mirror of the real helper (pure function, no AWS calls)."""
     signed = dict(params)
-    if str(signed.get('Key') or '').lower().endswith('.svg'):
+    key = str(signed.get('Key') or '')
+    if key.lower().endswith('.svg'):
         signed['ResponseContentType'] = SVG_RESPONSE_CONTENT_TYPE
         signed['ResponseContentDisposition'] = SVG_RESPONSE_CONTENT_DISPOSITION
+    if attachment:
+        signed['ResponseContentDisposition'] = attachment_content_disposition(key)
     return signed

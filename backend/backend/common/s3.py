@@ -4,6 +4,7 @@
 import os
 import boto3
 import json
+from urllib.parse import quote
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from common.validators import validate
@@ -249,15 +250,49 @@ def validateS3AssetExtensionsAndContentType(bucket: str, prefixKey: str):
 SVG_RESPONSE_CONTENT_TYPE = 'image/svg+xml'
 SVG_RESPONSE_CONTENT_DISPOSITION = 'attachment'
 
+# A download URL (attachment=True) asks S3 to answer with an attachment disposition naming the file
+# by its key, whatever Content-Type or Content-Disposition the object was stored with, so opening the
+# link saves the file under its own name. The longest value signed: every file name of up to 255
+# bytes (the usual file-system limit) fits fully escaped. A longer name is signed as a bare
+# attachment, and the browser then names the file from the URL path, which ends in the same key.
+ATTACHMENT_DISPOSITION_MAX_LENGTH = 1024
 
-def presigned_get_object_params(params: dict) -> dict:
-    """Return a copy of GetObject ``params`` with the response overrides the object key needs.
+
+def attachment_content_disposition(key: str) -> str:
+    """The ``Content-Disposition`` that saves an object as a file named by the key's final segment.
+
+    RFC 6266 form, plain ASCII whatever the key holds:
+    ``attachment; filename="<fallback>"; filename*=UTF-8''<name, percent-encoded>``. The fallback
+    replaces every character outside printable ASCII with ``_`` and escapes ``"`` and ``\\``; the
+    extended value (RFC 8187) percent-encodes every UTF-8 byte outside the unreserved set, and
+    browsers use it in preference to the fallback. A key ending in ``/`` (a folder marker) names no
+    file and gets ``attachment`` alone, as does a name over ``ATTACHMENT_DISPOSITION_MAX_LENGTH``.
+    """
+    name = str(key or '').rsplit('/', 1)[-1]
+    if not name:
+        return 'attachment'
+    fallback = ''.join(ch if ' ' <= ch <= '~' else '_' for ch in name)
+    fallback = fallback.replace('\\', '\\\\').replace('"', '\\"')
+    value = "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (fallback, quote(name, safe=''))
+    if len(value) > ATTACHMENT_DISPOSITION_MAX_LENGTH:
+        return 'attachment'
+    return value
+
+
+def presigned_get_object_params(params: dict, attachment: bool = False) -> dict:
+    """Return a copy of GetObject ``params`` with the response overrides the URL needs.
 
     A key whose final name ends in ``.svg`` (any case) gets ``ResponseContentType`` image/svg+xml and
-    ``ResponseContentDisposition`` attachment. Every other key is returned unchanged.
+    ``ResponseContentDisposition`` attachment. With ``attachment`` (a download URL, never a stream or
+    preview URL) every key gets ``ResponseContentDisposition`` from
+    ``attachment_content_disposition``, which names the file. Without it, every other key is
+    returned unchanged.
     """
     signed = dict(params)
-    if str(signed.get('Key') or '').lower().endswith('.svg'):
+    key = str(signed.get('Key') or '')
+    if key.lower().endswith('.svg'):
         signed['ResponseContentType'] = SVG_RESPONSE_CONTENT_TYPE
         signed['ResponseContentDisposition'] = SVG_RESPONSE_CONTENT_DISPOSITION
+    if attachment:
+        signed['ResponseContentDisposition'] = attachment_content_disposition(key)
     return signed

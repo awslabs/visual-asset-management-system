@@ -662,6 +662,8 @@ Version resolution is applied per file: `assetVersionId`/`assetVersionIdAlias` p
 
 Bulk requests return one entry per requested key. File paths that do not exist or are not downloadable are skipped (reported with `success: false` and an `error` reason, plus a warning in `message`); the request fails with `400` only when no URL can be generated at all. The top-level `downloadUrl` carries the first successful URL for compatibility with single-URL consumers.
 
+Every `assetFile` URL downloads its file as an attachment named by the last segment of its path: Amazon S3 answers with `Content-Disposition: attachment` and the file name (`filename`, plus `filename*` for names outside ASCII). Opening the URL in a browser therefore saves the file under its own name, whatever content type or download name the file was stored with. The `assetPreview` URL is served inline. To display a file's content, use the [stream endpoint](files.md#stream-endpoints).
+
 **Error Responses:**
 
 | Status | Description                                                                                                                                                                                                                             |
@@ -726,7 +728,7 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 | `startingToken`               | string        | --      | Pagination token from a previous response.                            |
 
 :::note[Presigned URLs Follow the Asset's Distributable Flag]
-`generatePresignedUrls` applies the same controls as the [Download Asset](#download-asset) endpoint. A URL is issued only for a file of an asset whose `isDistributable` is `true`, and never for a folder or an archived file. An asset that is not distributable is still exported with its files, metadata, and relationships; each of its files carries `presignedFileDownloadUrl: null`, and its `isdistributable` field tells the client why. A file whose extension or content type is on the executable blocklist is listed but receives no download URL, as the download endpoint refuses it. Every URL the export issues is recorded in the file download audit log, one entry per file, with a `downloadType` of `export`.
+`generatePresignedUrls` applies the same controls as the [Download Asset](#download-asset) endpoint. A URL is issued only for a file of an asset whose `isDistributable` is `true`, and never for a folder or an archived file. An asset that is not distributable is still exported with its files, metadata, and relationships; each of its files carries `presignedFileDownloadUrl: null`, and its `isdistributable` field tells the client why. A file whose extension or content type is on the executable blocklist is listed but receives no download URL, as the download endpoint refuses it. Each URL downloads its file as an attachment under its own name, as the [Download Asset](#download-asset) URLs do. Every URL the export issues is recorded in the file download audit log, one entry per file, with a `downloadType` of `export`.
 :::
 
 **Response:**
