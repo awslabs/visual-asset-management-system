@@ -252,6 +252,8 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files. It also removes the file's metadata, attributes and version records, so the asset's versions no longer list the file.
 
+A `filePath` of `/` names the top-level asset folder, and so does a prefix (`isPrefix` `true`) whose path resolves to the asset's own location folder: for an asset stored at `a1/`, both `/a1/` and `a1/` resolve to it. These requests return `400` with a `message` that contains `Cannot delete the top-level asset folder`, and nothing is deleted. A subfolder named like the asset is deleted by its full key, `/a1/a1/`; `/a1` and `a1`, without the trailing `/`, are the path prefix `a1/a1` under the location. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
+
 :::danger[Irreversible Operation]
 This permanently deletes the file and all its versions. Consider using [Archive File](#archive-file) for soft-deletion instead.
 :::
@@ -291,11 +293,11 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                                                                                                                                                                                    |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, or file not found. With `isPrefix` set to `true`, a path that names the file of an asset created from one Amazon S3 object, or one of its previews, is refused: `A prefix operation cannot name the file of a single-file asset or its previews. Use the operation without the prefix option.` |
-| `403`  | Not authorized to delete files in this asset.                                                                                                                                                                                                                                                                                                                  |
-| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                         |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, the top-level asset folder, or file not found. With `isPrefix` set to `true`, a path that names the file of an asset created from one Amazon S3 object, or one of its previews, is refused: `A prefix operation cannot name the file of a single-file asset or its previews. Use the operation without the prefix option.` |
+| `403`  | Not authorized to delete files in this asset.                                                                                                                                                                                                                                                                                                                                              |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                                     |
 
 ---
 
@@ -304,6 +306,8 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 `DELETE /database/{databaseId}/assets/{assetId}/archiveFile`
 
 Soft-deletes a file by creating an S3 delete marker. The file can be restored using [Unarchive File](#unarchive-file).
+
+A `filePath` of `/`, or a prefix (`isPrefix` `true`) whose path resolves to the asset's own location folder, such as `/a1/` or `a1/` for an asset stored at `a1/`, returns `400` with a `message` that contains `Cannot archive the top-level asset folder`, and nothing is archived. A subfolder named like the asset is archived by its full key, `/a1/a1/`; `/a1` and `a1`, without the trailing `/`, are the path prefix `a1/a1` under the location. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
 
 **Request Parameters:**
 
@@ -338,11 +342,11 @@ Soft-deletes a file by creating an S3 delete marker. The file can be restored us
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                                                                                                                                                            |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, or file not found or already archived. With `isPrefix` set to `true`, a path that names the file of an asset created from one Amazon S3 object, or one of its previews, is refused: `A prefix operation cannot name the file of a single-file asset or its previews. Use the operation without the prefix option.` |
-| `403`  | Not authorized to archive files in this asset.                                                                                                                                                                                                                                                                                         |
-| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                 |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                        |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, the top-level asset folder, or file not found or already archived. With `isPrefix` set to `true`, a path that names the file of an asset created from one Amazon S3 object, or one of its previews, is refused: `A prefix operation cannot name the file of a single-file asset or its previews. Use the operation without the prefix option.` |
+| `403`  | Not authorized to archive files in this asset.                                                                                                                                                                                                                                                                                                                     |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                             |
 
 ---
 

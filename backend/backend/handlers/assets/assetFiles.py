@@ -2176,6 +2176,9 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     full_key = resolve_asset_file_path(paths, file_path)
     if is_prefix and paths.is_single_file and not full_key.startswith(paths.location + '/'):
         raise VAMSGeneralErrorResponse(OWN_FILE_PREFIX_REFUSAL)
+    # A prefix that resolves to the location folder itself is the top-level asset folder
+    if is_prefix and not paths.is_single_file and full_key == paths.location:
+        raise VAMSGeneralErrorResponse("Cannot delete the top-level asset folder")
     
     # Check if path exists (including archived files)
     try:
@@ -2343,6 +2346,9 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
     full_key = resolve_asset_file_path(paths, file_path)
     if is_prefix and paths.is_single_file and not full_key.startswith(paths.location + '/'):
         raise VAMSGeneralErrorResponse(OWN_FILE_PREFIX_REFUSAL)
+    # A prefix that resolves to the location folder itself is the top-level asset folder
+    if is_prefix and not paths.is_single_file and full_key == paths.location:
+        raise VAMSGeneralErrorResponse("Cannot archive the top-level asset folder")
     
     # Check if path exists and if it's already archived
     try:
