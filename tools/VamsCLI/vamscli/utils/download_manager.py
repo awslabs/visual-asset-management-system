@@ -330,7 +330,13 @@ class DownloadManager:
         """Async context manager entry."""
         connector = aiohttp.TCPConnector(limit=self.max_parallel * 2)
         timeout = aiohttp.ClientTimeout(total=self.timeout)
-        self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+        # Save objects exactly as stored. With the default auto_decompress=True
+        # aiohttp decodes a body that carries a Content-Encoding (for example
+        # gzip), while the size check below compares against the stored object's
+        # Content-Length; such a file could never be downloaded (#2025).
+        self.session = aiohttp.ClientSession(
+            connector=connector, timeout=timeout, auto_decompress=False
+        )
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):

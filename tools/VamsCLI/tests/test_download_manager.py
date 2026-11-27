@@ -54,6 +54,24 @@ def run_download(manager, file_info):
     return asyncio.run(manager._download_single_file(file_info, progress))
 
 
+class TestSessionConfiguration:
+    def test_download_session_does_not_decode_content_encoding(self):
+        # An object stored with a Content-Encoding must be saved byte for byte.
+        # With aiohttp's default auto_decompress=True the body is decoded and
+        # the Content-Length check then fails on every retry (#2025).
+        session_cls = MagicMock()
+        session_cls.return_value.close = AsyncMock()
+        with patch("vamscli.utils.download_manager.aiohttp.TCPConnector", MagicMock()), \
+             patch("vamscli.utils.download_manager.aiohttp.ClientSession", session_cls):
+            async def enter():
+                async with DownloadManager(api_client=None):
+                    pass
+
+            asyncio.run(enter())
+
+        assert session_cls.call_args.kwargs["auto_decompress"] is False
+
+
 class TestParseRemoteTimestamp:
     def test_parses_iso_with_offset(self):
         assert parse_remote_timestamp('2026-01-01T00:00:00+00:00') == 1767225600.0
