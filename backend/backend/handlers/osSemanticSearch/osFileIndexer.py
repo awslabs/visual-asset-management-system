@@ -42,7 +42,7 @@ from common.indexing.geoLocation import build_geo_location
 from common.indexing.documentIds import MAX_OPENSEARCH_DOCUMENT_ID_BYTES, build_file_document_id
 from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions, list_key_versions_to_newest_version, region_routing_s3_client, bucket_region_fields
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
-from common.assetLocations import contains, normalize_base_prefix, object_key_for
+from common.assetLocations import _is_preview_of, contains, normalize_base_prefix, object_key_for
 from common.fileAttribution import AMBIGUOUS, FileAttribution, attribute_object, binding_of, stored_location
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record, is_internal_metadata_field
 
@@ -859,7 +859,9 @@ def find_preview_file_key(bucket_name: str, s3_key: str) -> str:
     """Check if a .previewFile.* exists for this file in S3.
 
     Preview files are stored as ``{s3_key}.previewFile.{ext}`` (e.g.
-    ``myasset/photo.e57.previewFile.gif``).
+    ``myasset/photo.e57.previewFile.gif``). Only a preview directly beside the file counts
+    (``_is_preview_of``): the prefix also matches keys inside a folder named like the preview,
+    which the ``/`` delimiter lists as one common prefix instead of as keys.
 
     Args:
         bucket_name: The S3 bucket name.
@@ -873,11 +875,12 @@ def find_preview_file_key(bucket_name: str, s3_key: str) -> str:
         response = s3_client.list_objects_v2(
             Bucket=bucket_name,
             Prefix=prefix,
+            Delimiter='/',
             MaxKeys=5
         )
         for obj in response.get('Contents', []):
             key = obj.get('Key', '')
-            if key.startswith(prefix):
+            if _is_preview_of(s3_key, key):
                 return key
         return ''
     except Exception as e:
