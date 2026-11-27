@@ -496,7 +496,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to view metadata for this asset link.
+                    description: Not authorized to view metadata for this asset link. Decided before the linked assets are looked up, so a refused caller gets this whether or not they exist.
                     content:
                         application/json:
                             schema:
@@ -548,7 +548,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create metadata for this asset link.
+                    description: Not authorized to create metadata for this asset link. Decided before the linked assets are looked up, so a refused caller gets this whether or not they exist.
                     content:
                         application/json:
                             schema:
@@ -603,7 +603,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update metadata for this asset link.
+                    description: Not authorized to update metadata for this asset link. Decided before the linked assets are looked up, so a refused caller gets this whether or not they exist.
                     content:
                         application/json:
                             schema:
@@ -652,7 +652,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to delete metadata for this asset link.
+                    description: Not authorized to delete metadata for this asset link. Decided before the linked assets are looked up, so a refused caller gets this whether or not they exist.
                     content:
                         application/json:
                             schema:
@@ -5346,7 +5346,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to view metadata for this asset.
+                    description: Not authorized to view metadata for this asset. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5410,7 +5410,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create metadata for this asset.
+                    description: Not authorized to create metadata for this asset. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5471,7 +5471,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update metadata for this asset.
+                    description: Not authorized to update metadata for this asset. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5526,7 +5526,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to delete metadata for this asset.
+                    description: Not authorized to delete metadata for this asset. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5576,7 +5576,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to view metadata for this file.
+                    description: Not authorized to view metadata for this file. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5653,7 +5653,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create metadata for this file.
+                    description: Not authorized to create metadata for this file. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5714,7 +5714,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update metadata for this file.
+                    description: Not authorized to update metadata for this file. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5769,7 +5769,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to delete metadata for this file.
+                    description: Not authorized to delete metadata for this file. Decided before the asset is looked up, so a refused caller gets this whether or not the asset exists.
                     content:
                         application/json:
                             schema:
@@ -5819,7 +5819,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to view metadata for this database.
+                    description: Not authorized to view metadata for this database. Decided before the database is looked up, so a refused caller gets this whether or not the database exists.
                     content:
                         application/json:
                             schema:
@@ -5871,7 +5871,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create metadata for this database.
+                    description: Not authorized to create metadata for this database. Decided before the database is looked up, so a refused caller gets this whether or not the database exists.
                     content:
                         application/json:
                             schema:
@@ -5926,7 +5926,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update metadata for this database.
+                    description: Not authorized to update metadata for this database. Decided before the database is looked up, so a refused caller gets this whether or not the database exists.
                     content:
                         application/json:
                             schema:
@@ -5975,7 +5975,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to delete metadata for this database.
+                    description: Not authorized to delete metadata for this database. Decided before the database is looked up, so a refused caller gets this whether or not the database exists.
                     content:
                         application/json:
                             schema:
