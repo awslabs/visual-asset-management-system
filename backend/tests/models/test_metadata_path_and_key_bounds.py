@@ -73,8 +73,13 @@ class TestFilePathBounds:
                   model=_model(model_name))
 
     @pytest.mark.parametrize("model_name", FILE_MODELS_WITH_PATH)
-    def test_normalizes_missing_leading_slash(self, model_name):
+    def test_keeps_the_callers_form_of_the_path(self, model_name):
+        """#1943: a path without a leading slash may be the file's full key, so the model keeps the form the
+        caller sent and metadataService.file_record_path decides what it names."""
         model = parse(_body_for(model_name, filePath="folder/file.glb"),
+                      model=_model(model_name))
+        assert model.filePath == "folder/file.glb"
+        model = parse(_body_for(model_name, filePath="/folder/file.glb"),
                       model=_model(model_name))
         assert model.filePath == "/folder/file.glb"
 

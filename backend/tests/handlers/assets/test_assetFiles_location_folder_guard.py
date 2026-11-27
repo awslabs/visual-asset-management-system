@@ -5,9 +5,11 @@
 asset, so it is refused like the top-level folder `/` and nothing in the bucket changes (#1943). A real
 subfolder, including one named like the asset, still deletes and archives.
 
-A path that starts with the location key is read as the full key (`AssetFilePaths.request_key_for`), so for an
-asset at `A/` the prefixes `/A/` and `A/` resolve to `A/`. `/A` and `A` resolve to the prefix `A/A`, which
-selects the subfolder named like the asset and any sibling key starting with `A/A`; that is unchanged.
+A path with a leading `/` is a path in the asset (`AssetFilePaths.request_key_for`, #1943), so for an asset at
+`A/` the prefix `/A/` is the subfolder named like the asset (`A/A/`), not the location folder; the full key
+`A/` names the location folder and is refused, as are `/` and an empty path. `/A` and `A` resolve to the
+prefix `A/A`, which selects the subfolder named like the asset and any sibling key starting with `A/A`; that
+is unchanged.
 
 Layout (bucket `vams-guard`, versioned): asset `A` (database db1) at `A/` holds `x.txt`, `sub/y.txt` and a
 root subfolder named like the asset, `A/z.txt` (key `A/A/z.txt`). Asset `A2` (db1) sits below a parent
@@ -39,7 +41,8 @@ LOCATIONS = {"A": "A/", "A2": "base/A2/", "M": "m/model.glb"}
 CLAIMS = {"tokens": ["tester"], "roles": []}
 DELETE_REFUSAL = ": Cannot delete the top-level asset folder"
 ARCHIVE_REFUSAL = ": Cannot archive the top-level asset folder"
-REFUSED = [("A", "/A/"), ("A", "A/"), ("A2", "/base/A2/"), ("A2", "base/A2/")]
+# The full-key forms of the location folder (a path with a leading `/` is a path in the asset, #1943)
+REFUSED = [("A", "A/"), ("A2", "base/A2/")]
 
 
 def _state(client):
@@ -127,9 +130,9 @@ class TestAPrefixThatNamesTheLocationFolderIsRefused:
         monkeypatch.setattr(af, "get_asset_with_permissions", deny)
         before = _state(af.test_client)
         with pytest.raises(VAMSAuthorizationDeniedResponse):
-            af.delete_file("db1", "A", "/A/", True, True, CLAIMS)
+            af.delete_file("db1", "A", "A/", True, True, CLAIMS)
         with pytest.raises(VAMSAuthorizationDeniedResponse):
-            af.archive_file("db1", "A", "/A/", True, CLAIMS)
+            af.archive_file("db1", "A", "A/", True, CLAIMS)
         assert _state(af.test_client) == before
 
 
@@ -144,13 +147,28 @@ class TestARealSubfolderStillDeletesAndArchives:
         assert _live_keys(af.test_client) == sorted(set(ALL_KEYS) - {"A/sub/y.txt"})
         assert _version_keys(af.test_client) == sorted(ALL_KEYS)
 
-    def test_the_subfolder_named_like_the_asset_deletes_by_its_full_key(self, af):
-        af.delete_file("db1", "A", "/A/A/", True, True, CLAIMS)
+    @pytest.mark.parametrize("path", ["A/A/", "/A/"], ids=["full-key", "path"])
+    def test_the_subfolder_named_like_the_asset_deletes_by_its_full_key_or_its_path(self, af, path):
+        af.delete_file("db1", "A", path, True, True, CLAIMS)
         assert _version_keys(af.test_client) == sorted(set(ALL_KEYS) - {"A/A/z.txt"})
 
-    def test_the_subfolder_named_like_the_asset_archives_by_its_full_key(self, af):
-        af.archive_file("db1", "A", "/A/A/", True, CLAIMS)
+    @pytest.mark.parametrize("path", ["A/A/", "/A/"], ids=["full-key", "path"])
+    def test_the_subfolder_named_like_the_asset_archives_by_its_full_key_or_its_path(self, af, path):
+        af.archive_file("db1", "A", path, True, CLAIMS)
         assert _live_keys(af.test_client) == sorted(set(ALL_KEYS) - {"A/A/z.txt"})
+
+    def test_a_path_that_repeats_the_location_names_a_folder_inside_the_asset(self, af):
+        """'/A/A/' is the path of 'A/A/A/' and '/base/A2/' of 'base/A2/base/A2/', which hold nothing: answered
+        as a missing folder, never as the top-level asset folder, and nothing changes."""
+        for asset_id, path in (("A", "/A/A/"), ("A2", "/base/A2/")):
+            before = _state(af.test_client)
+            with pytest.raises(VAMSGeneralErrorResponse) as raised:
+                af.delete_file("db1", asset_id, path, True, True, CLAIMS)
+            assert str(raised.value).endswith(": No files found under prefix.")
+            with pytest.raises(VAMSGeneralErrorResponse) as raised:
+                af.archive_file("db1", asset_id, path, True, CLAIMS)
+            assert str(raised.value).endswith(": No files found under prefix.")
+            assert _state(af.test_client) == before
 
     @pytest.mark.parametrize("path", ["/A", "A"])
     def test_the_asset_name_without_a_trailing_slash_selects_the_prefix_under_the_location(self, af, path):

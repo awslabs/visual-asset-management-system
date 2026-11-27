@@ -47,9 +47,11 @@ MOD = "backend.backend.handlers.workflows.executeWorkflow"
 
 @pytest.mark.unit
 class TestKeyResolution:
-    def test_resolve_full_key_no_duplication(self):
-        # relative already prefixed with the asset root -> used as-is (no duplication).
-        assert ewv2._resolve_full_key("assetX/", "assetX/a/b.glb") == "assetX/a/b.glb"
+    def test_a_path_that_starts_with_the_asset_root_is_a_path_in_the_asset(self):
+        # #1943: an input's key is the path in the asset, so a path that starts with the asset root names
+        # the file of a subfolder named like it, never the root's own file.
+        assert ewv2._resolve_full_key("assetX/", "/assetX/a/b.glb") == "assetX/assetX/a/b.glb"
+        assert ewv2._resolve_full_key("assetX/", "/a/b.glb") == "assetX/a/b.glb"
 
     def test_resolve_full_key_joins(self):
         assert ewv2._resolve_full_key("assetX/", "/a/b.glb") == "assetX/a/b.glb"
