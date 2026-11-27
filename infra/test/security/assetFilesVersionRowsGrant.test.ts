@@ -11,9 +11,9 @@
  * (`backend/backend/handlers/assets/assetFiles.py`, `delete_file_version_records`), which sends
  * `dynamodb:DeleteItem`. With read access only, the write is denied and the rows stay, so an asset
  * version keeps listing a file whose Amazon S3 versions are gone. The role holds that one write action
- * on the table and no other (`PutItem`, `UpdateItem`, `BatchWriteItem`): a batch write also allows
- * puts. Checked in every shipped template and in a customer managed key cell, where the deployment
- * key's encrypt permission must also be on the role.
+ * on the table and no other (`PutItem`, `UpdateItem`, `BatchWriteItem`). Checked in every shipped
+ * template and in a customer managed key cell, where the deployment key's encrypt permission must also
+ * be on the role.
  */
 
 import {
