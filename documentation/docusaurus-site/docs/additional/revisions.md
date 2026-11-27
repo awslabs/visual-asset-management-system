@@ -678,6 +678,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **CloudFront viewer TLS** — The web distribution sets its `TLSv1.2_2021` minimum viewer TLS version only with a custom domain, so synthesis no longer warns that it is ignored. The default `*.cloudfront.net` domain uses the `TLSv1` policy CloudFront applies there (TLS 1.0 and later); the security and configuration docs say which domain accepts which versions. (issue #434)
 -   **Supported npm range** — The `package.json` files declare `engines.npm` `>=11.10.0 <12` and the deployment prerequisites state the range: npm 12 blocks dependency install scripts (here `esbuild` and `@parcel/watcher`) unless an `allowScripts` entry approves them, and VAMS has not approved or tested any, so builds are supported on npm 11 only until that is done. With `engine-strict`, npm 12 stops with `EBADENGINE` instead. (issue #439)
 -   **Upload sequence in CLI JSON output** — `vamscli file upload --json-output` reports each sequence result's `sequence_number` (the upload sequence it belongs to) instead of `null`. (issue #1988)
+-   **Login cancelled at the version prompt** — `vamscli auth login` cancels the login when the version-mismatch prompt is ended with Ctrl+C or end of input, instead of reporting a failed version check and signing the user in. (issue #1911)
 
 **Documentation:**
 
