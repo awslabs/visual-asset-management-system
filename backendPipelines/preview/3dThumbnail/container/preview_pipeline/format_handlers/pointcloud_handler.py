@@ -147,9 +147,9 @@ def _to_uint8_colours(values) -> np.ndarray:
 def finite_points(points, colors=None):
     """``points`` and ``colors`` without the points that have a NaN or infinite coordinate.
 
-    An organized cloud (a PCD from a depth camera, say) keeps its grid by storing NaN for the pixels
-    that saw nothing, and a single non-finite point turns the camera's framing into NaN, so the
-    preview came out empty. Raises ValueError when no point is left."""
+    An organized cloud (a PCD from a depth camera, say) stores NaN for the pixels that saw nothing.
+    ``colors`` is filtered in step with ``points`` when it has one entry per point. Returns the inputs
+    unchanged when every point is finite. Raises ValueError when no point is left."""
     points = np.asarray(points)
     finite = np.isfinite(points).all(axis=1) if points.ndim == 2 and len(points) else None
     if finite is None or finite.all():
