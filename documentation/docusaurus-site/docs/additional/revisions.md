@@ -274,6 +274,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 
 **Key fixes:**
 
+-   **Metadata authorization before existence** — The metadata endpoints decide whether the caller may act on the asset or database before they report whether it exists, so a caller who is not allowed gets the same `403` whether or not it exists. (PR #TBD)
 -   **A folder delete that names the whole asset** — A folder delete or archive whose path resolves to the asset's own location folder, such as `a1/` (its full key) for an asset stored at `a1/`, is refused like `/` instead of deleting or archiving every file in the asset. `/a1/` is the root subfolder named like the asset (key `a1/a1/`) and deletes or archives only that subfolder. (issue #1943)
 -   **CLI asset-version help** — The `vamscli asset-version create` example that uses `--files` includes `--no-use-latest-files`, so copying it no longer fails. (issue #1941)
 -   **Why an upload failed** — `vamscli file upload` and `vamscli sync file push` print the reason each failed file was not stored, such as a permission denial or a file key over the upload bound, instead of the file name alone; `--json-output` lists the reasons under `failed_file_errors`. (issue #1072)

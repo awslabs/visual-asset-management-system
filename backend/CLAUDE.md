@@ -768,11 +768,17 @@ object from `asset_authorization_object`, whose stand-in for a missing id carrie
 `<databaseId>#deleted` id, so a caller refused that database's archived records gets the same 403
 for an archived asset as for a missing one. Write routes never pass it.
 
-The file metadata writes (`metadataService.create_file_metadata`, `update_file_metadata` and
-`delete_file_metadata`) authorize the asset before they check the file: they read the asset, decide
-Tier-2 on it (403 when refused), then key the path (`file_record_path`) and check the file in S3
-(`validate_file_exists`, create and update only). A missing asset answers 400 `Asset not found`
-before authorization, the convention `authorize_asset_read` documents for the metadata routes.
+Every metadata route (`metadataService`) decides Tier-2 before it reports whether the asset or
+database exists. `authorize_asset` (one asset) and `authorize_assets` (both ends of an asset link)
+read each record with `find_asset`, decide the route's action, or the REPLACE_ALL list `PUT`, `POST`
+and `DELETE`, on `asset_authorization_object` (the stand-in for a missing id), and only when every
+asset is allowed raise 400 `Asset not found`. `authorize_database` does the same for the database
+routes, on a `{databaseId, object__type: 'database'}` stand-in, before 400 `Database not found`. A
+refused caller gets the route's 403 whether or not the record exists. The asset link itself is read
+first (`validate_asset_link_exists`, 400 `Asset link not found`), because it names no asset until it
+is read. The file metadata writes (`create_file_metadata`, `update_file_metadata` and
+`delete_file_metadata`) authorize the asset this way before they check the file: they then key the
+path (`file_record_path`) and check the file in S3 (`validate_file_exists`, create and update only).
 
 ---
 
