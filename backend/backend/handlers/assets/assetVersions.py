@@ -1178,14 +1178,10 @@ def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: s
         for file in files_to_version:
             relative_key = file['relativeKey']
             
-            # Remove asset ID prefix if present
-            if relative_key.startswith(assetId + '/'):
-                path_without_asset = relative_key[len(assetId) + 1:]
-            else:
-                path_without_asset = relative_key
-            
-            # Prepend "/" to match metadata filePath format
-            file_path = "/" + path_without_asset.lstrip('/')
+            # A version entry is the file's path in the asset, so it keys the metadata filePath with a
+            # leading "/". An entry that starts with the asset ID ('A1/x') is the file of a subfolder named
+            # like the asset ('/A1/x'), not the root file '/x'.
+            file_path = "/" + relative_key.lstrip('/')
             versioned_file_paths.add(file_path)
         
         logger.info(f"Versioning metadata for {len(versioned_file_paths)} file paths (including asset-level)")
@@ -1498,14 +1494,10 @@ def revert_asset_metadata_version(databaseId: str, assetId: str, target_assetVer
         for file in files_to_version:
             relative_key = file['relativeKey']
             
-            # Remove asset ID prefix if present
-            if relative_key.startswith(assetId + '/'):
-                path_without_asset = relative_key[len(assetId) + 1:]
-            else:
-                path_without_asset = relative_key
-            
-            # Prepend "/" to match metadata filePath format
-            file_path = "/" + path_without_asset.lstrip('/')
+            # A version entry is the file's path in the asset, so it keys the metadata filePath with a
+            # leading "/". An entry that starts with the asset ID ('A1/x') is the file of a subfolder named
+            # like the asset ('/A1/x'), not the root file '/x'.
+            file_path = "/" + relative_key.lstrip('/')
             versioned_file_paths.add(file_path)
         
         logger.info(f"Reverting metadata for {len(versioned_file_paths)} file paths (including asset-level)")

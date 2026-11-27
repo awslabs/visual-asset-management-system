@@ -9,7 +9,9 @@ that holds a companion entry named like the object, ``p1/model.glb/model.glb``: 
 ``/model.glb`` and the object keeps its earlier ``/`` (no change for that asset). Every other path keeps its
 earlier meaning (``/x`` is ``p1/model.glb/x``). A path never resolves to a key the asset does not hold:
 ``..`` segments, another asset's key and keys that only share the location's characters stay refused or
-out of reach. Folder locations are unchanged. The module is the REAL one, registered by tests/conftest.py.
+out of reach. A request path with a leading ``/`` is always a path in the asset (#1943), so ``/A1/x`` in an
+asset at ``A1/`` is ``A1/A1/x``, the file of a subfolder named like the location. The module is the REAL one,
+registered by tests/conftest.py.
 """
 
 import sys
@@ -246,7 +248,6 @@ class TestFolderLocationUnchanged:
         ("/x.txt", "proj/a/x.txt"),
         ("x.txt", "proj/a/x.txt"),
         ("proj/a/x.txt", "proj/a/x.txt"),
-        ("/proj/a/x.txt", "proj/a/x.txt"),
         ("/sub/", "proj/a/sub/"),
         ("/", "proj/a/"),
         ("//x.txt", "proj/a//x.txt"),
@@ -254,6 +255,88 @@ class TestFolderLocationUnchanged:
     def test_file_route_forms(self, value, key):
         paths, _ = _paths(FOLDER)
         assert paths.request_key_for(value) == key
+
+
+# Location shapes a request path is read against (#1943)
+REQUEST_LOCATIONS = ["A1/", "vams/B/", "proj/site/", "assets/preview/", LOCATION, "model.glb"]
+
+
+def _request_values(location):
+    """Every value form a request can send for a location."""
+    return [
+        "/x.las", "/sub/x.las", "x.las", "sub/x.las", location + "x.las", location + "/x.las",
+        location + "/sub/x.las", "/" + location + "x.las", "/" + location + "/x.las", "/" + location,
+        location, "/", "", None, "A10/x.las", "/A10/x.las", location + ".bak", "/" + location + ".bak",
+        "model.glb", "/model.glb", "/model.glb.previewFile.png", location + ".previewFile.png", "//x.las",
+    ]
+
+
+@pytest.mark.unit
+class TestALeadingSlashMarksAPathInTheAsset:
+    """#1943: a request path with a leading ``/`` is the file's path in the asset, never a full key, so a path
+    that starts with the location key names a file in a subfolder named like the location. A value without
+    one keeps its meaning: a key under the location is that key, anything else is a path."""
+
+    @pytest.mark.parametrize("value,key", [
+        ("/A1/cloud.las", "A1/A1/cloud.las"),
+        ("A1/A1/cloud.las", "A1/A1/cloud.las"),
+        ("/cloud.las", "A1/cloud.las"),
+        ("A1/cloud.las", "A1/cloud.las"),
+        ("cloud.las", "A1/cloud.las"),
+        ("/A1/", "A1/A1/"),
+        ("A1/", "A1/"),
+        ("/A1", "A1/A1"),
+        ("/A10/x.las", "A1/A10/x.las"),
+        ("A10/x.las", "A1/A10/x.las"),
+    ])
+    def test_an_asset_id_folder(self, value, key):
+        assert _paths("A1/")[0].request_key_for(value) == key
+
+    @pytest.mark.parametrize("location,value,key", [
+        ("vams/B/", "/vams/B/x.las", "vams/B/vams/B/x.las"),
+        ("vams/B/", "vams/B/x.las", "vams/B/x.las"),
+        ("vams/B/", "/x.las", "vams/B/x.las"),
+        ("proj/site/", "/proj/site/m.glb", "proj/site/proj/site/m.glb"),
+        ("proj/site/", "proj/site/m.glb", "proj/site/m.glb"),
+        (FOLDER, "/proj/a/x.txt", "proj/a/proj/a/x.txt"),
+        ("assets/preview/", "/assets/preview/x.glb", "assets/preview/assets/preview/x.glb"),
+    ])
+    def test_a_base_prefixed_or_custom_folder(self, location, value, key):
+        assert _paths(location)[0].request_key_for(value) == key
+
+    @pytest.mark.parametrize("existing", [(), (COPY,)], ids=["no-companion", "companion"])
+    @pytest.mark.parametrize("value,key", [
+        ("/p1/model.glb/sub/x.obj", "p1/model.glb/p1/model.glb/sub/x.obj"),
+        ("p1/model.glb/sub/x.obj", COMPANION),
+        ("/p1/model.glb", "p1/model.glb/p1/model.glb"),
+        ("/sub/x.obj", COMPANION),
+    ])
+    def test_a_single_file_companion_path_that_spells_the_location(self, existing, value, key):
+        assert _paths(existing=existing)[0].request_key_for(value) == key
+
+    @pytest.mark.parametrize("location,keys", [
+        ("A1/", ["A1/A1/cloud.las", "A1/cloud.las", "A1/A1/A1/x", "A1/A1/"]),
+        ("vams/B/", ["vams/B/vams/B/x.las", "vams/B/x.las"]),
+        (LOCATION, ["p1/model.glb/p1/model.glb/x.obj", COMPANION]),
+    ])
+    def test_the_listed_path_of_each_key_names_that_key_again(self, location, keys):
+        paths, _ = _paths(location)
+        for key in keys:
+            assert paths.request_key_for(paths.path_for(key)) == key, key
+
+    @pytest.mark.parametrize("location", REQUEST_LOCATIONS)
+    def test_every_key_it_names_is_held_by_the_location(self, location):
+        """Confinement: whatever the value, the key stays inside the requesting asset's location."""
+        paths, _ = _paths(location)
+        for value in _request_values(location):
+            key = paths.request_key_for(value)
+            if key is not None:
+                assert al.contains(location, key) or key == location, (location, value, key)
+
+    @pytest.mark.parametrize("location", REQUEST_LOCATIONS)
+    @pytest.mark.parametrize("value", ["/../x.las", "../x.las", "sub/../../x.las", "/sub/.."])
+    def test_a_parent_segment_names_nothing(self, location, value):
+        assert _paths(location)[0].request_key_for(value) is None
 
     def test_relative_form_drops_every_leading_slash(self):
         paths, _ = _paths(FOLDER)

@@ -13,6 +13,7 @@ For asset-level operations, see [Assets](assets.md). For file metadata, see [Met
 -   **Primary File Type**: A designation that marks a file as the primary representative of a particular type within an asset (e.g., the primary `.ifc` file).
 -   **Preview File**: A generated preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file.
 -   **Archive**: Soft-deletion of a file using S3 delete markers. Archived files can be unarchived.
+-   **File path**: How a request names a file of the asset (`filePath`, `sourcePath`, `destinationPath`, an upload's `relativeKey`, a stream path, a file metadata `filePath`, a workflow input's `relativeFileKey`). Send the file's path in the asset with its leading `/`, the file list's `relativePath`. A value with a leading `/` is always a path in the asset: `/a1/cloud.laz` in an asset stored at `a1/` is the file `a1/a1/cloud.laz` of a subfolder named like the asset. A value without a leading `/` is the file's full S3 key (the file list's `key`) when it is one of the asset's keys, and otherwise a path in the asset.
 
 ---
 
@@ -74,7 +75,7 @@ Returns a list of all files in the specified asset, including file metadata, siz
 
 `key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns.
 
-An asset created from one Amazon S3 object (a `bucketExistingKey` without a trailing `/`) lists that object at `/{file name}` and its previews at `/{file name}.previewFile.{ext}`, and every file route takes that path or the object's `key`. Its other files are in its companion folder `{key}/` and keep the path after `{key}`. While the companion folder holds a file of the object's own name (`{key}/{file name}`), that file keeps the path `/{file name}`, and the object keeps the path `/` that no file route reaches.
+An asset created from one Amazon S3 object (a `bucketExistingKey` without a trailing `/`) lists that object at `/{file name}` and its previews at `/{file name}.previewFile.{ext}`, and every file route takes that path or the object's `key`. Its other files are in its companion folder `{key}/` and keep the path after `{key}`. While the companion folder holds a file of the object's own name (`{key}/{file name}`), that file keeps the path `/{file name}`, and the object keeps the path `/`, which no file route except download by the location key reaches.
 
 `changeSource` and `changeUserId` describe how the current version of each file was created. When `changeSource` is `workflowExecution`, `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote it; they are `null` for every other change source, and in `basic` mode, which performs no per-object read.
 
@@ -252,7 +253,7 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files. It also removes the file's metadata, attributes and version records, so the asset's versions no longer list the file.
 
-A `filePath` of `/` names the top-level asset folder, and so does a prefix (`isPrefix` `true`) whose path resolves to the asset's own location folder: for an asset stored at `a1/`, both `/a1/` and `a1/` resolve to it. These requests return `400` with a `message` that contains `Cannot delete the top-level asset folder`, and nothing is deleted. A subfolder named like the asset is deleted by its full key, `/a1/a1/`; `/a1` and `a1`, without the trailing `/`, are the path prefix `a1/a1` under the location. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
+A `filePath` of `/` names the top-level asset folder, and so does a prefix (`isPrefix` `true`) whose path resolves to the asset's own location folder: for an asset stored at `a1/`, its full key `a1/` resolves to it. These requests return `400` with a `message` that contains `Cannot delete the top-level asset folder`, and nothing is deleted. A path with a leading `/` is a path in the asset, so `/a1/` is the subfolder named like the asset (key `a1/a1/`) and deletes only that subfolder; `/a1` and `a1`, without the trailing `/`, are the path prefix `a1/a1` under the location. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
 
 :::danger[Irreversible Operation]
 This permanently deletes the file and all its versions. Consider using [Archive File](#archive-file) for soft-deletion instead.
@@ -307,7 +308,7 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 
 Soft-deletes a file by creating an S3 delete marker. The file can be restored using [Unarchive File](#unarchive-file).
 
-A `filePath` of `/`, or a prefix (`isPrefix` `true`) whose path resolves to the asset's own location folder, such as `/a1/` or `a1/` for an asset stored at `a1/`, returns `400` with a `message` that contains `Cannot archive the top-level asset folder`, and nothing is archived. A subfolder named like the asset is archived by its full key, `/a1/a1/`; `/a1` and `a1`, without the trailing `/`, are the path prefix `a1/a1` under the location. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
+A `filePath` of `/`, or a prefix (`isPrefix` `true`) whose path resolves to the asset's own location folder, such as `a1/` (its full key) for an asset stored at `a1/`, returns `400` with a `message` that contains `Cannot archive the top-level asset folder`, and nothing is archived. `/a1/` is the subfolder named like the asset (key `a1/a1/`) and archives only that subfolder; `/a1` and `a1`, without the trailing `/`, are the path prefix `a1/a1` under the location. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
 
 **Request Parameters:**
 
