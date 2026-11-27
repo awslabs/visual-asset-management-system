@@ -159,3 +159,20 @@ class TestTheCrossCallNamesTheExecution:
         source = inspect.getsource(po.lambda_handler)
         assert source.count("process_metadata_file(") == 3
         assert source.count("workflow_execution_id=event.get('workflowExecutionId')") == 3
+
+
+@pytest.mark.unit
+class TestFileMetadataNamesTheFileByItsPath:
+    """#1943: a file-level metadata output names its file by its path in the asset, sent with a leading '/'
+    so the metadata service never reads it as the asset's key. An output for a file in a subfolder named
+    like the asset (A1/cloud.las in an asset at A1/) keeps that file's records, not the root file's."""
+
+    @pytest.mark.parametrize("file_path,sent", [
+        ("A1/cloud.las", "/A1/cloud.las"),
+        ("sub/x.glb", "/sub/x.glb"),
+        ("/sub/x.glb", "/sub/x.glb"),
+    ])
+    @pytest.mark.parametrize("metadata_type", ["metadata", "attribute"])
+    def test_the_file_path_is_sent_with_a_leading_slash(self, file_path, sent, metadata_type):
+        event = _invoke(file_path=file_path, metadata_type=metadata_type)
+        assert json.loads(event["body"])["filePath"] == sent

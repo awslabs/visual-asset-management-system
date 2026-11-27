@@ -33,6 +33,8 @@ _MODULE_PATH = os.path.join(
 UNSLASHED_BASE = "assets/pfx"
 SLASHED_BASE = "assets/pfx/"
 ESCAPE_KEY = "assets/pfxOTHER/secret.txt"
+# A key with a parent segment names no key of any asset
+PARENT_KEY = "/../pfxOTHER/secret.txt"
 BLOCKED_CONTENT_TYPE = "application/x-msdownload"
 
 
@@ -183,7 +185,7 @@ class TestResolveAssetFileKey:
     def test_accepted_shapes(self, raw_key, expected):
         assert de.resolve_asset_file_key(SLASHED_BASE, raw_key) == expected
 
-    @pytest.mark.parametrize("raw_key", ['/pfx', 'pfx', 'assets/pfx', '/assets/pfx', '/', None, ''])
+    @pytest.mark.parametrize("raw_key", ['/pfx', 'pfx', 'assets/pfx', '/', None, ''])
     def test_a_single_file_asset_resolves_its_one_object(self, raw_key):
         assert de.resolve_asset_file_key(UNSLASHED_BASE, raw_key) == UNSLASHED_BASE
 
@@ -196,21 +198,34 @@ class TestResolveAssetFileKey:
         ('/assets/pfxOTHER/x', 'assets/pfx/assets/pfxOTHER/x'),
         ('/pfx.previewFile.png', 'assets/pfx.previewFile.png'),
         ('assets/pfx.previewFile.png', 'assets/pfx.previewFile.png'),
+        # A leading '/' marks a path in the asset, so the object's key after one is a companion entry (#1943)
+        ('/assets/pfx', 'assets/pfx/assets/pfx'),
+        ('/assets/pfx/dir/f.glb', 'assets/pfx/assets/pfx/dir/f.glb'),
     ])
     def test_a_single_file_asset_resolves_its_companion_folder_and_previews(self, raw_key, expected):
         assert de.resolve_asset_file_key(UNSLASHED_BASE, raw_key) == expected
 
-    @pytest.mark.parametrize("raw_key", ['assets/pfx.bak', 'assets/pfxx/y.glb', 'assets/pfx.previewFile.png/x',
-                                         ESCAPE_KEY])
-    def test_a_single_file_asset_refuses_a_bucket_root_key_that_only_shares_its_characters(self, raw_key):
+    @pytest.mark.parametrize("raw_key,expected", [
+        ('assets/pfx.bak', 'assets/pfx/assets/pfx.bak'),
+        ('assets/pfxx/y.glb', 'assets/pfx/assets/pfxx/y.glb'),
+        ('assets/pfx.previewFile.png/x', 'assets/pfx/assets/pfx.previewFile.png/x'),
+        (ESCAPE_KEY, 'assets/pfx/' + ESCAPE_KEY),
+    ])
+    def test_a_single_file_asset_reads_a_key_that_only_shares_its_characters_as_a_path_in_it(self, raw_key, expected):
+        """A key the location does not hold is the file's path in the asset (#1943), so it stays inside the asset."""
+        assert de.resolve_asset_file_key(UNSLASHED_BASE, raw_key) == expected
+
+    @pytest.mark.parametrize("base", [UNSLASHED_BASE, SLASHED_BASE])
+    @pytest.mark.parametrize("raw_key", [PARENT_KEY, '../x', 'dir/../../x'])
+    def test_a_parent_segment_is_refused(self, base, raw_key):
         with pytest.raises(VAMSGeneralErrorResponse) as e:
-            de.resolve_asset_file_key(UNSLASHED_BASE, raw_key)
+            de.resolve_asset_file_key(base, raw_key)
         assert str(e.value) == _msg("Requested file is not part of this asset")
 
     @pytest.mark.parametrize("final_key,expected", [
-        ('assets/pfx', 'pfx'),
-        ('assets/pfx/dir/f.glb', 'dir/f.glb'),
-        ('assets/pfx.previewFile.png', 'pfx.previewFile.png'),
+        ('assets/pfx', '/pfx'),
+        ('assets/pfx/dir/f.glb', '/dir/f.glb'),
+        ('assets/pfx.previewFile.png', '/pfx.previewFile.png'),
     ])
     def test_a_single_file_asset_relative_key_for_version_snapshots(self, final_key, expected):
         assert de.asset_relative_key(final_key, UNSLASHED_BASE) == expected
@@ -226,16 +241,27 @@ class TestResolveAssetFileKey:
     def test_no_key_is_the_base_key_verbatim(self, base, raw_key):
         assert de.resolve_asset_file_key(base, raw_key) == base
 
-    def test_sibling_prefix_escape_refused_without_echoing_the_key(self):
+    def test_a_refused_key_is_not_echoed(self):
         with pytest.raises(VAMSGeneralErrorResponse) as e:
-            de.resolve_asset_file_key(UNSLASHED_BASE, ESCAPE_KEY)
+            de.resolve_asset_file_key(UNSLASHED_BASE, PARENT_KEY)
         assert str(e.value) == _msg("Requested file is not part of this asset")
-        assert ESCAPE_KEY not in str(e.value)
+        assert 'pfxOTHER' not in str(e.value)
 
-    def test_leading_slash_sibling_shape_stays_inside_the_asset(self):
-        """'/assets/pfxOTHER/x' is asset-relative, so it is joined under the base, not refused."""
-        assert de.resolve_asset_file_key(SLASHED_BASE, '/assets/pfxOTHER/x') == \
-            'assets/pfx/assets/pfxOTHER/x'
+    @pytest.mark.parametrize("raw_key", ['/assets/pfxOTHER/x', 'assets/pfxOTHER/x'])
+    def test_a_sibling_shape_stays_inside_the_asset(self, raw_key):
+        """A key that only shares the folder's characters is a path in the asset, with or without a leading
+        '/', so it is joined under the base (#1943); it never names another asset's object."""
+        assert de.resolve_asset_file_key(SLASHED_BASE, raw_key) == 'assets/pfx/assets/pfxOTHER/x'
+
+    @pytest.mark.parametrize("raw_key,expected", [
+        ('/pfx/cloud.las', 'assets/pfx/pfx/cloud.las'),
+        ('/assets/pfx/cloud.las', 'assets/pfx/assets/pfx/cloud.las'),
+        ('assets/pfx/cloud.las', 'assets/pfx/cloud.las'),
+        ('assets/pfx/assets/pfx/cloud.las', 'assets/pfx/assets/pfx/cloud.las'),
+    ])
+    def test_a_path_that_starts_with_the_location_key_is_a_path_in_the_asset(self, raw_key, expected):
+        """#1943: '/{location}x' is the file of a subfolder named like the location, never '{location}x'."""
+        assert de.resolve_asset_file_key(SLASHED_BASE, raw_key) == expected
 
     def test_over_long_resolved_key_refused(self):
         from common.validators import exceeds_s3_object_key_limit
@@ -251,9 +277,12 @@ class TestResolveAssetFileKey:
         assert de.resolve_asset_file_key(SLASHED_BASE, relative) == SLASHED_BASE + relative
 
     @pytest.mark.parametrize("base", [UNSLASHED_BASE, SLASHED_BASE])
-    @pytest.mark.parametrize("final_key", ['assets/pfx/dir/f.glb', 'assets/pfx//dir/f.glb'])
-    def test_relative_key_for_version_snapshots(self, base, final_key):
-        assert de.asset_relative_key(final_key, base) == 'dir/f.glb'
+    @pytest.mark.parametrize("final_key,expected", [('assets/pfx/dir/f.glb', '/dir/f.glb'),
+                                                    ('assets/pfx//dir/f.glb', '//dir/f.glb')])
+    def test_relative_key_for_version_snapshots(self, base, final_key, expected):
+        # The file's path in the asset; the snapshot lookup drops one '/', so the key with an empty segment
+        # after the location ('//dir/f.glb') is its own file (#1977)
+        assert de.asset_relative_key(final_key, base) == expected
 
 
 @pytest.mark.unit
@@ -441,7 +470,7 @@ class TestCheckFileEligibilitySingleFile:
     def test_escape_refused_before_any_s3_call(self):
         client = _s3()
         with pytest.raises(VAMSGeneralErrorResponse):
-            _check(client, ESCAPE_KEY, base=UNSLASHED_BASE)
+            _check(client, PARENT_KEY, base=UNSLASHED_BASE)
         client.head_object.assert_not_called()
 
 
@@ -472,7 +501,7 @@ class TestCheckFileEligibilityKeyQuarantine:
     def test_an_escaping_key_is_refused_before_the_block(self):
         block = MagicMock()
         with pytest.raises(VAMSGeneralErrorResponse):
-            _check(_s3(), ESCAPE_KEY, base=UNSLASHED_BASE, check_key_quarantine=block)
+            _check(_s3(), PARENT_KEY, base=UNSLASHED_BASE, check_key_quarantine=block)
         block.assert_not_called()
 
 
@@ -485,7 +514,7 @@ class TestCheckFileEligibilityPin:
             client, 'assets/pfx/dir/f.glb', base=SLASHED_BASE, asset_version_id='2',
             resolve_file_version=resolve_file, resolve_alias=MagicMock())
         assert (final_key, version_id) == ('assets/pfx/dir/f.glb', 'v-pinned')
-        resolve_file.assert_called_once_with('db1', 'asset1', '2', 'dir/f.glb')
+        resolve_file.assert_called_once_with('db1', 'asset1', '2', '/dir/f.glb')
         client.head_object.assert_called_once_with(
             Bucket='bucket', Key='assets/pfx/dir/f.glb', VersionId='v-pinned')
 

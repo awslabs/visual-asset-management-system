@@ -24,6 +24,7 @@ import FileViewerModal from "../../filemanager/modals/FileViewerModal";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
 import { isFilenameComparableAsVersions } from "../../../visualizerPlugin/core/viewableExtensions";
 import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
+import { storedVersionEntryKey, versionFilePath } from "./versionFilePath";
 
 // TypeScript interfaces - using imported AssetVersion from AssetVersionManager
 
@@ -160,7 +161,7 @@ const buildVersionCompareFiles = (
     const filename = file.relativeKey.split("/").pop() || file.relativeKey;
     const toFileInfo = (fv: FileVersion): FileInfo => ({
         filename,
-        key: file.relativeKey,
+        key: versionFilePath(file.relativeKey),
         isDirectory: false,
         assetId,
         databaseId,
@@ -175,17 +176,15 @@ const buildVersionCompareFiles = (
 /**
  * The asset's current files from the list-files API, keyed as a version snapshot keys its files.
  * The API names a file by `relativePath`, which starts with "/", while a snapshot's `relativeKey`
- * usually has no leading slash and lists no folders, so folders are skipped and the slash is
- * dropped. A snapshot created with an explicit file list may keep a leading "/", so its keys are
- * matched without it too.
+ * usually has no leading slash and lists no folders, so folders are skipped and both sides are matched
+ * in the snapshot's stored form (storedVersionEntryKey): one leading "/" dropped, so "/x", "x" and a
+ * legacy "/x" match, and "//x" (the key with an empty segment after the location) is another file.
  */
-/** A file's path without its leading "/", the form both sides are matched in. */
-const withoutLeadingSlash = (path: unknown): string => String(path ?? "").replace(/^\/+/, "");
 
 const currentFilesByRelativeKey = (files: any[]): Map<string, FileVersion> => {
     const byKey = new Map<string, FileVersion>();
     files.forEach((file: any) => {
-        const relativeKey = withoutLeadingSlash(file?.relativePath);
+        const relativeKey = storedVersionEntryKey(file?.relativePath);
         if (file?.isFolder || !relativeKey) {
             return;
         }
@@ -289,7 +288,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
 
                             // Add all keys from version files
                             versionDetails.files.forEach((file: FileVersion) => {
-                                allKeys.add(withoutLeadingSlash(file.relativeKey));
+                                allKeys.add(storedVersionEntryKey(file.relativeKey));
                             });
 
                             // Add all keys from current files
@@ -300,7 +299,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                             // Create comparison objects
                             allKeys.forEach((key) => {
                                 const versionFile = versionDetails.files.find(
-                                    (f: FileVersion) => withoutLeadingSlash(f.relativeKey) === key
+                                    (f: FileVersion) => storedVersionEntryKey(f.relativeKey) === key
                                 );
                                 const currentFile = currentByKey.get(key);
 
@@ -510,7 +509,7 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
         navigate(`/databases/${databaseId}/assets/${encodeURIComponent(assetId)}/file`, {
             state: {
                 filename: file.relativeKey.split("/").pop() || file.relativeKey,
-                key: file.relativeKey,
+                key: versionFilePath(file.relativeKey),
                 isDirectory: false,
                 versionId: file.versionId,
                 size: file.size,
@@ -1364,7 +1363,7 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
         navigate(`/databases/${databaseId}/assets/${encodeURIComponent(String(assetId))}/file`, {
             state: {
                 filename: file.relativeKey.split("/").pop() || file.relativeKey,
-                key: file.relativeKey,
+                key: versionFilePath(file.relativeKey),
                 isDirectory: false,
                 versionId: file.versionId,
                 size: file.size,

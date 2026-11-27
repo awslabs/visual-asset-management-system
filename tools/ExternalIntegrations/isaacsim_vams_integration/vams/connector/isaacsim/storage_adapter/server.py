@@ -224,8 +224,13 @@ class VamsTree:
             for items in self._pages(lambda t: api.list_asset_files(database_id, asset_id,
                                                                     {"startingToken": t} if t else {})):
                 for item in items:
-                    rel = (item.get("relativePath") or "").lstrip("/")
-                    if rel and not item.get("isFolder") and not item.get("isArchived"):
+                    path = item.get("relativePath") or ""
+                    # The path without its one leading '/' marker. A file whose key has an empty segment
+                    # (listed at '//x') cannot be named by a content URL, whose path drops empty segments,
+                    # so it is left out rather than shown, and served, as the file at '/x' (#1977)
+                    rel = path[1:] if path.startswith("/") else path
+                    if (rel and not rel.startswith("/") and "//" not in rel
+                            and not item.get("isFolder") and not item.get("isArchived")):
                         found[rel] = item
             return found
         return self._cached(("files", who, database_id, asset_id), load)

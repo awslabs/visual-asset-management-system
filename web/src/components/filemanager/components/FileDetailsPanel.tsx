@@ -938,12 +938,10 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const folderName = selectedItem.name;
 
     const handleView = () => {
-        // Encode the relative path for the URL (for bookmarking/sharing)
-        // Remove leading slash if present since it's already in the URL structure
-        const pathForUrl = selectedItem.relativePath.startsWith("/")
-            ? selectedItem.relativePath.substring(1)
-            : selectedItem.relativePath;
-        const encodedPath = encodeURIComponent(pathForUrl);
+        // Encode the file's path in the asset for the URL (for bookmarking/sharing). It keeps its
+        // leading "/", so the API reads it as a path in the asset, never as one of the asset's keys:
+        // "/A1/cloud.las" in an asset stored at "A1/" is the file in the subfolder "A1/" (#1943)
+        const encodedPath = encodeURIComponent(selectedItem.relativePath);
 
         // Build URL with version query parameter — assetVersionId takes priority
         let url = `/databases/${databaseId}/assets/${encodeURIComponent(
@@ -980,9 +978,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
             // Construct the relative path for the new folder
             let relativeKey;
 
-            // If we're at the root level
+            // If we're at the root level. The path keeps its leading "/", so the API reads it as a
+            // path in the asset: a folder named like the asset's location ("A1/" in an asset stored
+            // at "A1/") is the new folder "A1/A1/", never the asset's own folder (#1943)
             if (selectedItem.relativePath === "/") {
-                relativeKey = `${newFolderName}/`;
+                relativeKey = `/${newFolderName}/`;
             } else {
                 // If we're in a subfolder, use the selected item's relativePath
                 // Make sure it ends with a slash
@@ -1207,6 +1207,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         databaseId={databaseId!}
                         assetId={assetId!}
                         filePath={selectedItem.keyPrefix}
+                        linkFilePath={selectedItem.relativePath}
                         fileName={selectedItem.name}
                         currentVersionId={selectedItem.versionId}
                         onVersionRevert={() => {

@@ -479,13 +479,17 @@ class Job:
         prefixes = [entry["relativePrefix"] for entry in run["inputs"]]
         pinned = []
         for item in items:
-            rel = "/" + (item.get("fileKey") or "").lstrip("/")
+            # The entry's path in the asset by the one-slash rule (backend assetVersions.version_entry_key):
+            # exactly one leading '/' is the marker, so a stored 'x' or legacy '/x' is '/x' ('{base}x') and a
+            # stored '//x' is '//x' ('{base}/x', the key with an empty segment after the location, #1977)
+            file_key = item.get("fileKey") or ""
+            rel = "/" + (file_key[1:] if file_key.startswith("/") else file_key)
             # A prefix ending in '/' selects a folder (or, as '/', the whole asset); any other selects
             # that one file.
             if not item.get("versionId") or not any(rel == p or (p.endswith("/") and rel.startswith(p))
                                                     for p in prefixes):
                 continue
-            pinned.append({"key": run["assetBaseKey"] + rel.lstrip("/"), "versionId": item["versionId"],
+            pinned.append({"key": run["assetBaseKey"] + rel[1:], "versionId": item["versionId"],
                            "size": int(item.get("size") or 0)})
         return pinned
 

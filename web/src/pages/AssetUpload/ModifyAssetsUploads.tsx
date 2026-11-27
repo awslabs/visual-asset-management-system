@@ -94,6 +94,19 @@ interface FinishUploadsProps {
     isNewFiles: boolean;
 }
 
+/**
+ * The Destination folder field's starting value for a folder the page is opened with (?folder= or the
+ * file manager's folder): its normalized form, the folder the files go to, so the field, the header and
+ * the planned paths name one folder. A value the normalizer refuses is kept as given, so its error shows.
+ * `emptySegmentsDropped` says the value named an empty folder ("//", the file manager's "/" folder), which
+ * uploads drop.
+ */
+export function incomingDestination(raw: string): { input: string; emptySegmentsDropped: boolean } {
+    const normalized = normalizeDestination(raw);
+    if (normalized.error) return { input: raw, emptySegmentsDropped: false };
+    return { input: normalized.value, emptySegmentsDropped: /\/\//.test(raw.trim()) };
+}
+
 export default function ModifyAssetsUploadsPage() {
     const location = useLocation();
     const { state } = location;
@@ -118,10 +131,21 @@ export default function ModifyAssetsUploadsPage() {
     const [previewFileError, setPreviewFileError] = useState<string | undefined>(undefined);
 
     // Destination folder: the ?folder= query parameter (survives a refresh or a deep link), else
-    // the folder the page was opened from in the file manager, else the asset root.
+    // the folder the page was opened from in the file manager, else the asset root. A folder the page
+    // is opened with starts the field at its normalized form, the folder the files go to: the file
+    // manager's "/" folder ("//", keys with an empty segment after the asset's folder) is the asset
+    // root here, because uploads drop empty folder names (#1977).
     const [searchParams, setSearchParams] = useSearchParams();
     const [destinationInput, setDestinationInput] = useState<string>(
-        () => searchParams.get("folder") ?? state?.fileTree?.relativePath ?? "/"
+        () =>
+            incomingDestination(searchParams.get("folder") ?? state?.fileTree?.relativePath ?? "/")
+                .input
+    );
+    // Whether the folder the page was opened with lost empty folder names, while the field still shows it.
+    const [emptySegmentsDropped, setEmptySegmentsDropped] = useState<boolean>(
+        () =>
+            incomingDestination(searchParams.get("folder") ?? state?.fileTree?.relativePath ?? "/")
+                .emptySegmentsDropped
     );
     const { value: destination, error: destinationError } = normalizeDestination(destinationInput);
 
@@ -167,12 +191,11 @@ export default function ModifyAssetsUploadsPage() {
         const wanted = folderParam ?? state?.fileTree?.relativePath;
         if (wanted === undefined || wanted === null) return;
         const target = normalizeDestination(wanted);
-        setDestinationInput((prev) => {
-            const current = normalizeDestination(prev);
-            return !target.error && !current.error && current.value === target.value
-                ? prev
-                : wanted;
-        });
+        const current = normalizeDestination(destinationInput);
+        if (!target.error && !current.error && current.value === target.value) return;
+        const incoming = incomingDestination(wanted);
+        setDestinationInput(incoming.input);
+        setEmptySegmentsDropped(incoming.emptySegmentsDropped);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [folderParam, location.key]);
 
@@ -564,13 +587,19 @@ export default function ModifyAssetsUploadsPage() {
                                         <FormField
                                             label="Destination folder"
                                             description="Folder in the asset the files are added to. Every previewed path includes it."
+                                            constraintText={
+                                                emptySegmentsDropped && !destinationError
+                                                    ? `Empty folder names are dropped, so the files go to ${destination}.`
+                                                    : undefined
+                                            }
                                             errorText={destinationError}
                                         >
                                             <Input
                                                 value={destinationInput}
-                                                onChange={({ detail }) =>
-                                                    setDestinationInput(detail.value)
-                                                }
+                                                onChange={({ detail }) => {
+                                                    setEmptySegmentsDropped(false);
+                                                    setDestinationInput(detail.value);
+                                                }}
                                                 ariaLabel="Destination folder"
                                                 placeholder="/"
                                             />

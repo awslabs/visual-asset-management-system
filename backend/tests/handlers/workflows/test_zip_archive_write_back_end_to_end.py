@@ -55,8 +55,9 @@ class TestZipArchiveWriteBack:
         assert ingestion[0]["statusCode"] == 200, ingestion[0].get("body")
         body = json.loads(ingestion[0]["body"])
         assert body["overallSuccess"] is True
+        # The archive is sent, and answered, as its path in the asset with a leading '/'
         assert [r["relativeKey"] for r in body["fileResults"] if r["success"]] == [
-            ARCHIVES[archive][0]["Key"][len(wb.FILES_PREFIX):]]
+            "/" + ARCHIVES[archive][0]["Key"][len(wb.FILES_PREFIX):]]
 
     def test_the_cross_call_names_the_global_zip_archive_workflow(self, archive):
         _resp, ingestion, m = _zip_archive_run(ARCHIVES[archive])

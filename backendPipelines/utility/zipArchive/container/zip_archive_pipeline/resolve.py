@@ -167,7 +167,12 @@ def _head(s3_client, member):
 
 def check_names(members, empty_dirs):
     """Refuse a selection holding an entry name the archive writers would refuse: a name that breaks
-    their member-name rule, or two entries that would carry the same name."""
+    their member-name rule, or two entries that would carry the same name.
+
+    A member is named by its path without the leading slashes, because an archive has no portable way to
+    keep an empty path segment: '/x' and '//x' (the key with an empty segment after the asset's folder,
+    #1977) are both 'x'. Such a pair is refused, naming the two paths the caller selected, rather than
+    renamed under a placeholder folder that could match a real one."""
     seen = {}
     entries = [(m["relativePath"], m["relativePath"].lstrip("/")) for m in members]
     entries += [(d, d.strip("/") + "/") for d in empty_dirs]
@@ -177,7 +182,8 @@ def check_names(members, empty_dirs):
         except ValueError:
             raise Refusal(f"{rel!r} cannot be a name in the archive") from None
         if name in seen:
-            raise Refusal(f"{seen[name]!r} and {rel!r} would have the same name in the archive")
+            raise Refusal(f"{seen[name]!r} and {rel!r} would have the same name in the archive; "
+                          "download them separately")
         seen[name] = rel
 
 

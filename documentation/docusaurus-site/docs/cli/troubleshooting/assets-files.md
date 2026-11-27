@@ -520,6 +520,22 @@ A download reports a file as failed without transferring it.
 
 Ask an administrator to rename or move the file in the asset. To fetch it anyway, use `--flatten-download-tree` (`assets download`) or `--flatten-downloads` (`assets export --download`), which writes each file under its name alone, or remove the symbolic link from the download directory.
 
+### File Not Downloaded Because Another File Takes Its Local Path
+
+A download reports a file as failed without transferring it, and names another file of the asset.
+
+**Symptoms:**
+
+-   `Not downloaded: another file of this download is saved at the same local path (/cloud.las)` in `failed_downloads`, and the command exits `1`
+
+**Cause:**
+
+Two files of one download would be saved at one local path, and the CLI never lets one replace the other. A file whose key has an empty segment right after the asset's folder (`A1//cloud.las`, listed at `//cloud.las`) maps to the local path of `/cloud.las`, because a local folder cannot have an empty name; the file without the empty segment is saved. With `assets export --download --flatten-downloads` or `--organize-by-asset`, two files of one name in different folders also share a local path; the first listed is saved. Paths that differ only in letter case count as one on a file system that ignores case.
+
+**Resolution:**
+
+Download the reported file on its own into another directory: `vamscli assets download <other-dir> -d <db> -a <asset> --file-key //cloud.las`. Or ask an administrator to rename or move one of the files in the asset.
+
 ---
 
 ## Directory Synchronization

@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Tuple
 from botocore.exceptions import ClientError
 from botocore.config import Config as BotoConfig
 from boto3.dynamodb.conditions import Key
-from common.validators import object_name_regex, validate
+from common.validators import new_asset_id_regex, object_name_regex, validate
 from common.eventLogSummary import event_log_summary
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
@@ -427,8 +427,9 @@ def folder_holds_other_objects(bucket_name: str, folder: str, object_key: str) -
 
 
 def _sync_file_path(object_key: str, prefix: str, asset_id: str) -> str:
-    """The asset-relative file path in the form the API records name a file ('/dir/file.ext')."""
-    return "/" + extract_relative_file_path(object_key, prefix, asset_id).lstrip("/")
+    """The asset-relative file path in the form the API records name a file ('/dir/file.ext'): '/' + the key
+    after the asset's folder, so '{assetId}//x' is '//x', the listed path (#1977)."""
+    return "/" + extract_relative_file_path(object_key, prefix, asset_id)
 
 
 def _written_by_vams(object_metadata) -> bool:
@@ -1351,6 +1352,15 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         AssetLocationInUseError: another asset's location holds the folder.
         RecordRedrive: the id could not be checked.
     """
+    # The folder name is a NEW asset id. Its last character must be one the rest
+    # of the id admits; the shared ASSET_ID rule stays broader so an id an
+    # earlier release stored (for example one ending in '#') stays addressable.
+    if not new_asset_id_regex.fullmatch(asset_id):
+        logger.warning(
+            f"Bucket sync cannot create asset {asset_id!r}: the last character must be "
+            "a letter, digit, underscore, comma, apostrophe or hyphen"
+        )
+        return None
     holders = database_asset_id_rows(database_id, asset_id)
     if holders:
         raise AssetIdInUseError(asset_id, holders)
@@ -2645,8 +2655,9 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
                     )
                     database_id_to_use = restored_database_id
             if not asset_data and not archived_asset:
-                # Auto-create an asset for a new first-level folder.
-                if not first_folder_valid:
+                # Auto-create an asset for a new first-level folder. The folder name is a new asset id,
+                # so it also follows the new-id rule; an existing asset was found by the lookups above.
+                if not first_folder_valid or not new_asset_id_regex.fullmatch(asset_id):
                     logger.info(f"Asset ID {asset_id} is not valid, skipping processing but forwarding to indexers")
                     return False, True, f"Asset ID {asset_id} is not valid"
                 derived_location = derive_location({'baseAssetsPrefix': base_prefix}, '', asset_id)
@@ -2709,7 +2720,7 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
         asset_location = asset_location_of(asset_data or archived_asset, base_prefix, owner_asset_id)
         relative_path = relative_path_in(asset_location, object_key)
         if relative_path is None:
-            relative_path = "/" + extract_relative_file_path(object_key, prefix, owner_asset_id).lstrip("/")
+            relative_path = "/" + extract_relative_file_path(object_key, prefix, owner_asset_id)
         if binding_out is not None:
             binding_out.update(build_binding(database_id_to_use, owner_asset_id, owner_bucket_id,
                                              relative_path, resolved_by))
@@ -3005,7 +3016,7 @@ def relative_path_for_key(asset_location: str, object_key: str, prefix: str, ass
     location does not hold it. A legacy first-folder match falls back to the path after the folder."""
     relative = relative_path_in(asset_location, object_key)
     if relative is None and resolved_by == RESOLVED_BY_FAST_PATH:
-        relative = "/" + extract_relative_file_path(object_key, prefix, asset_id).lstrip("/")
+        relative = "/" + extract_relative_file_path(object_key, prefix, asset_id)
     return relative
 
 

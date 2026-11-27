@@ -129,6 +129,17 @@ class TestFailuresAreReported:
         assert os.path.isfile(local_file)
         assert missing == 1
 
+    def test_an_empty_segment_twin_not_downloaded_does_not_fail_the_file(self, tmp_path):
+        """#1977: vamscli saves '/scene.usda' and reports '//scene.usda' (the key with an empty segment
+        after the asset's folder, which maps to the same local path) as not downloaded. That report names
+        another file, so the open of '/scene.usda' goes on and counts it as one file missing."""
+        cli = _FakeCli(files=ASSET_FILES + ("//scene.usda",), fail={"//scene.usda"},
+                       errors={"//scene.usda": "Not downloaded: another file of this download is saved at "
+                                               "the same local path (/scene.usda)"})
+        local_file, missing = _connector(cli).fetch_local_copy("db", "a1", "/scene.usda", str(tmp_path))
+        assert local_file == os.path.abspath(os.path.join(tmp_path, "scene.usda"))
+        assert missing == 1
+
     def test_the_selected_file_missing_from_the_download_raises(self, tmp_path):
         cli = _FakeCli(fail={"/scene.usda"})
         with pytest.raises(VamsCliError, match="not found"):

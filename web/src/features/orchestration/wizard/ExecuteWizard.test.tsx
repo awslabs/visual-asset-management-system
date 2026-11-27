@@ -1435,8 +1435,8 @@ describe("validateInputSelection", () => {
                     },
                 ],
                 [
-                    "another spelling",
-                    { databaseId: "db1", assetId: "a1", relativeFileKey: "//a.obj" },
+                    "the same selection twice",
+                    { databaseId: "db1", assetId: "a1", relativeFileKey: "/a.obj" },
                 ],
             ])("counts one file selected twice once (%s)", (_spelling, second) => {
                 // The run stores one input row per database, asset and normalized key.
@@ -1455,6 +1455,25 @@ describe("validateInputSelection", () => {
                         ]
                     )
                 ).toEqual([]);
+            });
+
+            it("counts //a.obj and /a.obj as two files (#1977)", () => {
+                // "//a.obj" is the key with an empty segment after the asset's folder (A1//a.obj), so
+                // the run stores a row for each and the single-file step would get both.
+                expect(
+                    validateInputSelection(
+                        { inputFileArity: "multi" },
+                        [multiConvert, singleConsume],
+                        [
+                            { databaseId: "db1", assetId: "a1", relativeFileKey: "/a.obj" },
+                            { databaseId: "db1", assetId: "a1", relativeFileKey: "//a.obj" },
+                        ]
+                    )
+                ).toEqual([
+                    expect.stringContaining(
+                        "but 2 selected input files pass its input-file filters"
+                    ),
+                ]);
             });
         });
 

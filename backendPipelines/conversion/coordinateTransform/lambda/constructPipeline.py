@@ -209,7 +209,9 @@ def _asset_relative_file_key(input_key, asset_id, relative_path=""):
     event carries one, else the input S3 key sliced at the threaded assetId path segment. Returns the
     asset-level key ('/') when neither names it."""
     if relative_path:
-        return "/" + relative_path.lstrip("/")
+        # As given, with a leading '/' added only when missing: '//x' (a key with an empty segment after
+        # the asset's folder) names another file's metadata than '/x'
+        return relative_path if relative_path.startswith("/") else "/" + relative_path
     parts = input_key.split("/")
     if asset_id and asset_id in parts:
         return "/" + "/".join(parts[parts.index(asset_id) + 1:])

@@ -33,6 +33,7 @@ from common.workflows import executionAccess as ea
 from common.workflows import executionLogCapture as elc
 from common.workflows import systemPipelines as sp
 from common import largeObjectCopy as loc
+from common.assetLocations import normalize_location, relative_path_in
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA,
@@ -6518,17 +6519,20 @@ def get_global_executions(event, query_params):
 
 def _to_asset_relative_key(full_key, asset_root_s3_key):
     """Convert a stored FULL asset-bucket key (assetRootS3Key + relative) back to the asset-relative
-    key the execute request expects (leading '/'; '/' = whole asset). Strips the asset root prefix
-    when present; a whole-asset root ('/assetId/') collapses back to '/'."""
-    fk = "/" + (full_key or "").lstrip("/")
-    root = (asset_root_s3_key or "").strip("/")
+    key the execute request expects (leading '/'; '/' = whole asset). A key the asset root holds
+    becomes its path in the asset (common.assetLocations.relative_path_in), the path the execute
+    request reads back to that same key: a single-file asset's own previews and the companion entries
+    named like its file included. The root itself ('/assetId/', or a single file's object) collapses
+    back to '/'."""
+    body = (full_key or "").lstrip("/")
+    root = normalize_location(asset_root_s3_key)
     if root:
-        body = fk.lstrip("/")
-        if body == root or body == root + "/":
+        if body == root or body == root.rstrip("/") or body == root.rstrip("/") + "/":
             return "/"
-        if body.startswith(root + "/"):
-            return "/" + body[len(root) + 1:]
-    return fk
+        path = relative_path_in(root, body)
+        if path is not None:
+            return path
+    return "/" + body
 
 
 def _reconstruct_execute_request(execution_id, main_item, config_row):
