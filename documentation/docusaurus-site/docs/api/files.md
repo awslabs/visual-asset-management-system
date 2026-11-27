@@ -155,6 +155,8 @@ The `versions` list is present only when `includeVersions` is `true`. `changeWor
 
 Moves or renames a file within the asset. This copies the file to the new location and deletes the original. The copy runs within the request, so moving a large file can take longer than the Amazon API Gateway integration timeout; see [API Gateway Timeout for Large Operations](../troubleshooting/known-limitations.md#api-gateway-timeout-for-large-operations).
 
+A `sourcePath` of `/`, or one that resolves to the entry the file list shows at `/`, names the top-level asset folder: for an asset stored at `a1/`, its full key `a1/`, and for an asset created from one Amazon S3 object, its companion folder `{key}/`. These requests return `400` with a `message` that contains `Cannot move or rename the top-level asset folder`, and nothing is moved. `/a1/` is the subfolder named like the asset (key `a1/a1/`).
+
 **Request Parameters:**
 
 | Parameter    | Location | Type   | Required | Description          |
@@ -188,11 +190,11 @@ Moves or renames a file within the asset. This copies the file to the new locati
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                                                                 |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, source file not found, destination already exists, the source is the file of a single-file asset (`The file of a single-file asset cannot be moved or renamed.`), or the destination file name has a blocked extension. |
-| `403`  | Not authorized to modify files in this asset.                                                                                                                                                                                               |
-| `500`  | Internal server error.                                                                                                                                                                                                                      |
+| Status | Description                                                                                                                                                                                                                                                                           |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, source file not found, destination already exists, the source is the top-level asset folder, the source is the file of a single-file asset (`The file of a single-file asset cannot be moved or renamed.`), or the destination file name has a blocked extension. |
+| `403`  | Not authorized to modify files in this asset.                                                                                                                                                                                                                                         |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                |
 
 ---
 
@@ -448,6 +450,8 @@ Creates a new folder (zero-byte S3 object with trailing slash) within the asset'
 
 Reverts a file to a specific previous S3 version by copying the old version as the new current version.
 
+A `filePath` of `/`, or one that resolves to the entry the file list shows at `/` (for an asset stored at `a1/`, its full key `a1/`; for an asset created from one Amazon S3 object, its companion folder `{key}/`), names the top-level asset folder. These requests return `400` with a `message` that contains `Cannot revert the top-level asset folder`, and nothing changes.
+
 **Request Parameters:**
 
 | Parameter    | Location | Type   | Required | Description                     |
@@ -482,11 +486,11 @@ Reverts a file to a specific previous S3 version by copying the old version as t
 
 **Error Responses:**
 
-| Status | Description                                       |
-| ------ | ------------------------------------------------- |
-| `400`  | Invalid parameters, or file or version not found. |
-| `403`  | Not authorized to revert file versions.           |
-| `500`  | Internal server error.                            |
+| Status | Description                                                                   |
+| ------ | ----------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, the top-level asset folder, or file or version not found. |
+| `403`  | Not authorized to revert file versions.                                       |
+| `500`  | Internal server error.                                                        |
 
 ---
 

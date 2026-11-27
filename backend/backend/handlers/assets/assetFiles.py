@@ -3233,6 +3233,11 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     # Use smart path resolution to avoid duplication
     source_key = resolve_asset_file_path(base_key, source_path)
     dest_key = resolve_asset_file_path(base_key, dest_path)
+
+    # The key listed at '/' is the top-level asset folder (see delete_file)
+    if relative_path_in(base_key, source_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot move or rename the top-level asset folder")
+
     # Moving deletes the source, so a source key another live asset also holds is left alone
     nested = nested_locations_for(asset, bucket, base_key, destructive=True)
     refuse_nested_key(nested, source_key, "Source file not found.")
@@ -3386,6 +3391,11 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+
+    # The key listed at '/' is the top-level asset folder (see delete_file)
+    if relative_path_in(base_key, full_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot revert the top-level asset folder")
+
     refuse_unwritable_key(asset, bucket, base_key, full_key, "File not found.")
     
     # Check if file exists
