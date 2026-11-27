@@ -680,6 +680,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Supported npm range** — The `package.json` files declare `engines.npm` `>=11.10.0 <12` and the deployment prerequisites state the range: npm 12 blocks dependency install scripts (here `esbuild` and `@parcel/watcher`) unless an `allowScripts` entry approves them, and VAMS has not approved or tested any, so builds are supported on npm 11 only until that is done. With `engine-strict`, npm 12 stops with `EBADENGINE` instead. (issue #439)
 -   **Upload sequence in CLI JSON output** — `vamscli file upload --json-output` reports each sequence result's `sequence_number` (the upload sequence it belongs to) instead of `null`. (issue #1988)
 -   **Login cancelled at the version prompt** — `vamscli auth login` cancels the login when the version-mismatch prompt is ended with Ctrl+C or end of input, instead of reporting a failed version check and signing the user in. (issue #1911)
+-   **Permanent delete of a missing asset** — Permanently deleting an asset that does not exist answers `404` "Asset not found" instead of `400`, as the asset `GET` does. (issue #1904)
 
 **Documentation:**
 
