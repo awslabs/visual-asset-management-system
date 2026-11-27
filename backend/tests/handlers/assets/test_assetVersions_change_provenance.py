@@ -133,7 +133,7 @@ def _record_writes(runner, target_files=()):
 
     asset_table.update_item = _update_item
 
-    def _copy(source_bucket, source_key, source_version_id, dest_bucket, dest_key):
+    def _copy(source_bucket, source_key, source_version_id, dest_bucket, dest_key, change_user_id=None):
         events.append(("copy", datetime.now(timezone.utc).isoformat()))
         return f"new-{source_version_id}"
 
