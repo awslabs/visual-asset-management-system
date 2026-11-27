@@ -104,6 +104,15 @@ def get_subscription_obj(body):
     return resp.get('Item')
 
 
+def _resolve_profile_email(user_id):
+    """The address the asset topic uses for a user: the profile email, like the subscribe path."""
+    from handlers.subscription.subscriptionService import (  # noqa: WPS433 (lazy import)
+        get_userProfile_Email,
+    )
+
+    return get_userProfile_Email(user_id)
+
+
 def delete_subscription(body):
     response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     subscription_table = dynamodb.Table(subscription_table_name)
@@ -122,7 +131,21 @@ def delete_subscription(body):
     # for a subscriber the row no longer lists -- a retry after a failure between the two writes
     # still owes the SNS half, and it is a no-op for an endpoint the topic never carried.
     if body["entityName"] == "Asset":
-        delete_sns_subscriptions(body["databaseId"], body["entityId"], list(body["subscribers"]),
+        # The topic carries resolved addresses: the profile email, or the user ID when it is
+        # already email-shaped. Resolve a plain user ID the same way the subscribe path does,
+        # otherwise the endpoint never matches and only the row is rewritten (#2028).
+        endpoints = set(body["subscribers"])
+        for subscriber in body["subscribers"]:
+            (valid, _) = validate({
+                'subscriber': {'value': subscriber, 'validator': 'EMAIL'}
+            })
+            if valid:
+                continue
+            email = _resolve_profile_email(subscriber)
+            if email != "INVALID_FORMAT":
+                endpoints.add(email)
+
+        delete_sns_subscriptions(body["databaseId"], body["entityId"], endpoints,
                                  delete_sns=False)
 
     if subscriber in existing_subscribers:

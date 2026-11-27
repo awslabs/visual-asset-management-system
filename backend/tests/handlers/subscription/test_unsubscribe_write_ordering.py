@@ -36,9 +36,12 @@ TOPIC = "arn:aws:sns:us-east-1:123456789012:AssetTopic-test"
 
 USER = "test-user@example.com"
 OTHER_USER = "other-user@example.com"
+USER_ID = "user-123"
+PROFILE_EMAIL = "profile@example.com"
 SUBSCRIPTION_ARNS = {
     USER: f"{TOPIC}:11111111-1111-1111-1111-111111111111",
     OTHER_USER: f"{TOPIC}:22222222-2222-2222-2222-222222222222",
+    PROFILE_EMAIL: f"{TOPIC}:33333333-3333-3333-3333-333333333333",
 }
 NOT_FOUND_MESSAGE = "Subscription does not exists for eventName."
 
@@ -199,6 +202,25 @@ class TestSnsFailureLeavesTheRowUnchanged:
         assert wiring.stored_subscribers() == [OTHER_USER]
         assert wiring.log.index("sns.unsubscribe") < wiring.log.index("update_item"), (
             "the row must not be rewritten until the SNS subscription has been released")
+
+
+@pytest.mark.unit
+class TestProfileEmailEndpoint:
+    """The topic carries the profile email; unsubscribing by user ID must still release it."""
+
+    def test_user_id_resolves_to_the_profile_email(self, monkeypatch):
+        # The row stores the user ID, the topic stores the profile email. Comparing the ID with
+        # the topic endpoints released nothing and the user kept receiving mail (#2028).
+        wiring = Wiring(
+            monkeypatch, _row(USER_ID, OTHER_USER), topic_subscribers=(PROFILE_EMAIL, OTHER_USER))
+        monkeypatch.setattr(
+            unsubscribeService, "_resolve_profile_email", lambda user_id: PROFILE_EMAIL)
+
+        response = unsubscribeService.delete_subscription(_body(USER_ID))
+
+        assert response["statusCode"] == 200
+        assert wiring.unsubscribed_arns() == [SUBSCRIPTION_ARNS[PROFILE_EMAIL]]
+        assert wiring.stored_subscribers() == [OTHER_USER]
 
 
 @pytest.mark.unit
