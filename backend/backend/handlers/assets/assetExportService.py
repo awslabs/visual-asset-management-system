@@ -772,6 +772,24 @@ def get_asset_version_info(databaseId: str, assetId: str, versionId: str) -> Opt
         logger.warning(f"Error getting version info for {databaseId}:{assetId} version {versionId}: {e}")
         return None
 
+def collapse_version_entries(items: List[Dict]) -> List[Dict]:
+    """The rows of an asset version's files, one per file, keyed by the path without its leading slash.
+
+    A version a file list created before #1795 can name one file both as '/a.txt' and 'a.txt' (D1),
+    and can hold a '/' row that names no file. The row stored without the slash wins, the first
+    one read otherwise, and a row that names no file is left out.
+    """
+    chosen: Dict[str, Dict] = {}
+    for item in items:
+        stored_key = str(item.get('fileKey') or '')
+        relative_key = stored_key.lstrip('/')
+        if not relative_key:
+            continue
+        if relative_key not in chosen or not stored_key.startswith('/'):
+            chosen[relative_key] = item
+    return list(chosen.values())
+
+
 def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) -> Optional[Dict]:
     """Get file versions for a specific asset version using the table PK (databaseId:assetId:assetVersionId is now the table PK)
 
@@ -797,10 +815,12 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
         if not items:
             return None
 
+        # The export compares each entry with the file's path without its leading slash, so the key
+        # is handed out in that form, once per file; an entry stored before #1795 can carry the slash.
         files = []
-        for item in items:
+        for item in collapse_version_entries(items):
             file_info = {
-                'relativeKey': item.get('fileKey'),
+                'relativeKey': str(item.get('fileKey') or '').lstrip('/'),
                 'versionId': item.get('versionId'),
                 'size': item.get('size'),
                 'lastModified': item.get('lastModified'),
