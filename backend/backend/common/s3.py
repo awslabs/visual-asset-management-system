@@ -253,11 +253,12 @@ SVG_RESPONSE_CONTENT_DISPOSITION = 'attachment'
 # A download URL (attachment=True) asks S3 to answer with an attachment disposition naming the file
 # by its key, whatever Content-Type or Content-Disposition the object was stored with, so opening the
 # link saves the file under its own name. The bound is on the value as it is signed into the URL's
-# query string (percent-encoded the way SigV4 encodes a query value), which is what it adds to each
-# URL: a bulk response of 1,500 URLs grows by at most about 1 MB, far under the 6 MB Lambda response
-# limit. Every name of up to 255 ASCII letters, digits and "-._~" fits; a name that does not fit
-# (long non-ASCII names first: each three-byte character takes 16 characters) is signed as a bare
-# attachment, and the browser then names the file from the URL path, which ends in the same key.
+# query string (percent-encoded the way SigV4 encodes a query value), so it caps what the disposition
+# adds to each URL: at most about 670 bytes, about 0.9 MB over a full bulk response of 1,500 URLs. It
+# does not bound the response itself; the bulk route has no response-size guard. Every name of up
+# to 255 ASCII letters, digits and "-._~" fits; a name that does not fit (long non-ASCII names
+# first: each three-byte character takes 16 characters) is signed as a bare attachment, and the
+# browser then names the file from the URL path, which ends in the same key.
 ATTACHMENT_DISPOSITION_MAX_LENGTH = 640
 # The characters SigV4 leaves unencoded in a query value (botocore.utils.SAFE_CHARS).
 SIGNED_QUERY_SAFE_CHARS = '-._~'
