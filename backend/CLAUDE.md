@@ -773,12 +773,22 @@ database exists. `authorize_asset` (one asset) and `authorize_assets` (both ends
 read each record with `find_asset`, decide the route's action, or the REPLACE_ALL list `PUT`, `POST`
 and `DELETE`, on `asset_authorization_object` (the stand-in for a missing id), and only when every
 asset is allowed raise 400 `Asset not found`. `authorize_database` does the same for the database
-routes, on a `{databaseId, object__type: 'database'}` stand-in, before 400 `Database not found`. A
-refused caller gets the route's 403 whether or not the record exists. The asset link itself is read
-first (`validate_asset_link_exists`, 400 `Asset link not found`), because it names no asset until it
-is read. The file metadata writes (`create_file_metadata`, `update_file_metadata` and
+routes, on `common.dynamodb.database_authorization_object` (the record, or a `{databaseId,
+object__type: 'database'}` stand-in for a missing id), before 400 `Database not found`. A refused
+caller gets the route's 403 whether or not the record exists. The asset link itself is read first
+(`validate_asset_link_exists`, 400 `Asset link not found`), because it names no asset until it is
+read. The file metadata writes (`create_file_metadata`, `update_file_metadata` and
 `delete_file_metadata`) authorize the asset this way before they check the file: they then key the
 path (`file_record_path`) and check the file in S3 (`validate_file_exists`, create and update only).
+
+The database update and delete (`databaseService.update_database`, `delete_database`) decide Tier-2
+`PUT` / `DELETE` on `database_authorization_object` before they report a missing database (update:
+400 `Database not found`; delete: 404 `Record not found`), and the delete runs its content checks
+only after both. The single asset link GET and the asset link update
+(`assetLinksService.get_single_asset_link`, `update_asset_link`) decide `GET` / `PUT` on both ends
+through `authorize_link_ends` (`asset_authorization_object` per end, the link's stored ids standing in
+for a missing asset) before they answer 400 `One or both linked assets no longer exist`; a link id
+that names no link still answers `Asset link not found` first.
 
 ---
 

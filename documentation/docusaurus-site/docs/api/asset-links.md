@@ -201,6 +201,16 @@ GET /asset-links/single/{assetLinkId}
 }
 ```
 
+Permission on both linked assets is decided before the API reports that one of them no longer exists, so a caller who is not allowed receives `403` whether or not the linked assets still exist.
+
+### Error responses
+
+| Status | Description                                                                                                                                                                                            |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, the asset link does not exist (`Asset link not found`), or, for a caller allowed on both linked assets, one of them no longer exists (`One or both linked assets no longer exist`) |
+| `403`  | Not authorized (requires GET permission on both linked assets)                                                                                                                                         |
+| `500`  | Internal server error                                                                                                                                                                                  |
+
 ---
 
 ## Update an asset link
@@ -243,12 +253,11 @@ PUT /asset-links/{assetLinkId}
 
 ### Error responses
 
-| Status | Description                                                    |
-| ------ | -------------------------------------------------------------- |
-| `400`  | Validation error or alias conflict                             |
-| `403`  | Not authorized (requires PUT permission on both linked assets) |
-| `404`  | Asset link not found                                           |
-| `500`  | Internal server error                                          |
+| Status | Description                                                                                                                                                                                                          |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, alias conflict, the asset link does not exist (`Asset link not found`), or, for a caller allowed on both linked assets, one of them no longer exists (`One or both linked assets no longer exist`) |
+| `403`  | Not authorized (requires PUT permission on both linked assets), whether or not the linked assets still exist                                                                                                         |
+| `500`  | Internal server error                                                                                                                                                                                                |
 
 ---
 
@@ -278,9 +287,8 @@ DELETE /asset-links/{assetLinkId}
 
 | Status | Description                                                                         |
 | ------ | ----------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters                                                                  |
+| `400`  | Invalid parameters, or the asset link does not exist (`Asset link not found`)       |
 | `403`  | Not authorized (requires DELETE permission on every linked asset that still exists) |
-| `404`  | Asset link not found                                                                |
 | `500`  | Internal server error                                                               |
 
 ---

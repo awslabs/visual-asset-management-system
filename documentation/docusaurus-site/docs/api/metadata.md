@@ -106,12 +106,11 @@ When a metadata schema applies to the entity, each metadata item is enriched wit
 
 **Error Responses:**
 
-| Status | Description                                     |
-| ------ | ----------------------------------------------- |
-| `400`  | Invalid parameters or pagination token.         |
-| `403`  | Not authorized to view metadata for this asset. |
-| `404`  | Asset not found.                                |
-| `500`  | Internal server error.                          |
+| Status | Description                                                                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or pagination token, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized to view metadata for this asset.                                                                                                  |
+| `500`  | Internal server error.                                                                                                                           |
 
 ---
 
@@ -171,13 +170,12 @@ Adds new metadata items to an asset. Supports bulk creation of multiple items in
 
 **Error Responses:**
 
-| Status | Description                                                                                |
-| ------ | ------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, validation error, or schema validation failure.                        |
-| `403`  | Not authorized to create metadata for this asset.                                          |
-| `404`  | Asset not found.                                                                           |
-| `500`  | Internal server error.                                                                     |
-| `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
+| Status | Description                                                                                                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, validation error, or schema validation failure, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized to create metadata for this asset.                                                                                                                            |
+| `500`  | Internal server error.                                                                                                                                                       |
+| `503`  | The existing record count could not be checked, so nothing was written. Retry the request.                                                                                   |
 
 ---
 
@@ -237,12 +235,11 @@ A `replace_all` that removes stored keys (keys the entity holds that the request
 
 **Error Responses:**
 
-| Status | Description                                       |
-| ------ | ------------------------------------------------- |
-| `400`  | Invalid parameters or validation error.           |
-| `403`  | Not authorized to update metadata for this asset. |
-| `404`  | Asset not found.                                  |
-| `500`  | Internal server error.                            |
+| Status | Description                                                                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or validation error, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized to update metadata for this asset.                                                                                                |
+| `500`  | Internal server error.                                                                                                                           |
 
 ---
 
@@ -288,12 +285,11 @@ Removes metadata items from an asset by key.
 
 **Error Responses:**
 
-| Status | Description                                       |
-| ------ | ------------------------------------------------- |
-| `400`  | Invalid parameters.                               |
-| `403`  | Not authorized to delete metadata for this asset. |
-| `404`  | Asset not found.                                  |
-| `500`  | Internal server error.                            |
+| Status | Description                                                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized to delete metadata for this asset.                                                                            |
+| `500`  | Internal server error.                                                                                                       |
 
 ---
 
@@ -342,12 +338,11 @@ Retrieves metadata for a specific file within an asset.
 
 **Error Responses:**
 
-| Status | Description                               |
-| ------ | ----------------------------------------- |
-| `400`  | Invalid parameters or missing `filePath`. |
-| `403`  | Not authorized.                           |
-| `404`  | Asset or file not found.                  |
-| `500`  | Internal server error.                    |
+| Status | Description                                                                                                                                        |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters or missing `filePath`, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized.                                                                                                                                    |
+| `500`  | Internal server error.                                                                                                                             |
 
 ---
 
@@ -392,13 +387,12 @@ Returns a bulk operation response (same format as asset metadata).
 
 **Error Responses:**
 
-| Status | Description                                                                                |
-| ------ | ------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters.                                                                        |
-| `403`  | Not authorized.                                                                            |
-| `404`  | Asset or file not found.                                                                   |
-| `500`  | Internal server error.                                                                     |
-| `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
+| Status | Description                                                                                                                                                                                          |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`) or the file does not exist (`VAMS General Error: File not found in S3`). |
+| `403`  | Not authorized.                                                                                                                                                                                      |
+| `500`  | Internal server error.                                                                                                                                                                               |
+| `503`  | The existing record count could not be checked, so nothing was written. Retry the request.                                                                                                           |
 
 ---
 
@@ -433,12 +427,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description              |
-| ------ | ------------------------ |
-| `400`  | Invalid parameters.      |
-| `403`  | Not authorized.          |
-| `404`  | Asset or file not found. |
-| `500`  | Internal server error.   |
+| Status | Description                                                                                                                                                                                          |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`) or the file does not exist (`VAMS General Error: File not found in S3`). |
+| `403`  | Not authorized.                                                                                                                                                                                      |
+| `500`  | Internal server error.                                                                                                                                                                               |
 
 ---
 
@@ -466,12 +459,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description              |
-| ------ | ------------------------ |
-| `400`  | Invalid parameters.      |
-| `403`  | Not authorized.          |
-| `404`  | Asset or file not found. |
-| `500`  | Internal server error.   |
+| Status | Description                                                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized.                                                                                                              |
+| `500`  | Internal server error.                                                                                                       |
 
 ---
 
@@ -518,12 +510,11 @@ Retrieves metadata items for the specified database, one page at a time.
 
 **Error Responses:**
 
-| Status | Description                                        |
-| ------ | -------------------------------------------------- |
-| `400`  | Invalid parameters.                                |
-| `403`  | Not authorized to view metadata for this database. |
-| `404`  | Database not found.                                |
-| `500`  | Internal server error.                             |
+| Status | Description                                                                                                                           |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the database, the database does not exist (`VAMS General Error: Database not found`). |
+| `403`  | Not authorized to view metadata for this database.                                                                                    |
+| `500`  | Internal server error.                                                                                                                |
 
 ---
 
@@ -559,13 +550,12 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description                                                                                |
-| ------ | ------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters or schema validation failure.                                           |
-| `403`  | Not authorized.                                                                            |
-| `404`  | Database not found.                                                                        |
-| `500`  | Internal server error.                                                                     |
-| `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
+| Status | Description                                                                                                                                                        |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or schema validation failure, or, for a caller allowed on the database, the database does not exist (`VAMS General Error: Database not found`). |
+| `403`  | Not authorized.                                                                                                                                                    |
+| `500`  | Internal server error.                                                                                                                                             |
+| `503`  | The existing record count could not be checked, so nothing was written. Retry the request.                                                                         |
 
 ---
 
@@ -598,12 +588,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `400`  | Invalid parameters.    |
-| `403`  | Not authorized.        |
-| `404`  | Database not found.    |
-| `500`  | Internal server error. |
+| Status | Description                                                                                                                           |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the database, the database does not exist (`VAMS General Error: Database not found`). |
+| `403`  | Not authorized.                                                                                                                       |
+| `500`  | Internal server error.                                                                                                                |
 
 ---
 
@@ -627,12 +616,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `400`  | Invalid parameters.    |
-| `403`  | Not authorized.        |
-| `404`  | Database not found.    |
-| `500`  | Internal server error. |
+| Status | Description                                                                                                                           |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the database, the database does not exist (`VAMS General Error: Database not found`). |
+| `403`  | Not authorized.                                                                                                                       |
+| `500`  | Internal server error.                                                                                                                |
 
 ---
 
@@ -675,12 +663,11 @@ Retrieves metadata items for the specified asset link, one page at a time.
 
 **Error Responses:**
 
-| Status | Description                                          |
-| ------ | ---------------------------------------------------- |
-| `400`  | Invalid parameters or pagination token.              |
-| `403`  | Not authorized to view metadata for this asset link. |
-| `404`  | Asset link not found.                                |
-| `500`  | Internal server error.                               |
+| Status | Description                                                                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or pagination token, or the asset link does not exist (`VAMS General Error: Asset link not found`), or, for a caller allowed on both linked assets, one of them does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized to view metadata for this asset link.                                                                                                                                                                                       |
+| `500`  | Internal server error.                                                                                                                                                                                                                     |
 
 ---
 
@@ -716,13 +703,12 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description                                                                                |
-| ------ | ------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters or validation error.                                                    |
-| `403`  | Not authorized.                                                                            |
-| `404`  | Asset link not found.                                                                      |
-| `500`  | Internal server error.                                                                     |
-| `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
+| Status | Description                                                                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or validation error, or the asset link does not exist (`VAMS General Error: Asset link not found`), or, for a caller allowed on both linked assets, one of them does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized.                                                                                                                                                                                                                            |
+| `500`  | Internal server error.                                                                                                                                                                                                                     |
+| `503`  | The existing record count could not be checked, so nothing was written. Retry the request.                                                                                                                                                 |
 
 ---
 
@@ -768,12 +754,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description                             |
-| ------ | --------------------------------------- |
-| `400`  | Invalid parameters or validation error. |
-| `403`  | Not authorized.                         |
-| `404`  | Asset link not found.                   |
-| `500`  | Internal server error.                  |
+| Status | Description                                                                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or validation error, or the asset link does not exist (`VAMS General Error: Asset link not found`), or, for a caller allowed on both linked assets, one of them does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized.                                                                                                                                                                                                                            |
+| `500`  | Internal server error.                                                                                                                                                                                                                     |
 
 ---
 
@@ -803,12 +788,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `400`  | Invalid parameters.    |
-| `403`  | Not authorized.        |
-| `404`  | Asset link not found.  |
-| `500`  | Internal server error. |
+| Status | Description                                                                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or the asset link does not exist (`VAMS General Error: Asset link not found`), or, for a caller allowed on both linked assets, one of them does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized.                                                                                                                                                                                                        |
+| `500`  | Internal server error.                                                                                                                                                                                                 |
 
 ---
 
