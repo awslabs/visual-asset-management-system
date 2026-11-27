@@ -103,6 +103,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CLI** The `vamscli asset-version create` help example that uses `--files` now includes `--no-use-latest-files`, without which the example fails ([#1941](https://github.com/awslabs/visual-asset-management-system/issues/1941))
 -   **CLI** `vamscli file upload --json-output` names each entry of `sequence_results` by its upload sequence in `sequence_number`; it was always `null`, because the command read a key the upload manager does not set. ([#1988](https://github.com/awslabs/visual-asset-management-system/issues/1988))
 -   **Documentation** The OpenAPI document `VAMS_API.yaml` names the create-folder request and response field `relativeKey`, the field the API reads and returns, instead of `keyPath`. ([#2013](https://github.com/awslabs/visual-asset-management-system/issues/2013))
+-   **Backend** For an asset created from a single Amazon S3 object, creating an asset version from a file list and reverting to an asset version reach the files of its companion folder: a version created from a file list holds each named file, and a revert restores each file of the version and lists it in the new version. Both skipped every such file and reported it in `skippedFiles`, and a revert recorded a new version that listed none of them. (refs [#2023](https://github.com/awslabs/visual-asset-management-system/issues/2023), PR [#2034](https://github.com/awslabs/visual-asset-management-system/pull/2034))
 
 ### Chores
 
