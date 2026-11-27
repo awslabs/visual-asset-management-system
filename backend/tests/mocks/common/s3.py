@@ -122,7 +122,8 @@ def list_all_objects(bucket, prefix, client=None, max_objects=None):
 # attachment disposition naming the file; every other key is unchanged.
 SVG_RESPONSE_CONTENT_TYPE = 'image/svg+xml'
 SVG_RESPONSE_CONTENT_DISPOSITION = 'attachment'
-ATTACHMENT_DISPOSITION_MAX_LENGTH = 1024
+ATTACHMENT_DISPOSITION_MAX_LENGTH = 640
+SIGNED_QUERY_SAFE_CHARS = '-._~'
 
 
 def attachment_content_disposition(key):
@@ -134,7 +135,7 @@ def attachment_content_disposition(key):
     fallback = ''.join(ch if ' ' <= ch <= '~' else '_' for ch in name)
     fallback = fallback.replace('\\', '\\\\').replace('"', '\\"')
     value = "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (fallback, quote(name, safe=''))
-    if len(value) > ATTACHMENT_DISPOSITION_MAX_LENGTH:
+    if len(quote(value, safe=SIGNED_QUERY_SAFE_CHARS)) > ATTACHMENT_DISPOSITION_MAX_LENGTH:
         return 'attachment'
     return value
 

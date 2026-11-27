@@ -252,10 +252,15 @@ SVG_RESPONSE_CONTENT_DISPOSITION = 'attachment'
 
 # A download URL (attachment=True) asks S3 to answer with an attachment disposition naming the file
 # by its key, whatever Content-Type or Content-Disposition the object was stored with, so opening the
-# link saves the file under its own name. The longest value signed: every file name of up to 255
-# bytes (the usual file-system limit) fits fully escaped. A longer name is signed as a bare
+# link saves the file under its own name. The bound is on the value as it is signed into the URL's
+# query string (percent-encoded the way SigV4 encodes a query value), which is what it adds to each
+# URL: a bulk response of 1,500 URLs grows by at most about 1 MB, far under the 6 MB Lambda response
+# limit. Every name of up to 255 ASCII letters, digits and "-._~" fits; a name that does not fit
+# (long non-ASCII names first: each three-byte character takes 16 characters) is signed as a bare
 # attachment, and the browser then names the file from the URL path, which ends in the same key.
-ATTACHMENT_DISPOSITION_MAX_LENGTH = 1024
+ATTACHMENT_DISPOSITION_MAX_LENGTH = 640
+# The characters SigV4 leaves unencoded in a query value (botocore.utils.SAFE_CHARS).
+SIGNED_QUERY_SAFE_CHARS = '-._~'
 
 
 def attachment_content_disposition(key: str) -> str:
@@ -266,7 +271,8 @@ def attachment_content_disposition(key: str) -> str:
     replaces every character outside printable ASCII with ``_`` and escapes ``"`` and ``\\``; the
     extended value (RFC 8187) percent-encodes every UTF-8 byte outside the unreserved set, and
     browsers use it in preference to the fallback. A key ending in ``/`` (a folder marker) names no
-    file and gets ``attachment`` alone, as does a name over ``ATTACHMENT_DISPOSITION_MAX_LENGTH``.
+    file and gets ``attachment`` alone, as does a name whose value, percent-encoded as it is signed
+    into the URL, would pass ``ATTACHMENT_DISPOSITION_MAX_LENGTH``.
     """
     name = str(key or '').rsplit('/', 1)[-1]
     if not name:
@@ -274,7 +280,7 @@ def attachment_content_disposition(key: str) -> str:
     fallback = ''.join(ch if ' ' <= ch <= '~' else '_' for ch in name)
     fallback = fallback.replace('\\', '\\\\').replace('"', '\\"')
     value = "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (fallback, quote(name, safe=''))
-    if len(value) > ATTACHMENT_DISPOSITION_MAX_LENGTH:
+    if len(quote(value, safe=SIGNED_QUERY_SAFE_CHARS)) > ATTACHMENT_DISPOSITION_MAX_LENGTH:
         return 'attachment'
     return value
 

@@ -22,7 +22,10 @@ import os
 import sys
 from email.message import Message
 from email.utils import collapse_rfc2231_value
-from urllib.parse import parse_qs, urlsplit
+import base64
+import json
+import random
+from urllib.parse import parse_qs, quote, urlsplit
 
 import boto3
 import pytest
@@ -140,16 +143,35 @@ class TestAttachmentContentDisposition:
     def test_a_key_with_no_folder_is_named_whole(self):
         assert _decoded_filename(_shipped_s3().attachment_content_disposition("top.glb")) == "top.glb"
 
-    def test_a_255_byte_name_fits_fully_escaped(self):
-        s3 = _shipped_s3()
-        name = "€" * 85  # 85 three-byte characters: a 255-byte name, every byte escaped
-        value = s3.attachment_content_disposition(f"a/{name}")
-        assert len(value) <= s3.ATTACHMENT_DISPOSITION_MAX_LENGTH
-        assert _decoded_filename(value) == name
+    def test_a_255_byte_ascii_name_is_named(self):
+        name = "a" * 251 + ".txt"  # the usual file-system name limit, in characters SigV4 leaves as they are
+        assert _decoded_filename(_shipped_s3().attachment_content_disposition(f"a/{name}")) == name
 
-    def test_a_name_over_the_bound_gets_a_bare_attachment(self):
+    @pytest.mark.parametrize("name", ["€" * 85, "中" * 85, "😀" * 63, "€" * 200])
+    def test_a_long_non_ascii_name_gets_a_bare_attachment(self, name):
+        # A 255-byte name of three- or four-byte characters would add over 1.3 KB to each URL.
+        assert _shipped_s3().attachment_content_disposition(f"a/{name}") == "attachment"
+
+    @pytest.mark.parametrize("char", ["a", " ", '"', "é", "中", "😀"],
+                             ids=["ascii", "space", "quote", "2-byte", "3-byte", "4-byte"])
+    def test_the_signed_value_stays_within_the_bound(self, char):
         s3 = _shipped_s3()
-        assert s3.attachment_content_disposition("a/" + "€" * 200) == "attachment"
+        unbounded = _shipped_s3()
+        unbounded.ATTACHMENT_DISPOSITION_MAX_LENGTH = 10 ** 6
+        named = 0
+        for count in range(1, 251 // len(char.encode()) + 1):
+            key = f"a/{char * count}.bin"
+            value = s3.attachment_content_disposition(key)
+            full = unbounded.attachment_content_disposition(key)
+            # Named exactly when the named value, as signed into the URL query, fits the bound.
+            if len(quote(full, safe=s3.SIGNED_QUERY_SAFE_CHARS)) <= s3.ATTACHMENT_DISPOSITION_MAX_LENGTH:
+                assert value == full
+                assert _decoded_filename(value) == f"{char * count}.bin"
+                named = count
+            else:
+                assert value == "attachment"
+        # Short names of every kind are named.
+        assert named >= 10
 
 
 @pytest.mark.unit
@@ -187,12 +209,28 @@ class TestPresignedParams:
         assert query["response-content-disposition"] == [params["ResponseContentDisposition"]]
         assert _decoded_filename(query["response-content-disposition"][0]) == 'Grüße "x", y.txt'
 
+    # Names just inside the bound: 574, 632 and 492 characters once signed.
+    @pytest.mark.parametrize("name", ["a" * 251 + ".txt", "中" * 35 + ".txt", 'q "x" ' * 10 + ".txt"])
+    def test_the_bound_measures_the_value_as_botocore_signs_it(self, name):
+        s3 = _shipped_s3()
+        params = s3.presigned_get_object_params({"Bucket": "b", "Key": f"asset1/{name}"}, attachment=True)
+        client = boto3.client("s3", region_name="us-east-1", aws_access_key_id="AKIDEXAMPLE",
+                              aws_secret_access_key="example-secret")
+        url = client.generate_presigned_url("get_object", Params=params, ExpiresIn=60)
+        raw = [p.split("=", 1)[1] for p in urlsplit(url).query.split("&")
+               if p.startswith("response-content-disposition=")]
+        assert raw == [quote(params["ResponseContentDisposition"], safe=s3.SIGNED_QUERY_SAFE_CHARS)]
+        assert len(raw[0]) <= s3.ATTACHMENT_DISPOSITION_MAX_LENGTH
+        assert _decoded_filename(params["ResponseContentDisposition"]) == name
+
     def test_the_test_mock_applies_the_same_rule(self):
         mock = sys.modules["common.s3"]
         shipped = _shipped_s3()
         assert mock.ATTACHMENT_DISPOSITION_MAX_LENGTH == shipped.ATTACHMENT_DISPOSITION_MAX_LENGTH
+        assert mock.SIGNED_QUERY_SAFE_CHARS == shipped.SIGNED_QUERY_SAFE_CHARS
         keys = [f"x/{name}" for name in NAMES] + ["x/a.svg", "x/folder/", "", "x/" + "€" * 200,
-                                                  "x/line\nbreak.txt"]
+                                                  "x/line\nbreak.txt", "x/" + "a" * 251 + ".txt",
+                                                  "x/" + "中" * 35 + ".txt", "x/" + "中" * 36 + ".txt"]
         for key in keys:
             assert mock.attachment_content_disposition(key) == shipped.attachment_content_disposition(key)
             for attachment in (False, True):
@@ -260,6 +298,76 @@ class TestDownloadAssetUrls:
         params = _signed_params(download.s3)
         assert params["Key"] == preview_key
         assert "ResponseContentDisposition" not in params
+
+
+# A full bulk response as the route returns it: MAX_KEYS_PER_DOWNLOAD_REQUEST keys, each pinned to a
+# 32-character version ID, one subfolder below a 37-character asset folder in a 63-character bucket
+# in us-west-2, signed by botocore with a 1,200-character session token, serialized by
+# models.common.success and then as the Lambda proxy response.
+LAMBDA_RESPONSE_LIMIT = 6 * 1024 * 1024
+BULK_RESPONSE_BUDGET = LAMBDA_RESPONSE_LIMIT - 512 * 1024  # half a mebibyte under the limit
+BULK_ASSET_FOLDER = "xd1f0c3a2-5b7e-4f7a-9c1e-2a6b8d9e0f12/"
+BULK_BUCKET = "vams-assets-" + "b" * 51
+BULK_VERSION_ID = "3HL4kqtJlcpXroDTDmJ.rmSpXd3dIbrH"
+
+
+def _bulk_name(char, count, index):
+    return "%s%04d.txt" % (char * count, index)
+
+
+def _longest_named_count(s3, char):
+    """The most repeats of ``char`` in a bulk test name that the helper still names."""
+    count = 255 // len(char.encode())
+    while s3.attachment_content_disposition("a/" + _bulk_name(char, count, 0)) == "attachment":
+        count -= 1
+    return count
+
+
+def _raw_disposition(url):
+    return [p.split("=", 1)[1] for p in urlsplit(url).query.split("&")
+            if p.startswith("response-content-disposition=")]
+
+
+@pytest.fixture
+def bulk_download(monkeypatch):
+    m = _wire_download_module(_load_download(), BULK_ASSET_FOLDER)
+    m.get_default_bucket_details = MagicMock(return_value={
+        "bucketId": "bucket-1", "bucketName": BULK_BUCKET, "baseAssetsPrefix": "",
+    })
+    monkeypatch.setattr(m, "presigned_get_object_params", _shipped_s3().presigned_get_object_params)
+    token = base64.b64encode(random.Random(2026).randbytes(900)).decode()
+    assert len(token) == 1200
+    client = boto3.client("s3", region_name="us-west-2", aws_access_key_id="ASIAEXAMPLEEXAMPLE00",
+                          aws_secret_access_key="example-secret", aws_session_token=token)
+    m.s3.generate_presigned_url.side_effect = client.generate_presigned_url
+    return m
+
+
+@pytest.mark.unit
+class TestBulkResponseSize:
+    """A full bulk response stays under the 6 MB Lambda response limit with the named attachments."""
+
+    # 255 bytes is the usual file-system name limit; None is the longest name the helper still names
+    # (the largest disposition it signs for that kind of character).
+    @pytest.mark.parametrize("char,name_bytes", [("a", 255), ("中", 255), ("中", None), ("😀", 255), ("😀", None)],
+                             ids=["ascii-255", "3-byte-255", "3-byte-longest-named", "4-byte-255",
+                                  "4-byte-longest-named"])
+    def test_a_full_bulk_response_stays_under_the_budget(self, bulk_download, char, name_bytes):
+        from models.assetsV3 import MAX_KEYS_PER_DOWNLOAD_REQUEST
+        s3 = _shipped_s3()
+        count = ((name_bytes - 8) // len(char.encode()) if name_bytes is not None
+                 else _longest_named_count(s3, char))
+        keys = [{"key": "/scans/batch-%04d/%s" % (i, _bulk_name(char, count, i)), "versionId": BULK_VERSION_ID}
+                for i in range(MAX_KEYS_PER_DOWNLOAD_REQUEST)]
+        response = bulk_download.download_asset_files_bulk(
+            "db1", "asset1", _parse_download({"downloadType": "assetFile", "keys": keys}))
+        assert len(response.files) == MAX_KEYS_PER_DOWNLOAD_REQUEST
+        assert all(f.success for f in response.files)
+        for f in response.files:
+            raw = _raw_disposition(f.downloadUrl)
+            assert len(raw) == 1 and len(raw[0]) <= s3.ATTACHMENT_DISPOSITION_MAX_LENGTH
+        envelope = json.dumps(bulk_download.success(body=response.dict()))
+        assert len(envelope.encode()) <= BULK_RESPONSE_BUDGET, len(envelope.encode())
 
 
 @pytest.mark.unit
