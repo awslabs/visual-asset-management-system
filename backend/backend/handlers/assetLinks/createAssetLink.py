@@ -11,7 +11,7 @@ from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
-from common.dynamodb import query_all_items
+from common.dynamodb import query_all_items, asset_authorization_object
 from common.validators import validate
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -213,7 +213,12 @@ def detect_cycle_in_parent_child(from_asset_id: str, from_database_id: str, to_a
         return True  # Err on the side of caution
 
 def check_asset_permissions(asset_id: str, database_id: str, claims_and_roles: dict, action: str) -> bool:
-    """Check if user has permissions for the specified asset and action"""
+    """Check if user has permissions for the specified asset and action
+
+    Decided on the asset's record or, when it does not exist, on the requested ids
+    (common.dynamodb.asset_authorization_object), so the verdict does not depend on whether the
+    asset exists; validate_assets_exist reports a missing asset afterwards.
+    """
     try:
         # Get asset details
         response = asset_storage_table.get_item(
@@ -222,13 +227,8 @@ def check_asset_permissions(asset_id: str, database_id: str, claims_and_roles: d
                 'assetId': asset_id
             }
         )
-        
-        if 'Item' not in response:
-            return False
-            
-        asset = response['Item']
-        asset.update({"object__type": "asset"})
-        
+        asset = asset_authorization_object(response.get('Item'), database_id, asset_id)
+
         if len(claims_and_roles.get("tokens", [])) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             return casbin_enforcer.enforce(asset, action)
@@ -251,6 +251,13 @@ def create_asset_link(request_model: CreateAssetLinkRequestModel, claims_and_rol
         request_model.fromAssetDatabaseId == request_model.toAssetDatabaseId):
         raise ValueError("Cannot create asset link to the same asset")
     
+    # Check permissions for both assets before either's existence is reported
+    if not check_asset_permissions(request_model.fromAssetId, request_model.fromAssetDatabaseId, claims_and_roles, "POST"):
+        raise PermissionError("Not authorized to create links for the source asset")
+        
+    if not check_asset_permissions(request_model.toAssetId, request_model.toAssetDatabaseId, claims_and_roles, "POST"):
+        raise PermissionError("Not authorized to create links for the target asset")
+
     # Validate that both assets exist
     if not validate_assets_exist(
         request_model.fromAssetId, 
@@ -259,13 +266,6 @@ def create_asset_link(request_model: CreateAssetLinkRequestModel, claims_and_rol
         request_model.toAssetDatabaseId
     ):
         raise ValueError("One or both assets do not exist")
-    
-    # Check permissions for both assets
-    if not check_asset_permissions(request_model.fromAssetId, request_model.fromAssetDatabaseId, claims_and_roles, "POST"):
-        raise PermissionError("Not authorized to create links for the source asset")
-        
-    if not check_asset_permissions(request_model.toAssetId, request_model.toAssetDatabaseId, claims_and_roles, "POST"):
-        raise PermissionError("Not authorized to create links for the target asset")
     
     # Check for existing relationships with the same aliasId
     if check_existing_relationship(

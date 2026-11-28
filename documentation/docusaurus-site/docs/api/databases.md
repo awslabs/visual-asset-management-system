@@ -270,15 +270,15 @@ At least one field must be provided. The `databaseId` cannot be changed after cr
 }
 ```
 
-A caller who may call this route but is not permitted to update the database itself receives `403`, and nothing is written.
+A caller who may call this route but is not permitted to update the database itself receives `403` whether or not the database exists, and nothing is written.
 
 ### Error responses
 
-| Status | Description                                                                                                                                                                                           |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation error, no updatable field supplied, database not found, or the bucket is unknown, not active or not readable to you (`{"message": "Bucket ID not found or not available"}`, as for create) |
-| `403`  | Not authorized                                                                                                                                                                                        |
-| `500`  | Internal server error                                                                                                                                                                                 |
+| Status | Description                                                                                                                                                                                                                                                                        |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, no updatable field supplied, database not found for a caller allowed to update it (`VAMS General Error: Database not found`), or the bucket is unknown, not active or not readable to you (`{"message": "Bucket ID not found or not available"}`, as for create) |
+| `403`  | Not authorized                                                                                                                                                                                                                                                                     |
+| `500`  | Internal server error                                                                                                                                                                                                                                                              |
 
 ---
 
@@ -300,7 +300,7 @@ DELETE /database/{databaseId}
 A database cannot be deleted if it contains active assets, pipelines, or workflows. Remove all dependent resources before deleting the database.
 :::
 
-The dependency check runs after the database is found and the caller is authorized to delete it, so a caller who is not authorized receives `403`, and a database that does not exist returns `404`, whatever the database contains.
+The caller's permission is decided first, then the database is looked up, then the dependency check runs. A caller who is not authorized receives `403` whether or not the database exists, and a caller who is authorized receives `404` for a database that does not exist, whatever the database contains.
 
 ### Response
 
@@ -316,7 +316,7 @@ The dependency check runs after the database is found and the caller is authoriz
 | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Database has active assets, pipelines, or workflows, or an unexpected error stopped the delete (`VAMS General Error: Error deleting database.`) |
 | `403`  | Not authorized                                                                                                                                  |
-| `404`  | Database not found                                                                                                                              |
+| `404`  | Database not found (`Record not found`), for a caller allowed to delete it                                                                      |
 | `500`  | Internal server error                                                                                                                           |
 | `503`  | Compliance is still building an index after an update; try again in a few minutes                                                               |
 
