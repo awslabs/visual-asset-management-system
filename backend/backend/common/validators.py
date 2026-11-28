@@ -194,8 +194,8 @@ def validate_relative_file_path(name, value):
         return (False, name + " is invalid. Must follow the regexp "+relative_file_path_pattern)
     elif value.count('..') > 0:
         return (False, name + " is invalid. Cannot contain more than one '.' in sequence.")
-    elif len(value) < 3:
-        return (False, name + " is invalid. Must be at least 3 characters long.")
+    elif len(value) < 2:
+        return (False, name + " is invalid. Must be at least 2 characters long.")
     elif exceeds_s3_object_key_limit(value):
         return (False, _s3_object_key_limit_message(name))
     return (True, '')

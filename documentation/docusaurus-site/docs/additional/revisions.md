@@ -692,6 +692,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Upload sequence in CLI JSON output** — `vamscli file upload --json-output` reports each sequence result's `sequence_number` (the upload sequence it belongs to) instead of `null`. (issue #1988)
 -   **Login cancelled at the version prompt** — `vamscli auth login` cancels the login when the version-mismatch prompt is ended with Ctrl+C or end of input, instead of reporting a failed version check and signing the user in. (issue #1911)
 -   **Permanent delete of a missing asset** — Permanently deleting an asset that does not exist answers `404` "Asset not found" instead of `400`, as the asset `GET` does. (issue #1904)
+-   **One-character file names at the asset root** — A file such as `/x` can have its file metadata and attributes read and written; the file path check required at least 3 characters. A bare `/` is still refused. (issue #2021)
 
 **Documentation:**
 
