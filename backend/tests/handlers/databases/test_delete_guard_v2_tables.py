@@ -149,7 +149,10 @@ class TestDeleteGuardRunsAfterAuthorization:
         assert tables.get_item(Key={"databaseId": "db1"}).get("Item") is not None
 
     def test_a_missing_database_is_not_found_before_the_content_checks(self, enforcer, tables, checks):
-        """db2 has no record but does own a pipeline row, so a guard that ran first would answer 400."""
+        """db2 has no record but does own a pipeline row, so a guard that ran first would answer 400.
+
+        The caller is authorized on the requested id first, so a refused caller cannot tell a missing
+        database from an existing one."""
         svc.dynamodb.Table(svc.pipeline_database).put_item(
             Item={"databaseId": "db2", "pipelineId": "p2"})
 
@@ -157,7 +160,7 @@ class TestDeleteGuardRunsAfterAuthorization:
 
         assert result.statusCode == 404
         assert checks == []
-        assert enforcer.calls == []
+        assert enforcer.calls == [("database", "db2", "DELETE")]
 
     def test_an_empty_identity_is_refused_without_consulting_casbin(self, enforcer, tables, checks):
         result = svc.delete_database("db1", claims_and_roles={"tokens": [], "roles": []})
