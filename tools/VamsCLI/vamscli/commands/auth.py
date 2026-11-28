@@ -228,6 +228,11 @@ def login(ctx: click.Context, username: str, password: str, password_stdin: bool
                 output_info("Skipping version check confirmation (--skip-version-check enabled)", json_output)
         else:
             output_status(f"✓ Version match: {version_info['cli_version']}", json_output)
+    except click.Abort:
+        # Ctrl+C or end of input at the prompt is a "no". click.Abort is a RuntimeError, so the
+        # handler below would otherwise report it as a failed version check and sign the user in.
+        output_info("Authentication cancelled.", json_output)
+        return
     except Exception as e:
         # Version check failure shouldn't block authentication
         output_warning(f"Could not check API version: {e}", json_output)
