@@ -331,27 +331,37 @@ endpoint rather than the detail response.
 
 ### File Upload Restrictions
 
-| Parameter                 | Value                                                                                                                                         |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Blocked file extensions   | `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`                      |
-| Upload stage 1 rate limit | 20 initializations per user per minute                                                                                                        |
-| File validation           | Extension check on API upload and on the destination of a move, rename or copy; MIME type check on a stored object's content type (see below) |
+| Parameter                 | Value                                                                                                                                                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Blocked file extensions   | `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.dotm`, `.xlsm`, `.xltm`, `.xlsb`, `.xlam`, `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm`, `.vbs`, `.bat` |
+| Upload stage 1 rate limit | 20 initializations per user per minute                                                                                                                                                                             |
+| File validation           | Extension check on API upload and on the destination of a move, rename or copy; MIME type check on a stored object's content type (see below)                                                                      |
 
 ### Blocked MIME Types
 
 The following MIME types are refused when Amazon S3 reports one as a stored object's content type: when an upload completes, when a workflow output is ingested, when the large object copy engine copies a file into its asset, and when a file is downloaded, streamed, exported or added to a zip download. This list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
 
-| MIME Type                                          | Description                  |
-| -------------------------------------------------- | ---------------------------- |
-| `application/java-archive`                         | Java archive files           |
-| `application/x-msdownload`                         | Windows executables          |
-| `application/x-sh`                                 | Shell scripts                |
-| `application/x-php`                                | PHP scripts                  |
-| `application/x-powershell`                         | PowerShell scripts           |
-| `application/vbscript`                             | VBScript files               |
-| `application/x-ms-dos-executable`                  | DOS executables              |
-| `application/x-bat-script`                         | Batch scripts                |
-| `application/vnd.ms-word.document.macroEnabled.12` | Macro-enabled Word documents |
+| MIME Type                                                    | Description                            |
+| ------------------------------------------------------------ | -------------------------------------- |
+| `application/java-archive`                                   | Java archive files                     |
+| `application/x-msdownload`                                   | Windows executables                    |
+| `application/x-sh`                                           | Shell scripts                          |
+| `application/x-php`                                          | PHP scripts                            |
+| `application/x-powershell`                                   | PowerShell scripts                     |
+| `application/vbscript`                                       | VBScript files                         |
+| `application/x-ms-dos-executable`                            | DOS executables                        |
+| `application/x-bat-script`                                   | Batch scripts                          |
+| `application/vnd.ms-word.document.macroEnabled.12`           | Macro-enabled Word documents           |
+| `application/vnd.ms-word.template.macroEnabled.12`           | Macro-enabled Word templates           |
+| `application/vnd.ms-excel.sheet.macroEnabled.12`             | Macro-enabled Excel workbooks          |
+| `application/vnd.ms-excel.template.macroEnabled.12`          | Macro-enabled Excel templates          |
+| `application/vnd.ms-excel.sheet.binary.macroEnabled.12`      | Excel binary workbooks                 |
+| `application/vnd.ms-excel.addin.macroEnabled.12`             | Excel add-ins                          |
+| `application/vnd.ms-powerpoint.presentation.macroEnabled.12` | Macro-enabled PowerPoint presentations |
+| `application/vnd.ms-powerpoint.template.macroEnabled.12`     | Macro-enabled PowerPoint templates     |
+| `application/vnd.ms-powerpoint.slideshow.macroEnabled.12`    | Macro-enabled PowerPoint slide shows   |
+| `application/vnd.ms-powerpoint.addin.macroEnabled.12`        | PowerPoint add-ins                     |
+| `application/vnd.ms-powerpoint.slide.macroEnabled.12`        | Macro-enabled PowerPoint slides        |
 
 ---
 

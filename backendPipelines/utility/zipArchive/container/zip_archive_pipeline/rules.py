@@ -18,14 +18,25 @@ import os
 
 CORE_BLOCKED_EXTENSIONS = (
     ".jar", ".java", ".com", ".php", ".reg", ".pif", ".bak", ".dll", ".exe", ".nat", ".cmd", ".lnk",
-    ".docm", ".vbs", ".bat",
+    ".docm", ".dotm", ".xlsm", ".xltm", ".xlsb", ".xlam", ".pptm", ".potm", ".ppsm", ".ppam", ".sldm",
+    ".vbs", ".bat",
 )
 CORE_BLOCKED_CONTENT_TYPES = (
     "application/java-archive", "application/x-python-code", "text/x-python-source",
     "text/x-java-source", "application/x-sh", "application/java-vm", "application/x-msdownload",
     "application/x-php", "application/x-ms-dos-executable", "application/x-ini", "application/x-inf",
     "application/x-sql", "application/x-ms-shortcut", "application/x-bat-script",
-    "application/vnd.ms-word.document.macroenabled.12", "application/x-vbs",
+    "application/vnd.ms-word.document.macroenabled.12",
+    "application/vnd.ms-word.template.macroenabled.12",
+    "application/vnd.ms-excel.sheet.macroenabled.12",
+    "application/vnd.ms-excel.template.macroenabled.12",
+    "application/vnd.ms-excel.sheet.binary.macroenabled.12",
+    "application/vnd.ms-excel.addin.macroenabled.12",
+    "application/vnd.ms-powerpoint.presentation.macroenabled.12",
+    "application/vnd.ms-powerpoint.template.macroenabled.12",
+    "application/vnd.ms-powerpoint.slideshow.macroenabled.12",
+    "application/vnd.ms-powerpoint.addin.macroenabled.12",
+    "application/vnd.ms-powerpoint.slide.macroenabled.12", "application/x-vbs",
     "application/x-powershell", "application/x-msdos-program", "application/vbscript",
     "application/powershell",
 )

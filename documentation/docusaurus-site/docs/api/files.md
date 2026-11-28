@@ -621,7 +621,7 @@ A file's key, which is its asset's location followed by its `relativeKey`, may b
 | `500`  | Internal server error.                                                                                                                                                                     |
 
 :::info[Blocked File Types]
-For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. The destination file name of a move, rename or copy gets the same extension check. The blocked MIME type list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
+For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.dotm`, `.xlsm`, `.xltm`, `.xlsb`, `.xlam`, `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm`, `.vbs`, `.bat`. The destination file name of a move, rename or copy gets the same extension check. The blocked MIME type list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
 :::
 
 :::info[Single-file assets]
