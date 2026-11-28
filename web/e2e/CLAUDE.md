@@ -152,9 +152,9 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | `collectPageErrors(page)`                                     | Uncaught page errors, for crash-regression assertions                                                                |
 | `openAssetFile(page, databaseId, assetId, filename)`          | Open an asset's file in the File Visualizer through the File Manager, as a user does                                 |
 | `openFileManager(page, databaseId, assetId)`                  | Land on an asset's File Manager tab with its tree rendered (the first half of `openAssetFile`)                       |
-| `selectTreePath(page, filename, { modifiers })`               | Select a file in the File Manager tree by path, expanding each folder by its caret as needed                         |
+| `selectTreePath(page, filename, { modifiers, leaf })`         | Select a row in the File Manager tree by path, a file over a folder of the same name; `leaf` names a folder          |
 | `compareSeed()`                                               | The `E2E_COMPARE_SEED` seed fixture of `seeded.compare.spec.ts`, or `null` when unset                                |
-| `treeNode(page, name)`                                        | A File Manager tree row by name, in the visible tree, for files and folders alike                                    |
+| `treeNode(page, name, kind?, within?)`                        | A File Manager tree row by name, a file unless `kind` is `"folder"`; `within` scopes it to one folder's children     |
 | `chooseViewer(page, name)`                                    | Pick a File Visualizer viewer matching a RegExp, by keyboard, and confirm it applied                                 |
 | `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator                           |
 | `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls                                      |
