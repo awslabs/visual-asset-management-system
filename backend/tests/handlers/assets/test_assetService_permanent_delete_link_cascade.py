@@ -68,6 +68,7 @@ def _load():
     files_stub.delete_files_metadata = MagicMock()
     files_stub.delete_auxiliary_files_of_keys = MagicMock()
     files_stub.delete_file_version_records = MagicMock()
+    files_stub.record_invocation_context = MagicMock()
     files_stub.aux_bucket_asset_file_base = lambda db, key: f"{(db or '').strip('/')}/{(key or '').strip('/')}/"
     authz_stub = types.ModuleType("handlers.authz"); authz_stub.CasbinEnforcer = MagicMock()
     auth_stub = types.ModuleType("handlers.auth"); auth_stub.request_to_claims = MagicMock(return_value={"tokens": ["tester"]})

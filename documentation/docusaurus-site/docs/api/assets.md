@@ -517,6 +517,8 @@ Restores a previously archived asset record, making it active again. The asset's
 | `403`  | Not authorized to unarchive this asset.                                                                        |
 | `500`  | Internal server error.                                                                                         |
 
+Authorization is decided before the asset's existence and archive state. An archived asset is evaluated on its stored `{databaseId}#deleted` record and a live one on its own record; an asset ID with no asset record is evaluated as an archived asset of the database would be. A caller who may not unarchive the database's archived assets therefore gets `403` for an unknown asset ID as for an archived one, and only a caller who may gets `400` "Asset not found".
+
 ---
 
 ### Reading an archived asset

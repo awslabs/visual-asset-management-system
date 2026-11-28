@@ -88,7 +88,7 @@ class TestKeys:
         selection = PipelineInputFiles(mode="explicit", keys=["a.stl", "//b.obj", " /c/d.ply "])
         assert selection.keys == ["/a.stl", "/b.obj", "/c/d.ply"]
 
-    @pytest.mark.parametrize("key", ["/../x.stl", "/a/../b.stl", "/a", ""],
+    @pytest.mark.parametrize("key", ["/../x.stl", "/a/../b.stl", "/", ""],
                              ids=["traversal", "inner-traversal", "too-short", "empty"])
     def test_a_key_the_relative_path_rule_refuses_is_rejected(self, key):
         message = _rejects(mode="explicit", keys=[key])

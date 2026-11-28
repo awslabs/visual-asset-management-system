@@ -200,10 +200,17 @@ class TestTheDispatcherCarriesTheBound:
 class TestExistingRulesStillFire:
     """Regression: the pre-existing minimum-length and traversal rules were not displaced."""
 
+    def test_relative_file_path_accepts_a_one_character_file_at_the_root(self):
+        # `/x` is a one-character file name at the asset root; the old minimum
+        # of 3 refused it, so its metadata could not be read or written (#2021).
+        valid, message = validate_relative_file_path("key", "/x")
+        assert valid is True
+        assert message == ""
+
     def test_relative_file_path_minimum_length_still_fires(self):
-        valid, message = validate_relative_file_path("key", "/a")
+        valid, message = validate_relative_file_path("key", "/")
         assert valid is False
-        assert "at least 3 characters" in message
+        assert "at least 2 characters" in message
 
     def test_relative_file_path_traversal_still_fires(self):
         valid, message = validate_relative_file_path("key", "/dir/../etc/passwd")
