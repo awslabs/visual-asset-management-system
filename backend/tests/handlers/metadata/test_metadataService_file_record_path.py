@@ -415,12 +415,21 @@ class TestWritesAuthorizeTheAssetBeforeTheFile:
         harness.client.batch_write_item.assert_not_called()
 
     @pytest.mark.parametrize("write,method,body", WRITES, ids=WRITE_IDS)
-    @pytest.mark.parametrize("allowed", [True, False], ids=["allowed", "refused"])
-    def test_a_missing_asset_is_answered_as_on_every_metadata_route(self, write, method, body, allowed):
-        harness = _Harness({"databaseId": _DB, "assetId": "another"}, allowed=allowed)
+    def test_an_allowed_caller_is_told_a_missing_asset_is_missing(self, write, method, body):
+        harness = _Harness({"databaseId": _DB, "assetId": "another"})
         response = harness.call(method, body={"filePath": "/sub/x.obj", **body})
         assert _status(response) == (400, "VAMS General Error: Asset not found")
         assert harness.checked_keys() == []
+
+    @pytest.mark.parametrize("write,method,body", WRITES, ids=WRITE_IDS)
+    def test_a_refused_caller_gets_the_same_answer_for_a_missing_asset(self, write, method, body):
+        missing = _Harness({"databaseId": _DB, "assetId": "another"}, allowed=False)
+        missing_response = missing.call(method, body={"filePath": "/sub/x.obj", **body})
+        existing_response = _Harness(_asset("projects/site-a/"), allowed=False).call(
+            method, body={"filePath": "/sub/x.obj", **body})
+        assert missing_response["statusCode"] == 403, missing_response
+        assert _status(missing_response) == _status(existing_response)
+        assert missing.checked_keys() == []
 
 
 @pytest.mark.unit

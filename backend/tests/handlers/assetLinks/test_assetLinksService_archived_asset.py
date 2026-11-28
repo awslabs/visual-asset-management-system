@@ -108,7 +108,7 @@ def _live_only(obj):
 
 @pytest.mark.unit
 class TestRefusedMatchesMissing:
-    """With showArchived, Tier 2 is decided before the asset's existence is reported."""
+    """Tier 2 is decided before the asset's existence is reported; with showArchived, on the archived id."""
 
     def _status_and_message(self, response):
         return response["statusCode"], json.loads(response["body"])["message"]
@@ -127,8 +127,9 @@ class TestRefusedMatchesMissing:
         assert response["statusCode"] == 400
         assert "Asset not found" in json.loads(response["body"])["message"]
 
-    def test_without_the_flag_existence_is_still_checked_first(self):
+    def test_without_the_flag_a_missing_id_is_decided_on_its_live_id(self):
         response, enforcer, _ = _call(_Table(), None, enforce=_live_only)
         assert response["statusCode"] == 400
         assert "Asset not found" in json.loads(response["body"])["message"]
-        enforcer.return_value.enforce.assert_not_called()
+        assert enforcer.return_value.enforce.call_args.args[0] == {
+            "databaseId": _DB, "assetId": _ASSET, "object__type": "asset"}

@@ -116,7 +116,7 @@ def _live_only(entity):
 
 @pytest.mark.unit
 class TestAssetLinkMetadataRefusedMatchesMissing:
-    """With showArchived, both ends are authorized before either's existence is reported."""
+    """Both ends are authorized before either's existence is reported; with showArchived, on the archived id."""
 
     def test_a_refused_archived_end_answers_as_a_missing_end(self):
         query = {"showArchived": "true"}
@@ -133,12 +133,19 @@ class TestAssetLinkMetadataRefusedMatchesMissing:
         assert response["statusCode"] == 400
         assert "Asset not found" in _message(response)
 
-    def test_without_the_flag_existence_is_still_checked_first(self):
+    def test_without_the_flag_both_ends_are_decided_on_their_live_ids(self):
         response, authorized = _call(_Table({"databaseId": "db2", "assetId": "live"}), _event("GET"),
                                      authorized=_live_only)
         assert response["statusCode"] == 400
         assert "Asset not found" in _message(response)
-        assert authorized == []
+        assert [o["databaseId"] for o in authorized] == ["db1", "db2"]
+
+    def test_without_the_flag_a_refused_caller_gets_the_same_answer_for_a_missing_end(self):
+        both = _Table({"databaseId": "db1", "assetId": "arch"}, {"databaseId": "db2", "assetId": "live"})
+        refused, _ = _call(both, _event("GET"), authorized=False)
+        missing, _ = _call(_Table({"databaseId": "db2", "assetId": "live"}), _event("GET"), authorized=False)
+        assert refused["statusCode"] == 403
+        assert (missing["statusCode"], _message(missing)) == (refused["statusCode"], _message(refused))
 
 
 _ITEM = {"metadataKey": "k", "metadataValue": "v", "metadataValueType": "string"}
