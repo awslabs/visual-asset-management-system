@@ -744,6 +744,26 @@ os.environ.setdefault("ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME", "assetFil
 os.environ["VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME"] = "vectorEmbeddingsStorageTable"
 os.environ["WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME"] = "workflowExecutionLocksStorageTable"
 
+# The module the assetFiles and assetService handlers record their Lambda context in
+# (assetFiles.record_invocation_context). Tests import it under this name only.
+_ASSET_FILES_MODULE = "backend.backend.handlers.assets.assetFiles"
+
+
+def _clear_recorded_lambda_context():
+    module = sys.modules.get(_ASSET_FILES_MODULE)
+    if module is not None and hasattr(module, "_invocation_context"):
+        module._invocation_context = None
+
+
+@pytest.fixture(autouse=True)
+def _no_recorded_lambda_context():
+    """A handler call records its Lambda context in a module global, and the version row cleanup stops
+    before that context's time limit. Cleared before and after each test, so a context one test gives a
+    handler (30 s left, say) does not stop the deletes of a later test in the same worker."""
+    _clear_recorded_lambda_context()
+    yield
+    _clear_recorded_lambda_context()
+
 
 @pytest.fixture(scope="function")
 def lambda_context():

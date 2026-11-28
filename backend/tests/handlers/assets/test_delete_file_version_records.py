@@ -73,12 +73,6 @@ def _create_versions_table(rows):
     return table
 
 
-@pytest.fixture(autouse=True)
-def no_recorded_invocation(monkeypatch):
-    """No Lambda context left behind by another test's handler call sets a time limit here."""
-    monkeypatch.setattr(af, "_invocation_context", None, raising=False)
-
-
 @pytest.fixture
 def versions_table(monkeypatch):
     with mock_aws():
@@ -248,7 +242,6 @@ def no_waits(monkeypatch):
 def test_many_rows_are_deleted_through_delete_item_alone_a_bounded_number_at_a_time(monkeypatch):
     table = _FakeVersionsTable(_many_rows(versions=300, files_per_version=4))
     monkeypatch.setattr(af, "asset_version_files_table", table)
-    monkeypatch.setattr(af, "_invocation_context", None, raising=False)
 
     deleted = af.delete_file_version_records("db1", "a1", [f"/part{f}.txt" for f in range(4)])
 
@@ -293,7 +286,6 @@ def test_a_row_still_throttled_after_its_retries_stops_the_delete_and_the_count_
     table = _FakeVersionsTable(_many_rows(versions=100, files_per_version=4), delete_seconds=0.001,
                                refuse=lambda key, attempt: _throttled() if key == stuck else None)
     monkeypatch.setattr(af, "asset_version_files_table", table)
-    monkeypatch.setattr(af, "_invocation_context", None, raising=False)
     logger = MagicMock()
     monkeypatch.setattr(af, "logger", logger)
 
@@ -352,7 +344,6 @@ def test_the_delete_stops_part_way_at_the_time_limit_and_reports_the_rows_delete
 
 
 def test_the_time_limit_comes_from_the_recorded_lambda_context(monkeypatch):
-    monkeypatch.setattr(af, "_invocation_context", None, raising=False)
     assert af._version_rows_delete_deadline() is None
 
     af.record_invocation_context({})

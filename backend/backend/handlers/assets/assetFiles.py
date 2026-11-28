@@ -47,7 +47,7 @@ from common.s3PathPatterns import (
 from common.assetLocations import (
     NESTED_PATH_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations,
     _is_preview_of, aux_owner_filter, aux_scope, contains,
-    fill_location_attributes, folder_listing_prefix, held_objects, in_folder, is_folder_location,
+    fill_location_attributes, folder_aux_keep, folder_listing_prefix, held_objects, in_folder, is_folder_location,
     names_own_object, normalize_base_prefix, object_key_for_path, object_key_for_request, relative_path_in,
     viewer_data_prefix, viewer_data_scope,
 )
@@ -2714,9 +2714,11 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         # files, keep theirs
         if incomplete is None:
             folder_aux = aux_bucket_asset_file_base(databaseId, full_key)
-            _call_with_keep(delete_assetAuxiliary_files, folder_aux,
-                            keep=_keep_aux(aux_owner_filter(databaseId, base_key, full_key, folder_aux), nested,
-                                           databaseId))
+            owner_keep = aux_owner_filter(databaseId, base_key, full_key, folder_aux)
+            folder_files_keep = folder_aux_keep(databaseId, full_key)
+            folder_keep = folder_files_keep if owner_keep is None else (
+                lambda k: owner_keep(k) and folder_files_keep(k))
+            _call_with_keep(delete_assetAuxiliary_files, folder_aux, keep=_keep_aux(folder_keep, nested, databaseId))
         else:
             delete_auxiliary_files_of_keys(databaseId, [key for key in deleted_keys if contains(base_key, key)])
         
@@ -3216,6 +3218,16 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     # Use smart path resolution to avoid duplication for both source and destination
     source_key = resolve_asset_file_path(source_base_key, source_path)
     dest_key = resolve_asset_file_path(dest_base_key, dest_path)
+
+    # The key listed at '/' is the destination asset's top-level folder (see delete_file): no file is copied
+    # onto it
+    if relative_path_in(dest_base_key, dest_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot copy a file onto the top-level asset folder")
+    # A key ending in '/' is a folder entry: a file copied there would become one, and its viewer data would land
+    # in another file's viewer-data folder (viewer_data_prefix drops the slashes)
+    if dest_key.endswith('/') and not source_key.endswith('/'):
+        raise VAMSGeneralErrorResponse("Cannot copy a file onto a folder")
+
     refuse_nested_key(nested_locations_for(source_asset, source_bucket, source_base_key), source_key,
                       "Source file not found.")
     refuse_unwritable_key(dest_asset, dest_bucket, dest_base_key, dest_key, NESTED_PATH_REFUSAL)
@@ -3339,9 +3351,15 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     source_key = resolve_asset_file_path(base_key, source_path)
     dest_key = resolve_asset_file_path(base_key, dest_path)
 
-    # The key listed at '/' is the top-level asset folder (see delete_file)
+    # The key listed at '/' is the top-level asset folder (see delete_file): it is not moved, and no file is
+    # moved onto it
     if relative_path_in(base_key, source_key) == "/":
         raise VAMSGeneralErrorResponse("Cannot move or rename the top-level asset folder")
+    if relative_path_in(base_key, dest_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot move or rename a file onto the top-level asset folder")
+    # A key ending in '/' is a folder entry (see copy_file)
+    if dest_key.endswith('/') and not source_key.endswith('/'):
+        raise VAMSGeneralErrorResponse("Cannot move or rename a file onto a folder")
 
     # Moving deletes the source, so a source key another live asset also holds is left alone
     nested = nested_locations_for(asset, bucket, base_key, destructive=True)
@@ -5191,8 +5209,10 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
     nested = nested_locations_for(asset, bucket, base_key)
     refuse_nested_key(nested, full_key, "File not found.")
     if full_key.endswith('/'):
-        # A folder: the data of every file in it, except a nested asset's
-        aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
+        # A folder: the data of every file in it, except a nested asset's and the file named like the folder's
+        aux_prefix, owner_keep = aux_scope(databaseId, base_key, full_key)
+        folder_files_keep = folder_aux_keep(databaseId, full_key)
+        aux_keep = folder_files_keep if owner_keep is None else (lambda k: owner_keep(k) and folder_files_keep(k))
         aux_keep = _keep_aux(aux_keep, nested, databaseId)
     else:
         # A file: its own viewer data, not another file's in a folder named like it

@@ -541,13 +541,29 @@ def viewer_data_scope(database_id: Optional[str], object_key: Optional[str]) -> 
     ``{file key}/preview/`` (a folder named like the file, in this asset or in an asset nested there), and its
     path below the prefix has a ``preview`` folder segment; every other key is this file's. The file keeps
     none of its own data.
+
+    A folder marker (a key ending in ``/``) has no viewer data of its own: its prefix is the viewer-data folder
+    of the file named like the folder, so no key under it is the marker's.
     """
     prefix = viewer_data_prefix(database_id, object_key)
     own = (object_key or "").strip("/")
+    folder_marker = (object_key or "").endswith("/")
 
     def keep(aux_key: str) -> bool:
-        return viewer_data_file_key(database_id, aux_key) == own
+        return not folder_marker and viewer_data_file_key(database_id, aux_key) == own
     return prefix, keep
+
+
+def folder_aux_keep(database_id: Optional[str], folder_key: Optional[str]) -> Callable[[str], bool]:
+    """Which auxiliary keys under a folder's base (``{databaseId}/{folder}/``) are its files' data: all but the
+    viewer data of the file named like the folder (``{databaseId}/{folder}/preview/...`` is the data of the file
+    ``{folder}`` without its trailing ``/``, which is not in the folder)."""
+    folder = folder_key or ""
+
+    def keep(aux_key: str) -> bool:
+        file_key = viewer_data_file_key(database_id, aux_key)
+        return file_key is None or file_key.startswith(folder)
+    return keep
 
 
 LOCATION_INDEX_NAME = "AssetLocationGSI"

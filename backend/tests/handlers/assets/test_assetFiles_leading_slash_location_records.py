@@ -107,9 +107,6 @@ def asset(request, monkeypatch):
         monkeypatch.setattr(af, "asset_version_files_table", tables["versions"])
         monkeypatch.setattr(af, "asset_file_version_history_table", None)
         monkeypatch.setattr(af, "MAX_PARALLEL_S3_WORKERS", 1)
-        # No Lambda context: a handler call in an earlier test of this worker can leave one with little time
-        # left, and the version row cleanup would then stop before its first delete
-        monkeypatch.setattr(af, "_invocation_context", None, raising=False)
         for name in ("send_subscription_email", "delete_assetAuxiliary_files", "delete_auxiliary_files_of_keys"):
             monkeypatch.setattr(af, name, lambda *args, **kwargs: None)
         history = []
