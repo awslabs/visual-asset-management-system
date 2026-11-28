@@ -9,7 +9,7 @@ import pytest
 from vamscli.constants import MAX_DOWNLOAD_KEYS_PER_REQUEST
 from vamscli.utils.download_manager import (
     DownloadFileInfo, DownloadManager, DownloadProgress, parse_remote_timestamp,
-    generate_presigned_urls, temp_download_path
+    generate_presigned_urls, temp_download_path, file_name_length
 )
 from vamscli.utils.exceptions import APIError, DownloadError
 
@@ -302,6 +302,12 @@ class TestTempDownloadPath:
         assert temp.parent == tmp_path
         assert len(temp.name.encode()) <= 255
         assert temp.name.endswith('.vamsdownload')
+
+    def test_file_name_length_counts_utf16_units_on_windows_and_bytes_elsewhere(self):
+        name = '\u6587' * 90  # 90 characters: 270 bytes in UTF-8, 90 UTF-16 units
+        assert file_name_length(name, windows=True) == 90
+        assert file_name_length(name, windows=False) == 270
+        assert file_name_length('\U0001F600', windows=True) == 2  # a surrogate pair counts twice
 
     def test_two_long_names_get_different_temp_names(self, tmp_path):
         a = temp_download_path(tmp_path / ('a' * 250))

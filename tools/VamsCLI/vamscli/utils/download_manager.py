@@ -178,6 +178,15 @@ TEMP_DOWNLOAD_SUFFIX = '.vamsdownload'
 MAX_FILE_NAME_BYTES = 255  # file-name limit of common Linux and macOS file systems
 
 
+def file_name_length(name: str, windows: Optional[bool] = None) -> int:
+    """Length of a file name in the unit its file system limits: bytes, or UTF-16 code units on Windows (NTFS)."""
+    if windows is None:
+        windows = os.name == 'nt'
+    if windows:
+        return len(name.encode('utf-16-le', 'surrogatepass')) // 2
+    return len(os.fsencode(name))
+
+
 def temp_download_path(local_path: Path) -> Path:
     """Path of the temporary file a download is written to before it is renamed into place.
 
@@ -472,9 +481,9 @@ class DownloadManager:
         file_info.local_path.parent.mkdir(parents=True, exist_ok=True)
 
         # A name over the file-system limit cannot be saved, so refuse it before any transfer
-        if len(os.fsencode(file_info.local_path.name)) > MAX_FILE_NAME_BYTES:
+        if file_name_length(file_info.local_path.name) > MAX_FILE_NAME_BYTES:
             raise DownloadError(
-                f"File name too long ({MAX_FILE_NAME_BYTES} bytes at most): {file_info.relative_key}"
+                f"File name too long ({MAX_FILE_NAME_BYTES} bytes at most, 255 UTF-16 units on Windows): {file_info.relative_key}"
             )
 
         # Download to a temporary file so failed transfers never leave a
