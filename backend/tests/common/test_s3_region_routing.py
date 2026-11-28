@@ -338,6 +338,7 @@ class TestMockParity:
                "s3_asset_client", "s3_asset_resource", "S3_ASSET_CLIENT_CONFIG", "MAX_PARALLEL_S3_WORKERS",
                "S3_CLIENT_MAX_POOL_CONNECTIONS", "presigned_get_object_params",
                "SVG_RESPONSE_CONTENT_TYPE", "SVG_RESPONSE_CONTENT_DISPOSITION",
+               "attachment_content_disposition", "ATTACHMENT_DISPOSITION_MAX_LENGTH",
                "S3_ASSET_SINGLE_ATTEMPT_CLIENT_CONFIG", "s3_single_attempt_client_for_region",
                "copy_s3_object_repeat_safe", "is_retryable_write_error", "single_request_copy_backoff",
                "SINGLE_REQUEST_COPY_MAX_BYTES", "SINGLE_REQUEST_COPY_MAX_ATTEMPTS",

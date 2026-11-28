@@ -1087,10 +1087,11 @@ def generate_presigned_url(bucket: str, key: str, version_id: str) -> Optional[s
         if version_id and version_id != 'null':
             params['VersionId'] = version_id
 
-        # SVG keys get the image/svg+xml type and an attachment disposition (common.s3)
+        # A download URL saves the file under its own name (an attachment disposition); SVG keys
+        # also get the image/svg+xml type (common.s3)
         url = s3_client.generate_presigned_url(
             'get_object',
-            Params=presigned_get_object_params(params),
+            Params=presigned_get_object_params(params, attachment=True),
             ExpiresIn=int(presigned_url_timeout)
         )
         

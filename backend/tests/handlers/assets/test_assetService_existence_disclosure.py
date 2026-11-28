@@ -85,6 +85,13 @@ _SITE_IDS = [site[0] for site in _SITES]
 # Sites whose asset must already be archived for the operation to be valid.
 _ARCHIVED_FIXTURE = {"unarchive_asset"}
 
+# Sites whose read includes archived assets, so a missing asset's stand-in carries the archived
+# database id.
+_ARCHIVED_STAND_IN = {
+    "delete_asset_permanent": f"{_DB}#deleted",
+    "unarchive_asset": f"{_DB}#deleted",
+}
+
 
 class _EnforcerSpy:
     """A CasbinEnforcer stand-in that records every construction and every enforce call."""
@@ -237,7 +244,8 @@ class TestAMissingAssetIsNotDisclosedToADeniedCaller:
             denied_actions=(action,),
         )
 
-        assert (action, "asset", _DB, _ASSET) in _authorized_identities(spy), (
+        database_id = _ARCHIVED_STAND_IN.get(site, _DB)
+        assert (action, "asset", database_id, _ASSET) in _authorized_identities(spy), (
             f"{site}: the absent asset was not evaluated on the requested identifiers, so the "
             f"ABAC rule that scopes access cannot match. Evaluated: "
             f"{sorted(_authorized_identities(spy))}"
@@ -385,3 +393,109 @@ class TestEmptyTokenListDeniesBeforeTheFetchIsUsed:
             f"{site}: CasbinEnforcer was constructed for an empty token list"
         )
         assert spy.calls == [], f"{site}: enforce() ran with no identity: {spy.calls}"
+
+
+class _DatabaseScopedEnforcer:
+    """Allows an action only on the listed database ids, as a constraint naming them would.
+
+    An archived record lives under "<databaseId>#deleted" and is decided on that id and on the
+    database id together, so it is allowed only when both are listed.
+    """
+
+    def __init__(self, allowed_databases):
+        self.allowed = set(allowed_databases)
+        self.calls = []
+
+    @property
+    def factory(self):
+        scoped = self
+
+        class _Enforcer:
+            def __init__(self, claims_and_roles):
+                pass
+
+            def enforce(self, obj, action):
+                scoped.calls.append({"object": dict(obj), "action": action})
+                database_id = str(obj.get("databaseId", ""))
+                ids = {database_id, database_id.replace("#deleted", "")}
+                return ids <= scoped.allowed
+
+            def enforceAPI(self, event):
+                return True
+
+        return _Enforcer
+
+
+def _archived_asset():
+    asset = _existing_asset(f"{_DB}#deleted")
+    asset["status"] = "archived"
+    return asset
+
+
+def _permanent_delete(asset, allowed_databases):
+    m, _, undo = _wire(asset)
+    scoped = _DatabaseScopedEnforcer(allowed_databases)
+    enforcer_patch = patch.object(m, "CasbinEnforcer", scoped.factory)
+    objects_patch = patch.object(m, "_delete_asset_objects_for_permanent_deletion", MagicMock())
+    sns_patch = patch.object(m, "sns_client", MagicMock())
+    enforcer_patch.start()
+    delete_objects = objects_patch.start()
+    sns = sns_patch.start()
+    try:
+        response = _invoke(
+            m, "handle_delete_request", "DELETE", "/deleteAsset", {"confirmPermanentDelete": True}
+        )
+    finally:
+        sns_patch.stop()
+        objects_patch.stop()
+        enforcer_patch.stop()
+        undo()
+    return response, m, delete_objects, sns, scoped
+
+
+@pytest.mark.unit
+class TestPermanentDeleteDecidesAMissingAssetAsAnArchivedOne:
+    """The permanent delete reads archived assets too, so a caller whose rule names only the
+    live database must get the same answer for a missing id as for an archived one."""
+
+    @pytest.mark.parametrize("label", ["missing", "archived"])
+    def test_a_caller_without_archived_rights_is_refused_either_way(self, label):
+        asset = None if label == "missing" else _archived_asset()
+        response, m, delete_objects, sns, _ = _permanent_delete(asset, {_DB})
+
+        assert response["statusCode"] == 403, (
+            f"{label} asset: answered {response['statusCode']} to a caller allowed only on the "
+            f"live database: {response}"
+        )
+        assert json.loads(response["body"])["message"] == "Not Authorized"
+        delete_objects.assert_not_called()
+        sns.delete_topic.assert_not_called()
+        m.asset_table.delete_item.assert_not_called()
+
+    def test_a_caller_with_archived_rights_is_still_told_the_asset_is_missing(self):
+        """Positive control: refusing everyone would pass the test above on its own."""
+        response, m, delete_objects, _, scoped = _permanent_delete(None, {_DB, f"{_DB}#deleted"})
+
+        missing_status = next(site[-1] for site in _SITES if site[0] == "delete_asset_permanent")
+        assert response["statusCode"] == missing_status, response
+        assert scoped.calls, "the not-found answer was produced with nothing authorized"
+        delete_objects.assert_not_called()
+        m.asset_table.delete_item.assert_not_called()
+
+    def test_a_caller_with_archived_rights_can_delete_an_archived_asset(self):
+        response, m, delete_objects, _, _ = _permanent_delete(
+            _archived_asset(), {_DB, f"{_DB}#deleted"}
+        )
+
+        assert response["statusCode"] == 200, response
+        delete_objects.assert_called_once()
+        deleted_keys = [c.kwargs.get("Key") for c in m.asset_table.delete_item.call_args_list]
+        assert {"databaseId": f"{_DB}#deleted", "assetId": _ASSET} in deleted_keys, deleted_keys
+
+    def test_a_live_asset_is_still_deleted_on_the_live_database_rule(self):
+        """A found live asset is decided on its own record, so the live rule is enough."""
+        response, _, delete_objects, _, scoped = _permanent_delete(_existing_asset(_DB), {_DB})
+
+        assert response["statusCode"] == 200, response
+        delete_objects.assert_called_once()
+        assert {c["object"]["databaseId"] for c in scoped.calls} == {_DB}
