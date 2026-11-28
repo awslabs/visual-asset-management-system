@@ -36,6 +36,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY,
     VAMS_CHANGE_SOURCE_DIRECT,
     normalize_history_file_path,
+    replace_metadata_copy_args,
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment
 from common.s3 import is_object_version_archived
@@ -1132,17 +1133,16 @@ def update_s3_metadata(bucket_name: str, object_key: str, database_id: str, asse
             VAMS_CHANGE_SOURCE_METADATA_KEY: desired_change_source,
         }
 
-        # Use boto3 resource copy() which automatically handles multipart for large files
+        # Use boto3 resource copy() which automatically handles multipart for large files.
+        # A REPLACE copy resets the content type and the other system-defined headers the
+        # request does not restate, so restate them from the head of the key being copied.
         copy_source = {
             'Bucket': bucket_name,
             'Key': effective_key
         }
         s3_resource.Object(bucket_name, effective_key).copy(
             copy_source,
-            ExtraArgs={
-                'Metadata': metadata,
-                'MetadataDirective': 'REPLACE'
-            }
+            ExtraArgs=replace_metadata_copy_args(response, metadata)
         )
 
         logger.info(f"Updated metadata for {effective_key}")
