@@ -701,6 +701,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Permanent delete of a missing asset** — Permanently deleting an asset that does not exist answers `404` "Asset not found" instead of `400`, as the asset `GET` does. (issue #1904)
 -   **One-character file names at the asset root** — A file such as `/x` can have its file metadata and attributes read and written; the file path check required at least 3 characters. A bare `/` is still refused. (issue #2021)
 -   **A file's records in a location starting with `/`** — In an asset whose stored location key starts with `/`, a file or folder delete clears the deleted files' metadata, attributes and asset version records, a file move or copy carries that file's own metadata and attributes, and a file archive records its history, under the path the file is listed at. The records no longer stay behind, and another file's records are no longer removed, moved or copied in their place. A download of a file at an asset version finds the file the same way. (issue #2065)
+-   **Unsubscribe by profile email** — Unsubscribing from an asset's notifications removes the email subscription of a user whose profile email differs from their user ID; only the subscription record changed before, and the notifications kept arriving. (issue #2028)
 
 **Documentation:**
 

@@ -68,7 +68,12 @@ def delete_sns_subscriptions(database_id, asset_id, subscribers, delete_sns=Fals
         return
 
     resp = sns_client.list_subscriptions_by_topic(TopicArn=asset_obj.get("snsTopic"))
-    subscription_arns = [subscription['SubscriptionArn'] for subscription in resp['Subscriptions'] if subscription['Endpoint'] in subscribers]
+    wanted_endpoints = {endpoint.lower() for endpoint in subscribers}
+    subscription_arns = [
+        subscription['SubscriptionArn']
+        for subscription in resp['Subscriptions']
+        if subscription['Endpoint'].lower() in wanted_endpoints
+    ]
 
     for subscription_arn in subscription_arns:
         if subscription_arn != "PendingConfirmation":
@@ -104,6 +109,15 @@ def get_subscription_obj(body):
     return resp.get('Item')
 
 
+def _resolve_profile_email(user_id):
+    """The address the asset topic uses for a user: the profile email, like the subscribe path."""
+    from .subscriptionService import (  # noqa: WPS433 (lazy import)
+        get_userProfile_Email,
+    )
+
+    return get_userProfile_Email(user_id)
+
+
 def delete_subscription(body):
     response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     subscription_table = dynamodb.Table(subscription_table_name)
@@ -122,7 +136,17 @@ def delete_subscription(body):
     # for a subscriber the row no longer lists -- a retry after a failure between the two writes
     # still owes the SNS half, and it is a no-op for an endpoint the topic never carried.
     if body["entityName"] == "Asset":
-        delete_sns_subscriptions(body["databaseId"], body["entityId"], list(body["subscribers"]),
+        # The topic carries resolved addresses: the profile email, or the value as submitted
+        # when no profile email is set. Resolve every submitted value -- an email-shaped user
+        # ID can still have a different profile email -- and keep the submitted one as a match
+        # too, so a topic endpoint stored under it is released as well (#2028).
+        endpoints = set(body["subscribers"])
+        for submitted in body["subscribers"]:
+            email = _resolve_profile_email(submitted)
+            if email != "INVALID_FORMAT":
+                endpoints.add(email)
+
+        delete_sns_subscriptions(body["databaseId"], body["entityId"], endpoints,
                                  delete_sns=False)
 
     if subscriber in existing_subscribers:
