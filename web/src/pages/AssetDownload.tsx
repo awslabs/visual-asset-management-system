@@ -19,7 +19,11 @@ import {
 } from "@cloudscape-design/components";
 import { usePageTitle } from "../hooks/usePageTitle";
 import Synonyms from "../synonyms";
-import { fileFolderCollision } from "../utils/localPathCollision";
+import {
+    fileFolderCollision,
+    localPathOwners,
+    SAME_LOCAL_PATH_REASON,
+} from "../utils/localPathCollision";
 
 // Utility class for managing concurrent downloads
 class DownloadQueue {
@@ -284,22 +288,42 @@ const downloadFilesInParallel = async (
 ): Promise<void> => {
     const downloadQueue = new DownloadQueue(concurrencyLimit);
 
+    // Keeping the asset's paths, "/x" and "//x" (#1977) are both written at "x": before any write, the file
+    // without an empty segment is kept and every other file of that local path fails with the file kept, so
+    // neither replaces the other (#2084). Flatten mode refuses repeated names before it starts.
+    const takenBy = flattenHierarchy
+        ? files.map(() => null)
+        : localPathOwners(files.map((file) => file.relativePath));
+    files.forEach((file, index) => {
+        if (takenBy[index] !== null) {
+            dispatch({
+                type: "UPDATE_STATUS",
+                payload: {
+                    relativePath: file.relativePath,
+                    status: "Failed",
+                    error: `${SAME_LOCAL_PATH_REASON} (${takenBy[index]})`,
+                },
+            });
+        }
+    });
+    const toWrite = files.filter((_, index) => takenBy[index] === null);
+
     // Bulk-generate presigned URLs up front (one API call per 1500 files).
     // All files resolve to their current version (or the selected asset
     // version); any key missing from the bulk result falls back to a per-file
     // URL request inside downloadSingleFile.
     let urlByKey = new Map<string, string>();
-    if (files.length > 1) {
+    if (toWrite.length > 1) {
         urlByKey = await generateBulkDownloadUrlMap(
             databaseId,
             assetId,
-            files.map((f) => f.keyPrefix),
+            toWrite.map((f) => f.keyPrefix),
             assetVersionId
         );
     }
 
     // Create an array of promises for all file downloads
-    const downloadPromises = files.map((file) =>
+    const downloadPromises = toWrite.map((file) =>
         downloadQueue.add(() =>
             downloadSingleFile(
                 assetId,
@@ -320,9 +344,9 @@ const downloadFilesInParallel = async (
 
     console.log(`All downloads completed: ${results.length} files processed`);
 
-    // Ensure all files are properly marked as completed or failed; a row already Failed keeps its reason
+    // Ensure all files written are properly marked as completed or failed; a row already Failed keeps its reason
     results.forEach((result, index) => {
-        const file = files[index];
+        const file = toWrite[index];
         if (result.status === "fulfilled" && result.value === true) {
             // Double-check that the file is marked as completed
             dispatch({

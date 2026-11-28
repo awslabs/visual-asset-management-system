@@ -176,6 +176,62 @@ describe("AssetDownloadsPage keeps the asset's paths only when every file can be
     });
 });
 
+/** "/x" and "//x" (#1977), listed in the given order, beside another file. */
+const emptySegmentTree = (doubleFirst: boolean) =>
+    folder("/", [
+        ...(doubleFirst ? [folder("//", [file("//x")])] : []),
+        file("/x"),
+        ...(doubleFirst ? [] : [folder("//", [file("//x")])]),
+        file("/y"),
+    ]);
+
+describe("AssetDownloadsPage writes one file per local path in Keep-paths mode (#2084)", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    it.each([false, true])(
+        "writes /x, not //x, at x and says why //x was not written (//x listed first: %s)",
+        async (doubleFirst) => {
+            const local = localFolder(new Set());
+            (window as any).showDirectoryPicker = jest.fn(async () => local.handle);
+            const { container } = renderPage(emptySegmentTree(doubleFirst));
+
+            await keepPaths(container);
+            expect(screen.queryByText(/is in a folder of the same name/)).not.toBeInTheDocument();
+            await userEvent.click(startButton());
+
+            await waitFor(() =>
+                expect(screen.getByText(/2 of 3 files completed, 1 failed/)).toBeInTheDocument()
+            );
+            expect(
+                screen.getByText(
+                    "Failed: another file of this download is saved at the same local path (/x)",
+                    { exact: false }
+                )
+            ).toBeInTheDocument();
+            expect(local.fileHandleCalls.filter((name) => name === "x")).toHaveLength(1);
+            const { downloadAsset } = jest.requireMock("../services/APIService");
+            const { generateBulkDownloadUrlMap } = jest.requireMock(
+                "../services/FileOperationsService"
+            );
+            expect(generateBulkDownloadUrlMap.mock.calls[0][2]).toEqual(["asset1/x", "asset1/y"]);
+            expect(downloadAsset.mock.calls.map((call: any[]) => call[0].key).sort()).toEqual([
+                "asset1/x",
+                "asset1/y",
+            ]);
+            expect(summaryType(container)).toBe("warning");
+        }
+    );
+
+    it("keeps the duplicate-names alert for the same files in flatten mode", () => {
+        renderPage(emptySegmentTree(false));
+
+        expect(screen.getByText(/Duplicate File Names Detected/)).toBeInTheDocument();
+        expect(startButton()).toBeDisabled();
+    });
+});
+
 describe("AssetDownloadsPage says why a file failed", () => {
     beforeEach(() => {
         jest.clearAllMocks();

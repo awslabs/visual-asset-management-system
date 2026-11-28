@@ -8,7 +8,7 @@
  * folder holds a file and a folder of one name (#2074, the rule of #2070).
  */
 
-import { fileFolderCollision } from "./localPathCollision";
+import { fileFolderCollision, localPathOwners } from "./localPathCollision";
 
 describe("fileFolderCollision", () => {
     it.each([
@@ -35,5 +35,46 @@ describe("fileFolderCollision", () => {
         [[]],
     ])("no false positive: %j", (paths) => {
         expect(fileFolderCollision(paths)).toBeNull();
+    });
+});
+
+/**
+ * "/x" and "//x" (the key with an empty segment after the asset's folder, #1977) are both written at "x" when
+ * the asset's paths are kept: the file without an empty segment is written, the other is not (#2084), as
+ * `vamscli assets download` decides it.
+ */
+describe("localPathOwners", () => {
+    it.each([
+        [
+            ["/x", "//x"],
+            [null, "/x"],
+        ],
+        [
+            ["//x", "/x"],
+            ["/x", null],
+        ],
+        [
+            ["/a/x", "/a//x"],
+            [null, "/a/x"],
+        ],
+        [
+            ["//x", "///x"],
+            [null, "//x"],
+        ],
+        [
+            ["/x", "x"],
+            [null, "/x"],
+        ],
+        [
+            ["/x", "/y", "/d/x"],
+            [null, null, null],
+        ],
+        [
+            ["/X", "/x"],
+            [null, null],
+        ],
+        [[], []],
+    ])("%j", (paths, expected) => {
+        expect(localPathOwners(paths)).toEqual(expected);
     });
 });
