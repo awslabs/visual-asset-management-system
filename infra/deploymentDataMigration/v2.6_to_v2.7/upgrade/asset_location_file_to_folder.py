@@ -423,6 +423,17 @@ def _error_code(error: ClientError) -> str:
 # Amazon S3 reads
 #######################
 
+def _continue_listing(kwargs: Dict, page: Dict) -> None:
+    """Point ``kwargs`` at the page after a truncated ListObjectVersions ``page``: its ``NextKeyMarker``, and its
+    ``NextVersionIdMarker`` only when it returned one. A page of a listing with a delimiter that ends at a common
+    prefix returns a key marker and no version marker (passing ``None`` fails the call), and a version marker
+    left from an earlier page names a version of another key, so it is dropped."""
+    kwargs['KeyMarker'] = page.get('NextKeyMarker')
+    kwargs.pop('VersionIdMarker', None)
+    if page.get('NextVersionIdMarker'):
+        kwargs['VersionIdMarker'] = page['NextVersionIdMarker']
+
+
 def list_versions(s3_client, bucket: str, prefix: str) -> Iterator[Dict]:
     """Every version and delete marker under ``prefix`` as ``{'Key', 'VersionId', 'IsLatest', 'StorageClass',
     'Marker', 'LastModified'}``."""
@@ -435,8 +446,7 @@ def list_versions(s3_client, bucket: str, prefix: str) -> Iterator[Dict]:
             yield dict(entry, Marker=True)
         if not page.get('IsTruncated'):
             return
-        kwargs['KeyMarker'] = page.get('NextKeyMarker')
-        kwargs['VersionIdMarker'] = page.get('NextVersionIdMarker')
+        _continue_listing(kwargs, page)
 
 
 def exact_versions(s3_client, bucket: str, key: str) -> List[Dict]:
@@ -452,8 +462,7 @@ def exact_versions(s3_client, bucket: str, key: str) -> List[Dict]:
         listed = page.get('Versions', []) + page.get('DeleteMarkers', [])
         if any(e['Key'] != key for e in listed) or not page.get('IsTruncated'):
             return versions + markers
-        kwargs['KeyMarker'] = page.get('NextKeyMarker')
-        kwargs['VersionIdMarker'] = page.get('NextVersionIdMarker')
+        _continue_listing(kwargs, page)
 
 
 def latest_is_marker(entries: List[Dict]) -> bool:
@@ -483,8 +492,7 @@ def direct_entries(s3_client, bucket: str, folder: str) -> Tuple[Set[str], Set[s
         prefixes.update(p['Prefix'] for p in page.get('CommonPrefixes', []))
         if not page.get('IsTruncated'):
             return keys, prefixes
-        kwargs['KeyMarker'] = page.get('NextKeyMarker')
-        kwargs['VersionIdMarker'] = page.get('NextVersionIdMarker')
+        _continue_listing(kwargs, page)
 
 
 def _sample(items) -> Tuple[List[str], int]:
