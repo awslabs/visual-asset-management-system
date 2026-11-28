@@ -584,78 +584,84 @@ export async function openFileManager(
 }
 
 /**
- * Select a file in the File Manager tree by its asset-relative path, expanding folders on the way.
+ * Select a row of the File Manager tree by its asset-relative path, expanding folders on the way.
  * A file inside a folder is not visible until its folder is expanded, so walk the path segments and
- * click each one; passing "tileset/tileset.json" as a single label matches nothing. Pass
- * `modifiers: ["Control"]` to ADD the file to the current selection (multi-select).
+ * click each one; passing "tileset/tileset.json" as a single label matches nothing.
+ *
+ * The last segment is a FILE unless `leaf: "folder"` says otherwise (#2075). An asset can hold a file
+ * and a folder of one name, `/model.glb` beside `/model.glb/`, and a lookup by label alone picks the
+ * folder, which renders first. A folder offers no "Download File", so a spec that selects a file by
+ * its name timed out on such an asset. Every segment before the last is a folder to expand.
+ *
+ * Each segment is looked for inside the folder expanded just before it, so two rows that share a
+ * name at different depths (`/a.txt/` and `/deep/a.txt/`) stay tellable apart.
+ *
+ * Pass `modifiers: ["Control"]` to ADD the leaf to the current selection (multi-select).
  *
  * Clicking a folder's NAME only selects it (SELECT_ITEM); the tree expands a folder solely through
- * its caret (`.tree-item-caret`, TOGGLE_EXPANDED). So after selecting a folder, expand it through the
- * caret when its next segment is not yet visible. The visibility check comes first because a folder
+ * its caret (`.tree-item-caret`, TOGGLE_EXPANDED). So a folder on the way down is expanded through
+ * its caret when its children are not rendered yet. The presence check comes first because a folder
  * that is already expanded would collapse on a caret click.
- *
- * A folder can be named like a file beside it ("/a.txt" and "/a.txt/b.txt"; an asset converted from a
- * single file holds "/model.glb" and "/model.glb/..."), and the folder row comes first. So every segment
- * before the last is matched as a folder, a last segment followed by "/" as a folder, and any other last
- * segment as the file of that name, or as the folder when there is no such file (the asset root, for one).
  */
 export async function selectTreePath(
     page: Page,
     filename: string,
-    options: { modifiers?: Array<"Control" | "Shift"> } = {}
+    options: {
+        modifiers?: Array<"Control" | "Shift">;
+        /** What the last segment names. A path is a file unless the caller says it is a folder. */
+        leaf?: "file" | "folder";
+    } = {}
 ): Promise<void> {
     const segments = filename.split("/").filter(Boolean);
-    const leafIsFolder = filename.endsWith("/");
-    for (let index = 0; index < segments.length; index++) {
-        const segment = segments[index];
+    // The children of the folder the walk is inside; undefined is the whole tree.
+    let within: Locator | undefined;
+    for (const [index, segment] of segments.entries()) {
         const isLeaf = index === segments.length - 1;
-        const kind: TreeNodeKind | undefined = !isLeaf || leafIsFolder ? "folder" : undefined;
+        const file = treeNode(page, segment, "file", within);
+        const folder = treeNode(page, segment, "folder", within);
+        // Wait for the NAME to be rendered, whichever kind it is, before choosing: a look taken
+        // while the tree is still rendering could see the folder row and not yet the file beside it.
+        // `.first()` is here because a file and a folder of one name can both be listed, and an
+        // assertion on a locator with several matches is a strictness violation.
         await expect(
-            treeNode(page, segment, kind),
+            file.or(folder).first(),
             `${segment} is not listed in the file tree`
         ).toBeVisible({
             timeout: 60_000,
         });
-        // A file path names the file even when a folder of its name is listed before it
-        const fileRow = treeNode(page, segment, "file");
-        const node =
-            kind === undefined && (await fileRow.count()) > 0
-                ? fileRow
-                : treeNode(page, segment, kind);
-        if (isLeaf && options.modifiers?.length) {
-            await node.scrollIntoViewIfNeeded().catch(() => undefined);
-            await node.click({ modifiers: options.modifiers, timeout: 8_000 });
-        } else if (isLeaf) {
-            await clickWhenActionable(node, `tree node "${segment}"`);
-        } else {
-            // A click on a folder's label selects it; only its caret expands it. Expand a folder whose
-            // children are not rendered yet, and leave one that already is alone (the caret toggles).
-            const row = node.locator("xpath=ancestor::*[contains(@class, 'tree-item-content')][1]");
-            const children = row.locator(
-                "xpath=following-sibling::*[contains(@class, 'tree-item-children')]"
+        // A path names a FILE unless the caller says its last segment is a folder, and every segment
+        // before the last is a folder to expand. A file is chosen over a folder of the same name; a
+        // name that is only a folder, such as the asset root, still resolves, as it did before.
+        const wantsFile = isLeaf && options.leaf !== "folder";
+        const node = wantsFile && (await file.count()) > 0 ? file : folder;
+        const row = node.locator("xpath=ancestor::*[contains(@class, 'tree-item-content')][1]");
+        if (isLeaf) {
+            if (options.modifiers?.length) {
+                await node.scrollIntoViewIfNeeded().catch(() => undefined);
+                await node.click({ modifiers: options.modifiers, timeout: 8_000 });
+            } else {
+                await clickWhenActionable(node, `tree node "${segment}"`);
+            }
+            continue;
+        }
+        // The children of a folder are a sibling of its row, inside the folder's own `.tree-item`,
+        // and are RENDERED ONLY WHILE IT IS EXPANDED. So "is it expanded?" is asked by looking for
+        // its children container; an expanded folder would collapse on a caret click, so the caret
+        // is clicked only when the container is absent. Only that container is the next segment's
+        // scope: a deeper folder of the same name keeps its children in its own `.tree-item`.
+        const children = row.locator(
+            "xpath=following-sibling::*[contains(@class, 'tree-item-children')][1]"
+        );
+        if ((await children.count()) === 0) {
+            await clickWhenActionable(
+                row.locator(".tree-item-caret"),
+                `caret of folder "${segment}"`
             );
-            if ((await children.count()) === 0) {
-                await clickWhenActionable(
-                    row.locator(".tree-item-caret"),
-                    `caret of folder "${segment}"`
-                );
-            }
-            await expect(children, `folder "${segment}" did not expand`).toHaveCount(1, {
-                timeout: 15_000,
-            });
         }
-        if (!isLeaf) {
-            const next = treeNode(page, segments[index + 1]);
-            // Let the selection settle; a folder may already be expanded (e.g. auto-expanded root).
-            await page.waitForTimeout(400);
-            if (!(await next.isVisible())) {
-                // `.tree-item-name` and `.tree-item-caret` are siblings in the row's `.tree-item-content`.
-                const caret = node.locator("xpath=..").locator(".tree-item-caret");
-                await clickWhenActionable(caret, `the expand caret of folder "${segment}"`);
-            }
-            // Give the tree a moment to render the newly revealed children.
-            await page.waitForTimeout(1200);
-        }
+        await expect(children, `folder "${segment}" did not expand`).toHaveCount(1, {
+            timeout: 15_000,
+        });
+        within = children.first();
     }
 }
 
@@ -733,8 +739,8 @@ export function viewerSamples(): ViewerSamples | null {
 /**
  * A row in the asset File Manager's file tree, by name.
  *
- * Two facts make a plain `getByText(name, { exact: true })` wrong here, and both fail in ways that do
- * not look like selector problems:
+ * Four facts make a plain `getByText(name, { exact: true })` wrong here, and each fails in a way that
+ * does not look like a selector problem:
  *
  *  1. **The page mounts TWO trees.** The visible one is `.directory-tree` (rows `.tree-item-name`); a
  *     second, folder-only `.folder-tree-view` (rows `.folder-tree-item-name`) is mounted for the
@@ -744,30 +750,41 @@ export function viewerSamples(): ViewerSamples | null {
  *     0×0 at x=0,y=0, which is what `getBoundingClientRect` returns inside `display:none`.
  *  2. **A folder row's label includes its child count** — the node for `3DTiles` reads `3DTiles(2)`.
  *     So exact matching cannot find a folder in the visible tree at all, whatever the scope.
+ *  3. **A file and a folder can share a name** (#2075) — `/model.glb` beside `/model.glb/`. A lookup
+ *     by label alone finds both and takes the folder, which renders first. So `kind` says which is
+ *     meant, a file unless the caller names a folder, and the two are told apart by structure: only
+ *     a folder row carries a `.tree-item-caret`. The label cannot decide it, see 4.
+ *  4. **A FILE row can carry a bracketed suffix too** — its primary type, `model.glb(glTF)`. So the
+ *     optional suffix is anything in brackets, not only a count.
  *
- * Scoping to `.directory-tree` and allowing the optional `(n)` suffix handles files and folders alike.
+ * Scoping to `.directory-tree` and allowing the optional suffix handles all four. The row is matched
+ * on `.tree-item-content`, which holds exactly one row's caret, icon and name: an expanded folder
+ * renders its children inside its own `.tree-item`, so a name matched on that would also see every
+ * descendant's label. Pass `within` to look in the children of one folder alone, so rows that share
+ * a name at different depths stay tellable apart.
  *
- * `kind` picks a file or a folder row when both carry the name (a file "a.txt" beside a folder "a.txt/"):
- * a folder row has an expand caret (`.tree-item-caret`) and a file row has none. Without it the first row
- * of the name is taken, whichever it is.
+ * Resolves to the row's `.tree-item-name`, so `locator("xpath=..")` is the row.
  */
-export type TreeNodeKind = "file" | "folder";
-
-export function treeNode(page: Page, name: string, kind?: TreeNodeKind): Locator {
+export function treeNode(
+    page: Page,
+    name: string,
+    kind: "file" | "folder" = "file",
+    within?: Locator
+): Locator {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const rows = page.locator(".directory-tree .tree-item-content");
-    const caret = page.locator(".tree-item-caret");
-    const kindRows =
-        kind === "folder"
-            ? rows.filter({ has: caret })
-            : kind === "file"
-            ? rows.filter({ hasNot: caret })
-            : rows;
     // e2e test helper: the tree-node name is escaped with the standard metacharacter escape before
     // it is interpolated into the RegExp below.
-    return kindRows
+    const caret = page.locator(".tree-item-caret");
+    const byName = (within ?? page.locator(".directory-tree"))
+        .locator(".tree-item-content")
+        .filter({
+            has: page
+                .locator(".tree-item-name")
+                .filter({ hasText: new RegExp(`^\\s*${escaped}(\\([^)]*\\))?\\s*$`) }), // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+        });
+    // A folder row carries a caret; a file row never does.
+    return (kind === "folder" ? byName.filter({ has: caret }) : byName.filter({ hasNot: caret }))
         .locator(".tree-item-name")
-        .filter({ hasText: new RegExp(`^${escaped}(\\(\\d+\\))?$`) }) // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
         .first();
 }
 

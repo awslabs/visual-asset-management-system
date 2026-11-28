@@ -788,6 +788,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Backend test subsets** — A test run that collects the Physna add-on tests before another test imports the audit logging module, such as `tests/handlers` alone, no longer fails at collection. (issue #1451)
 -   **Audit log search tests on long runs** — The audit log search service tests take their timestamps when each test runs, so a backend test run that reaches them more than about 1,000 seconds after collection no longer fails. (issue #1752)
 -   **3D Preview Thumbnail docstring** — The `finite_points` docstring says what the function returns and when it raises. (issue #1518)
+-   **Web e2e file tree helpers** — The core Playwright helpers select a file, not a folder of the same name, in the File Manager tree, and find a file whose label carries its primary type. Only the test harness changes. (issue #2075)
 
 **Known issues:**
 
