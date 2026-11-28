@@ -179,6 +179,17 @@ _fat_module = _s3mk_importlib_util.module_from_spec(_fat_spec)
 _fat_spec.loader.exec_module(_fat_module)
 sys.modules['common.fileAttribution'] = _fat_module
 sys.modules['common'].fileAttribution = _fat_module
+# assetLocationConversion reads a v2.6 to v2.7 move's record from the asset row and deletes the old versions
+# it left through the S3 client its caller passes; it builds no client, so load the REAL module by path,
+# after assetLocations and s3MetadataKeys, which it imports.
+_alcv_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.assetLocationConversion',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'assetLocationConversion.py')
+)
+_alcv_module = _s3mk_importlib_util.module_from_spec(_alcv_spec)
+_alcv_spec.loader.exec_module(_alcv_module)
+sys.modules['common.assetLocationConversion'] = _alcv_module
+sys.modules['common'].assetLocationConversion = _alcv_module
 # vamsObjectTags writes the two VAMS object tags through the S3 client its caller passes and builds no
 # client of its own, so load the REAL module by path.
 _vot_spec = _s3mk_importlib_util.spec_from_file_location(

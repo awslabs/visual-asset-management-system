@@ -27,6 +27,10 @@ REVIEWED = {
         "the reindex walk attributes each listed key to its deepest owner, live or archived, through the location "
         "index once it is ready (BucketLocations.owner) and keeps it only when that owner is live; by its first "
         "folder before, as before",
+    "common/assetLocationConversion.py":
+        "deletes at a moved asset's former file key and its previews (outside the location) only the versions the "
+        "asset's own relocated copies name; a version another asset or a user wrote there is named by no copy and "
+        "stays, so no location decides what is deleted",
     "common/s3PathPatterns.py": "pure path joining; callers decide ownership",
     "handlers/addon/garnetFramework/garnetDataIndexFile.py":
         "attributes each file event with fileAttribution.attribute_object (the deepest owner)",

@@ -51,6 +51,10 @@ from common.assetLocations import (
     names_own_object, normalize_base_prefix, object_key_for_path, object_key_for_request, relative_path_in,
     viewer_data_prefix, viewer_data_scope,
 )
+from common.assetLocationConversion import (
+    MOVE_PENDING_REFUSAL, MovedVersionsDeleteIncomplete, delete_moved_source_versions, is_pending_move,
+    moved_file_key,
+)
 from common.fileAttribution import nested_locations_of_asset
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from common.apiRoutes import (
@@ -2735,6 +2739,16 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
                              if nested.keep(preview_file)]
         except Exception as e:
             logger.exception(f"Error listing the preview files of {full_key}: {e}")
+            raise VAMSGeneralErrorResponse(FILE_DELETE_INCOMPLETE_MESSAGE)
+
+        # A file a v2.6 to v2.7 move put in the companion folder first loses the old versions the move left at
+        # its former key and previews, while its copies still name them (common.assetLocationConversion); a
+        # move the upgrade step has not finished keeps the file
+        if is_pending_move(asset) and full_key == moved_file_key(asset):
+            raise VAMSGeneralErrorResponse(MOVE_PENDING_REFUSAL)
+        try:
+            delete_moved_source_versions(s3_client, bucket, asset, copy_key=full_key)
+        except MovedVersionsDeleteIncomplete:
             raise VAMSGeneralErrorResponse(FILE_DELETE_INCOMPLETE_MESSAGE)
 
         # Delete the main file including all versions; when S3 keeps a version, its previews and
