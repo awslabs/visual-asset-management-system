@@ -1384,6 +1384,7 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                     if file_key:
                         download_response = api_client.download_asset_file(
                             database, asset, file_key,
+                            version_id=version_id,
                             asset_version_id=asset_version_id,
                             asset_version_alias=asset_version_alias
                         )

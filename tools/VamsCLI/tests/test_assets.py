@@ -1739,6 +1739,26 @@ class TestAssetDownloadCommand:
             assert '✓ Shareable links generated successfully!' in result.output
             assert 'Files (2):' in result.output
     
+    def test_download_shareable_link_passes_version_id(self, cli_runner, assets_command_mocks):
+        """--version-id must reach the API for a single file with --shareable-links-only."""
+        with assets_command_mocks as mocks:
+            mocks['api_client'].download_asset_file.return_value = {
+                'downloadUrl': 'https://example.com/download/url',
+                'expiresIn': 86400
+            }
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'download',
+                '-d', 'test-database',
+                '-a', 'test-asset',
+                '--file-key', '/model.glb',
+                '--version-id', 'v-first',
+                '--shareable-links-only'
+            ])
+
+            assert result.exit_code == 0
+            assert mocks['api_client'].download_asset_file.call_args.kwargs['version_id'] == 'v-first'
+
     def test_download_asset_preview_only(self, cli_runner, assets_command_mocks):
         """Test download command for asset preview only."""
         with assets_command_mocks as mocks:
@@ -1809,7 +1829,7 @@ class TestAssetDownloadCommand:
             assert 'Expires: in 24 hours' in result.output
             
             # Verify API call
-            mocks['api_client'].download_asset_file.assert_called_once_with('test-database', 'test-asset', '/model.gltf', asset_version_id=None, asset_version_alias=None)
+            mocks['api_client'].download_asset_file.assert_called_once_with('test-database', 'test-asset', '/model.gltf', version_id=None, asset_version_id=None, asset_version_alias=None)
 
     def test_download_shareable_links_whole_asset(self, cli_runner, assets_command_mocks):
         """Test download command with shareable links for whole asset."""
@@ -1974,7 +1994,7 @@ class TestAssetDownloadCommand:
             assert '✓ Shareable links generated successfully!' in result.output
             
             # Verify API call uses JSON data
-            mocks['api_client'].download_asset_file.assert_called_once_with('json-database', 'json-asset', '/json-model.gltf', asset_version_id=None, asset_version_alias=None)
+            mocks['api_client'].download_asset_file.assert_called_once_with('json-database', 'json-asset', '/json-model.gltf', version_id=None, asset_version_id=None, asset_version_alias=None)
     
     def test_download_json_output(self, cli_runner, assets_command_mocks):
         """Test download command with JSON output."""
