@@ -69,6 +69,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Scripts and users that delete or archive by full key: a permanent delete or an archive with `isPrefix` `false` whose path resolves to the asset's location folder, such as `a1/` for an asset stored at `a1/`, answers `400` and changes nothing, as the folder request does. The companion folder `{key}/` of an asset created from a single Amazon S3 object answers the same with or without `isPrefix`; delete or archive the files and subfolders inside it instead. (PR #2049)
     -   Scripts and users that move, rename or revert by full key: a file move or rename whose source path, or a file version revert whose file path, is `/` or resolves to the asset's location folder, such as `a1/` for an asset stored at `a1/`, or to the companion folder `{key}/` of an asset created from a single Amazon S3 object, answers `400` and changes nothing; move, rename or revert the files inside it instead. (PR #2060)
     -   Scripts and users that download with VamsCLI: a file stored with a `Content-Encoding`, such as gzip, is saved as stored, compressed, where the download failed with `Size mismatch`; decompress it before opening it in a tool that expects the decoded file. (issue #2025, PR #2053)
+    -   Users and scripts that open download links: opening a download link, including a shared link or an asset export file URL, saves the file under its own name instead of displaying it in the browser tab; the viewers and previews still display files. (refs #2026, PR #2054)
 
 **Key fixes:**
 
@@ -139,6 +140,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **A single request that names the top-level folder** — A permanent delete or archive with `isPrefix` `false` of the asset's own location folder, such as `a1/` for an asset stored at `a1/`, and a delete or archive of the companion folder `{key}/` of an asset created from a single Amazon S3 object, are refused like `/`. (PR #2049)
 -   **A move or revert that names the top-level folder** — A file move, rename or version revert of `/`, of the asset's own location folder, such as `a1/` for an asset stored at `a1/`, or of the companion folder `{key}/` of an asset created from a single Amazon S3 object, is refused like a delete or archive of it. (PR #2060)
 -   **CLI downloads of files stored compressed** — `vamscli assets download`, `assets export --download-files` and `sync file pull` save a file stored with a `Content-Encoding`, such as gzip, byte for byte as stored, as `aws s3 cp` does, instead of failing with `Size mismatch`. (issue #2025, PR #2053)
+-   **Download links save the file** — **Download File**, a file version's download, the download API's file URLs and the asset export's file URLs save the file under its own name. A file stored with a viewable type such as PNG, PDF, MP4 or text no longer opens in the browser tab, and a download name stored with the file no longer renames it; viewers still display files. (refs #2026, PR #2054)
 
 **Other changes:**
 
