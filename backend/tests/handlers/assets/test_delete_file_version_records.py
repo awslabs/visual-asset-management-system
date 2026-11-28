@@ -111,39 +111,65 @@ def test_the_asset_root_and_folders_name_no_row(versions_table):
     assert len(_rows(versions_table, "a1")) == 4
 
 
-class _RefusedBatch:
-    def __init__(self):
-        self.deletes = []
-
-    def __enter__(self):
-        return self
-
-    def delete_item(self, Key):
-        self.deletes.append(Key)
-
-    def __exit__(self, *exc):
-        raise ClientError({"Error": {"Code": "AccessDeniedException", "Message": "not authorized"}},
-                          "BatchWriteItem")
+def _refused(operation):
+    return ClientError({"Error": {"Code": "AccessDeniedException", "Message": "not authorized"}}, operation)
 
 
 def test_a_refused_write_is_logged_as_an_error_and_reports_no_row_deleted(versions_table, monkeypatch):
-    batch = _RefusedBatch()
     refusing_table = MagicMock(wraps=versions_table)
     refusing_table.query.side_effect = versions_table.query
-    refusing_table.batch_writer.return_value = batch
+    refusing_table.delete_item.side_effect = _refused("DeleteItem")
     monkeypatch.setattr(af, "asset_version_files_table", refusing_table)
     logger = MagicMock()
     monkeypatch.setattr(af, "logger", logger)
 
     deleted = af.delete_file_version_records("db1", "a1", ["/x.txt"])
 
-    assert batch.deletes == [{PK: "db1:a1:1", "fileKey": "x.txt"}, {PK: "db1:a1:2", "fileKey": "x.txt"}]
+    assert refusing_table.delete_item.call_args_list[0].kwargs == {"Key": {PK: "db1:a1:1", "fileKey": "x.txt"}}
     assert deleted == 0
     logger.exception.assert_called_once()
     assert "AccessDeniedException" in logger.exception.call_args.args[0]
     logger.warning.assert_not_called()
     # The rows are still there, and the file route goes on (the files are already gone from S3).
     assert ("db1:a1:1", "x.txt") in _rows(versions_table)
+
+
+def test_a_write_refused_part_way_reports_the_rows_deleted_before_it(versions_table, monkeypatch):
+    refusing_table = MagicMock(wraps=versions_table)
+    refusing_table.query.side_effect = versions_table.query
+    answers = iter([None])
+
+    def delete_item(**kwargs):
+        if next(answers, "refused") == "refused":
+            raise _refused("DeleteItem")
+        return versions_table.delete_item(**kwargs)
+
+    refusing_table.delete_item.side_effect = delete_item
+    monkeypatch.setattr(af, "asset_version_files_table", refusing_table)
+    monkeypatch.setattr(af, "logger", MagicMock())
+
+    assert af.delete_file_version_records("db1", "a1", ["/x.txt"]) == 1
+    assert len([row for row in _rows(versions_table, "a1") if row[1] == "x.txt"]) == 1
+
+
+def test_rows_are_deleted_one_at_a_time_with_no_batch_write(versions_table, monkeypatch):
+    """The role holds DeleteItem on this table and no BatchWriteItem: every row of a file that more
+    asset versions list than one batch carries (25) goes, through DeleteItem alone."""
+    for version in range(3, 33):
+        versions_table.put_item(Item={PK: f"db1:a1:{version}", "fileKey": "x.txt", "databaseId:assetId": "db1:a1"})
+    watched = MagicMock(wraps=versions_table)
+    watched.query.side_effect = versions_table.query
+    watched.delete_item.side_effect = versions_table.delete_item
+    watched.batch_writer.side_effect = AssertionError("a batch write was used")
+    monkeypatch.setattr(af, "asset_version_files_table", watched)
+
+    deleted = af.delete_file_version_records("db1", "a1", ["/x.txt"])
+
+    assert deleted == 32
+    assert watched.delete_item.call_count == 32
+    watched.batch_writer.assert_not_called()
+    assert _rows(versions_table, "a1") == [("db1:a1:2", "keep.txt"), ("db1:a1:2", "sub/y.txt")]
+    assert _rows(versions_table, "a2") == [("db1:a2:1", "x.txt"), ("db1:a2:2", "/x.txt")]
 
 
 ROUTE_ROWS = [
