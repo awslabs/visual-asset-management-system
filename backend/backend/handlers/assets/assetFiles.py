@@ -2707,8 +2707,9 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         if incomplete is None:
             folder_aux = aux_bucket_asset_file_base(databaseId, full_key)
             owner_keep = aux_owner_filter(databaseId, base_key, full_key, folder_aux)
-            in_folder = folder_aux_keep(databaseId, full_key)
-            folder_keep = in_folder if owner_keep is None else (lambda k: owner_keep(k) and in_folder(k))
+            folder_files_keep = folder_aux_keep(databaseId, full_key)
+            folder_keep = folder_files_keep if owner_keep is None else (
+                lambda k: owner_keep(k) and folder_files_keep(k))
             _call_with_keep(delete_assetAuxiliary_files, folder_aux, keep=_keep_aux(folder_keep, nested, databaseId))
         else:
             delete_auxiliary_files_of_keys(databaseId, [key for key in deleted_keys if contains(base_key, key)])
@@ -3204,6 +3205,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     # onto it
     if relative_path_in(dest_base_key, dest_key) == "/":
         raise VAMSGeneralErrorResponse("Cannot copy a file onto the top-level asset folder")
+    # A key ending in '/' is a folder entry: a file copied there would become one, and its viewer data would land
+    # in another file's viewer-data folder (viewer_data_prefix drops the slashes)
+    if dest_key.endswith('/') and not source_key.endswith('/'):
+        raise VAMSGeneralErrorResponse("Cannot copy a file onto a folder")
 
     refuse_nested_key(nested_locations_for(source_asset, source_bucket, source_base_key), source_key,
                       "Source file not found.")
@@ -3334,6 +3339,9 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
         raise VAMSGeneralErrorResponse("Cannot move or rename the top-level asset folder")
     if relative_path_in(base_key, dest_key) == "/":
         raise VAMSGeneralErrorResponse("Cannot move or rename a file onto the top-level asset folder")
+    # A key ending in '/' is a folder entry (see copy_file)
+    if dest_key.endswith('/') and not source_key.endswith('/'):
+        raise VAMSGeneralErrorResponse("Cannot move or rename a file onto a folder")
 
     # Moving deletes the source, so a source key another live asset also holds is left alone
     nested = nested_locations_for(asset, bucket, base_key, destructive=True)
@@ -5183,8 +5191,10 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
     nested = nested_locations_for(asset, bucket, base_key)
     refuse_nested_key(nested, full_key, "File not found.")
     if full_key.endswith('/'):
-        # A folder: the data of every file in it, except a nested asset's
-        aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
+        # A folder: the data of every file in it, except a nested asset's and the file named like the folder's
+        aux_prefix, owner_keep = aux_scope(databaseId, base_key, full_key)
+        folder_files_keep = folder_aux_keep(databaseId, full_key)
+        aux_keep = folder_files_keep if owner_keep is None else (lambda k: owner_keep(k) and folder_files_keep(k))
         aux_keep = _keep_aux(aux_keep, nested, databaseId)
     else:
         # A file: its own viewer data, not another file's in a folder named like it

@@ -10,14 +10,16 @@ moving or copying the marker leaves every viewer-data object as it is (``common.
 A file move or copy whose destination resolves to the entry the file list shows at `/` (the destination asset's
 location folder, or a single-object asset's companion folder `{key}/`) is refused with `400` and nothing changes, as
 a move of that entry is (test_assetFiles_top_level_move_revert.py). An asset has no object at that key when its
-folder was written without a marker, or when nothing created the companion folder.
+folder was written without a marker, or when nothing created the companion folder. A file moved or copied onto any
+other key ending in `/` (a folder entry) is refused too: its viewer data would land in another file's viewer-data
+folder. A folder marker still moves and copies to another folder name.
 
 Layout (buckets `vams-guard` and `vams-guard-aux`, versioned; every asset key has two versions):
 - `A` at `A/` holds its marker, `x.txt`, a file `sub` and a subfolder `sub/` with its marker and `sub/x`.
 - `M` was created from one object, `m/model.glb`; its companion folder holds a marker, a file `sub`, and a subfolder
   `sub/` with its marker and `sub/n.txt`.
-- `N` at `N/` and `B2` at `base/B2/` hold `x.txt` and `sub/x` but no folder marker; `L` has a location stored with a
-  leading `/`, `/lead/`, and holds `x.txt` but no marker.
+- `N` at `N/` holds `x.txt`, a file `sub` and `sub/x`, and `B2` at `base/B2/` holds `x.txt` and `sub/x`, neither with
+  a folder marker; `L` has a location stored with a leading `/`, `/lead/`, and holds `x.txt` but no marker.
 - `P` was created from one object, `p/model.glb`, and holds a companion file `n.txt` but no companion marker.
 
 Every file has viewer data in the auxiliary bucket, and each asset has an asset-level metadata row and attribute row
@@ -50,7 +52,7 @@ AUX_BUCKET = "vams-guard-aux"
 KEYS = {
     "A": ("A/", "A/x.txt", "A/sub", "A/sub/", "A/sub/x"),
     "M": ("m/model.glb", "m/model.glb/", "m/model.glb/sub", "m/model.glb/sub/", "m/model.glb/sub/n.txt"),
-    "N": ("N/x.txt", "N/sub/x"),
+    "N": ("N/x.txt", "N/sub", "N/sub/x"),
     "B2": ("base/B2/x.txt", "base/B2/sub/x"),
     "L": ("lead/x.txt",),
     "P": ("p/model.glb", "p/model.glb/n.txt"),
@@ -64,6 +66,15 @@ METADATA_PATHS = {asset_id: ("/", "/n.txt" if asset_id == "P" else "/x.txt") for
 CLAIMS = {"tokens": ["tester"], "roles": []}
 MOVE_REFUSAL = ": Cannot move or rename a file onto the top-level asset folder"
 COPY_REFUSAL = ": Cannot copy a file onto the top-level asset folder"
+MOVE_FOLDER_REFUSAL = ": Cannot move or rename a file onto a folder"
+COPY_FOLDER_REFUSAL = ": Cannot copy a file onto a folder"
+# A destination ending in '/' that is not the top-level entry: (asset, source, destination)
+FOLDER_DESTINATIONS = [
+    ("N", "/x.txt", "//"), ("N", "/x.txt", "N//"), ("N", "/x.txt", "./"), ("N", "/x.txt", "/./"),
+    ("N", "/x.txt", "/sub/"), ("N", "/x.txt", "N/sub/"), ("B2", "/x.txt", "base/B2//"), ("L", "/x.txt", "lead//"),
+    ("A", "/x.txt", "/sub//"), ("A", "/x.txt", "A/sub//"), ("M", "/sub/n.txt", "m/model.glb//"),
+    ("M", "/sub/n.txt", "/sub//"), ("P", "/n.txt", "p/model.glb//"), ("P", "/n.txt", "p/model.glb///"),
+]
 # A destination that resolves to the top-level entry of an asset that has no object there: (asset, source, destination)
 TOP_LEVEL_DESTINATIONS = [
     ("N", "/x.txt", "/"), ("N", "/x.txt", "N/"), ("B2", "/x.txt", "/"), ("B2", "/x.txt", "base/B2/"),
@@ -324,3 +335,77 @@ class TestFilesStillMoveAndCopy:
         af.copy_file("db1", "A", "/x.txt", "/from-a.txt", "N", None, CLAIMS)
         assert "N/from-a.txt" in _live(af.test_client, BUCKET)
         assert "db1:N:/from-a.txt" in _paths(af.asset_file_metadata_table)
+
+
+@pytest.mark.unit
+class TestAMoveOrCopyOfAFileOntoAFolderIsRefused:
+    """A destination ending in `/` names a folder entry, and `viewer_data_prefix` drops its slashes, so the file's
+    viewer data would land in the viewer-data folder of another key (`p/model.glb//` writes the object's own)."""
+
+    @pytest.mark.parametrize("asset_id,source,dest", FOLDER_DESTINATIONS)
+    def test_the_move_is_refused_and_nothing_changes(self, af, asset_id, source, dest):
+        before = _everything(af)
+        with pytest.raises(af.VAMSGeneralErrorResponse) as raised:
+            af.move_file("db1", asset_id, source, dest, CLAIMS)
+        assert str(raised.value).endswith(MOVE_FOLDER_REFUSAL)
+        assert raised.value.status_code == 400
+        assert _everything(af) == before
+
+    @pytest.mark.parametrize("asset_id,source,dest", FOLDER_DESTINATIONS)
+    def test_the_copy_is_refused_and_nothing_changes(self, af, asset_id, source, dest):
+        before = _everything(af)
+        with pytest.raises(af.VAMSGeneralErrorResponse) as raised:
+            af.copy_file("db1", asset_id, source, dest, None, None, CLAIMS)
+        assert str(raised.value).endswith(COPY_FOLDER_REFUSAL)
+        assert raised.value.status_code == 400
+        assert _everything(af) == before
+
+    @pytest.mark.parametrize("dest_asset,dest", [("P", "p/model.glb//"), ("N", "/sub/"), ("N", "//")])
+    def test_a_copy_onto_another_assets_folder_is_refused(self, af, dest_asset, dest):
+        before = _everything(af)
+        with pytest.raises(af.VAMSGeneralErrorResponse) as raised:
+            af.copy_file("db1", "A", "/x.txt", dest, dest_asset, None, CLAIMS)
+        assert str(raised.value).endswith(COPY_FOLDER_REFUSAL)
+        assert _everything(af) == before
+
+    def test_authorization_is_checked_before_the_path(self, af, monkeypatch):
+        def deny(*args, **kwargs):
+            raise af.VAMSAuthorizationDeniedResponse()
+
+        monkeypatch.setattr(af, "get_asset_with_permissions", deny)
+        before = _everything(af)
+        for asset_id, source, dest in FOLDER_DESTINATIONS:
+            with pytest.raises(af.VAMSAuthorizationDeniedResponse):
+                af.move_file("db1", asset_id, source, dest, CLAIMS)
+            with pytest.raises(af.VAMSAuthorizationDeniedResponse):
+                af.copy_file("db1", asset_id, source, dest, None, None, CLAIMS)
+        assert _everything(af) == before
+
+    def test_a_folder_marker_still_moves_and_copies_to_another_folder_name(self, af):
+        af.copy_file("db1", "A", "/sub/", "/copied/", None, None, CLAIMS)
+        af.move_file("db1", "A", "/sub/", "/moved/", CLAIMS)
+        live = _live(af.test_client, BUCKET)
+        assert {"A/copied/", "A/moved/"} <= set(live) and "A/sub/" not in live
+
+
+@pytest.mark.unit
+class TestAnAuxiliaryPreviewDeleteOfAFolderKeepsTheSameNamedFilesViewerData:
+    @pytest.mark.parametrize("asset_id,path,folder,sibling", [
+        ("A", "/sub/", "A/sub/", "A/sub"), ("A", "A/sub/", "A/sub/", "A/sub"), ("N", "/sub/", "N/sub/", "N/sub"),
+        ("M", "/sub/", "m/model.glb/sub/", "m/model.glb/sub"),
+    ])
+    def test_the_folders_files_lose_their_viewer_data_and_the_same_named_file_keeps_its_own(
+            self, af, asset_id, path, folder, sibling):
+        assets_before, aux_before = _versions(af.test_client, BUCKET), _versions(af.test_client, AUX_BUCKET)
+        af.delete_auxiliary_preview_asset_files("db1", asset_id, path, CLAIMS)
+        assert _versions(af.test_client, BUCKET) == assets_before
+        assert _versions(af.test_client, AUX_BUCKET) == [
+            v for v in aux_before if not v[0].startswith(f"db1/{folder}") or v[0].startswith(f"db1/{sibling}/preview/")]
+        assert f"db1/{sibling}/preview/viewer.json" in _live(af.test_client, AUX_BUCKET)
+
+    @pytest.mark.parametrize("asset_id,path,key", [("A", "/sub", "A/sub"), ("A", "/sub/x", "A/sub/x"),
+                                                   ("N", "/sub", "N/sub")])
+    def test_a_file_loses_only_its_own_viewer_data(self, af, asset_id, path, key):
+        aux_before = set(_live(af.test_client, AUX_BUCKET))
+        af.delete_auxiliary_preview_asset_files("db1", asset_id, path, CLAIMS)
+        assert aux_before - set(_live(af.test_client, AUX_BUCKET)) == {f"db1/{key}/preview/viewer.json"}
