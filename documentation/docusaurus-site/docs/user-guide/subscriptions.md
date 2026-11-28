@@ -59,7 +59,7 @@ The **Subscription Management** page displays all subscriptions you have permiss
 | Event Name  | The type of event being monitored (currently **Asset Version Change**). |
 | Subscribers | The list of subscribed user IDs or email addresses.                     |
 
-You can edit a subscription to add or remove subscribers. When subscribers are removed, the confirmed Amazon SNS subscription for their current profile email is also removed; an address that was subscribed before a profile email change keeps receiving notifications until its recipient uses the unsubscribe link in the email.
+You can edit a subscription to add or remove subscribers. When subscribers are removed, the confirmed Amazon SNS subscription for their current profile email is also removed; an address that was subscribed before a profile email change keeps receiving notifications until its recipient uses the unsubscribe link in the email or the subscription is deleted.
 
 ### Updating a subscription
 

@@ -28,7 +28,7 @@ sequenceDiagram
     SNS->>E: Send email to subscribers
 ```
 
-1. **Subscribe** -- You choose an asset and supply the email addresses to notify. VAMS creates an Amazon Simple Notification Service (Amazon SNS) topic for the asset (if one does not already exist) and stores the subscription record.
+1. **Subscribe** -- You choose an asset and name the subscribers to notify, by user ID (or by email address for a recipient without a user account). VAMS creates an Amazon Simple Notification Service (Amazon SNS) topic for the asset (if one does not already exist) and stores the subscription record.
 
 2. **Trigger** -- When the monitored event occurs (for example, a new asset version is created or files are modified), VAMS publishes a notification to the asset's Amazon SNS topic.
 
@@ -36,7 +36,7 @@ sequenceDiagram
 
 ## Managing subscriptions
 
-You can create a subscription, review the subscriptions you have access to, change the email addresses on an existing subscription, check whether an asset is already monitored, and unsubscribe. Each of these is available from the web interface -- see the [Subscriptions User Guide](../user-guide/subscriptions.md) for the procedures.
+You can create a subscription, review the subscriptions you have access to, change the subscribers on an existing subscription, check whether an asset is already monitored, and unsubscribe. Each of these is available from the web interface -- see the [Subscriptions User Guide](../user-guide/subscriptions.md) for the procedures.
 
 The same operations are available programmatically for automation and custom integrations. See the [Subscriptions API](../api/subscriptions.md) reference.
 
