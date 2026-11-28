@@ -3551,7 +3551,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, source file is archived, the source is the file of a single-file asset (it cannot be moved or renamed), or the destination file name has a blocked extension. A missing source file also answers 400.
+                    description: Invalid parameters, file already exists at destination, source file is archived, the source is the top-level asset folder (`/`, or a path that resolves to the asset's location folder or to a single-object asset's companion folder), the source is the file of a single-file asset (it cannot be moved or renamed), or the destination file name has a blocked extension. A missing source file also answers 400.
                     content:
                         application/json:
                             schema:
@@ -3652,7 +3652,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters. A missing or already archived file also answers 400, as does the top-level asset folder (`/` or a prefix that resolves to the asset's location folder); an empty filePath is an invalid parameter.
+                    description: Invalid parameters. A missing or already archived file also answers 400, as does the top-level asset folder (`/`, or a path that resolves to the asset's location folder or to a single-object asset's companion folder, with or without isPrefix); an empty filePath is an invalid parameter.
                     content:
                         application/json:
                             schema:
@@ -3753,7 +3753,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or confirmation required. A missing file also answers 400, as does the top-level asset folder (`/` or a prefix that resolves to the asset's location folder); an empty filePath is an invalid parameter. A delete Amazon S3 does not complete also answers 400; the files it deleted lose their records and the remaining files are kept.
+                    description: Invalid parameters or confirmation required. A missing file also answers 400, as does the top-level asset folder (`/`, or a path that resolves to the asset's location folder or to a single-object asset's companion folder, with or without isPrefix); an empty filePath is an invalid parameter. A delete Amazon S3 does not complete also answers 400; the files it deleted lose their records and the remaining files are kept.
                     content:
                         application/json:
                             schema:
@@ -3899,7 +3899,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/revertFileVersionResponse"
                 "400":
-                    description: Invalid parameters. A missing file or version also answers 400.
+                    description: Invalid parameters. A missing file or version also answers 400, as does the top-level asset folder (`/`, or a path that resolves to the asset's location folder or to a single-object asset's companion folder).
                     content:
                         application/json:
                             schema:
@@ -4603,9 +4603,10 @@ paths:
                                     message:
                                         type: string
                                         example: "Folder created successfully"
-                                    keyPath:
+                                    relativeKey:
                                         type: string
-                                        example: "asset-id/folder/subfolder/"
+                                        description: "The folder's path in the asset, as the request sent it."
+                                        example: "/models/v2/"
                 "400":
                     description: Invalid parameters or key path. A missing asset also answers 400.
                     content:
@@ -13474,7 +13475,7 @@ components:
                     description: "Whether the asset can be downloaded."
                 assetId:
                     $ref: '#/components/schemas/asset_id_regex'
-                    description: "Explicit asset identifier (2-255 characters). ASCII characters only, and cannot contain forward slashes. Auto-generated when omitted. The ASCII rule applies where a caller names a new asset; an identifier already stored stays valid on every other operation. An identifier equal to a folder name VAMS reserves for system use (pipeline, pipelines, preview, previews, temp-upload, temp-uploads, workspace, workspaces, vams.preparedDownloads) is refused with 400."
+                    description: "Explicit asset identifier (2-255 characters). ASCII characters only, and cannot contain forward slashes. Auto-generated when omitted. The ASCII rule, and the rule that the last character is a letter, digit, underscore, comma, apostrophe or hyphen, apply where a caller names a new asset; an identifier already stored stays valid on every other operation. An identifier equal to a folder name VAMS reserves for system use (pipeline, pipelines, preview, previews, temp-upload, temp-uploads, workspace, workspaces, vams.preparedDownloads) is refused with 400."
                 tags:
                     type: array
                     items:
@@ -16636,7 +16637,7 @@ components:
                     pattern: "^[-_a-zA-Z0-9]{3,63}$"
                 assetId:
                     type: string
-                    description: "Asset identifier, ASCII characters only. Every file relativeKey must begin with '{assetId}/'. When the asset already exists the identifier must match it exactly."
+                    description: "Asset identifier, ASCII characters only. Every file relativeKey must begin with '{assetId}/'. When the asset already exists the identifier must match it exactly; a new asset's identifier must end with a letter, digit, underscore, comma, apostrophe or hyphen."
                     minLength: 2
                     maxLength: 255
                 assetName:

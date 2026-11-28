@@ -3,7 +3,18 @@
 
 import json
 from customLogging.logger import safeLogger
-from common.validators import validate, normalize_userid, trim_name, relative_file_path_pattern, id_pattern, object_name_pattern, filename_pattern, bucket_existing_key_pattern, show_archived_model_value
+from common.validators import (
+    bucket_existing_key_pattern,
+    filename_pattern,
+    id_pattern,
+    new_asset_id_regex,
+    normalize_userid,
+    object_name_pattern,
+    relative_file_path_pattern,
+    show_archived_model_value,
+    trim_name,
+    validate,
+)
 from typing import Dict, List, Optional, Literal, Union, Any
 from typing_extensions import Annotated
 from pydantic import Json, EmailStr, PositiveInt, Field
@@ -176,15 +187,21 @@ def validate_asset_identifiers(values: dict) -> dict:
 
 
 def validate_ascii_asset_id(value: str) -> str:
-    """Reject an asset id a caller chose that carries a non-ASCII or non-printable character.
+    """Reject an asset id a caller chose that the new-ID rule refuses: a non-ASCII
+    or non-printable character, or a last character the rest of the id does not
+    admit.
 
     Narrower than ASSET_ID on purpose, and applied only where a caller names a
-    NEW asset. ASSET_ID itself stays Unicode-tolerant because it is validated on
-    every read path — asset detail, file listing, download, workflow execute —
-    so an id an earlier release stored has to keep matching it to stay
-    addressable. The value is rejected rather than folded to an ASCII spelling:
-    the id is an S3 prefix component, so normalizing it would point the asset at
-    a different location than the caller asked for.
+    NEW asset. ASSET_ID itself stays Unicode-tolerant and keeps the broader last
+    character, because it is validated on every read path — asset detail, file
+    listing, download, workflow execute — so an id an earlier release stored has
+    to keep matching it to stay addressable. The value is rejected rather than
+    folded to an ASCII spelling: the id is an S3 prefix component, so normalizing
+    it would point the asset at a different location than the caller asked for.
+
+    The last-character check is the same rule the rest of the id follows: a new
+    id cannot end in '!', '#', '%', ')' or a symbol such as '™', while an id an
+    earlier release stored with one of those characters still matches ASSET_ID.
 
     The printable check is not covered by the ASCII one. The shared
     ``filename_pattern`` admits ``\\s``, so a tab or a newline inside an id
@@ -199,6 +216,11 @@ def validate_ascii_asset_id(value: str) -> str:
         raise ValueError(message)
     if not value.isprintable():
         message = "Asset identifier must contain only printable characters"
+        logger.error(message)
+        raise ValueError(message)
+    if not new_asset_id_regex.fullmatch(value):
+        message = ("Asset identifier must end with a letter, digit, underscore, "
+                   "comma, apostrophe or hyphen")
         logger.error(message)
         raise ValueError(message)
     return value
@@ -1480,6 +1502,9 @@ class AssetUploadTableModel(BaseModel, extra='ignore'):
     # relativeKeys the upload was initialized with. Completion accepts only these; a record
     # without the attribute predates the binding and is completed without the membership check.
     files: Optional[List[str]] = None
+    # "perUpload" (UPLOAD_STAGING_LAYOUT_PER_UPLOAD) when the files stage per upload; a record without
+    # it was initialized before per-upload staging, and only such an upload uses the legacy staging key.
+    stagingLayout: Optional[str] = None
     
     def to_dict(self):
         """Convert model to dictionary for DynamoDB storage"""
@@ -1503,6 +1528,8 @@ class AssetUploadTableModel(BaseModel, extra='ignore'):
             result["UserId"] = self.UserId
         if self.files is not None:
             result["files"] = self.files
+        if self.stagingLayout:
+            result["stagingLayout"] = self.stagingLayout
             
         return result
 
