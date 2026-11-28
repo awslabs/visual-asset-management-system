@@ -3705,7 +3705,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or confirmation required. A missing file also answers 400, as does the top-level asset folder (`/`, or a path that resolves to the asset's location folder or to a single-object asset's companion folder, with or without isPrefix); an empty filePath is an invalid parameter. A delete Amazon S3 does not complete also answers 400; the files it deleted lose their records and the remaining files are kept.
+                    description: Invalid parameters or confirmation required. A missing file also answers 400, as does the top-level asset folder (`/`, or a path that resolves to the asset's location folder or to a single-object asset's companion folder, with or without isPrefix); an empty filePath is an invalid parameter. A delete Amazon S3 does not complete also answers 400; the files it deleted lose their records and the remaining files are kept. A delete of a moved file whose v2.6 to v2.7 upgrade move (assetLocationFileToFolder) is still pending answers 400 too.
                     content:
                         application/json:
                             schema:
@@ -4397,7 +4397,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/assetOperationResponse"
                 "400":
-                    description: Invalid parameters, or Amazon S3 did not delete every object version of the asset. The asset keeps its records and remaining files, so the delete can be retried; the files that were deleted lose their records.
+                    description: Invalid parameters, or Amazon S3 did not delete every object version of the asset. The asset keeps its records and remaining files, so the delete can be retried; the files that were deleted lose their records. Also returned, with nothing deleted, while the asset's v2.6 to v2.7 upgrade move (assetLocationFileToFolder) is still pending.
                     content:
                         application/json:
                             schema:

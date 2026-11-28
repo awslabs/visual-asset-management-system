@@ -552,6 +552,8 @@ Asset subscribers are notified by email when the asset is archived. A permanent 
 
 The asset's Amazon S3 objects are deleted before any of its records. When Amazon S3 does not delete every object version (for example, access to the bucket is denied or the objects are locked), the request returns `400` and the asset keeps its records and its remaining files, so the delete can be retried once the cause is fixed. The files that were deleted lose their metadata, attributes, version records and auxiliary data. An asset whose bucket no longer exists is deleted.
 
+An asset the v2.6 to v2.7 upgrade step `assetLocationFileToFolder` converted with a `move` also loses the old versions the move left outside its location: at its former file key and that file's previews only, the versions the moved copies name, then the delete markers of a key left with no version. They are deleted first, so a refused delete keeps them for the retry. A version written at the former key after the move is not the asset's and stays. While such a move is still `pending`, the delete returns `400` naming the upgrade step, and nothing is deleted; run the step again to finish the move.
+
 :::danger[Irreversible Operation]
 This operation permanently removes the asset and all its data. It cannot be undone. Consider using [Archive Asset](#archive-asset) for soft-deletion instead.
 :::
@@ -593,12 +595,12 @@ A body is required; `confirmPermanentDelete` must be `true`. An empty body retur
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                   |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Missing body or `confirmPermanentDelete` not set to `true`, or Amazon S3 did not delete every object version of the asset; the asset is kept. |
-| `403`  | Not authorized to delete this asset.                                                                                                          |
-| `404`  | Asset not found.                                                                                                                              |
-| `500`  | Internal server error.                                                                                                                        |
+| Status | Description                                                                                                                                                                                                      |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Missing body or `confirmPermanentDelete` not set to `true`, or Amazon S3 did not delete every object version of the asset; the asset is kept. Also returned while the asset's upgrade `move` is still `pending`. |
+| `403`  | Not authorized to delete this asset.                                                                                                                                                                             |
+| `404`  | Asset not found.                                                                                                                                                                                                 |
+| `500`  | Internal server error.                                                                                                                                                                                           |
 
 ---
 
