@@ -292,6 +292,8 @@ web/
       queryRetry.ts         # createAppQueryClient, shouldRetryQuery: a final 4xx is never retried
       fileExtensionValidation.ts
       fileHandleCompat.ts
+      localPathCollision.ts # fileFolderCollision: a file whose local path is another file's folder (the
+                            #   Keep-paths folder download refuses it, as Download as Zip and the CLI do)
 
     styles/                 # Global styles
       theme.css             # CSS custom properties for dark/light theming
