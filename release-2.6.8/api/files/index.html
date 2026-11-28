@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Files | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/api/files"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Files | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="This page documents the file operation endpoints in the VAMS API. These endpoints manage individual files within assets, including listing, moving, copying, archiving, uploading, and streaming."><meta data-rh="true" property="og:description" content="This page documents the file operation endpoints in the VAMS API. These endpoints manage individual files within assets, including listing, moving, copying, archiving, uploading, and streaming."><link data-rh="true" rel="icon" href="/visual-asset-management-system/release-2.6.8/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/api/files"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/api/files" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/release-2.6.8/api/files" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Files","item":"https://awslabs.github.io/visual-asset-management-system/release-2.6.8/api/files"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/release-2.6.8/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/release-2.6.8/assets/js/runtime~main.60b7c00e.js" defer="defer"></script>
+<script src="/visual-asset-management-system/release-2.6.8/assets/js/runtime~main.efda0278.js" defer="defer"></script>
 <script src="/visual-asset-management-system/release-2.6.8/assets/js/main.88e94686.js" defer="defer"></script>
 </head>
 <body>
@@ -197,6 +197,7 @@
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="moverename-file">Move/Rename File<a href="#moverename-file" class="hash-link" aria-label="Direct link to Move/Rename File" title="Direct link to Move/Rename File" translate="no">​</a></h3>
 <p><code>POST /database/{databaseId}/assets/{assetId}/moveFile</code></p>
 <p>Moves or renames a file within the asset. This copies the file to the new location and deletes the original.</p>
+<p>A <code>sourcePath</code> of <code>/</code>, or one that resolves to the entry the file list shows at <code>/</code>, names the top-level asset folder: for an asset stored at <code>a1/</code>, its full key <code>a1/</code>, and for an asset created from one Amazon S3 object, <code>/</code> or its companion folder <code>{key}/</code>. These requests return <code>400</code> with a <code>message</code> that contains <code>Cannot move or rename the top-level asset folder</code>, and nothing is moved. <code>/a1/</code> is the subfolder named like the asset (key <code>a1/a1/</code>).</p>
 <p><strong>Request Parameters:</strong></p>
 
 
@@ -275,7 +276,7 @@
 
 
 
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters, source file not found, destination already exists, or the destination file name has a blocked extension. The file of an asset created from one Amazon S3 object cannot be moved or renamed: <code>The file of a single-file asset cannot be moved or renamed. Copy it to another path instead.</code></td></tr><tr><td><code>403</code></td><td>Not authorized to modify files in this asset.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters, source file not found, destination already exists, the source is the top-level asset folder, or the destination file name has a blocked extension. The file of an asset created from one Amazon S3 object cannot be moved or renamed: <code>The file of a single-file asset cannot be moved or renamed. Copy it to another path instead.</code></td></tr><tr><td><code>403</code></td><td>Not authorized to modify files in this asset.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="copy-file">Copy File<a href="#copy-file" class="hash-link" aria-label="Direct link to Copy File" title="Direct link to Copy File" translate="no">​</a></h3>
 <p><code>POST /database/{databaseId}/assets/{assetId}/copyFile</code></p>
@@ -704,6 +705,7 @@
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="revert-file-version">Revert File Version<a href="#revert-file-version" class="hash-link" aria-label="Direct link to Revert File Version" title="Direct link to Revert File Version" translate="no">​</a></h3>
 <p><code>POST /database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}</code></p>
 <p>Reverts a file to a specific previous S3 version by copying the old version as the new current version.</p>
+<p>A <code>filePath</code> of <code>/</code>, or one that resolves to the entry the file list shows at <code>/</code> (for an asset stored at <code>a1/</code>, its full key <code>a1/</code>; for an asset created from one Amazon S3 object, its companion folder <code>{key}/</code>), names the top-level asset folder. These requests return <code>400</code> with a <code>message</code> that contains <code>Cannot revert the top-level asset folder</code>, and nothing changes.</p>
 <p><strong>Request Parameters:</strong></p>
 
 
@@ -783,7 +785,7 @@
 
 
 
-<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters, or file or version not found.</td></tr><tr><td><code>403</code></td><td>Not authorized to revert file versions.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
+<table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody><tr><td><code>400</code></td><td>Invalid parameters, the top-level asset folder, or file or version not found.</td></tr><tr><td><code>403</code></td><td>Not authorized to revert file versions.</td></tr><tr><td><code>500</code></td><td>Internal server error.</td></tr></tbody></table>
 <hr>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="set-primary-file-type">Set Primary File Type<a href="#set-primary-file-type" class="hash-link" aria-label="Direct link to Set Primary File Type" title="Direct link to Set Primary File Type" translate="no">​</a></h3>
 <p><code>PUT /database/{databaseId}/assets/{assetId}/setPrimaryFile</code></p>
