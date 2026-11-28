@@ -430,11 +430,9 @@ def _held_in_folder(location: str, folder: Optional[str], key: str,
 
 def _relative_to_location(base_key: str, key: str) -> str:
     """The asset-relative path ('/...') of an S3 key in an asset's location."""
-    if base_key and not is_folder_location(base_key):
-        return relative_path_in(base_key, key) or '/' + key
-    if base_key and key.startswith(base_key):
-        return '/' + key[len(base_key):]
-    return '/' + key
+    # relative_path_in normalizes the location, so a folder stored with a leading slash
+    # ('/scans/') still matches the keys held without it ('scans/x.txt', #2065).
+    return relative_path_in(base_key, key) or '/' + key
 
 def _is_missing_object_error(e: ClientError) -> bool:
     """Return True when a ClientError reports the S3 object as missing.
