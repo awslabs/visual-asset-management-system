@@ -432,11 +432,14 @@ test.describe("Download as Zip", () => {
         await expect(treeNode(page, archivedName)).toBeVisible({ timeout: 60_000 });
         await page.waitForLoadState("networkidle").catch(() => undefined);
         // A selection with a folder (here the asset root) offers Export > Download as Zip.
-        await selectTreePath(page, ref!.rootName);
+        await selectTreePath(page, ref!.rootName, { leaf: "folder" });
         await selectTreePath(page, ref!.archivedKey, { modifiers: ["Control"] });
-        const row = (name: string) => treeNode(page, name).locator("xpath=..");
-        await expect(row(ref!.rootName)).toHaveClass(/\bselected\b/);
-        await expect(row(archivedName)).toHaveClass(/\bselected\b/);
+        // The root is a folder; the archived item is a file. The tree can hold both under one name,
+        // so each is looked up as what it is (#2075).
+        const row = (name: string, kind: "file" | "folder") =>
+            treeNode(page, name, kind).locator("xpath=..");
+        await expect(row(ref!.rootName, "folder")).toHaveClass(/\bselected\b/);
+        await expect(row(archivedName, "file")).toHaveClass(/\bselected\b/);
         const exportButton = page.getByRole("button", { name: "Export" }).first();
         await expect(exportButton).toBeVisible({ timeout: 30_000 });
         const dialog = page.getByRole("dialog").filter({ hasText: "Download as Zip" });
