@@ -16,7 +16,10 @@ the versions the copies name, then the delete markers of a source key left with 
 -   the old versions go before the location, so a delete S3 refuses keeps the asset (or the file) and the copies
     that name them, and a retry finishes the job;
 -   a move the step has not finished (``state`` ``pending``) refuses the delete and changes nothing;
--   ``in-place`` and ``append-slash`` conversions, whose keys are all inside the location, delete as before.
+-   ``in-place`` and ``append-slash`` conversions, whose keys are all inside the location, delete as before;
+-   the heads of the copies and the deletes run a bounded number at a time (``OLD_VERSION_WORKERS``, the limit of the
+    file delete's version-row pool), so a file with hundreds of versions fits the API's time limit, and a refused
+    call stops the calls after it.
 
 The copies are written by the step's own ``move_object`` on a versioned moto bucket, so the delete reads what
 the step writes. The harness is the permanent delete's S3 failure harness (``test_permanent_delete_s3_failures``).
@@ -26,6 +29,8 @@ import importlib.util
 import os
 import pathlib
 import sys
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -131,10 +136,11 @@ def _keys_under(client, prefix):
     return sorted({e["Key"] for e in listing.get("Versions", []) + listing.get("DeleteMarkers", [])})
 
 
-def _move(client):
-    """Write the file, its preview and a companion file, then move them as the upgrade step does."""
-    client.put_object(Bucket=BUCKET, Key=FILE_KEY, Body=b"v1")
-    client.put_object(Bucket=BUCKET, Key=FILE_KEY, Body=b"v2")
+def _move(client, versions=2):
+    """Write the file (``versions`` versions), its preview and a companion file, then move them as the upgrade
+    step does."""
+    for number in range(1, versions + 1):
+        client.put_object(Bucket=BUCKET, Key=FILE_KEY, Body=f"v{number}".encode())
     client.put_object(Bucket=BUCKET, Key=PREVIEW, Body=b"p1")
     client.put_object(Bucket=BUCKET, Key=COMPANION, Body=b"c1")
     for key in LOOKALIKES + (NEIGHBOUR,):
@@ -162,9 +168,15 @@ def s3(monkeypatch):
 
 
 @pytest.fixture
-def svc(s3, monkeypatch):
+def versions():
+    """How many versions of the file the move copies (a test overrides it with ``pytest.mark.parametrize``)."""
+    return 2
+
+
+@pytest.fixture
+def svc(s3, monkeypatch, versions):
     """assetService's permanent delete of a moved asset, on the real S3 deletes and the moto bucket."""
-    _move(s3.client)
+    _move(s3.client, versions)
     m = _load()
     asset = _asset(db="db1", aid="a1", assetLocation={"Key": TARGET}, assetLocationConversion=_record())
     state = SimpleNamespace(m=m, asset=asset, client=s3.client, faulty=s3.faulty)
@@ -327,6 +339,92 @@ class TestTheAssetPermanentDeleteOfAMovedAsset:
         _delete_asset(svc)
 
         assert len(_version_ids(svc.client, FILE_KEY)) == 2
+        assert _keys_under(svc.client, TARGET) == []
+
+
+class _Overlapping:
+    """The harness's client with each HeadObject and DeleteObject held a little, so calls of a pool overlap and
+    can be counted. The calls reach moto one at a time."""
+
+    def __init__(self, client, hold_seconds=0.003):
+        self._client = client
+        self._hold = hold_seconds
+        self._moto = threading.Lock()
+        self._count = threading.Lock()
+        self.active = self.max_active = 0
+        self.calls = {"head_object": 0, "delete_object": 0}
+
+    def _call(self, name, kwargs):
+        with self._count:
+            self.calls[name] += 1
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(self._hold)
+            with self._moto:
+                return getattr(self._client, name)(**kwargs)
+        finally:
+            with self._count:
+                self.active -= 1
+
+    def head_object(self, **kwargs):
+        return self._call("head_object", kwargs)
+
+    def delete_object(self, **kwargs):
+        return self._call("delete_object", kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
+def _conversion_module():
+    return sys.modules["common.assetLocationConversion"]
+
+
+@pytest.mark.unit
+class TestManyOldVersionsAreDeletedABoundedNumberAtATime:
+    @pytest.mark.parametrize("versions", [40])
+    def test_every_old_version_goes_with_calls_overlapping_within_the_pool(self, svc, monkeypatch, versions):
+        overlapping = _Overlapping(svc.faulty)
+        monkeypatch.setattr(svc.m, "s3", overlapping)
+        markers = sum(len(_entries(svc.client, key)) - len(_version_ids(svc.client, key)) for key in OLD_KEYS)
+
+        response = _delete_asset(svc)
+
+        assert response.success is True
+        for key in OLD_KEYS:
+            assert _entries(svc.client, key) == [], key
+        assert _keys_under(svc.client, TARGET) == []
+        _lookalikes_and_neighbour_kept(svc.client)
+        # One head per copy version (40 of the file, 1 of the preview); one delete per old version and marker
+        assert overlapping.calls == {"head_object": versions + 1, "delete_object": versions + 1 + markers}
+        assert overlapping.max_active > 1, "the heads and deletes ran one at a time"
+        assert overlapping.max_active <= _conversion_module().OLD_VERSION_WORKERS
+
+    @pytest.mark.parametrize("versions", [40])
+    def test_a_refused_delete_stops_the_later_calls_keeps_the_asset_and_a_retry_finishes(self, svc, monkeypatch,
+                                                                                       versions):
+        overlapping = _Overlapping(svc.faulty)
+        monkeypatch.setattr(svc.m, "s3", overlapping)
+        copies = {key: _entries(svc.client, key) for key in (MOVED, MOVED_PREVIEW, COMPANION)}
+        refused = _version_ids(svc.client, FILE_KEY)[10]
+        svc.faulty.deny_versions.add((FILE_KEY, refused))
+
+        with pytest.raises(svc.m.VAMSGeneralErrorResponse) as raised:
+            _delete_asset(svc)
+
+        assert str(raised.value).endswith(ASSET_MESSAGE)
+        svc.m.asset_table.delete_item.assert_not_called()
+        assert {key: _entries(svc.client, key) for key in copies} == copies
+        assert refused in _version_ids(svc.client, FILE_KEY)
+        # The markers go only after every version: none was deleted, and the deletes stopped early
+        assert len(_entries(svc.client, FILE_KEY)) > len(_version_ids(svc.client, FILE_KEY))
+        assert overlapping.calls["delete_object"] < versions + 1
+
+        svc.faulty.lift()
+        assert _delete_asset(svc).success is True
+        for key in OLD_KEYS:
+            assert _entries(svc.client, key) == [], key
         assert _keys_under(svc.client, TARGET) == []
 
 

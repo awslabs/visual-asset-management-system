@@ -26,7 +26,9 @@ refused S3 call finds what is left.
 Legacy: this module goes with the single-file location code in the next feature release.
 """
 
-from typing import Dict, List, Optional, Tuple
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from functools import partial
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from botocore.exceptions import ClientError
 
@@ -54,6 +56,11 @@ MOVE_PENDING_REFUSAL = (
 
 # A head of a copy version that is gone (another delete removed it meanwhile) names no source.
 _GONE_ERROR_CODES = frozenset({"404", "NoSuchKey", "NoSuchVersion"})
+
+# HeadObject and DeleteObject calls in flight at once, so a moved file with hundreds of versions is read and
+# deleted within the API's time limit. The limit of the file delete's version-row pool
+# (assetFiles.VERSION_ROWS_DELETE_WORKERS), well below the S3 client's 50 pooled connections.
+OLD_VERSION_WORKERS = 8
 
 
 class MovedVersionsDeleteIncomplete(Exception):
@@ -123,22 +130,53 @@ def _direct_entries(s3_client, bucket: str, base_key: str) -> Dict[str, Dict[str
             kwargs["VersionIdMarker"] = page["NextVersionIdMarker"]
 
 
-def _named_sources(s3_client, bucket: str, copy_key: str, versions: List[str], asset_id: str) -> set:
-    """The source version ids the step's copies at ``copy_key`` name (relocated copies of this asset only)."""
-    named = set()
-    for version_id in versions:
-        try:
-            head = s3_client.head_object(Bucket=bucket, Key=copy_key, VersionId=version_id)
-        except ClientError as e:
-            if e.response.get("Error", {}).get("Code") in _GONE_ERROR_CODES:
-                continue
-            raise
-        metadata = head.get("Metadata") or {}
-        if (metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY) == VAMS_CHANGE_SOURCE_FILE_RELOCATE
-                and metadata.get(VAMS_CHANGE_ASSET_ID_FROM_METADATA_KEY) == asset_id
-                and metadata.get(VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY)):
-            named.add(metadata[VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY])
-    return named
+def _run_bounded(calls: List[Callable[[], Any]]) -> List[Any]:
+    """Run ``calls`` with at most ``OLD_VERSION_WORKERS`` in flight, as the file delete runs its version-row
+    deletes: a failed call stops new calls, the calls in flight finish, and the first error is raised. Returns
+    the results in the order of ``calls``."""
+    results: List[Any] = [None] * len(calls)
+    if not calls:
+        return results
+    pending = iter(enumerate(calls))
+    in_flight = {}
+    failure: Optional[BaseException] = None
+    with ThreadPoolExecutor(max_workers=OLD_VERSION_WORKERS) as executor:
+        while True:
+            while failure is None and len(in_flight) < OLD_VERSION_WORKERS:
+                item = next(pending, None)
+                if item is None:
+                    break
+                index, call = item
+                in_flight[executor.submit(call)] = index
+            if not in_flight:
+                break
+            done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+            for future in done:
+                index = in_flight.pop(future)
+                error = future.exception()
+                if error is None:
+                    results[index] = future.result()
+                elif failure is None:
+                    failure = error
+    if failure is not None:
+        raise failure
+    return results
+
+
+def _named_source(s3_client, bucket: str, copy_key: str, version_id: str, asset_id: str) -> Optional[str]:
+    """The source version id a version of the step's copy at ``copy_key`` names, or None when the version is
+    not a relocated copy of this asset (or is gone)."""
+    try:
+        head = s3_client.head_object(Bucket=bucket, Key=copy_key, VersionId=version_id)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in _GONE_ERROR_CODES:
+            return None
+        raise
+    metadata = head.get("Metadata") or {}
+    if (metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY) == VAMS_CHANGE_SOURCE_FILE_RELOCATE
+            and metadata.get(VAMS_CHANGE_ASSET_ID_FROM_METADATA_KEY) == asset_id):
+        return metadata.get(VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY) or None
+    return None
 
 
 def delete_moved_source_versions(s3_client, bucket: str, asset: Dict, copy_key: Optional[str] = None) -> List[str]:
@@ -146,7 +184,9 @@ def delete_moved_source_versions(s3_client, bucket: str, asset: Dict, copy_key: 
 
     For each source key, ``K`` and each ``K.previewFile.{ext}`` (exact keys: ``contains(K, key)`` without the
     keys under ``K/``, so ``K.bak``, ``Kx/...`` or ``K.previewFile.png/x`` are never read), the versions its
-    copy names are deleted, then its delete markers when no version is left. ``copy_key`` limits the delete to
+    copy names are deleted, then its delete markers when no version is left. The heads of the copies, then the
+    deletes of the versions, then those of the markers each run on a bounded pool (``OLD_VERSION_WORKERS``), and
+    every call of a step finishes before the next step starts. ``copy_key`` limits the delete to
     the moved file's own keys: it is the key a file delete removes, and anything but the moved file
     (``K/{name}``) deletes nothing. An asset with no finished move deletes nothing.
 
@@ -170,22 +210,36 @@ def delete_moved_source_versions(s3_client, bucket: str, asset: Dict, copy_key: 
         if not sources:
             return []
         copies = _direct_entries(s3_client, bucket, moved_file)
-        for source, entry in sorted(sources.items()):
-            copy = moved_file + source[len(file_key):]
-            named = _named_sources(s3_client, bucket, copy, copies.get(copy, {}).get("versions", []), asset_id)
-            moved = [version for version in entry["versions"] if version in named]
-            for version in moved:
-                s3_client.delete_object(Bucket=bucket, Key=source, VersionId=version)
-            foreign = len(entry["versions"]) - len(moved)
+        plan = [(source, moved_file + source[len(file_key):]) for source in sorted(sources)]
+
+        # Which source versions the copies name: one head per copy version
+        heads = [(copy, version) for _, copy in plan for version in copies.get(copy, {}).get("versions", [])]
+        named: Dict[str, set] = {}
+        found = _run_bounded([partial(_named_source, s3_client, bucket, copy, version, asset_id)
+                              for copy, version in heads])
+        for (copy, _), source_version in zip(heads, found):
+            if source_version:
+                named.setdefault(copy, set()).add(source_version)
+        moved = {source: [version for version in sources[source]["versions"] if version in named.get(copy, ())]
+                 for source, copy in plan}
+
+        # The moved versions, then the delete markers of a key with no version left
+        _run_bounded([partial(s3_client.delete_object, Bucket=bucket, Key=source, VersionId=version)
+                      for source, _ in plan for version in moved[source]])
+        cleared = []
+        for source, _ in plan:
+            foreign = len(sources[source]["versions"]) - len(moved[source])
             if foreign:
                 logger.warning(f"Asset {asset_id}: {foreign} version(s) at {source} were not moved by its "
                                f"conversion and stay, with the key's delete markers")
-                continue
-            for marker in entry["markers"]:
-                s3_client.delete_object(Bucket=bucket, Key=source, VersionId=marker)
+            else:
+                cleared.append(source)
+        _run_bounded([partial(s3_client.delete_object, Bucket=bucket, Key=source, VersionId=marker)
+                      for source in cleared for marker in sources[source]["markers"]])
+        for source in cleared:
             emptied.append(source)
-            logger.info(f"Asset {asset_id}: deleted {len(moved)} moved version(s) and {len(entry['markers'])} "
-                        f"delete marker(s) at {source}")
+            logger.info(f"Asset {asset_id}: deleted {len(moved[source])} moved version(s) and "
+                        f"{len(sources[source]['markers'])} delete marker(s) at {source}")
     except Exception as e:
         code = e.response.get("Error", {}).get("Code") if isinstance(e, ClientError) else type(e).__name__
         logger.error(f"Asset {asset_id}: the old versions its move left outside its location could not all be "
