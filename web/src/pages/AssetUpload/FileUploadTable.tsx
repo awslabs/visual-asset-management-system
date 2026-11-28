@@ -354,6 +354,17 @@ export const FileUploadTable = ({
                 // Fallback: add to the end if status column not found
                 customColumnDefinitions.push(finalDownloadPathColumn, versionColumn);
             }
+
+            // The download table is wider than the page: its Status column, with a failed file's reason, comes
+            // first so the reason shows without scrolling sideways (#2074)
+            const downloadStatusIndex = customColumnDefinitions.findIndex(
+                (col) => col.id === "status"
+            );
+            if (downloadStatusIndex > 0) {
+                customColumnDefinitions.unshift(
+                    ...customColumnDefinitions.splice(downloadStatusIndex, 1)
+                );
+            }
         }
 
         // Add actions column if we need retry, cancel, or removal functionality
@@ -483,6 +494,8 @@ export const FileUploadTable = ({
                         </Header>
                     }
                     columnDefinitions={columnDefinitions}
+                    // A failed download's reason wraps in its cell instead of widening the table
+                    wrapLines={mode === "Download"}
                     visibleColumns={preferences.visibleContent}
                     items={items}
                     sortingDescending={collectionProps.sortingDescending}
