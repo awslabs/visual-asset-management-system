@@ -211,3 +211,70 @@ class TestAssetLinkListAuthorizedBeforeExistence:
         body = json.loads(response["body"])
         assert [node["assetLinkId"] for node in body["related"]] == ["l-visible"]
         assert body["unauthorizedCounts"]["related"] == 2
+
+
+# Creating a link: POST /asset-links
+def _create_event():
+    body = {"fromAssetId": _FROM[1], "fromAssetDatabaseId": _FROM[0],
+            "toAssetId": _TO[1], "toAssetDatabaseId": _TO[0], "relationshipType": "related"}
+    return {"body": json.dumps(body), "requestContext": {"http": {"method": "POST", "path": "/asset-links"}},
+            "headers": {"Authorization": "Bearer test-token"}}
+
+
+def _create(ends=(), granted=(_OPEN,)):
+    from backend.backend.handlers.assetLinks import createAssetLink
+
+    decided = []
+
+    def _enforce(obj, act):
+        decided.append((dict(obj), act))
+        return obj.get("databaseId") in granted
+
+    enforcer = MagicMock()
+    enforcer.return_value.enforceAPI.return_value = True
+    enforcer.return_value.enforce.side_effect = _enforce
+    links = MagicMock()
+    links.query.return_value = {"Items": []}
+    with patch.object(createAssetLink, "asset_storage_table", _AssetTable(*ends)), \
+            patch.object(createAssetLink, "asset_links_table", links), \
+            patch.object(createAssetLink, "CasbinEnforcer", enforcer), \
+            patch.object(createAssetLink, "log_action", MagicMock()), \
+            patch.object(createAssetLink, "request_to_claims",
+                         return_value={"tokens": ["alice"], "roles": []}):
+        response = createAssetLink.lambda_handler(_create_event(), MagicMock())
+    return response, decided, links
+
+
+@pytest.mark.unit
+class TestCreateLinkAuthorizedBeforeExistence:
+    @pytest.mark.parametrize("refused", [
+        ("target refused", (_OPEN,), "target"), ("source refused", (_CLOSED,), "source"),
+    ], ids=lambda r: r[0])
+    @pytest.mark.parametrize("present", [
+        ("to missing", (_FROM,)), ("from missing", (_TO,)), ("both missing", ()),
+    ], ids=lambda p: p[0])
+    def test_a_caller_refused_one_end_gets_the_same_answer_whichever_end_exists(self, present, refused):
+        _label, ends = present
+        _refused_label, granted, end_name = refused
+        both, _, both_links = _create(ends=(_FROM, _TO), granted=granted)
+        response, _decided, links = _create(ends=ends, granted=granted)
+        assert _answer(both) == (403, f"Not authorized to create links for the {end_name} asset")
+        assert _answer(response) == _answer(both)
+        both_links.put_item.assert_not_called()
+        links.put_item.assert_not_called()
+
+    def test_a_missing_end_is_decided_on_the_requested_ids(self):
+        _response, decided, _ = _create(ends=(_FROM,))
+        assert ({"databaseId": _CLOSED, "assetId": "to-asset", "object__type": "asset"}, "POST") in decided
+
+    def test_a_caller_allowed_both_ends_is_told_an_end_does_not_exist(self):
+        response, decided, links = _create(ends=(_FROM,), granted=(_OPEN, _CLOSED))
+        assert _answer(response) == (400, "One or both assets do not exist")
+        assert [(obj["databaseId"], act) for obj, act in decided] == [(_OPEN, "POST"), (_CLOSED, "POST")]
+        links.put_item.assert_not_called()
+
+    def test_a_caller_allowed_both_ends_creates_the_link(self):
+        response, decided, links = _create(ends=(_FROM, _TO), granted=(_OPEN, _CLOSED))
+        assert response["statusCode"] == 200, response
+        links.put_item.assert_called_once()
+        assert [act for _obj, act in decided] == ["POST", "POST"]
