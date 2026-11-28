@@ -9,7 +9,11 @@ renders an SVG image only when it arrives as image/svg+xml. Every presigned GetO
 an asset or preview file now signs ``ResponseContentType=image/svg+xml`` and
 ``ResponseContentDisposition=attachment`` for a key ending in ``.svg`` (any case). The attachment
 disposition keeps a directly opened link a download, so no script inside the SVG runs at the
-bucket's origin. Every other key is signed exactly as before.
+bucket's origin. Every other key is signed exactly as before on the stream and preview URLs.
+
+The download URLs (POST /download assetFile and the export) also name the file in the attachment
+disposition for every key, SVG included (#2026); ``test_presigned_download_attachment.py`` pins
+that encoding. Here those paths are held to the SVG type rule only.
 
 The shipped ``common/s3.py`` helper is loaded by file path (the root conftest swaps in the mock), and
 each handler path is driven through its real module with the S3 client mocked, asserting on the
@@ -111,6 +115,10 @@ def _parse_download(body):
     return parse(body, model=DownloadAssetRequestModel)
 
 
+def _is_named_attachment(disposition, name):
+    return disposition == "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (name, name)
+
+
 @pytest.mark.unit
 class TestDownloadAssetFile:
     """POST /download assetFile -- the Image Viewer's path (resolve_and_sign_file_key)."""
@@ -120,14 +128,16 @@ class TestDownloadAssetFile:
         m = _wire_download()
         m.download_asset_file("db1", "asset1", _parse_download({"downloadType": "assetFile", "key": key}))
         params = _signed_params(m.s3)
-        assert {k: params[k] for k in OVERRIDE_KEYS} == SVG_OVERRIDES
+        assert params["ResponseContentType"] == SVG_OVERRIDES["ResponseContentType"]
+        assert _is_named_attachment(params["ResponseContentDisposition"], key.lstrip("/"))
         assert params["Bucket"] == "test-bucket"
 
-    def test_non_svg_file_url_is_unchanged(self):
+    def test_non_svg_file_url_gets_no_svg_type(self):
         m = _wire_download()
         m.download_asset_file("db1", "asset1", _parse_download({"downloadType": "assetFile", "key": "/photo.png"}))
         params = _signed_params(m.s3)
-        assert not OVERRIDE_KEYS & set(params)
+        assert "ResponseContentType" not in params
+        assert _is_named_attachment(params["ResponseContentDisposition"], "photo.png")
 
     def test_bulk_signs_each_key_by_its_own_extension(self):
         m = _wire_download()
@@ -137,8 +147,10 @@ class TestDownloadAssetFile:
         by_key = {c.kwargs["Params"]["Key"]: c.kwargs["Params"] for c in m.s3.generate_presigned_url.call_args_list}
         svg = next(p for k, p in by_key.items() if k.endswith("a.svg"))
         png = next(p for k, p in by_key.items() if k.endswith("b.png"))
-        assert {k: svg[k] for k in OVERRIDE_KEYS} == SVG_OVERRIDES
-        assert not OVERRIDE_KEYS & set(png)
+        assert svg["ResponseContentType"] == SVG_OVERRIDES["ResponseContentType"]
+        assert _is_named_attachment(svg["ResponseContentDisposition"], "a.svg")
+        assert "ResponseContentType" not in png
+        assert _is_named_attachment(png["ResponseContentDisposition"], "b.png")
 
 
 @pytest.mark.unit
@@ -252,7 +264,10 @@ class TestAssetExportFileUrls:
     def test_svg_export_url_carries_the_overrides(self):
         params = self._sign("asset1/Plan.SVG")
         assert params["VersionId"] == "v1"
-        assert {k: params[k] for k in OVERRIDE_KEYS} == SVG_OVERRIDES
+        assert params["ResponseContentType"] == SVG_OVERRIDES["ResponseContentType"]
+        assert _is_named_attachment(params["ResponseContentDisposition"], "Plan.SVG")
 
-    def test_non_svg_export_url_is_unchanged(self):
-        assert not OVERRIDE_KEYS & set(self._sign("asset1/model.glb"))
+    def test_non_svg_export_url_gets_no_svg_type(self):
+        params = self._sign("asset1/model.glb")
+        assert "ResponseContentType" not in params
+        assert _is_named_attachment(params["ResponseContentDisposition"], "model.glb")
