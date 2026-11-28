@@ -73,6 +73,12 @@ def _create_versions_table(rows):
     return table
 
 
+@pytest.fixture(autouse=True)
+def no_recorded_invocation(monkeypatch):
+    """No Lambda context left behind by another test's handler call sets a time limit here."""
+    monkeypatch.setattr(af, "_invocation_context", None, raising=False)
+
+
 @pytest.fixture
 def versions_table(monkeypatch):
     with mock_aws():
@@ -350,6 +356,10 @@ def test_the_time_limit_comes_from_the_recorded_lambda_context(monkeypatch):
     assert af._version_rows_delete_deadline() is None
 
     af.record_invocation_context({})
+    assert af._version_rows_delete_deadline() is None
+
+    # Another test's handler call with a MagicMock context sets no time limit either
+    af.record_invocation_context(MagicMock())
     assert af._version_rows_delete_deadline() is None
 
     af.record_invocation_context(SimpleNamespace(get_remaining_time_in_millis=lambda: 900_000))

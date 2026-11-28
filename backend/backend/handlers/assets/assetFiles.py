@@ -175,10 +175,12 @@ def record_invocation_context(context) -> None:
 def _version_rows_delete_deadline() -> Optional[float]:
     """The time.monotonic() value after which no new row delete starts, or None without a Lambda context."""
     try:
-        remaining = _invocation_context.get_remaining_time_in_millis() / 1000.0
+        remaining_ms = _invocation_context.get_remaining_time_in_millis()
     except Exception:
         return None
-    return time.monotonic() + remaining - VERSION_ROWS_DELETE_TIME_MARGIN_SECONDS
+    if isinstance(remaining_ms, bool) or not isinstance(remaining_ms, (int, float)):
+        return None
+    return time.monotonic() + remaining_ms / 1000.0 - VERSION_ROWS_DELETE_TIME_MARGIN_SECONDS
 
 # Default list_objects_v2 page sizes for the current-file listing path. These are
 # per-page batch sizes; the current-file path returns a NextToken for external paging.
