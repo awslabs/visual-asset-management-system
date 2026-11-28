@@ -123,7 +123,7 @@ A dedicated configuration template is provided at `infra/config/config.template.
 
 The following file extensions are blocked by the VAMS upload API for security reasons:
 
-`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`
+`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.dotm`, `.xlsm`, `.xltm`, `.xlam`, `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm`, `.vbs`, `.bat`
 
 A list of blocked MIME types (`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/x-php`, `application/x-powershell`, `application/vbscript` and others) is checked against the content type Amazon S3 reports for a stored file: when an upload completes, when a workflow output is ingested, when the large object copy engine copies a file into its asset, and when a file is downloaded, streamed, exported or zipped. The MIME type list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
 

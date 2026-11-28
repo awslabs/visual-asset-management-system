@@ -491,6 +491,15 @@ CORE_UNALLOWED_FILE_EXTENSION_LIST = [
     ".cmd",
     ".lnk",
     ".docm",
+    ".dotm",
+    ".xlsm",
+    ".xltm",
+    ".xlam",
+    ".pptm",
+    ".potm",
+    ".ppsm",
+    ".ppam",
+    ".sldm",
     ".vbs",
     ".bat"
 ] 
@@ -499,8 +508,9 @@ CORE_UNALLOWED_FILE_EXTENSION_LIST = [
 #Same contract: lower-case entries, matched against the lower-cased media type (parameters stripped).
 #Word documents (application/vnd.openxmlformats-officedocument.wordprocessingml.document, which runs no
 #macros) and JavaScript (application/javascript) are ordinary asset content and are not core entries; a
-#deployment that wants either refused adds it to its add-on or custom lane. The macro-enabled Word type
-#stays blocked here and as .docm above.
+#deployment that wants either refused adds it to its add-on or custom lane. The macro-enabled Office types
+#(Word, Excel and PowerPoint documents, templates, add-ins and slides) are blocked here and by their
+#extensions above.
 CORE_UNALLOWED_MIME_LIST = [
     "application/java-archive",
     "application/x-python-code",
@@ -517,6 +527,15 @@ CORE_UNALLOWED_MIME_LIST = [
     "application/x-ms-shortcut",
     "application/x-bat-script",
     "application/vnd.ms-word.document.macroenabled.12",
+    "application/vnd.ms-word.template.macroenabled.12",
+    "application/vnd.ms-excel.sheet.macroenabled.12",
+    "application/vnd.ms-excel.template.macroenabled.12",
+    "application/vnd.ms-excel.addin.macroenabled.12",
+    "application/vnd.ms-powerpoint.presentation.macroenabled.12",
+    "application/vnd.ms-powerpoint.template.macroenabled.12",
+    "application/vnd.ms-powerpoint.slideshow.macroenabled.12",
+    "application/vnd.ms-powerpoint.addin.macroenabled.12",
+    "application/vnd.ms-powerpoint.slide.macroenabled.12",
     "application/x-vbs",
     "application/x-powershell",
     "application/x-msdos-program",
