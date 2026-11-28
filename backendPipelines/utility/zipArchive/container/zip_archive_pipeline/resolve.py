@@ -185,6 +185,24 @@ def check_names(members, empty_dirs):
             raise Refusal(f"{seen[name]!r} and {rel!r} would have the same name in the archive; "
                           "download them separately")
         seen[name] = rel
+    check_file_folder_names(members, entries)
+
+
+def check_file_folder_names(members, entries):
+    """Refuse a selection where a file's archive name is also a folder of another entry: a file 'a.txt'
+    with 'a.txt/b.txt', or with the empty folder 'a.txt/'. The archive itself is valid, but no file
+    system holds a file and a folder of one name, so extracting it loses entries (#2070). As for two
+    entries of one name, the refusal names both selected paths and asks for them to be downloaded
+    separately; neither is renamed."""
+    files = {m["relativePath"].lstrip("/"): m["relativePath"] for m in members}
+    for rel, name in entries:
+        segments = name.rstrip("/").split("/")
+        for depth in range(1, len(segments) + (1 if name.endswith("/") else 0)):
+            folder = "/".join(segments[:depth])
+            if folder in files and files[folder] != rel:
+                raise Refusal(f"{files[folder]!r} is a file and {rel!r} is in a folder of the same name; "
+                              "no folder can hold both when the archive is extracted, so download them "
+                              "separately")
 
 
 def check_members(get_client, members, blocked_extensions, blocked_content_types, empty_dirs=(),

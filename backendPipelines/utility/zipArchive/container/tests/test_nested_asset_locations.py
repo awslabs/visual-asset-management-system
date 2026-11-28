@@ -85,10 +85,18 @@ def test_a_workflow_run_over_a_folder_leaves_the_nested_asset_under_it_out(s3):
     assert _archived(s3, result) == ["sub/b.obj"]
 
 
-def test_a_workflow_run_without_the_list_archives_the_folder_as_before(s3):
-    # Control: the same folder without excludeLocations archives every key under it
+def test_a_workflow_run_without_the_list_reads_the_nested_files_as_before(s3):
+    # Without the list the nested single-file asset's 'model.glb' and its companion 'model.glb/notes.txt'
+    # are both selected. No folder holds a file and a folder of one name when the archive is extracted, so
+    # the run is refused naming both (#2070); without the companion the folder is archived as before.
+    with pytest.raises(runner.ArchiveFailure) as failure:
+        _archive_run(s3, [{"bucket": ASSETS, "key": BASE, "versionId": ""}]).run()
+    assert failure.value.refusal
+    assert "'/model.glb'" in failure.value.reason and "'/model.glb/notes.txt'" in failure.value.reason
+    del s3.objects[(ASSETS, BASE + "model.glb/notes.txt")]
     result = _archive_run(s3, [{"bucket": ASSETS, "key": BASE, "versionId": ""}]).run()
-    assert _archived(s3, result) == sorted(OWN + NESTED + ["model.glb2.txt"])
+    assert _archived(s3, result) == sorted(OWN + [n for n in NESTED if n != "model.glb/notes.txt"]
+                                           + ["model.glb2.txt"])
 
 
 def test_the_lists_of_several_inputs_are_merged(s3):
