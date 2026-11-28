@@ -215,6 +215,10 @@ def asset_relative_key(final_key: str, asset_base_key: str) -> str:
     """
     if asset_base_key and not is_folder_location(asset_base_key):
         return relative_path_in(asset_base_key, final_key) or final_key
+    # The key is resolved in the location without its leading '/' (object_key_for_request), so the path is too
+    path = relative_path_in(asset_base_key, final_key)
+    if path:
+        return path
     prefix = asset_prefix(asset_base_key)
     if final_key.startswith(prefix):
         return '/' + final_key[len(prefix):]

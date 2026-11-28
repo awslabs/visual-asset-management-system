@@ -429,10 +429,14 @@ def _held_in_folder(location: str, folder: Optional[str], key: str,
     return held and (not nested or nested.keep(key))
 
 def _relative_to_location(base_key: str, key: str) -> str:
-    """The asset-relative path ('/...') of an S3 key in an asset's location."""
-    if base_key and not is_folder_location(base_key):
-        return relative_path_in(base_key, key) or '/' + key
-    if base_key and key.startswith(base_key):
+    """The asset-relative path ('/...') of an S3 key in an asset's location: the path the file is listed at and
+    its records are keyed by (common.assetLocations.relative_path_in, which reads a stored location without its
+    leading '/'). In a folder location a key spelled with the stored location's leading '/' keeps the path after
+    it."""
+    path = relative_path_in(base_key, key)
+    if path:
+        return path
+    if base_key and is_folder_location(base_key) and key.startswith(base_key):
         return '/' + key[len(base_key):]
     return '/' + key
 
