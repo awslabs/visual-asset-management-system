@@ -142,7 +142,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **A move or revert that names the top-level folder** — A file move, rename or version revert of `/`, of the asset's own location folder, such as `a1/` for an asset stored at `a1/`, or of the companion folder `{key}/` of an asset created from a single Amazon S3 object, is refused like a delete or archive of it. (PR #2060)
 -   **CLI downloads of files stored compressed** — `vamscli assets download`, `assets export --download-files` and `sync file pull` save a file stored with a `Content-Encoding`, such as gzip, byte for byte as stored, as `aws s3 cp` does, instead of failing with `Size mismatch`. (issue #2025, PR #2053)
 -   **Download links save the file** — **Download File**, a file version's download, the download API's file URLs and the asset export's file URLs save the file under its own name. A file stored with a viewable type such as PNG, PDF, MP4 or text no longer opens in the browser tab, and a download name stored with the file no longer renames it; viewers still display files. (refs #2026, PR #2054)
--   **One-character file names at the asset root** — A file such as `/x` can have its file metadata and attributes read and written; the file path check required at least 3 characters. A bare `/` is still refused. (issue #2021, PR #2083)
+-   **One-character file names at the asset root** — A file such as `/x` can have its file metadata and attributes read and written, can be streamed and is indexed for search; the file path check required at least 3 characters. A bare `/` is still refused. (issue #2021, PR #2083)
 
 **Other changes:**
 
