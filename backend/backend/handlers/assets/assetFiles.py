@@ -5,7 +5,8 @@ import os
 import boto3
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from common.timestamps import utc_now
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from boto3.dynamodb.conditions import Key
@@ -144,6 +145,42 @@ VERSION_LISTING_PAGE_SIZE = 1500
 # Concurrency cap for parallel per-file S3 calls (head_object enrichment, version
 # checks). Bounds Lambda memory/thread usage; not a data cap.
 MAX_PARALLEL_S3_WORKERS = 10
+
+# DeleteItem calls in flight at once when a file delete removes its version snapshot rows. Below the
+# DynamoDB client's 10 pooled connections, so no call waits for a connection; the table is on-demand.
+VERSION_ROWS_DELETE_WORKERS = 8
+# A row whose DeleteItem is still throttled after the client's own adaptive retries is retried this
+# many more times, waiting VERSION_ROW_THROTTLE_BASE_DELAY_SECONDS, then twice that, and so on.
+VERSION_ROW_THROTTLE_RETRIES = 3
+VERSION_ROW_THROTTLE_BASE_DELAY_SECONDS = 0.5
+DYNAMODB_THROTTLING_ERROR_CODES = frozenset({
+    "ProvisionedThroughputExceededException", "ThrottlingException", "RequestLimitExceeded",
+})
+# No new row delete starts once less than this is left of the invocation's time, so the function
+# answers instead of timing out; the rows not reached are logged.
+VERSION_ROWS_DELETE_TIME_MARGIN_SECONDS = 60
+# Files named in the log line of rows left behind.
+VERSION_ROWS_LEFT_LOGGED_FILES = 20
+
+# The Lambda context of the running invocation, recorded by the handler (record_invocation_context).
+_invocation_context = None
+
+
+def record_invocation_context(context) -> None:
+    """Record the running invocation's Lambda context, so the version row cleanup stops before its timeout."""
+    global _invocation_context
+    _invocation_context = context
+
+
+def _version_rows_delete_deadline() -> Optional[float]:
+    """The time.monotonic() value after which no new row delete starts, or None without a Lambda context."""
+    try:
+        remaining_ms = _invocation_context.get_remaining_time_in_millis()
+    except Exception:
+        return None
+    if isinstance(remaining_ms, bool) or not isinstance(remaining_ms, (int, float)):
+        return None
+    return time.monotonic() + remaining_ms / 1000.0 - VERSION_ROWS_DELETE_TIME_MARGIN_SECONDS
 
 # Default list_objects_v2 page sizes for the current-file listing path. These are
 # per-page batch sizes; the current-file path returns a NextToken for external paging.
@@ -429,10 +466,14 @@ def _held_in_folder(location: str, folder: Optional[str], key: str,
     return held and (not nested or nested.keep(key))
 
 def _relative_to_location(base_key: str, key: str) -> str:
-    """The asset-relative path ('/...') of an S3 key in an asset's location."""
-    if base_key and not is_folder_location(base_key):
-        return relative_path_in(base_key, key) or '/' + key
-    if base_key and key.startswith(base_key):
+    """The asset-relative path ('/...') of an S3 key in an asset's location: the path the file is listed at and
+    its records are keyed by (common.assetLocations.relative_path_in, which reads a stored location without its
+    leading '/'). In a folder location a key spelled with the stored location's leading '/' keeps the path after
+    it."""
+    path = relative_path_in(base_key, key)
+    if path:
+        return path
+    if base_key and is_folder_location(base_key) and key.startswith(base_key):
         return '/' + key[len(base_key):]
     return '/' + key
 
@@ -2352,6 +2393,23 @@ def delete_file_metadata(databaseId: str, assetId: str, relative_file_path: str)
         logger.exception(f"Error deleting metadata for file: {e}")
         return False
 
+def _delete_version_row(item: dict) -> None:
+    """Delete one version snapshot row by the key it is stored under, retrying a throttled call."""
+    key = {
+        'databaseId:assetId:assetVersionId': item['databaseId:assetId:assetVersionId'],
+        'fileKey': item['fileKey']
+    }
+    for attempt in range(VERSION_ROW_THROTTLE_RETRIES + 1):
+        try:
+            asset_version_files_table.delete_item(Key=key)
+            return
+        except ClientError as e:
+            throttled = e.response.get('Error', {}).get('Code') in DYNAMODB_THROTTLING_ERROR_CODES
+            if not throttled or attempt == VERSION_ROW_THROTTLE_RETRIES:
+                raise
+            time.sleep(VERSION_ROW_THROTTLE_BASE_DELAY_SECONDS * (2 ** attempt))
+
+
 def delete_file_version_records(databaseId: str, assetId: str, file_paths: list) -> int:
     """Delete version snapshot records from asset_version_files_table for given file paths.
 
@@ -2367,7 +2425,8 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
             deleting one never deletes the other's rows (#1977).
 
     Returns:
-        Number of records deleted
+        Number of records deleted. Rows not deleted (a failed delete, or the invocation's time limit
+        reached first) stay listed in the asset's versions and are logged as an error.
     """
     if not file_paths:
         return 0
@@ -2406,17 +2465,49 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
             else:
                 break
 
-        # One DeleteItem per row (one per asset version that lists the file): the role holds
-        # DeleteItem on this table and no batch write. The count is the rows deleted.
-        for item in records_to_delete:
-            asset_version_files_table.delete_item(Key={
-                'databaseId:assetId:assetVersionId': item['databaseId:assetId:assetVersionId'],
-                'fileKey': item['fileKey']
-            })
-            deleted_count += 1
+        # One DeleteItem per row (one per asset version that lists the file), at most
+        # VERSION_ROWS_DELETE_WORKERS at a time: the role holds DeleteItem on this table and no batch
+        # write. The count is the rows deleted. A failed row stops new deletes; so does the time limit.
+        deadline = _version_rows_delete_deadline()
+        rows = iter(records_to_delete)
+        in_flight = {}
+        not_deleted = []
+        failure = None
+        out_of_time = False
+        with ThreadPoolExecutor(max_workers=VERSION_ROWS_DELETE_WORKERS) as executor:
+            while True:
+                while failure is None and not out_of_time and len(in_flight) < VERSION_ROWS_DELETE_WORKERS:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        out_of_time = True
+                        break
+                    item = next(rows, None)
+                    if item is None:
+                        break
+                    in_flight[executor.submit(_delete_version_row, item)] = item
+                if not in_flight:
+                    break
+                done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                for future in done:
+                    item = in_flight.pop(future)
+                    error = future.exception()
+                    if error is None:
+                        deleted_count += 1
+                    else:
+                        not_deleted.append(item)
+                        failure = failure or error
+        not_deleted.extend(rows)
 
         if deleted_count > 0:
             logger.info(f"Deleted {deleted_count} version snapshot records for {len(normalized_paths)} file(s) in {db_asset_key}")
+
+        if not_deleted:
+            left_files = sorted({item['fileKey'] for item in not_deleted})
+            reason = "a row delete failed" if failure is not None else "the invocation's time limit was near"
+            logger.error(f"Stopped deleting version snapshot records in {db_asset_key} because {reason}: "
+                         f"{deleted_count} deleted, {len(not_deleted)} left listed in its asset versions, of "
+                         f"{len(left_files)} file(s) such as {left_files[:VERSION_ROWS_LEFT_LOGGED_FILES]}")
+        if failure is not None:
+            raise failure
 
     except Exception as e:
         # The files are already gone from Amazon S3, so the delete stands; rows left here are listed
@@ -5545,6 +5636,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     Returns:
         APIGatewayProxyResponseV2 with the response
     """
+    record_invocation_context(context)
     normalize_event(event)
     try:
         # Get API path and method

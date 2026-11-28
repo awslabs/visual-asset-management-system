@@ -197,18 +197,20 @@ To limit the exposure:
 
 The blocked extension list is enforced only on files written through the VAMS API: uploads, and the destination file name of a move, rename or copy. Files added directly to the Amazon S3 asset bucket bypass it when they are written. The blocked MIME type list does not refuse an upload (see [Blocked File Types](../architecture/security.md#blocked-file-types)). Both lists are checked against a stored file's name and content type when it is downloaded, streamed, exported or zipped. The following file extensions are blocked on upload:
 
-| Extension              | Description                  |
-| ---------------------- | ---------------------------- |
-| `.exe`, `.dll`, `.com` | Executable files             |
-| `.bat`, `.cmd`         | Batch and command scripts    |
-| `.jar`, `.java`        | Java archives and source     |
-| `.php`                 | PHP scripts                  |
-| `.vbs`                 | VBScript files               |
-| `.reg`                 | Registry files               |
-| `.pif`, `.lnk`         | Shortcut files               |
-| `.bak`                 | Backup files                 |
-| `.nat`                 | NAT files                    |
-| `.docm`                | Macro-enabled Word documents |
+| Extension                                   | Description                                                                        |
+| ------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `.exe`, `.dll`, `.com`                      | Executable files                                                                   |
+| `.bat`, `.cmd`                              | Batch and command scripts                                                          |
+| `.jar`, `.java`                             | Java archives and source                                                           |
+| `.php`                                      | PHP scripts                                                                        |
+| `.vbs`                                      | VBScript files                                                                     |
+| `.reg`                                      | Registry files                                                                     |
+| `.pif`, `.lnk`                              | Shortcut files                                                                     |
+| `.bak`                                      | Backup files                                                                       |
+| `.nat`                                      | NAT files                                                                          |
+| `.docm`, `.dotm`                            | Macro-enabled Word documents and templates                                         |
+| `.xlsm`, `.xltm`, `.xlam`                   | Macro-enabled Excel workbooks and templates, and Excel add-ins                     |
+| `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm` | Macro-enabled PowerPoint presentations, templates, slide shows, add-ins and slides |
 
 ### Folder Selection in Firefox
 

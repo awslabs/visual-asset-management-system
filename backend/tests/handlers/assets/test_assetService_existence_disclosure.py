@@ -87,7 +87,10 @@ _ARCHIVED_FIXTURE = {"unarchive_asset"}
 
 # Sites whose read includes archived assets, so a missing asset's stand-in carries the archived
 # database id.
-_ARCHIVED_STAND_IN = {"delete_asset_permanent": f"{_DB}#deleted"}
+_ARCHIVED_STAND_IN = {
+    "delete_asset_permanent": f"{_DB}#deleted",
+    "unarchive_asset": f"{_DB}#deleted",
+}
 
 
 class _EnforcerSpy:
