@@ -51,13 +51,15 @@ POST /asset-links
 }
 ```
 
+Permission on both assets is decided before the API reports whether they exist, so a caller who is not allowed receives `403` whether or not the assets exist.
+
 ### Error responses
 
-| Status | Description                                           |
-| ------ | ----------------------------------------------------- |
-| `400`  | Validation error, duplicate link, or assets not found |
-| `403`  | Not authorized (requires permission on both assets)   |
-| `500`  | Internal server error                                 |
+| Status | Description                                                                                                                               |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation error, duplicate link, or, for a caller allowed on both assets, one of them does not exist (`One or both assets do not exist`) |
+| `403`  | Not authorized (requires POST permission on both assets), whether or not the assets exist                                                 |
+| `500`  | Internal server error                                                                                                                     |
 
 ---
 

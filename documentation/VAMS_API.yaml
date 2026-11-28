@@ -281,13 +281,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/createAssetLinkResponse"
                 "400":
-                    description: Invalid parameters or validation error.
+                    description: "Invalid parameters or validation error, or, for a caller allowed on both assets, one of them does not exist ('One or both assets do not exist')."
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to create asset link.
+                    description: "Not authorized to create asset link. Decided on both assets before the API reports whether they exist, so a refused caller gets this whether or not they do."
                     content:
                         application/json:
                             schema:

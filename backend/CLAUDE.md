@@ -792,7 +792,9 @@ that names no link still answers `Asset link not found` first. The per-asset lin
 (`get_asset_links_for_asset`) decides `GET` on the queried asset's `asset_authorization_object` (with
 `showArchived`, the archived stand-in) before it answers 400 `Asset not found in database`; links whose
 other end the caller may not view or that no longer exists are left out and counted in
-`unauthorizedCounts`, as before.
+`unauthorizedCounts`, as before. Creating a link (`createAssetLink.create_asset_link`) decides `POST`
+on both ends through `check_asset_permissions` (the record, or `asset_authorization_object` from the
+requested ids) before `validate_assets_exist` answers 400 `One or both assets do not exist`.
 
 ---
 
