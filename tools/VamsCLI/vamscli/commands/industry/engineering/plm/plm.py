@@ -118,22 +118,26 @@ def sanitize_path(file_path: str) -> str:
 
 def sanitize_asset_id(asset_id: str) -> str:
     r"""
-    Sanitize asset ID to comply with VAMS requirements.
+    Sanitize asset ID to comply with VAMS new-asset requirements.
 
-    VAMS asset IDs must follow the regexp: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$
+    VAMS new asset IDs must follow the regexp: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[\w.,\'-]$
     This means:
-    - No characters: < > : " / \ | ? *
+    - Only ASCII word characters, spaces, periods, commas, apostrophes and hyphens
     - Cannot end with . or space
-    - Can contain word characters, spaces, periods, commas, apostrophes, hyphens
     - Length 1-254 characters
-    - Cannot end with . or space
+
+    A character the rule does not admit (for example '!', '#', '%', ')', a
+    symbol such as '™', or a letter from another script) is replaced with '_',
+    so the id this returns is one the API accepts for a new asset.
     """
     if not asset_id:
         return asset_id
 
-    # Replace forbidden characters with underscores
-    # Forbidden: < > : " / \ | ? *
-    sanitized = re.sub(r'[<>:"\/\\|?*]', "_", asset_id)
+    allowed = re.compile(r"[\w\s.,'-]")
+    sanitized = "".join(
+        ch if (ch.isascii() and ch.isprintable() and allowed.fullmatch(ch)) else "_"
+        for ch in asset_id
+    )
 
     # Remove trailing dots and spaces
     sanitized = sanitized.rstrip(". ")

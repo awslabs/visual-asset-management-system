@@ -347,7 +347,6 @@ The following MIME types are refused when Amazon S3 reports one as a stored obje
 | `application/x-msdownload`                         | Windows executables          |
 | `application/x-sh`                                 | Shell scripts                |
 | `application/x-php`                                | PHP scripts                  |
-| `application/javascript`                           | JavaScript files             |
 | `application/x-powershell`                         | PowerShell scripts           |
 | `application/vbscript`                             | VBScript files               |
 | `application/x-ms-dos-executable`                  | DOS executables              |

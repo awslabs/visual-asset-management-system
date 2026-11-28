@@ -735,9 +735,11 @@ VAMS checks the file name of every upload, and the destination file name of a mo
 
 ### Blocked MIME Types
 
-`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/javascript`, `application/x-powershell`, `application/vbscript`, and additional potentially dangerous MIME types.
+`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/x-powershell`, `application/vbscript`, `application/vnd.ms-word.document.macroEnabled.12`, and additional potentially dangerous MIME types.
 
-A deployment can add entries to both lists in its add-on or fork constants files; it cannot remove one. Added entries are matched the same way as the shipped ones. See [Upload deny lists](../developer/customizing-vams.md#upload-deny-lists).
+Word documents (`.docx`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`) and JavaScript files (`.js`, `application/javascript`) are on neither list, so a stored file of either type is downloaded, streamed, exported, zipped and ingested as a workflow output like any other file. Macro-enabled Word documents stay blocked by their extension and their MIME type.
+
+A deployment can add entries to both lists in its add-on or fork constants files; it cannot remove one. Added entries are matched the same way as the shipped ones. See [Upload deny lists](../developer/customizing-vams.md#upload-deny-lists). A zip download applies the added entries, but a [Zip Archive pipeline](../pipelines/zip-archive.md#checks-before-writing) run started as a workflow applies only the shipped lists, so an added entry, such as `.js` or `.docx`, does not reach that run.
 
 Upload completion applies the blocked-extension check to every object it creates, including zero-byte files, before the object is written, and accepts only the files that were declared when the upload was initialized; an upload initialized before this check existed is completed without it until it expires, seven days after it was initialized, and an expired upload is refused. A file completed with no parts is cancelled: its multipart upload is aborted and no object is created.
 
