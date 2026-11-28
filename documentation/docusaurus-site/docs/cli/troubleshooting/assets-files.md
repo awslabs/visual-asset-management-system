@@ -487,6 +487,22 @@ A flattened download reports duplicate filenames.
 
 Omit `--flatten-download-tree` to preserve the folder hierarchy. In interactive (non-JSON) mode the CLI prompts to skip, overwrite, or rename conflicting files; in `--json-output` mode the download aborts so it can be re-run interactively.
 
+### Downloaded File Is Compressed and Does Not Open
+
+A downloaded file is reported as complete, but the application that opens it reports a corrupt or unknown file. The web app opens or saves the same file normally.
+
+**Symptoms:**
+
+-   `file <path>` reports `gzip compressed data` (or the file starts with the bytes `1f 8b`) for a file named, for example, `model.glb`
+
+**Cause:**
+
+The file is stored with a `Content-Encoding`, such as `gzip`, typically because it was written straight to the asset bucket by a tool that compressed it. `assets download`, `assets export --download-files` and `sync file pull` save each file byte for byte as it is stored, as `aws s3 cp` does, so the saved file is the compressed object. A browser decodes the encoding when it fetches the file, which is why the web app shows the model.
+
+**Resolution:**
+
+Decompress the saved file before opening it (for gzip: `gunzip -c model.glb > model-decoded.glb`). To keep the file uncompressed in VAMS, upload the decoded file as a new version.
+
 ---
 
 ## Directory Synchronization
