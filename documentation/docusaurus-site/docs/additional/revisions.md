@@ -685,6 +685,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Upload sequence in CLI JSON output** — `vamscli file upload --json-output` reports each sequence result's `sequence_number` (the upload sequence it belongs to) instead of `null`. (issue #1988)
 -   **Login cancelled at the version prompt** — `vamscli auth login` cancels the login when the version-mismatch prompt is ended with Ctrl+C or end of input, instead of reporting a failed version check and signing the user in. (issue #1911)
 -   **Permanent delete of a missing asset** — Permanently deleting an asset that does not exist answers `404` "Asset not found" instead of `400`, as the asset `GET` does. (issue #1904)
+-   **Records of a deleted file in a location starting with `/`** — In an asset whose stored location key starts with `/`, a file or folder delete clears the deleted files' metadata, attributes and asset version records, and a file archive records its history, under the path the file is listed at, so the records no longer stay behind and another file's records are not removed. A download of a file at an asset version finds the file the same way. (issue #2065)
 
 **Documentation:**
 
