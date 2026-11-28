@@ -24,6 +24,7 @@ from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import (
     delete_s3_prefix_all_versions, aux_bucket_asset_file_base, S3PrefixDeleteIncomplete,
     delete_files_metadata, delete_file_version_records, delete_auxiliary_files_of_keys,
+    record_invocation_context,
 )
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, log_action
@@ -2542,6 +2543,7 @@ def handle_delete_request(event):
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset service APIs"""
     global claims_and_roles
+    record_invocation_context(context)
     claims_and_roles = request_to_claims(event)
     
     try:
