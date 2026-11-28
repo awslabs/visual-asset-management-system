@@ -351,6 +351,15 @@ For distributable assets, you can generate shareable download URLs:
 
 Large uploads and downloads can be faster when your administrator has turned on Amazon S3 Transfer Acceleration for the asset bucket. Nothing changes in how you use VAMS.
 
+### Downloading a Folder
+
+**Export** > **Download Folder** on a folder or the asset root opens the download page, which writes each file into a folder you pick on your computer (Chrome or Edge). The toggle chooses how:
+
+-   **Flatten Asset Paths on Download** (the default) writes every file directly into the picked folder. Files with the same name in different folders are refused with **Duplicate File Names Detected**; switch to Keep mode or rename them.
+-   **Keep Asset Paths on Download** recreates the asset's folders. A file and a folder of the same name, such as the file `/a.txt` and the file `/a.txt/b.txt`, cannot both be written, because no folder holds a file and a folder of one name. The page then shows **File and Folder With the Same Name**, naming the file and one path in the folder, and does not start: download the file and the folder separately, or use Flatten mode. An asset converted from a single file by the v2.6 to v2.7 upgrade can hold such a pair (`/model.glb` and `/model.glb/...`).
+
+A file that cannot be written or downloaded shows **Failed** with its reason in the **Status** column, and the summary above the table shows a warning (or an error when no file arrived) instead of the success icon. A file the picked folder already holds as a folder, or whose folder it holds as a file, fails without retries.
+
 ### Download as Zip
 
 When the deployment enables Download as Zip, the **Export** menu in the file details toolbar offers **Download as Zip** for any selection of files and folders, or for the asset root. VAMS builds one zip, tar, or tar.gz archive in the background from the current files or from an asset version, and lists the archive job in the asset's **Download Queue** tab, where you download, cancel, or delete it. The whole archive is refused when a selected file is archived, a deleted version, in an archive storage class, or has a blocked file type. See [Download as Zip and the Download Queue](zip-downloads.md).
