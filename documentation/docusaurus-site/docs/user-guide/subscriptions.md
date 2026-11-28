@@ -43,7 +43,7 @@ The button changes to **Subscribed** (with a bell icon) when you have an active 
 4. Choose **Create Subscription**.
 
 :::info[Subscriber email resolution]
-VAMS resolves subscriber user IDs to email addresses using the user's profile. If a user ID does not have an associated email, the user ID itself is used as the email address (it must be in valid email format). You can also enter direct email addresses for non-user recipients such as resource accounts.
+VAMS resolves subscriber user IDs to email addresses using the user's profile at the time you add or remove the subscriber; a later change to the profile email does not change an existing subscription. If a user ID does not have an associated email, the user ID itself is used as the email address (it must be in valid email format). You can also enter direct email addresses for non-user recipients such as resource accounts.
 :::
 
 ---
@@ -59,7 +59,7 @@ The **Subscription Management** page displays all subscriptions you have permiss
 | Event Name  | The type of event being monitored (currently **Asset Version Change**). |
 | Subscribers | The list of subscribed user IDs or email addresses.                     |
 
-You can edit a subscription to add or remove subscribers. When subscribers are removed, their Amazon SNS subscriptions are also removed.
+You can edit a subscription to add or remove subscribers. When subscribers are removed, the confirmed Amazon SNS subscription for their current profile email is also removed; an address that was subscribed before a profile email change keeps receiving notifications until its recipient uses the unsubscribe link in the email or the subscription is deleted.
 
 ### Updating a subscription
 

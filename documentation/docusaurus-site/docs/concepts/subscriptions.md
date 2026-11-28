@@ -6,7 +6,7 @@ Subscriptions provide email notifications when asset versions change. You can su
 
 A subscription is made of three parts: the **event** to watch for, the **entity** to watch, and the **subscribers** to notify. The event is an asset version change, and the entity is a single asset, so one subscription monitors one asset for changes to its content.
 
-Subscribers are named by user ID. VAMS resolves each subscriber's email address from their user profile when it sends a notification, so a subscriber needs an email address on their profile to receive one.
+Subscribers are named by user ID. VAMS resolves each subscriber's email address from their user profile when the subscriber is added to the subscription (on create or update), not when a notification is sent, so a subscriber needs an email address on their profile at that moment. A later change to the profile email does not move an existing subscription: notifications keep going to the address that was subscribed.
 
 For the field-level reference, see the [Subscriptions API](../api/subscriptions.md#create-a-subscription).
 
@@ -28,7 +28,7 @@ sequenceDiagram
     SNS->>E: Send email to subscribers
 ```
 
-1. **Subscribe** -- You choose an asset and supply the email addresses to notify. VAMS creates an Amazon Simple Notification Service (Amazon SNS) topic for the asset (if one does not already exist) and stores the subscription record.
+1. **Subscribe** -- You choose an asset and name the subscribers to notify, by user ID (or by email address for a recipient without a user account). VAMS creates an Amazon Simple Notification Service (Amazon SNS) topic for the asset (if one does not already exist) and stores the subscription record.
 
 2. **Trigger** -- When the monitored event occurs (for example, a new asset version is created or files are modified), VAMS publishes a notification to the asset's Amazon SNS topic.
 
@@ -36,7 +36,7 @@ sequenceDiagram
 
 ## Managing subscriptions
 
-You can create a subscription, review the subscriptions you have access to, change the email addresses on an existing subscription, check whether an asset is already monitored, and unsubscribe. Each of these is available from the web interface -- see the [Subscriptions User Guide](../user-guide/subscriptions.md) for the procedures.
+You can create a subscription, review the subscriptions you have access to, change the subscribers on an existing subscription, check whether an asset is already monitored, and unsubscribe. Each of these is available from the web interface -- see the [Subscriptions User Guide](../user-guide/subscriptions.md) for the procedures.
 
 The same operations are available programmatically for automation and custom integrations. See the [Subscriptions API](../api/subscriptions.md) reference.
 

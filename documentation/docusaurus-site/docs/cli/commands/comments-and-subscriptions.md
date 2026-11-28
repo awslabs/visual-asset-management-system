@@ -227,7 +227,7 @@ vamscli subscription update -d my-database -i my-asset -s reviewer@example.com -
 ```
 
 :::warning[The subscriber list is replaced, not extended]
-`--subscriber` supplies the complete list the subscription will have afterwards. A subscriber who is currently subscribed and is not named in the call is unsubscribed, and their notification subscription is removed. To add someone while keeping the existing subscribers, name all of them, including the ones already present. Use `vamscli subscription list` first to read the current list.
+`--subscriber` supplies the complete list the subscription will have afterwards. A subscriber who is currently subscribed and is not named in the call is unsubscribed: the confirmed notification subscription for their current profile email is removed. An address subscribed before a profile email change keeps receiving notifications until its recipient uses the unsubscribe link in the email or the subscription is deleted. To add someone while keeping the existing subscribers, name all of them, including the ones already present. Use `vamscli subscription list` first to read the current list.
 :::
 
 ---
