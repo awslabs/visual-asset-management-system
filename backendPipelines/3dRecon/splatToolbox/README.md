@@ -54,7 +54,8 @@ Key pipeline parameters configurable via VAMS. A parameter takes effect only whe
 container's `src/config.json`, which the upstream sync provides; a key absent from that file is
 reported on the container's log and otherwise ignored.
 
--   `MODEL` - Splatting model type (splatfacto, splatfacto-big, etc.)
+-   `MODEL` - Splatting model type (splatfacto-mcmc in both shipped templates, splatfacto, splatfacto-big, etc.)
+-   `NUM_GAUSSIANS` - Most Gaussians splatfacto-mcmc keeps while training, which bounds GPU memory (3,000,000 in both shipped templates)
 -   `MAX_STEPS` - Training iterations
 -   `RECON_SOFTWARE_NAME` - Reconstruction software (colmap, glomap, hloc, map_anything)
 -   `RUN_RECON` - Recover camera poses from the input capture before training
@@ -66,9 +67,12 @@ reported on the container's log and otherwise ignored.
 -   `ENABLE_SPZ` - Export the compressed SPZ splat format
 -   `ENABLE_SOG` - Export the SOG splat format
 
-`RUN_RECON`, `RUN_TRAIN`, `CROP_OUTPUT_BOUNDS` and `CROP_MODE` are declared as template tags on both
-shipped templates, so each is a field on the execute form. The rest are set by editing a template's
-configuration body.
+`RUN_RECON`, `RUN_TRAIN`, `CROP_OUTPUT_BOUNDS`, `CROP_MODE` and `NUM_GAUSSIANS` are declared as template
+tags on both shipped templates, so each is a field on the execute form. The rest are set by editing a
+template's configuration body.
+
+`__main__.py` refuses a `NUM_GAUSSIANS` that is not a positive whole number before it starts `main.py`,
+and reports a run whose output shows a GPU out-of-memory error with a failure cause that says so.
 
 ## AWS Resources
 
