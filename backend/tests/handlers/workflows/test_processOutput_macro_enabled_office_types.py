@@ -42,6 +42,7 @@ class TestOutputIngestMacroEnabledOfficeTypes:
 
     def test_macro_free_office_and_javascript_outputs_are_ingested(self):
         outputs = {"report.docx": DOCX_TYPE, "sheet.xlsx": XLSX_TYPE, "deck.pptx": PPTX_TYPE,
-                   "viewer.js": "application/javascript", "module.mjs": "text/javascript"}
+                   "viewer.js": "application/javascript", "module.mjs": "text/javascript",
+                   "book.xlsb": "application/vnd.ms-excel.sheet.binary.macroEnabled.12"}
         result = _verify(outputs)
         assert {obj["Key"][len(OUTPUT_PREFIX):]: obj["ContentType"] for obj in result["Contents"]} == outputs

@@ -209,7 +209,7 @@ The blocked extension list is enforced only on files written through the VAMS AP
 | `.bak`                                      | Backup files                                                                       |
 | `.nat`                                      | NAT files                                                                          |
 | `.docm`, `.dotm`                            | Macro-enabled Word documents and templates                                         |
-| `.xlsm`, `.xltm`, `.xlsb`, `.xlam`          | Macro-enabled Excel workbooks and templates, Excel binary workbooks and add-ins    |
+| `.xlsm`, `.xltm`, `.xlam`                   | Macro-enabled Excel workbooks and templates, and Excel add-ins                     |
 | `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm` | Macro-enabled PowerPoint presentations, templates, slide shows, add-ins and slides |
 
 ### Folder Selection in Firefox

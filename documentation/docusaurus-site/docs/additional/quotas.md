@@ -331,11 +331,11 @@ endpoint rather than the detail response.
 
 ### File Upload Restrictions
 
-| Parameter                 | Value                                                                                                                                                                                                              |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Blocked file extensions   | `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.dotm`, `.xlsm`, `.xltm`, `.xlsb`, `.xlam`, `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm`, `.vbs`, `.bat` |
-| Upload stage 1 rate limit | 20 initializations per user per minute                                                                                                                                                                             |
-| File validation           | Extension check on API upload and on the destination of a move, rename or copy; MIME type check on a stored object's content type (see below)                                                                      |
+| Parameter                 | Value                                                                                                                                                                                                     |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Blocked file extensions   | `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.dotm`, `.xlsm`, `.xltm`, `.xlam`, `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm`, `.vbs`, `.bat` |
+| Upload stage 1 rate limit | 20 initializations per user per minute                                                                                                                                                                    |
+| File validation           | Extension check on API upload and on the destination of a move, rename or copy; MIME type check on a stored object's content type (see below)                                                             |
 
 ### Blocked MIME Types
 
@@ -355,7 +355,6 @@ The following MIME types are refused when Amazon S3 reports one as a stored obje
 | `application/vnd.ms-word.template.macroEnabled.12`           | Macro-enabled Word templates           |
 | `application/vnd.ms-excel.sheet.macroEnabled.12`             | Macro-enabled Excel workbooks          |
 | `application/vnd.ms-excel.template.macroEnabled.12`          | Macro-enabled Excel templates          |
-| `application/vnd.ms-excel.sheet.binary.macroEnabled.12`      | Excel binary workbooks                 |
 | `application/vnd.ms-excel.addin.macroEnabled.12`             | Excel add-ins                          |
 | `application/vnd.ms-powerpoint.presentation.macroEnabled.12` | Macro-enabled PowerPoint presentations |
 | `application/vnd.ms-powerpoint.template.macroEnabled.12`     | Macro-enabled PowerPoint templates     |

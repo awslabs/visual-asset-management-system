@@ -731,13 +731,13 @@ VAMS checks the file name of every upload, and the destination file name of a mo
 
 ### Blocked Extensions
 
-`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.dotm`, `.xlsm`, `.xltm`, `.xlsb`, `.xlam`, `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm`, `.vbs`, `.bat`
+`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.dotm`, `.xlsm`, `.xltm`, `.xlam`, `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm`, `.vbs`, `.bat`
 
 ### Blocked MIME Types
 
-`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/x-powershell`, `application/vbscript`, the macro-enabled Office types (`application/vnd.ms-word.document.macroEnabled.12`, `application/vnd.ms-excel.sheet.macroEnabled.12`, `application/vnd.ms-powerpoint.presentation.macroEnabled.12` and the matching template, add-in, slide show, slide and Excel binary workbook types), and additional potentially dangerous MIME types.
+`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/x-powershell`, `application/vbscript`, the macro-enabled Office types (`application/vnd.ms-word.document.macroEnabled.12`, `application/vnd.ms-excel.sheet.macroEnabled.12`, `application/vnd.ms-powerpoint.presentation.macroEnabled.12` and the matching template, add-in, slide show and slide types), and additional potentially dangerous MIME types.
 
-Word documents (`.docx`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`) and JavaScript files (`.js`, `application/javascript`) are on neither list, so a stored file of either type is downloaded, streamed, exported, zipped and ingested as a workflow output like any other file. Macro-enabled Office files (Word, Excel and PowerPoint documents, templates, add-ins, slide shows and slides, and Excel binary workbooks) are blocked by their extension and by their MIME type.
+Word documents (`.docx`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`) and JavaScript files (`.js`, `application/javascript`) are on neither list, so a stored file of either type is downloaded, streamed, exported, zipped and ingested as a workflow output like any other file. Macro-enabled Office files (Word, Excel and PowerPoint documents, templates, add-ins, slide shows and slides) are blocked by their extension and by their MIME type. Excel binary workbooks (`.xlsb`) are on neither list: the format also holds ordinary workbooks without macros.
 
 A deployment can add entries to both lists in its add-on or fork constants files; it cannot remove one. Added entries are matched the same way as the shipped ones. See [Upload deny lists](../developer/customizing-vams.md#upload-deny-lists). A zip download applies the added entries, but a [Zip Archive pipeline](../pipelines/zip-archive.md#checks-before-writing) run started as a workflow applies only the shipped lists, so an added entry, such as `.js` or `.docx`, does not reach that run.
 

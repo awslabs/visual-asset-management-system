@@ -61,7 +61,6 @@ MACRO_ENABLED_TYPES = [
     (".dotm", "application/vnd.ms-word.template.macroEnabled.12"),
     (".xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12"),
     (".xltm", "application/vnd.ms-excel.template.macroEnabled.12"),
-    (".xlsb", "application/vnd.ms-excel.sheet.binary.macroEnabled.12"),
     (".xlam", "application/vnd.ms-excel.addin.macroEnabled.12"),
     (".pptm", "application/vnd.ms-powerpoint.presentation.macroEnabled.12"),
     (".potm", "application/vnd.ms-powerpoint.template.macroEnabled.12"),
@@ -88,6 +87,9 @@ SERVED = [
                  id="xlsx"),
     pytest.param("office/deck.pptx",
                  "application/vnd.openxmlformats-officedocument.presentationml.presentation", id="pptx"),
+    # The Excel binary workbook carries a macroEnabled.12 type but is also Excel's ordinary binary
+    # format, so it is not on the lists.
+    pytest.param("office/book.xlsb", "application/vnd.ms-excel.sheet.binary.macroEnabled.12", id="xlsb"),
     pytest.param("web/viewer.js", "application/javascript", id="js"),
     pytest.param("web/viewer.js", "text/javascript", id="js-text-type"),
     pytest.param("web/module.mjs", "text/javascript", id="mjs"),

@@ -26,6 +26,7 @@ pytestmark = pytest.mark.unit
 DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 PPTX_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+XLSB_TYPE = "application/vnd.ms-excel.sheet.binary.macroEnabled.12"
 JS_TYPE = "application/javascript"
 
 
@@ -41,6 +42,7 @@ def env(monkeypatch):
     e.s3.add("xasset1/office/report.docx", size=100, content_type=DOCX_TYPE)
     e.s3.add("xasset1/office/sheet.xlsx", size=100, content_type=XLSX_TYPE)
     e.s3.add("xasset1/office/deck.pptx", size=100, content_type=PPTX_TYPE)
+    e.s3.add("xasset1/office/book.xlsb", size=100, content_type=XLSB_TYPE)
     e.s3.add("xasset1/web/viewer.js", size=10, content_type=JS_TYPE)
     return e
 
@@ -73,6 +75,7 @@ class TestCreate:
         pytest.param([{"type": "file", "relativePath": "/office/report.docx"},
                       {"type": "file", "relativePath": "/office/sheet.xlsx"},
                       {"type": "file", "relativePath": "/office/deck.pptx"},
+                      {"type": "file", "relativePath": "/office/book.xlsb"},
                       {"type": "file", "relativePath": "/web/viewer.js"}], id="files"),
         pytest.param([{"type": "folder", "relativePath": "/office/"},
                       {"type": "folder", "relativePath": "/web/"}], id="folders"),
@@ -80,7 +83,7 @@ class TestCreate:
     def test_macro_free_office_files_and_scripts_are_accepted(self, env, selection):
         response = _create(env, selection)
         assert response["statusCode"] == 200, h.body_of(response)
-        assert h.body_of(response)["progress"]["filesTotal"] == 4
+        assert h.body_of(response)["progress"]["filesTotal"] == 5
 
     def test_the_manifest_hands_the_archive_job_every_macro_enabled_type(self, env):
         assert _create(env, [{"type": "file", "relativePath": "/office/report.docx"}])["statusCode"] == 200
@@ -88,8 +91,9 @@ class TestCreate:
         for ext, mime in MACRO_ENABLED_TYPES:
             assert ext in manifest["blockedExtensions"], ext
             assert mime.lower() in manifest["blockedContentTypes"], mime
-        for content_type in (DOCX_TYPE, XLSX_TYPE, PPTX_TYPE, JS_TYPE):
+        for content_type in (DOCX_TYPE, XLSX_TYPE, PPTX_TYPE, XLSB_TYPE.lower(), JS_TYPE):
             assert content_type not in manifest["blockedContentTypes"]
+        assert ".xlsb" not in manifest["blockedExtensions"]
 
 
 class TestDownloadUrlRecheck:

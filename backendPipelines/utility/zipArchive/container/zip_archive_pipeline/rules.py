@@ -18,7 +18,7 @@ import os
 
 CORE_BLOCKED_EXTENSIONS = (
     ".jar", ".java", ".com", ".php", ".reg", ".pif", ".bak", ".dll", ".exe", ".nat", ".cmd", ".lnk",
-    ".docm", ".dotm", ".xlsm", ".xltm", ".xlsb", ".xlam", ".pptm", ".potm", ".ppsm", ".ppam", ".sldm",
+    ".docm", ".dotm", ".xlsm", ".xltm", ".xlam", ".pptm", ".potm", ".ppsm", ".ppam", ".sldm",
     ".vbs", ".bat",
 )
 CORE_BLOCKED_CONTENT_TYPES = (
@@ -30,7 +30,6 @@ CORE_BLOCKED_CONTENT_TYPES = (
     "application/vnd.ms-word.template.macroenabled.12",
     "application/vnd.ms-excel.sheet.macroenabled.12",
     "application/vnd.ms-excel.template.macroenabled.12",
-    "application/vnd.ms-excel.sheet.binary.macroenabled.12",
     "application/vnd.ms-excel.addin.macroenabled.12",
     "application/vnd.ms-powerpoint.presentation.macroenabled.12",
     "application/vnd.ms-powerpoint.template.macroenabled.12",
