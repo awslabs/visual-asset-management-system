@@ -3551,7 +3551,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, source file is archived, the source is the top-level asset folder (`/`, or a path that resolves to the asset's location folder or to a single-object asset's companion folder), the source is the file of a single-file asset (it cannot be moved or renamed), or the destination file name has a blocked extension. A missing source file also answers 400.
+                    description: Invalid parameters, file already exists at destination, source file is archived, the source or the destination is the top-level asset folder (`/`, or a path that resolves to the asset's location folder or to a single-object asset's companion folder), the source is the file of a single-file asset (it cannot be moved or renamed), or the destination file name has a blocked extension. A missing source file also answers 400.
                     content:
                         application/json:
                             schema:
@@ -3602,7 +3602,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension. A missing source file also answers 400. With app.compliance.quarantineBlocksDownload, a copy to another asset or database of a file whose asset is quarantined without an exception answers "Asset is quarantined and its files cannot be copied to another asset".
+                    description: Invalid parameters, file already exists at destination, the destination is the destination asset's top-level folder (`/`, or a path that resolves to its location folder or to a single-object asset's companion folder), or the destination file name has a blocked extension. A missing source file also answers 400. With app.compliance.quarantineBlocksDownload, a copy to another asset or database of a file whose asset is quarantined without an exception answers "Asset is quarantined and its files cannot be copied to another asset".
                     content:
                         application/json:
                             schema:

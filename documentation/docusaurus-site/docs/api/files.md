@@ -155,7 +155,7 @@ The `versions` list is present only when `includeVersions` is `true`. `changeWor
 
 Moves or renames a file within the asset. This copies the file to the new location and deletes the original. The copy runs within the request, so moving a large file can take longer than the Amazon API Gateway integration timeout; see [API Gateway Timeout for Large Operations](../troubleshooting/known-limitations.md#api-gateway-timeout-for-large-operations).
 
-A `sourcePath` of `/`, or one that resolves to the entry the file list shows at `/`, names the top-level asset folder: for an asset stored at `a1/`, its full key `a1/`, and for an asset created from one Amazon S3 object, its companion folder `{key}/`. These requests return `400` with a `message` that contains `Cannot move or rename the top-level asset folder`, and nothing is moved. `/a1/` is the subfolder named like the asset (key `a1/a1/`).
+A `sourcePath` of `/`, or one that resolves to the entry the file list shows at `/`, names the top-level asset folder: for an asset stored at `a1/`, its full key `a1/`, and for an asset created from one Amazon S3 object, its companion folder `{key}/`. These requests return `400` with a `message` that contains `Cannot move or rename the top-level asset folder`, and nothing is moved. A `destinationPath` that resolves to that entry returns `400` with a `message` that contains `Cannot move or rename a file onto the top-level asset folder`, also when no object exists at that key. `/a1/` is the subfolder named like the asset (key `a1/a1/`).
 
 **Request Parameters:**
 
@@ -190,11 +190,11 @@ A `sourcePath` of `/`, or one that resolves to the entry the file list shows at 
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                                                                                                           |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, source file not found, destination already exists, the source is the top-level asset folder, the source is the file of a single-file asset (`The file of a single-file asset cannot be moved or renamed.`), or the destination file name has a blocked extension. |
-| `403`  | Not authorized to modify files in this asset.                                                                                                                                                                                                                                         |
-| `500`  | Internal server error.                                                                                                                                                                                                                                                                |
+| Status | Description                                                                                                                                                                                                                                                                                              |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, source file not found, destination already exists, the source or the destination is the top-level asset folder, the source is the file of a single-file asset (`The file of a single-file asset cannot be moved or renamed.`), or the destination file name has a blocked extension. |
+| `403`  | Not authorized to modify files in this asset.                                                                                                                                                                                                                                                            |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                   |
 
 ---
 
@@ -203,6 +203,8 @@ A `sourcePath` of `/`, or one that resolves to the entry the file list shows at 
 `POST /database/{databaseId}/assets/{assetId}/copyFile`
 
 Copies a file within the same asset or to a different asset. Supports cross-database copying when `destinationDatabaseId` is provided. The copy runs within the request, so copying a large file can take longer than the Amazon API Gateway integration timeout; see [API Gateway Timeout for Large Operations](../troubleshooting/known-limitations.md#api-gateway-timeout-for-large-operations).
+
+A `destinationPath` that resolves to the entry the destination asset's file list shows at `/` (`/`, its full key such as `a1/` for an asset stored at `a1/`, or the companion folder `{key}/` of an asset created from one Amazon S3 object) returns `400` with a `message` that contains `Cannot copy a file onto the top-level asset folder`, also when no object exists at that key, and nothing is copied.
 
 **Request Parameters:**
 
@@ -241,11 +243,11 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, source file not found, or the destination file name has a blocked extension. A copy to another asset or database of a file whose asset is quarantined without an exception, when the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and its files cannot be copied to another asset"); a copy within the asset is not refused. |
-| `403`  | Not authorized to copy files. A caller who may not read the source asset or write the destination asset receives `403` whatever the asset's compliance state.                                                                                                                                                                                                                                  |
-| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                                         |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, source file not found, the destination is the top-level asset folder, or the destination file name has a blocked extension. A copy to another asset or database of a file whose asset is quarantined without an exception, when the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and its files cannot be copied to another asset"); a copy within the asset is not refused. |
+| `403`  | Not authorized to copy files. A caller who may not read the source asset or write the destination asset receives `403` whatever the asset's compliance state.                                                                                                                                                                                                                                                                                 |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ---
 

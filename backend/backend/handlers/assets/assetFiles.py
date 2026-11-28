@@ -46,7 +46,7 @@ from common.s3PathPatterns import (
 from common.assetLocations import (
     NESTED_PATH_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations,
     _is_preview_of, aux_owner_filter, aux_scope, contains,
-    fill_location_attributes, folder_listing_prefix, held_objects, in_folder, is_folder_location,
+    fill_location_attributes, folder_aux_keep, folder_listing_prefix, held_objects, in_folder, is_folder_location,
     names_own_object, normalize_base_prefix, object_key_for_path, object_key_for_request, relative_path_in,
     viewer_data_prefix, viewer_data_scope,
 )
@@ -2619,9 +2619,10 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         # files, keep theirs
         if incomplete is None:
             folder_aux = aux_bucket_asset_file_base(databaseId, full_key)
-            _call_with_keep(delete_assetAuxiliary_files, folder_aux,
-                            keep=_keep_aux(aux_owner_filter(databaseId, base_key, full_key, folder_aux), nested,
-                                           databaseId))
+            owner_keep = aux_owner_filter(databaseId, base_key, full_key, folder_aux)
+            in_folder = folder_aux_keep(databaseId, full_key)
+            folder_keep = in_folder if owner_keep is None else (lambda k: owner_keep(k) and in_folder(k))
+            _call_with_keep(delete_assetAuxiliary_files, folder_aux, keep=_keep_aux(folder_keep, nested, databaseId))
         else:
             delete_auxiliary_files_of_keys(databaseId, [key for key in deleted_keys if contains(base_key, key)])
         
@@ -3111,6 +3112,12 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     # Use smart path resolution to avoid duplication for both source and destination
     source_key = resolve_asset_file_path(source_base_key, source_path)
     dest_key = resolve_asset_file_path(dest_base_key, dest_path)
+
+    # The key listed at '/' is the destination asset's top-level folder (see delete_file): no file is copied
+    # onto it
+    if relative_path_in(dest_base_key, dest_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot copy a file onto the top-level asset folder")
+
     refuse_nested_key(nested_locations_for(source_asset, source_bucket, source_base_key), source_key,
                       "Source file not found.")
     refuse_unwritable_key(dest_asset, dest_bucket, dest_base_key, dest_key, NESTED_PATH_REFUSAL)
@@ -3234,9 +3241,12 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     source_key = resolve_asset_file_path(base_key, source_path)
     dest_key = resolve_asset_file_path(base_key, dest_path)
 
-    # The key listed at '/' is the top-level asset folder (see delete_file)
+    # The key listed at '/' is the top-level asset folder (see delete_file): it is not moved, and no file is
+    # moved onto it
     if relative_path_in(base_key, source_key) == "/":
         raise VAMSGeneralErrorResponse("Cannot move or rename the top-level asset folder")
+    if relative_path_in(base_key, dest_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot move or rename a file onto the top-level asset folder")
 
     # Moving deletes the source, so a source key another live asset also holds is left alone
     nested = nested_locations_for(asset, bucket, base_key, destructive=True)
