@@ -104,7 +104,8 @@ class TestAssetVersionListingOpenApiContract:
     """
 
     @pytest.fixture(scope="class")
-    def spec(self):
+    @classmethod
+    def spec(cls):
         yaml = pytest.importorskip("yaml")
         if not SPEC_PATH.is_file():
             pytest.skip(f"OpenAPI spec not found at {SPEC_PATH}")

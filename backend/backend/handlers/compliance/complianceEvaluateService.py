@@ -1,0 +1,1357 @@
+#  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#  SPDX-License-Identifier: Apache-2.0
+
+"""Compliance Evaluate Service handler.
+
+- POST /compliance/evaluate/{databaseId}/{assetId}     — evaluate an asset
+- POST /compliance/evaluate/{databaseId}               — evaluate every tracked asset of a database
+- POST /compliance/sweep/{schemaName}                  — evaluate every asset bound to a schema
+- GET  /compliance/evaluations/{databaseId}/{assetId}  — evaluation history of an asset
+- GET  /compliance/state/{databaseId}/{assetId}        — compliance state of an asset
+- GET  /compliance/state/{databaseId}                  — compliance overview of a database
+
+Evaluation runs through `handlers/compliance/complianceEvaluationStore.run_evaluation`
+(metadata, relationship, file-structure, version-coverage and asset-attribute rules
+synchronously; pipeline rules launch workflow executions that the workflow callback finalizes).
+"""
+
+import base64
+import json
+import time
+from datetime import datetime, timedelta, timezone
+
+from aws_lambda_powertools.utilities.parser import ValidationError, parse
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from boto3.dynamodb.conditions import Attr, Key
+from botocore.exceptions import ClientError
+from common.apiRoutes import (
+    API_COMPLIANCE_EVALUATE_ASSET,
+    API_COMPLIANCE_EVALUATE_DATABASE,
+    API_COMPLIANCE_EVALUATIONS_ASSET,
+    API_COMPLIANCE_STATE_ASSET,
+    API_COMPLIANCE_STATE_DATABASE,
+    API_COMPLIANCE_SWEEP_SCHEMA,
+)
+from common.compliance import databaseRetirement
+from common.compliance import evaluationEngine as engine
+from common.compliance import executionFailureAccess as failure_access
+from common.compliance import listing
+from common.compliance.assetAccess import (
+    AssetAccess, flush_denials, withheld_state_counts,
+)
+from common.compliance import knownDatabase
+from common.compliance.knownDatabase import database_not_found
+from common.validators import validate
+from common.compliance.routeAudit import (
+    audit_outcome, created_value, failure_outcome, request_parameters, response_count,
+)
+from customLogging.auditLogging import audit_request, log_action
+from customLogging.logger import safeLogger
+from handlers.auth import request_to_claims
+from handlers.authz import CasbinEnforcer
+from handlers.compliance import complianceBindingApply as binding_apply
+from handlers.compliance import complianceEvaluationStore as store
+from handlers.compliance.complianceTrigger import (
+    EVALUATION_TARGET_ARCHIVED, EVALUATION_TARGET_REMOVED, automatic_evaluation_target,
+    check_and_trigger_cascade,
+)
+from models.common import (
+    APIGatewayProxyResponseV2,
+    VAMSGeneralErrorResponse,
+    authorization_error,
+    general_error,
+    internal_error,
+    success,
+    validation_error,
+    validation_error_message,
+)
+from models.compliance import (
+    GLOBAL_DATABASE_ID,
+    EvaluateAssetRequestModel,
+    EvaluateDatabaseRequestModel,
+    EvaluationVerdict,
+    SweepSchemaRequestModel,
+)
+
+logger = safeLogger(service_name="ComplianceEvaluateService")
+
+claims_and_roles = {}
+
+COMPLIANCE_EVALUATION_OBJECT_TYPE = "complianceEvaluation"
+COMPLIANCE_SCHEMA_OBJECT_TYPE = "complianceSchema"
+
+# Page size for the evaluation-history listing (newest first).
+DEFAULT_EVALUATIONS_PAGE_SIZE = 50
+MAX_EVALUATIONS_PAGE_SIZE = 200
+
+# Page bounds for the database overview. The state rows are read to exhaustion (the per-state
+# summary and total cover the whole database), then offset-sliced to one page in assetId order;
+# the token carries the offset of the next page.
+DEFAULT_OVERVIEW_PAGE_SIZE = 100
+MAX_OVERVIEW_PAGE_SIZE = listing.MAX_LISTING_PAGE_SIZE
+INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
+# An evaluation against a named schema: the refusal of a schema outside the asset's database, and
+# the message of a dry run (a named schema other than the bound one).
+SCHEMA_NOT_AVAILABLE_MESSAGE = "The schema is not available to the asset's database"
+DRY_RUN_MESSAGE = "Dry run completed: the asset's compliance state was not changed"
+# The attributes a LastEvaluatedKey of the evaluation table's AssetIndex carries (table key plus
+# index keys); a token missing one belongs to another listing and never reaches DynamoDB.
+EVALUATION_ASSET_INDEX_KEY_ATTRIBUTES = ("evaluationId", "databaseId:assetId", "evaluatedAt")
+# The overview `summary` key counting assets whose latest evaluation errored (`lastEvaluationStatus`
+# of `error`) — an overlay on the state buckets, not a compliance state.
+OVERVIEW_ERROR_BUCKET = "error"
+# The asset-state table's (complianceState, databaseId) index.
+COMPLIANCE_STATE_INDEX = "ComplianceStateIndex"
+
+# Bound on the assets one sweep evaluates synchronously inside the API Lambda timeout. A sweep
+# that reaches more is continued by the next call with the response's `NextToken`
+# (`_sweep_candidates`).
+MAX_SWEEP_ASSETS = 200
+
+# Wall-clock budget for launching a sweep's synchronous per-asset evaluations. API Gateway closes a
+# synchronous integration after 29 seconds, so the launches (each pipeline rule is an execute-workflow
+# invoke) must fit under it with room for the index reads and the response: once the budget is spent
+# the sweep launches nothing more and reports the unreached assets in `assetsRemaining`.
+SWEEP_TIME_BUDGET_SECONDS = 20
+
+# Clock for the sweep budget: monotonic, so a wall-clock adjustment cannot stretch or shrink it.
+monotonic = time.monotonic
+
+# Tables are resolved (and clients built) once by the shared store at import.
+asset_state_table = store.asset_state_table
+evaluation_table = store.evaluation_table
+asset_table = store.asset_table
+
+
+#######################
+# Lambda handler
+#######################
+
+def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    # The request's audit context: its action records are written together when it ends.
+    with audit_request(event, context):
+        return _handle_request(event)
+
+
+def _handle_request(event) -> APIGatewayProxyResponseV2:
+    global claims_and_roles
+    claims_and_roles = request_to_claims(event)
+
+    try:
+        method = event["requestContext"]["http"]["method"]
+
+        method_allowed_on_api = False
+        if len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+
+        if not method_allowed_on_api:
+            log_action(event, **failure_outcome(403))
+            return authorization_error()
+
+        if method == "GET":
+            return handle_get_request(event)
+        elif method == "POST":
+            return handle_post_request(event)
+        else:
+            return validation_error(body={"message": "Method not allowed"}, event=event)
+
+    except ValidationError as v:
+        logger.exception(f"Validation error: {v}")
+        log_action(event, **failure_outcome(400))
+        return validation_error(body={"message": validation_error_message(v)}, event=event)
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(f"VAMS error: {v}")
+        log_action(event, **failure_outcome(400))
+        return general_error(body={"message": str(v)}, event=event)
+    except Exception as e:
+        logger.exception(f"Internal error: {e}")
+        log_action(event, **failure_outcome(500))
+        return internal_error(event=event)
+    finally:
+        # The denials of this request's asset checks (`AssetAccess`).
+        flush_denials()
+
+
+#######################
+# Method handlers
+#######################
+
+def handle_get_request(event):
+    path = event["requestContext"]["http"]["path"]
+    path_params = event.get("pathParameters", {}) or {}
+    query_params = event.get("queryStringParameters", {}) or {}
+    # The history reads also take a deleted database's `<databaseId>#deleted` (sent as `%23deleted`).
+    database_id = knownDatabase.decoded_scope(path_params.get("databaseId"))
+    if API_COMPLIANCE_EVALUATIONS_ASSET.matches(path):
+        response = get_evaluations(event, database_id, path_params.get("assetId"), query_params)
+        log_action(event, "complianceEvaluationList", **audit_outcome(response),
+                   database_id=database_id, asset_id=path_params.get("assetId"),
+                   request_parameters=request_parameters(query_params, ("maxItems", "startingToken")),
+                   item_count=response_count(response, "evaluations"))
+        return response
+    if API_COMPLIANCE_STATE_ASSET.matches(path):
+        response = get_compliance_state(event, database_id, path_params.get("assetId"))
+        log_action(event, "complianceStateGet", **audit_outcome(response),
+                   database_id=database_id, asset_id=path_params.get("assetId"))
+        return response
+    if API_COMPLIANCE_STATE_DATABASE.matches(path):
+        response = get_database_compliance_overview(event, database_id, query_params)
+        log_action(event, "complianceStateList", **audit_outcome(response),
+                   database_id=database_id,
+                   request_parameters=request_parameters(query_params, (
+                       "state", "schemaName", "schemaSource", "evaluationError", "text", "sort",
+                       "maxItems", "startingToken")),
+                   item_count=response_count(response, "assets"))
+        return response
+    return validation_error(body={"message": "Method not allowed"}, event=event)
+
+
+def handle_post_request(event):
+    path = event["requestContext"]["http"]["path"]
+    path_params = event.get("pathParameters", {}) or {}
+    if API_COMPLIANCE_EVALUATE_ASSET.matches(path):
+        request = parse(_parse_body(event), model=EvaluateAssetRequestModel)
+        response = evaluate_asset(event, path_params.get("databaseId"), path_params.get("assetId"),
+                                  request)
+        # The record names the evaluation the request ran (its id from the service's answer, D197).
+        log_action(event, "complianceEvaluate", **audit_outcome(response),
+                   database_id=path_params.get("databaseId"), asset_id=path_params.get("assetId"),
+                   evaluationId=created_value(response, "evaluationId"),
+                   schemaName=request.schemaName)
+        return response
+    if API_COMPLIANCE_EVALUATE_DATABASE.matches(path):
+        request = parse(_parse_body(event), model=EvaluateDatabaseRequestModel)
+        response = evaluate_database(event, path_params.get("databaseId"), request.startingToken)
+        # Evaluate All and a sweep start up to MAX_SWEEP_ASSETS evaluations a call: the record
+        # counts them (`itemCount`) and names none of their ids, which the answer lists.
+        log_action(event, "complianceDatabaseEvaluate", **audit_outcome(response),
+                   database_id=path_params.get("databaseId"),
+                   item_count=response_count(response, "assetsTriggered"),
+                   details={"resumed": bool(request.startingToken)})
+        return response
+    if API_COMPLIANCE_SWEEP_SCHEMA.matches(path):
+        request = parse(_parse_body(event), model=SweepSchemaRequestModel)
+        response = sweep_schema(event, path_params.get("schemaName"), request.startingToken)
+        log_action(event, "complianceSchemaSweep", **audit_outcome(response),
+                   schemaName=path_params.get("schemaName"),
+                   item_count=response_count(response, "assetsTriggered"),
+                   details={"resumed": bool(request.startingToken)})
+        return response
+    return validation_error(body={"message": "Method not allowed"}, event=event)
+
+
+def _parse_body(event):
+    raw = event.get("body") or "{}"
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        raise VAMSGeneralErrorResponse("Invalid JSON in request body")
+
+
+#######################
+# Authorization helpers
+#######################
+
+def _enforce_evaluation(database_id, action, compliance_state=""):
+    """Tier-2 check on a compliance evaluation object. Fails closed on an empty token list."""
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+    return CasbinEnforcer(claims_and_roles).enforce({
+        "object__type": COMPLIANCE_EVALUATION_OBJECT_TYPE,
+        "databaseId": database_id,
+        "complianceState": compliance_state or "",
+    }, action)
+
+
+def _caller_enforcer():
+    """The caller's CasbinEnforcer, or None for a request without tokens."""
+    return CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+
+
+def _asset_access():
+    """The request's asset decisions (`AssetAccess`), with the caller's enforcer. An archived row
+    of an earlier, deleted database with the same id is not the live database's asset
+    (`databaseRetirement.Presenter.deleted_at`)."""
+    return AssetAccess(asset_table, _caller_enforcer(),
+                       databaseRetirement.Presenter(store.evaluation_table))
+
+
+def _execution_reads():
+    """The request's execution-read decisions (`executionFailureAccess`), with the caller's
+    enforcer: which failure reasons of the rule results and quarantine records it returns the
+    caller may read."""
+    return failure_access.new_scope(_caller_enforcer())
+
+
+def _enforce_asset_evaluation(database_id, asset_id, action, compliance_state="", access=None):
+    """Tier-2 check on the compliance evaluation object of one asset, and, for a caller whose
+    policy has asset rules, the asset GET the asset routes make on the asset's row as stored. For
+    an archived asset the evaluation object is also decided with its stored database id
+    `<databaseId>#deleted` (`AssetAccess.decide`; `access` is the request's, when it has one)."""
+    return (access or _asset_access()).decide(
+        database_id, asset_id,
+        lambda stored_id: _enforce_evaluation(stored_id, action, compliance_state))
+
+
+def _enforce_schema(schema_name, database_id, action):
+    """Tier-2 check on a compliance schema object in its scope (`databaseId`: a database id or
+    GLOBAL). Fails closed on an empty token list."""
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+    return CasbinEnforcer(claims_and_roles).enforce({
+        "object__type": COMPLIANCE_SCHEMA_OBJECT_TYPE,
+        "complianceSchemaName": schema_name,
+        "databaseId": database_id or GLOBAL_DATABASE_ID,
+    }, action)
+
+
+def _validate_database_and_asset(database_id, asset_id):
+    return validate({
+        "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
+        "assetId": {"value": asset_id, "validator": "ASSET_ID"},
+    })
+
+
+def _validate_history_scope_and_asset(database_id, asset_id):
+    """The ids of an asset history read: a database id, or a deleted database's
+    `<databaseId>#deleted` (`knownDatabase.validate_scope`), and an asset id."""
+    (valid, message) = knownDatabase.validate_scope(database_id)
+    if not valid:
+        return valid, message
+    return validate({"assetId": {"value": asset_id, "validator": "ASSET_ID"}})
+
+
+# The cache key of the archive-visibility decision (the evaluation GET on a database's stored id),
+# so one request asks it once per database.
+ARCHIVE_VISIBILITY_CACHE_KEY = "evaluation-GET"
+
+
+def _archived_visible(access, database_id, asset_id):
+    """Whether the caller may see an archived asset: the evaluation GET on its stored id
+    `<databaseId>#deleted` (asked once per database of the request) and, for a caller whose policy
+    has asset rules, the asset GET on its archived row, the decision the overview and the record
+    reads make on an archived asset's record (`AssetAccess.archived_asset_visible`)."""
+    return access.archived_asset_visible(
+        database_id, asset_id, lambda stored_id: _enforce_evaluation(stored_id, "GET"),
+        cache_key=ARCHIVE_VISIBILITY_CACHE_KEY)
+
+
+def _hidden_archived(access, database_id, asset_id):
+    """Whether an asset is archived and the caller may not see it. Such an asset is counted
+    nowhere in the response of a sweep or of Evaluate All (only the operator log counts it), as the
+    asset listing does not show it to that caller (`AssetAccess.withholds`)."""
+    return access.withholds(
+        database_id, asset_id, lambda stored_id: _enforce_evaluation(stored_id, "GET"),
+        cache_key=ARCHIVE_VISIBILITY_CACHE_KEY)
+
+
+def _live_not_readable(access, database_id, asset_id):
+    """Whether an asset is live and the caller's asset rules refuse the asset GET on its live row
+    (`AssetAccess.live_denied`). A sweep and Evaluate All do not evaluate it and count it in
+    `skippedNotAuthorized`, as an asset of a database the caller may not evaluate."""
+    return access.live_denied(database_id, asset_id)
+
+
+#######################
+# Business logic
+#######################
+
+def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestModel):
+    """Evaluate an asset against its bound schema; a named schema other than the bound one is a dry
+    run (`store.dry_run_evaluation`) that returns results and records nothing.
+
+    A named schema needs the schema GET in its scope (an absent name is checked as GLOBAL, so a
+    caller without schema read access is refused rather than told whether the name exists) and must
+    be GLOBAL or available to the asset's database, as binding it would require; both are decided
+    before the asset is read."""
+    (valid, message) = _validate_database_and_asset(database_id, asset_id)
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    if not _enforce_asset_evaluation(database_id, asset_id, "POST"):
+        return authorization_error()
+    if request.schemaName:
+        named = store.load_schema_item(request.schemaName)
+        named_scope = (named or {}).get("databaseId") or GLOBAL_DATABASE_ID
+        if not _enforce_schema(request.schemaName, named_scope, "GET"):
+            return authorization_error()
+        if named is None:
+            return general_error(body={"message": "Evaluation could not run: Schema not found"},
+                                 event=event)
+        if named_scope not in (GLOBAL_DATABASE_ID, database_id):
+            return general_error(body={"message": SCHEMA_NOT_AVAILABLE_MESSAGE}, event=event)
+    if store.database_moving(database_id):
+        return databaseRetirement.moving_response(event)
+
+    if not store.get_asset_item(database_id, asset_id):
+        return general_error(body={"message": "Asset not found"}, event=event)
+
+    current_state = store.get_compliance_record(database_id, asset_id) or {}
+    bound_schema = current_state.get("schemaName")
+    database_binding = None
+    if not bound_schema:
+        # The database binding governs every asset of the database, whatever its auto-evaluation
+        # says: an asset it does not record yet is registered under it and evaluated against it.
+        database_binding = (store.get_database_item(database_id) or {}).get("complianceSchemaName")
+        bound_schema = database_binding
+    if request.schemaName and request.schemaName != bound_schema:
+        return _dry_run_answer(event, database_id, asset_id, request.schemaName)
+    schema_name = bound_schema
+    if database_binding:
+        store.register_under_database_binding(database_id, asset_id, schema_name)
+    if not schema_name:
+        return general_error(body={
+            "message": "No schema specified and the asset has no bound schema",
+        }, event=event)
+
+    result = run_evaluation_for_asset(database_id, asset_id, schema_name,
+                                      claims_and_roles["tokens"][0])
+    if result.get("error"):
+        return general_error(body={"message": "Evaluation could not run: " + result["error"]},
+                             event=event)
+
+    return success(body={
+        "message": "Evaluation completed",
+        "dryRun": False,
+        "evaluationId": result.get("evaluationId"),
+        "schemaName": schema_name,
+        "schemaVersion": result.get("schemaVersion"),
+        "verdict": result.get("verdict"),
+        "complianceState": result.get("complianceState"),
+        "exceptionApplied": bool(result.get("exceptionApplied", False)),
+        # A release or exception grant made while the evaluation ran outranked its outcome (D159).
+        **({"notApplied": result["notApplied"],
+            "notAppliedMessage": result.get("notAppliedMessage")}
+           if result.get("notApplied") else {}),
+        "hasRuleErrors": bool(result.get("hasRuleErrors", False)),
+        "ruleResults": failure_access.rule_results_for_caller(
+            _execution_reads(), result.get("ruleResults", [])),
+        "pipelineRulesPending": result.get("pipelineRulesPending", 0),
+        # Of those, the rules waiting for a running execution of their workflow (it holds the
+        # workflow's concurrency lock on this asset); they launch when it ends.
+        "pipelineRulesWaiting": result.get("pipelineRulesWaiting", 0),
+    })
+
+
+def _dry_run_answer(event, database_id, asset_id, schema_name):
+    """The answer of an evaluation against a named schema other than the asset's bound one: its
+    results and verdict, with `dryRun: true`; nothing was recorded and no cascade is opened."""
+    result = store.dry_run_evaluation(database_id, asset_id, schema_name)
+    if result.get("error"):
+        return general_error(body={"message": "Evaluation could not run: " + result["error"]},
+                             event=event)
+    return success(body={
+        "message": DRY_RUN_MESSAGE,
+        "dryRun": True,
+        "schemaName": schema_name,
+        "schemaVersion": result.get("schemaVersion"),
+        "verdict": result.get("verdict"),
+        "complianceState": result.get("complianceState"),
+        "hasRuleErrors": bool(result.get("hasRuleErrors", False)),
+        "errorRules": result.get("errorRules", []),
+        "ruleResults": failure_access.rule_results_for_caller(
+            _execution_reads(), result.get("ruleResults", [])),
+        "pipelineRulesNotRun": result.get("pipelineRulesNotRun", 0),
+    })
+
+
+def run_evaluation_for_asset(database_id, asset_id, schema_name, actor):
+    """One evaluation plus the downstream cascade check; shared by evaluate and sweep. An evaluation
+    that could not run (including one a newer evaluation of the asset superseded, which carries an
+    `error`), or whose every rule errored (verdict `error`), changes no asset state and so opens no
+    cascade."""
+    result = store.run_evaluation(database_id, asset_id, schema_name, actor)
+    if not result.get("error") and result.get("verdict") != EvaluationVerdict.error.value:
+        check_and_trigger_cascade(database_id, asset_id)
+    return result
+
+
+def sweep_schema(event, schema_name, starting_token=None):
+    """Evaluate the assets whose state row is bound to `schema_name` (SchemaNameIndex GSI) and whose
+    database the caller may evaluate; the rest are counted as `skipped` (and in
+    `skippedNotAuthorized`, the reason they were skipped) and never listed. So is a live asset the
+    caller may not read: a caller whose policy has asset rules needs the asset GET on its row, as
+    the asset routes ask it (`_live_not_readable`); for a caller whose rules read an asset's own
+    fields a record whose asset has no row is skipped the same way. An archived asset is
+    not evaluated either (its row sits in the archive and cannot be read): it is counted in
+    `skipped` and `skippedArchived`, and its compliance record is left as it is. Only the archived
+    assets the caller may see are counted (`_archived_visible`): an archived asset the caller may
+    not see (its database's archive, or the asset itself by the asset GET) is counted nowhere in
+    the response (`skippedNotAuthorized`
+    and `assetsRemaining` included). The caller needs read access to the schema in its scope: a
+    database's compliance administrator may sweep a GLOBAL schema, and the sweep then reaches the
+    assets of the databases that administrator may evaluate only. Every evaluation runs as the
+    caller, never with the system identity.
+
+    A sweep is a walk over consecutive calls (`_SweepWalk`): each call reads a page at a time, first
+    the asset rows of each bound database the caller may evaluate (an asset the binding does not
+    record yet is registered under it, `registered`), then the schema's records, and stops once
+    SWEEP_TIME_BUDGET_SECONDS has elapsed or MAX_SWEEP_ASSETS assets were evaluated. While anything
+    is left to read the response carries `NextToken`; a call that passes it back as
+    `startingToken` goes on from there and evaluates only the assets not evaluated since the sweep
+    started (`_sweep_candidates`). `assetsRemaining` counts the assets of the pages this call read
+    that it did not reach: it can be 0 while a `NextToken` is present. Within a page,
+    `pending_evaluation` rows go first, then the least recently evaluated. A record whose asset no
+    longer exists is not evaluated: it is removed as the asset's permanent deletion removes it and
+    counted under `removedOrphans`. An asset whose evaluation found a newer one of it already
+    started (a trigger evaluation running at the same time) is listed with verdict `superseded` and
+    `superseded: true` and counted under `superseded`: its state is that evaluation's, and the
+    listed `evaluationId` names no evaluation record."""
+    walk = _SweepWalk()
+    (valid, message) = validate({"schemaName": {"value": schema_name, "validator": "ID"}})
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+    position = _sweep_position(starting_token, SCHEMA_NAME_INDEX_KEYS,
+                               lambda cursor: cursor["schemaName"] == schema_name)
+    if position is None:
+        return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    schema_item = store.load_schema_item(schema_name)
+    # An absent schema is checked in the GLOBAL scope, so a caller without schema read access is
+    # refused rather than told whether the name exists.
+    if not _enforce_schema(schema_name, (schema_item or {}).get("databaseId"), "GET"):
+        return authorization_error()
+    if schema_item is None:
+        return general_error(body={"message": "Schema not found"}, event=event)
+
+    # The evaluation object depends only on the database, so one verdict serves every asset in it.
+    database_allowed = {}
+
+    def allowed(database_id):
+        if database_id not in database_allowed:
+            database_allowed[database_id] = _enforce_evaluation(database_id, "POST")
+        return database_allowed[database_id]
+
+    # A database binding governs every asset of the database: an asset it does not record yet (one
+    # whose creation event was not processed) is registered under it first, in each bound database
+    # the caller may evaluate, so the sweep reaches it.
+    if position.phase == SWEEP_PHASE_REGISTER:
+        databases = sorted(store.databases_bound_to_schema(schema_name))
+        if position.database_id:
+            databases = [database_id for database_id in databases
+                         if database_id >= position.database_id]
+        cursor = position.cursor
+        for database_id in databases:
+            if database_id != position.database_id:
+                cursor = None
+            if not allowed(database_id):
+                continue
+            cursor = walk.register(database_id, schema_name, cursor)
+            if cursor is not None:
+                return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_REGISTER,
+                                                      database_id, cursor),
+                                   schemaName=schema_name)
+        position = position.evaluating()
+
+    actor = claims_and_roles["tokens"][0]
+    archived = _asset_access()
+    cursor = position.cursor
+    while not walk.done():
+        kwargs = {"IndexName": "SchemaNameIndex", "Limit": SWEEP_PAGE_SIZE,
+                  "KeyConditionExpression": Key("schemaName").eq(schema_name)}
+        if cursor:
+            kwargs["ExclusiveStartKey"] = cursor
+        response = asset_state_table.query(**kwargs)
+        # A deleted database's records (under `<databaseId>#deleted`) are never evaluated again.
+        rows, evaluated_earlier = _sweep_candidates(
+            [row for row in response.get("Items", [])
+             if not databaseRetirement.is_deleted_scope(row.get("databaseId"))],
+            position.started_at, _asset_key)
+        walk.evaluated_earlier += evaluated_earlier
+        # The live rows of a database's candidates are read together, when a decision first needs
+        # one (a caller whose asset rules read asset fields only), and only for a database the
+        # caller may evaluate.
+        candidates_by_database = {}
+        for row in rows:
+            candidates_by_database.setdefault(row["databaseId"], []).append(row["assetId"])
+        expected_databases = set()
+        for row in rows:
+            database_id, asset_id = row["databaseId"], row["assetId"]
+            may_evaluate = allowed(database_id)
+            # An archived asset the caller may not see is counted nowhere in the response, whatever
+            # the reason it is not evaluated (only the operator log counts it).
+            if _hidden_archived(archived, database_id, asset_id):
+                walk.hidden_archived += 1
+                continue
+            # A database the caller may not evaluate is skipped whatever the bounds: its assets are
+            # never this caller's to evaluate, so they are not counted as remaining either.
+            if not may_evaluate:
+                walk.skipped_not_authorized += 1
+                continue
+            if database_id not in expected_databases:
+                expected_databases.add(database_id)
+                archived.expect((database_id, candidate)
+                                for candidate in candidates_by_database[database_id])
+            # A live asset the caller may not read is skipped as not authorized, as the asset
+            # routes refuse it.
+            if _live_not_readable(archived, database_id, asset_id):
+                walk.skipped_not_authorized += 1
+                continue
+            walk.evaluate(archived, database_id, asset_id, schema_name, actor)
+        if walk.stopped_in_page:
+            # The page is read again by the next call, which skips what this one evaluated.
+            return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_EVALUATE,
+                                                   None, cursor), schemaName=schema_name)
+        if "LastEvaluatedKey" not in response:
+            return walk.answer(event, None, schemaName=schema_name)
+        cursor = response["LastEvaluatedKey"]
+    return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_EVALUATE, None, cursor),
+                       schemaName=schema_name)
+
+
+def evaluate_database(event, database_id, starting_token=None):
+    """Evaluate every tracked asset of one database — every asset-state row of it, each against
+    the schema its row binds (the database binding or the asset's own override) — with the sweep's
+    bounds and continuation (`sweep_schema`): a page at a time, at most MAX_SWEEP_ASSETS
+    evaluations and no launch after SWEEP_TIME_BUDGET_SECONDS per call, a `NextToken` while anything
+    is left to read that the next call passes back as `startingToken` to evaluate only the assets
+    not evaluated since the evaluation started, and `assetsRemaining` the assets of the pages this
+    call read that it did not reach (`_sweep_candidates`). A record whose asset no longer exists is
+    removed rather than evaluated, as in a sweep (`removedOrphans`), and an archived asset is
+    skipped with its record left as it is (`skipped`, `skippedArchived`). As in a sweep, only the
+    archived assets the caller may see are counted (`_archived_visible`): an archived asset the
+    caller may not see is counted nowhere in the response (`withoutSchema` and `assetsRemaining`
+    included). A live asset the caller may not read (a caller whose policy has asset rules needs
+    the asset GET on its row) is not evaluated and is counted in `skipped` and
+    `skippedNotAuthorized`; for a caller whose rules read an asset's own fields, so is a record
+    whose asset has no row (it is not removed then: `removedOrphans` counts only the records the
+    caller may read).
+
+    A database binding governs every asset of the database, so an asset of a bound database that
+    has no compliance record yet is registered under the binding first (`registered`), page by
+    page. A tracked asset whose row names no schema cannot be evaluated without a schema and is
+    counted under `withoutSchema`. An asset whose evaluation found a newer one of it already
+    started is listed with verdict `superseded` and counted under `superseded`, as in a sweep.
+
+    Authorized on the database's compliance evaluation object, like the evaluation of one asset;
+    no other database is read or evaluated."""
+    walk = _SweepWalk()
+    (valid, message) = validate({
+        "databaseId": {"value": database_id, "validator": "ID"},
+    })
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+    position = _sweep_position(starting_token, listing.BASE_STATE_KEYS,
+                               lambda cursor: cursor["databaseId"] == database_id)
+    if position is None or (position.database_id and position.database_id != database_id):
+        return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    if not _enforce_evaluation(database_id, "POST"):
+        return authorization_error()
+    if store.database_moving(database_id):
+        return databaseRetirement.moving_response(event)
+    # While a binding change is applied in the background, the records it has not reached yet
+    # still carry the binding before it: Evaluate All waits for it (D161).
+    running_apply = binding_apply.applying_record(database_id)
+    if running_apply is not None:
+        return binding_apply.applying_response(event, running_apply)
+
+    db_item = store.get_database_item(database_id)
+    if not db_item:
+        return general_error(body={"message": "Database not found"}, event=event)
+
+    if position.phase == SWEEP_PHASE_REGISTER:
+        if db_item.get("complianceSchemaName"):
+            cursor = walk.register(database_id, db_item["complianceSchemaName"], position.cursor)
+            if cursor is not None:
+                return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_REGISTER,
+                                                      database_id, cursor),
+                                   databaseId=database_id, database=True)
+        position = position.evaluating()
+
+    actor = claims_and_roles["tokens"][0]
+    archived = _asset_access()
+    if archived.reads_asset_rows():
+        # Decided on each asset's own row: the database's live rows are read once, projected, and
+        # after its records, so every record read names an asset whose row was written before it
+        # (the trigger records an asset after its row is written).
+        archived.live_rows(database_id)
+    cursor = position.cursor
+    while not walk.done():
+        kwargs = {"KeyConditionExpression": Key("databaseId").eq(database_id),
+                  "Limit": SWEEP_PAGE_SIZE}
+        if cursor:
+            kwargs["ExclusiveStartKey"] = cursor
+        response = asset_state_table.query(**kwargs)
+        rows, evaluated_earlier = _sweep_candidates(
+            response.get("Items", []), position.started_at, lambda row: row.get("assetId", ""))
+        walk.evaluated_earlier += evaluated_earlier
+        for row in rows:
+            asset_id = row.get("assetId", "")
+            if _hidden_archived(archived, database_id, asset_id):
+                walk.hidden_archived += 1
+                continue
+            # A live asset the caller may not read is not evaluated, as the asset routes refuse it.
+            if _live_not_readable(archived, database_id, asset_id):
+                walk.skipped_not_authorized += 1
+                continue
+            if not row.get("schemaName"):
+                walk.without_schema += 1
+                continue
+            walk.evaluate(archived, database_id, asset_id, row["schemaName"], actor,
+                          name_schema=True)
+        if walk.stopped_in_page:
+            return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_EVALUATE,
+                                                   None, cursor),
+                               databaseId=database_id, database=True)
+        if "LastEvaluatedKey" not in response:
+            return walk.answer(event, None, databaseId=database_id, database=True)
+        cursor = response["LastEvaluatedKey"]
+    return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_EVALUATE, None, cursor),
+                       databaseId=database_id, database=True)
+
+
+# A sweep's or Evaluate All's walk: the asset rows of the bound databases (registration), then the
+# records to evaluate, each read a page at a time.
+SWEEP_PHASE_REGISTER = "register"
+SWEEP_PHASE_EVALUATE = "evaluate"
+SWEEP_PAGE_SIZE = MAX_SWEEP_ASSETS
+# The key of a SchemaNameIndex page (the index's keys and the table's).
+SCHEMA_NAME_INDEX_KEYS = ("schemaName", "complianceState", "databaseId", "assetId")
+
+
+class _SweepWalk:
+    """One call of a sweep or of Evaluate All: its time budget (SWEEP_TIME_BUDGET_SECONDS from its
+    start), its counts, and the evaluations it ran. `evaluate` decides one candidate record within
+    the bounds; once the cap or the budget is reached the rest of the page is counted in
+    `assetsRemaining` and `stopped_in_page` is set, so the call ends after that page."""
+
+    def __init__(self):
+        self.started = monotonic()
+        self.registered = 0
+        self.triggered = []
+        self.superseded = 0
+        self.removed_orphans = 0
+        self.skipped_archived = 0
+        self.hidden_archived = 0
+        self.skipped_not_authorized = 0
+        self.without_schema = 0
+        self.beyond_cap = 0
+        self.beyond_budget = 0
+        self.evaluated_earlier = 0
+        self.budget_spent = False
+
+    def spent(self):
+        if not self.budget_spent and monotonic() - self.started > SWEEP_TIME_BUDGET_SECONDS:
+            self.budget_spent = True
+        return self.budget_spent
+
+    def done(self):
+        """Whether the call reads no further page: its budget is spent or its cap reached."""
+        return self.spent() or len(self.triggered) >= MAX_SWEEP_ASSETS
+
+    @property
+    def stopped_in_page(self):
+        return bool(self.beyond_cap or self.beyond_budget)
+
+    def register(self, database_id, schema_name, cursor):
+        """Register the database's unrecorded assets a page at a time from `cursor`, within the
+        budget; returns the cursor to go on from, None when the database's rows are done."""
+        while True:
+            registered, cursor = store.register_unrecorded_assets_page(
+                database_id, schema_name, cursor)
+            self.registered += registered
+            if cursor is None or self.spent():
+                return cursor
+
+    def evaluate(self, archived, database_id, asset_id, schema_name, actor, name_schema=False):
+        """Evaluate one candidate record within the call's bounds (counted beyond them otherwise),
+        unless its asset is gone (the record is removed) or archived (skipped)."""
+        if len(self.triggered) >= MAX_SWEEP_ASSETS:
+            self.beyond_cap += 1
+            return
+        if self.spent():
+            self.beyond_budget += 1
+            return
+        target = automatic_evaluation_target(database_id, asset_id, detected_by="sweep")
+        if target == EVALUATION_TARGET_REMOVED:
+            self.removed_orphans += 1
+            return
+        if target == EVALUATION_TARGET_ARCHIVED:
+            # Archived and visible to the caller, or archived since the archive was read.
+            if _archived_visible(archived, database_id, asset_id):
+                self.skipped_archived += 1
+            else:
+                self.hidden_archived += 1
+            return
+        result = run_evaluation_for_asset(database_id, asset_id, schema_name, actor)
+        entry = {"databaseId": database_id, "assetId": asset_id}
+        if name_schema:
+            entry["schemaName"] = schema_name
+        entry.update(evaluationId=result.get("evaluationId"), verdict=result.get("verdict"))
+        if result.get("superseded"):
+            entry["superseded"] = True
+            self.superseded += 1
+        self.triggered.append(entry)
+
+    def answer(self, event, next_token, database=False, **identity):
+        """The call's response: the evaluations it ran, its counts, and `NextToken` (`next_token`)
+        while anything is left to read."""
+        remaining = self.beyond_cap + self.beyond_budget
+        logger.info(f"{'Evaluation of database' if database else 'Sweep of schema'} "
+                    f"{identity}: {self.registered} registered, {len(self.triggered)} triggered "
+                    f"({self.superseded} superseded by a newer evaluation), "
+                    f"{self.skipped_not_authorized} skipped as not authorized, "
+                    f"{self.without_schema} without a schema, "
+                    f"{remaining} remaining in the pages read ({self.beyond_cap} beyond the cap, "
+                    f"{self.beyond_budget} beyond the time budget), {self.evaluated_earlier} "
+                    f"evaluated earlier in this walk, {self.removed_orphans} records of deleted "
+                    f"assets removed, "
+                    f"{self.skipped_archived + self.hidden_archived} archived assets skipped "
+                    f"({self.hidden_archived} the caller may not see, not in the response), "
+                    f"more to read: {next_token is not None}")
+        body = {
+            "message": (f"Evaluation triggered for {len(self.triggered)} assets" if database
+                        else f"Sweep triggered for {len(self.triggered)} assets"),
+            **identity,
+            "assetsTriggered": self.triggered,
+            "assetsRemaining": remaining,
+            "superseded": self.superseded,
+            "skipped": self.skipped_not_authorized + self.skipped_archived,
+            "skippedNotAuthorized": self.skipped_not_authorized,
+            "skippedArchived": self.skipped_archived,
+            "removedOrphans": self.removed_orphans,
+        }
+        if database:
+            body.update(registered=self.registered, withoutSchema=self.without_schema)
+        if next_token:
+            body["NextToken"] = next_token
+        return success(body=body)
+
+
+# The field of a sweep's continuation token: the instant its first call started.
+SWEEP_TOKEN_FIELD = "sweepStartedAt"
+
+
+def _parse_instant(value):
+    """An ISO-8601 instant as an aware datetime (UTC when it names no zone), or None."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        instant = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return instant if instant.tzinfo else instant.replace(tzinfo=timezone.utc)
+
+
+class _SweepPosition:
+    """Where a walk goes on: when it started, its phase, the database it registers (registration)
+    and the key of the page it continues from (None from the start of the phase)."""
+
+    def __init__(self, started_at, phase, database_id=None, cursor=None):
+        self.started_at = started_at
+        self.phase = phase
+        self.database_id = database_id
+        self.cursor = cursor
+
+    def evaluating(self):
+        return _SweepPosition(self.started_at, SWEEP_PHASE_EVALUATE)
+
+
+def _string_key(value, keys):
+    """Whether `value` is a table key with exactly `keys`, each a non-empty string."""
+    return (isinstance(value, dict) and set(value) == set(keys)
+            and all(isinstance(value[key], str) and value[key] for key in keys))
+
+
+def _sweep_position(starting_token, cursor_keys, cursor_matches):
+    """The walk a token continues, or the start of a new walk (no token, now); None for a token
+    that is not one of this walk: malformed, naming a future instant, an unknown phase, or a cursor
+    that is not a key of the table or index the phase reads (`cursor_keys` for the records,
+    `listing.BASE_STATE_KEYS` for the asset rows) or not of this request (`cursor_matches`). A
+    token of the earlier form (the start instant alone) goes on from the start of the walk."""
+    now = datetime.now(timezone.utc)
+    if not starting_token:
+        return _SweepPosition(now, SWEEP_PHASE_REGISTER)
+    try:
+        decoded = json.loads(base64.b64decode(starting_token, validate=True).decode("utf-8"))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    started_at = _parse_instant(decoded.get(SWEEP_TOKEN_FIELD))
+    if started_at is None or started_at > now + timedelta(minutes=5):
+        return None
+    phase = decoded.get("phase", SWEEP_PHASE_REGISTER)
+    database_id = decoded.get("databaseId")
+    cursor = decoded.get("cursor")
+    if phase == SWEEP_PHASE_REGISTER:
+        if database_id is not None and not (isinstance(database_id, str) and database_id):
+            return None
+        if cursor is not None and not (database_id and _string_key(cursor, listing.BASE_STATE_KEYS)
+                                       and cursor["databaseId"] == database_id):
+            return None
+    elif phase == SWEEP_PHASE_EVALUATE:
+        if database_id is not None:
+            return None
+        if cursor is not None and not (_string_key(cursor, cursor_keys) and cursor_matches(cursor)):
+            return None
+    else:
+        return None
+    return _SweepPosition(started_at, phase, database_id, cursor)
+
+
+def _sweep_token(started_at, phase, database_id, cursor):
+    """The continuation token of a walk: its start, its phase, and where it goes on."""
+    token = {SWEEP_TOKEN_FIELD: started_at.isoformat(), "phase": phase}
+    if database_id:
+        token["databaseId"] = database_id
+    if cursor:
+        token["cursor"] = cursor
+    return base64.b64encode(json.dumps(token).encode("utf-8")).decode("utf-8")
+
+
+def _sweep_candidates(rows, started_at, key):
+    """The rows of a page a sweep call still has to evaluate, in the order it evaluates them.
+
+    A sweep is a walk over consecutive calls: the first call starts it (`started_at` is then now),
+    and each call that leaves rows to read returns a token naming that instant. Every evaluation
+    records its start on the row (`lastEvaluatedAt`) before it evaluates anything, so a row
+    evaluated since the sweep started (by an earlier call of it, a page this call reads again, or an
+    evaluation of the trigger meanwhile) is done and left out. Order within the page:
+    `pending_evaluation` rows first, then the least recently evaluated (never evaluated first), then
+    `key`. Returns `(candidates, evaluated since the sweep started)`."""
+    candidates = []
+    evaluated = 0
+    for row in rows:
+        last = _parse_instant(row.get("lastEvaluatedAt"))
+        if last is not None and last >= started_at:
+            evaluated += 1
+        else:
+            candidates.append(row)
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
+    candidates.sort(key=lambda row: (
+        row.get("complianceState") != engine.STATE_PENDING_EVALUATION,
+        _parse_instant(row.get("lastEvaluatedAt")) or oldest,
+        key(row),
+    ))
+    return candidates, evaluated
+
+
+def _asset_key(state_row):
+    return (state_row["databaseId"], state_row["assetId"])
+
+
+def get_evaluations(event, database_id, asset_id, query_params):
+    """Evaluation history of an asset, newest first, externally paged (AssetIndex GSI). Every
+    evaluation still under the live id of a deleted database whose move is running is the deleted
+    database's, so none is listed for the live id (`databaseRetirement`)."""
+    (valid, message) = _validate_history_scope_and_asset(database_id, asset_id)
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    if not _enforce_asset_evaluation(database_id, asset_id, "GET"):
+        return authorization_error()
+
+    try:
+        page_size = int(query_params.get("maxItems", str(DEFAULT_EVALUATIONS_PAGE_SIZE)))
+    except (TypeError, ValueError):
+        return validation_error(body={"message": "maxItems must be an integer"}, event=event)
+    page_size = max(1, min(page_size, MAX_EVALUATIONS_PAGE_SIZE))
+    if store.database_moving(database_id):
+        return success(body={"evaluations": []})
+
+    query_kwargs = {
+        "IndexName": "AssetIndex",
+        "KeyConditionExpression": Key("databaseId:assetId").eq(f"{database_id}:{asset_id}"),
+        "ScanIndexForward": False,
+        "Limit": page_size,
+    }
+    starting_token = query_params.get("startingToken")
+    if starting_token:
+        exclusive_start_key = _decode_key_token(starting_token, EVALUATION_ASSET_INDEX_KEY_ATTRIBUTES)
+        # A token of another asset's history names another partition of the index, which DynamoDB
+        # refuses as a start key.
+        if exclusive_start_key is None or \
+                exclusive_start_key["databaseId:assetId"] != f"{database_id}:{asset_id}":
+            return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+        query_kwargs["ExclusiveStartKey"] = exclusive_start_key
+
+    response = evaluation_table.query(**query_kwargs)
+    reads = _execution_reads()
+    result = {"evaluations": [failure_access.evaluation_for_caller(reads, evaluation)
+                              for evaluation in response.get("Items", [])]}
+    if "LastEvaluatedKey" in response:
+        result["NextToken"] = base64.b64encode(
+            json.dumps(response["LastEvaluatedKey"], default=str).encode("utf-8")).decode("utf-8")
+    return success(body=result)
+
+
+def get_compliance_state(event, database_id, asset_id):
+    """The compliance state row of an asset ("unknown" when it has none). An archived asset is not
+    evaluated while it is archived: a caller allowed to read its record gets it with
+    `complianceState` `archived` and the stored state as `recordedComplianceState`, which applies
+    again once the asset is unarchived. A record still under the live id of a deleted database whose
+    move is running is the deleted database's, so the live id's asset has none."""
+    (valid, message) = _validate_history_scope_and_asset(database_id, asset_id)
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+
+    item = None if store.database_moving(database_id) else store.get_compliance_record(
+        database_id, asset_id)
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    archived = _asset_access()
+    if not _enforce_asset_evaluation(database_id, asset_id, "GET",
+                                     (item or {}).get("complianceState", ""), archived):
+        return authorization_error()
+
+    if not item:
+        item = {
+            "databaseId": database_id,
+            "assetId": asset_id,
+            "complianceState": engine.STATE_UNKNOWN,
+            "schemaName": None,
+            "schemaSource": None,
+        }
+    if archived.is_archived(database_id, asset_id):
+        item = dict(item, complianceState=engine.STATE_ARCHIVED,
+                    recordedComplianceState=item["complianceState"])
+    # Without the attributes the listings keep for their name sort and text filter (D163).
+    return success(body=failure_access.state_record_for_caller(
+        _execution_reads(), listing.state_record_answer(item)))
+
+
+# Filters of the database overview (GET /compliance/state/{databaseId}).
+OVERVIEW_STATES = (
+    engine.STATE_COMPLIANT, engine.STATE_NON_COMPLIANT, engine.STATE_PENDING_EVALUATION,
+    engine.STATE_QUARANTINED, engine.STATE_EXCEPTION, engine.STATE_UNKNOWN,
+)
+OVERVIEW_SCHEMA_SOURCES = ("database", "asset")
+OVERVIEW_SORTS = ("assetId", "name")
+
+
+def overview_summary(database_id, withheld=frozenset()):
+    """`(summary, totalAssets, reads)`: per-state counts and the evaluation-error overlay of a
+    database, without reading the rows. Each state is one `Select=COUNT` query on the
+    ComplianceStateIndex partition of that state narrowed to the database (its sort key), so the
+    reads grow with the database's index entries, never with the item sizes, and no row is
+    returned; the overlay is one COUNT over the database's partition filtered on
+    `lastEvaluationStatus`. Exact at the time of the read. The records of the `withheld` assets
+    (archived, and live ones the caller may not read) are read by key, 100 a BatchGetItem, and left
+    out of every count, so the counts, `totalAssets` and the share of compliant assets cover the
+    live assets the caller may read only."""
+    summary = {}
+    reads = 0
+    for state in OVERVIEW_STATES:
+        count, spent = listing.count_items(asset_state_table, {
+            "IndexName": COMPLIANCE_STATE_INDEX,
+            "KeyConditionExpression": (Key("complianceState").eq(state)
+                                       & Key("databaseId").eq(database_id)),
+        })
+        summary[state] = count
+        reads += spent
+    errors, spent = listing.count_items(asset_state_table, {
+        "KeyConditionExpression": Key("databaseId").eq(database_id),
+        "FilterExpression": Attr("lastEvaluationStatus").eq(engine.EVALUATION_STATUS_ERROR),
+    })
+    reads += spent
+    if withheld:
+        withheld_counts, withheld_errors = withheld_state_counts(
+            asset_state_table, database_id, withheld, OVERVIEW_STATES,
+            engine.EVALUATION_STATUS_ERROR)
+        for state in OVERVIEW_STATES:
+            summary[state] = max(0, summary[state] - withheld_counts[state])
+        errors = max(0, errors - withheld_errors)
+        reads += -(-len(withheld) // 100)
+    summary[OVERVIEW_ERROR_BUCKET] = errors
+    return summary, sum(summary[state] for state in OVERVIEW_STATES), reads
+
+
+def overview_summary_readable(database_id, readable):
+    """`(summary, totalAssets, records, reads)` for a caller whose asset rules read an asset's own
+    fields: the per-state counts and the evaluation-error overlay of the records of the `readable`
+    assets only (`AssetAccess.live_withheld`: the live assets whose rows the caller may read), so an
+    archived asset, a refused one and a record with no asset row count nowhere. Each state reads
+    its ComplianceStateIndex partition narrowed to the database projected on `assetId`, and the
+    overlay the database's error records the same way: the items and the pages `overview_summary`'s
+    COUNT queries read (`listing.query_ids`), and no record by key. `records` is how many records
+    were read in all, so the listing knows how many rows it leaves out."""
+    summary = {}
+    reads = 0
+    records = 0
+    for state in OVERVIEW_STATES:
+        ids, spent = listing.query_ids(asset_state_table, {
+            "IndexName": COMPLIANCE_STATE_INDEX,
+            "KeyConditionExpression": (Key("complianceState").eq(state)
+                                       & Key("databaseId").eq(database_id)),
+        })
+        summary[state] = sum(1 for asset_id in ids if asset_id in readable)
+        records += len(ids)
+        reads += spent
+    error_ids, spent = listing.query_ids(asset_state_table, {
+        "KeyConditionExpression": Key("databaseId").eq(database_id),
+        "FilterExpression": Attr("lastEvaluationStatus").eq(engine.EVALUATION_STATUS_ERROR),
+    })
+    reads += spent
+    summary[OVERVIEW_ERROR_BUCKET] = sum(1 for asset_id in error_ids if asset_id in readable)
+    return summary, sum(summary[state] for state in OVERVIEW_STATES), records, reads
+
+
+def _without(withheld, accept=None, readable=None):
+    """An `accept` for `listing.query_page` that drops the rows of the `withheld` asset ids, and,
+    with `readable`, those of every asset not among them, and otherwise applies `accept`."""
+    def accept_row(row):
+        if row.get("assetId") in withheld:
+            return False
+        if readable is not None and row.get("assetId") not in readable:
+            return False
+        return accept is None or accept(row)
+    return accept_row
+
+
+def _overview_filters(event, query_params):
+    """`(filters, None)` from the overview's query parameters, or `(None, response)` when one is
+    not an accepted value."""
+    state = query_params.get("state") or None
+    schema_name = query_params.get("schemaName") or None
+    schema_source = query_params.get("schemaSource") or None
+    evaluation_error = query_params.get("evaluationError")
+    text = listing.normalized_text(query_params.get("text"))
+    sort = query_params.get("sort") or "assetId"
+    if state is not None and state not in OVERVIEW_STATES:
+        return None, validation_error(body={"message": "state must be one of " + ", ".join(
+            OVERVIEW_STATES)}, event=event)
+    if schema_source is not None and schema_source not in OVERVIEW_SCHEMA_SOURCES:
+        return None, validation_error(body={"message": "schemaSource must be database or asset"},
+                                      event=event)
+    if evaluation_error not in (None, "", "true", "false"):
+        return None, validation_error(body={"message": "evaluationError must be true or false"},
+                                      event=event)
+    if sort not in OVERVIEW_SORTS:
+        return None, validation_error(body={"message": "sort must be assetId or name"}, event=event)
+    (valid, message) = validate({
+        "schemaName": {"value": schema_name, "validator": "ID", "optional": True},
+        "text": {"value": text, "validator": "STRING_256", "optional": True},
+    })
+    if not valid:
+        return None, validation_error(body={"message": message}, event=event)
+    return {"state": state, "schemaName": schema_name, "schemaSource": schema_source,
+            "evaluationError": evaluation_error or None, "text": text or None,
+            "sort": sort}, None
+
+
+def _overview_query(database_id, filters):
+    """`(query kwargs, token key attributes, filtered, accept)` for the overview's filters: a state
+    filter reads the ComplianceStateIndex partition of that state narrowed to the database;
+    `sort=name` reads the DatabaseAssetNameIndex; otherwise the database's partition of the table,
+    in assetId order. The other filters are a FilterExpression on that read, which never names a
+    key attribute of the table or index read (DynamoDB refuses it); `accept` (or None) is the part
+    of the text filter matched in code (`listing.asset_text_filter`)."""
+    if filters["state"]:
+        kwargs = {"IndexName": COMPLIANCE_STATE_INDEX,
+                  "KeyConditionExpression": (Key("complianceState").eq(filters["state"])
+                                             & Key("databaseId").eq(database_id))}
+        keys = listing.COMPLIANCE_STATE_INDEX_KEYS
+    elif filters["sort"] == "name":
+        kwargs = {"IndexName": listing.DATABASE_ASSET_NAME_INDEX,
+                  "KeyConditionExpression": Key("databaseId").eq(database_id)}
+        keys = listing.DATABASE_ASSET_NAME_INDEX_KEYS
+    else:
+        kwargs = {"KeyConditionExpression": Key("databaseId").eq(database_id)}
+        keys = listing.BASE_STATE_KEYS
+    conditions = []
+    accept = None
+    if filters["schemaName"]:
+        conditions.append(Attr("schemaName").eq(filters["schemaName"]))
+    if filters["schemaSource"]:
+        conditions.append(Attr("schemaSource").eq(filters["schemaSource"]))
+    if filters["evaluationError"] == "true":
+        conditions.append(Attr("lastEvaluationStatus").eq(engine.EVALUATION_STATUS_ERROR))
+    elif filters["evaluationError"] == "false":
+        conditions.append(Attr("lastEvaluationStatus").ne(engine.EVALUATION_STATUS_ERROR))
+    if filters["text"]:
+        # A row written before the search attribute existed is matched on its id, in code.
+        condition, accept = listing.asset_text_filter(filters["text"])
+        conditions.append(condition)
+    if conditions:
+        expression = conditions[0]
+        for condition in conditions[1:]:
+            expression = expression & condition
+        kwargs["FilterExpression"] = expression
+    return kwargs, keys, bool(conditions), accept
+
+
+def get_database_compliance_overview(event, database_id, query_params):
+    """One page of a database's asset-state rows, filtered and sorted on the server, with the
+    per-state counts of the whole database.
+
+    Query parameters: `maxItems` (1..200) and `startingToken`; `state`, `schemaName`,
+    `schemaSource` (`database` | `asset`), `evaluationError` (`true` | `false`), `text`
+    (case-insensitive contains on the asset name or id) and `sort` (`assetId`, the default, or
+    `name`). Each filter combination reads with a key condition (`_overview_query`) and fills the
+    page across at most `listing.DEFAULT_READ_BUDGET` reads; `NextToken` resumes after the last row
+    returned. Every row carries `assetName`, kept on the row (no lookup per row).
+
+    `summary` has one bucket per compliance state (each row counted in exactly one) plus an
+    `error` overlay: the rows whose `lastEvaluationStatus` is `error` — assets whose latest
+    evaluation could not run or could not evaluate any rule. `error` is not a state, so an asset in
+    it is also counted in its state bucket and the state buckets alone sum to `totalAssets`. The
+    counts are of the whole database, whatever the filters (`overview_summary`).
+
+    The rows and the counts cover the assets the caller may read: an archived asset is left out
+    for every caller, and so is a live asset whose row the caller's asset rules refuse the asset
+    GET on (`AssetAccess.live_withheld`); a caller refused the asset GET on the database's assets
+    gets an empty overview with zero counts. For a caller whose asset rules read an asset's own
+    fields, a record whose asset has no row (left by a permanently deleted asset until it is
+    removed) is left out too, and the counts are of the readable assets' records
+    (`overview_summary_readable`).
+
+    An id that names no database (`store.database_known`) answers `400` "Database not found",
+    after the authorization check on the id, rather than an empty overview.
+    """
+    (valid, message) = knownDatabase.validate_scope(database_id)
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    if not _enforce_evaluation(database_id, "GET"):
+        return authorization_error()
+
+    page_size = listing.page_size_of(query_params.get("maxItems"), DEFAULT_OVERVIEW_PAGE_SIZE)
+    if page_size is None:
+        return validation_error(body={"message": "maxItems must be an integer"}, event=event)
+    filters, error = _overview_filters(event, query_params)
+    if error:
+        return error
+    # `sort=name` without a state reads DatabaseAssetNameIndex. While DynamoDB backfills that index
+    # (the update that adds it to an existing table returns before the backfill ends) a read of it
+    # is refused, so the page is answered in the default order and flagged.
+    name_index = filters["sort"] == "name" and not filters["state"]
+    name_sort_unavailable = False
+    kwargs, keys, filtered, accept = _overview_query(database_id, filters)
+    # An archived asset keeps its record under the live database id, and it is not evaluated while
+    # it is archived. Its record is left out of the rows and the counts, for every caller, as the
+    # asset listing leaves archived assets out (`AssetAccess.left_out`). A live asset the caller's
+    # asset rules refuse is left out as well, as the asset listing leaves it out
+    # (`AssetAccess.live_withheld`): every asset of the database, or those whose rows are refused.
+    # For a caller whose rules read an asset's own fields only the readable live assets are kept
+    # (`readable`): that leaves out the archived ones, the refused ones and a record whose asset
+    # has no row, which has no fields to decide on.
+    access = _asset_access()
+    live_withheld = access.live_withheld(database_id)
+    readable = live_withheld.readable
+    if readable is None:
+        withheld = access.left_out(database_id) | live_withheld.ids
+    else:
+        withheld = frozenset()
+    read_limit = None
+    if withheld or readable is not None:
+        accept = _without(withheld, accept, readable)
+        if withheld and not filtered:
+            # At most len(withheld) rows are dropped, so a page plus that many fills in one read.
+            read_limit = min(page_size + len(withheld), listing.FILTERED_READ_LIMIT)
+    start_key = None
+    if query_params.get("startingToken"):
+        start_key = listing.decode_token(query_params["startingToken"], keys)
+        if start_key is None and name_index:
+            # A listing that began in the default order, during the backfill, continues in it.
+            start_key = listing.decode_token(query_params["startingToken"], listing.BASE_STATE_KEYS)
+            name_sort_unavailable = start_key is not None
+        if start_key is None:
+            return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+    # A well-formed request the caller may make of this id, so the answer may say whether the id
+    # names a database: one that names none is not an empty overview.
+    if not store.database_known(database_id):
+        return database_not_found(event)
+    # Every record still under the live id of a deleted database whose move is running is the
+    # deleted database's (`databaseRetirement`): the live id's overview holds none of them.
+    if live_withheld.everything or store.database_moving(database_id):
+        # The asset GET refuses every asset of the database: no row and no count is the caller's.
+        summary = dict.fromkeys(OVERVIEW_STATES, 0)
+        summary[OVERVIEW_ERROR_BUCKET] = 0
+        return success(body={"databaseId": database_id, "totalAssets": 0, "summary": summary,
+                             "assets": []})
+
+    readable_summary = None
+    if readable is not None:
+        # The counts first: they say how many records the rows leave out, so an unfiltered page
+        # plus that many fills in one read.
+        readable_summary = overview_summary_readable(database_id, readable)
+        dropped = readable_summary[2] - readable_summary[1]
+        if dropped and not filtered:
+            read_limit = min(page_size + dropped, listing.FILTERED_READ_LIMIT)
+
+    rows = next_key = None
+    if not name_sort_unavailable:
+        try:
+            rows, next_key, _ = listing.query_page(asset_state_table, kwargs, page_size, keys,
+                                                   start_key=start_key, filtered=filtered,
+                                                   accept=accept, read_limit=read_limit)
+        except ClientError as error:
+            if not (name_index and _index_backfilling(error)):
+                raise
+            logger.warning(f"{listing.DATABASE_ASSET_NAME_INDEX} is backfilling; answering the "
+                           f"overview of {database_id} in assetId order")
+            name_sort_unavailable = True
+            if start_key is not None:
+                start_key = {name: start_key[name] for name in listing.BASE_STATE_KEYS}
+    if name_sort_unavailable:
+        kwargs, keys, filtered, accept = _overview_query(database_id, dict(filters, sort="assetId"))
+        if withheld or readable is not None:
+            accept = _without(withheld, accept, readable)
+        rows, next_key, _ = listing.query_page(asset_state_table, kwargs, page_size, keys,
+                                               start_key=start_key, filtered=filtered,
+                                               accept=accept, read_limit=read_limit)
+    if filters["state"] and filters["sort"] == "name":
+        rows.sort(key=lambda row: row.get("assetNameSort") or row.get("assetId", ""))
+    for row in rows:
+        row.setdefault("assetName", "")
+    reads = _execution_reads()
+    rows = [failure_access.state_record_for_caller(reads, listing.state_record_answer(row))
+            for row in rows]
+
+    if readable_summary is not None:
+        summary, total = readable_summary[0], readable_summary[1]
+    else:
+        summary, total, _ = overview_summary(database_id, withheld)
+    body = {
+        "databaseId": database_id,
+        "totalAssets": total,
+        "summary": summary,
+        "assets": rows,
+    }
+    if name_sort_unavailable:
+        # The rows are in assetId order: the name index is still being built.
+        body["nameSortUnavailable"] = True
+    if next_key:
+        body["NextToken"] = listing.encode_token(next_key)
+    return success(body=body)
+
+
+def _index_backfilling(error):
+    """Whether a ClientError is DynamoDB refusing a read of a global secondary index it is still
+    backfilling ("Cannot read from backfilling global secondary index")."""
+    details = error.response.get("Error", {}) if hasattr(error, "response") else {}
+    return (details.get("Code") == "ValidationException"
+            and "backfilling" in str(details.get("Message", "")).lower())
+
+
+def _decode_key_token(token, key_attributes):
+    """The index key a Base64 JSON token carries, or None when the token is malformed — not Base64
+    JSON, not an object, or missing a string value for one of `key_attributes` (a key from another
+    listing would otherwise reach DynamoDB and fail the request as an internal error)."""
+    try:
+        decoded = json.loads(base64.b64decode(token, validate=True).decode("utf-8"))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    if any(not isinstance(decoded.get(name), str) for name in key_attributes):
+        return None
+    return {name: decoded[name] for name in key_attributes}
+
+

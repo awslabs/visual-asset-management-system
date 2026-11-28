@@ -1,0 +1,35 @@
+{
+  "name": "ldap_user_create_rejected_minimal",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "POST",
+    "path": "/api/ldap/user",
+    "absolutePath": "/api/ldap/user",
+    "query": {},
+    "headers": {},
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "user": "vspikeaaaaaaaaaa"
+    }
+  },
+  "response": {
+    "status": 400,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": false,
+      "message": "password parameter is missing in the request.   (Request ID: a7618718-d223-4485-a788-0fc7c102232a)"
+    }
+  },
+  "expect": {},
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/ldap/user.py",
+      "source/soca/cluster_manager/utils/errors/web_api.py",
+      "source/soca/cluster_manager/utils/error.py"
+    ]
+  }
+}

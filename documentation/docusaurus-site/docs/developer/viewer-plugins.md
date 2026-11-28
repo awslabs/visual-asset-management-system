@@ -19,18 +19,23 @@ graph TD
 
 ### Core Components
 
-| Component         | File                            | Purpose                                        |
-| ----------------- | ------------------------------- | ---------------------------------------------- |
-| PluginRegistry    | `core/PluginRegistry.ts`        | Singleton that manages all viewer plugins      |
-| viewerConfig.json | `config/viewerConfig.json`      | JSON configuration for all plugins             |
-| manifest.ts       | `viewers/manifest.ts`           | Vite static analysis paths for dynamic imports |
-| StylesheetManager | `core/StylesheetManager.ts`     | Per-plugin CSS lifecycle management            |
-| DynamicViewer     | `components/DynamicViewer.tsx`  | Main viewer component for rendering            |
-| ViewerSelector    | `components/ViewerSelector.tsx` | UI for choosing between compatible viewers     |
+| Component         | File                            | Purpose                                                                                |
+| ----------------- | ------------------------------- | -------------------------------------------------------------------------------------- |
+| PluginRegistry    | `core/PluginRegistry.ts`        | Singleton that manages all viewer plugins                                              |
+| viewerConfig.json | `config/viewerConfig.json`      | JSON configuration for the core plugins                                                |
+| manifest.ts       | `viewers/manifest.ts`           | Vite static analysis paths for dynamic imports                                         |
+| StylesheetManager | `core/StylesheetManager.ts`     | Per-plugin CSS lifecycle management                                                    |
+| streamFailure     | `core/streamFailure.ts`         | Names why a streamed or downloaded file failed to load (permission, archived, missing) |
+| extensionMatching | `core/extensionMatching.ts`     | The filename rule and the `(none)` token                                               |
+| textContent       | `core/textContent.ts`           | Text-or-binary check and bounded text loader                                           |
+| DynamicViewer     | `components/DynamicViewer.tsx`  | Main viewer component for rendering                                                    |
+| ViewerSelector    | `components/ViewerSelector.tsx` | UI for choosing between compatible viewers                                             |
+
+The add-on viewers — the Physna viewer and the licensed VNTANA and VEERUM viewers, which ship disabled — are configured in `config/addonViewerConfig.json` and listed in `viewers/addonManifest.ts`; a fork's viewers go in `config/customViewerConfig.json` and `viewers/custom/customManifest.ts` (see [Extending VAMS in a Fork](customizing-vams.md)). `core/viewerSources.ts` merges the three tiers in the order core, add-on, custom, so on a priority tie a core viewer is listed before an add-on viewer.
 
 ### How It Works
 
-1. **Initialization** -- `PluginRegistry.initialize()` reads `viewerConfig.json` and registers metadata for all enabled plugins. No components are loaded at this stage.
+1. **Initialization** -- `PluginRegistry.initialize()` reads the merged configuration (core, add-on and custom) and registers metadata for all enabled plugins. No components are loaded at this stage.
 2. **Extension Matching** -- `getCompatibleViewers(extensions, isMultiFile)` returns metadata for all plugins that support the given file extensions.
 3. **On-Demand Loading** -- `loadPlugin(pluginId)` dynamically imports the React component and optional dependency manager when a viewer is selected.
 4. **Cleanup** -- `unloadPlugin(pluginId)` removes the component, cleans up dependencies, and removes plugin stylesheets.
@@ -207,6 +212,17 @@ When using a dependency manager, add the configuration fields to `viewerConfig.j
 }
 ```
 
+### Decoding in a Web Worker (optional)
+
+A viewer that decodes a large file in JavaScript can run the decoder in a worker so the page stays responsive. The TIFF/TGA Image Viewer (`viewers/RasterImageViewerPlugin/`) is the reference:
+
+-   `rasterWorker.ts` imports the decoders statically and answers `open` and `decode` messages with the same `RasterEngine` that the page can run. It posts `{ type: "ready" }` as its last statement.
+-   `createRasterWorker.ts` creates the worker with `new Worker(new URL("./rasterWorker.ts", import.meta.url), { type: "module" })`. Keep `import.meta.url` in a module of its own: jest's CommonJS transform cannot evaluate it, so unit tests replace the module with `jest.mock`.
+-   `rasterSession.ts` waits for `ready` before it sends the file, and decodes on the page with the same engine and caps when the worker cannot be created, its script cannot be loaded (blocked, 404 after a redeploy, no module worker support) or it does not start within 15 s. Only a worker that dies after it started is reported as a failure. `dispose()` rejects any request still in flight and terminates the worker.
+-   The worker is a same-origin file under `assets/`, so it runs under the existing `worker-src 'self' blob: data:` directive and needs no CSP change. A decoder that expects `require` (such as `utif2`, which looks up `pako` through `require` or `self.pako`) needs its dependency placed on the global first; `pakoGlobal.ts` does this and is imported before `utif2`.
+-   A viewer that relies on a worker for a decoder the page cannot run must say so in its documentation; this one can, so module workers (Chrome and Edge 80, Firefox 114, Safari 15) only improve responsiveness.
+-   Treat the file as untrusted input: check header sizes against pixel and byte caps before allocating, and refuse a variant the decoder draws wrongly rather than showing wrong pixels.
+
 ### Step 5 (Optional): Custom Install Script
 
 If your viewer requires build-time dependency installation beyond standard npm packages, create a custom install script:
@@ -221,28 +237,37 @@ Review existing custom install scripts in `web/customInstalls/` for patterns. Vi
 
 ## Plugin Configuration Fields
 
-| Field                        | Type     | Required | Description                                                        |
-| ---------------------------- | -------- | -------- | ------------------------------------------------------------------ |
-| `id`                         | string   | Yes      | Unique plugin identifier                                           |
-| `name`                       | string   | Yes      | Display name in the viewer selector UI                             |
-| `description`                | string   | Yes      | Description shown to users                                         |
-| `componentPath`              | string   | Yes      | Path for manifest lookup (must match manifest.ts key)              |
-| `supportedExtensions`        | string[] | Yes      | File extensions this viewer handles (e.g., `[".obj", ".fbx"]`)     |
-| `supportsMultiFile`          | boolean  | Yes      | Whether the viewer can handle multiple files simultaneously        |
-| `canFullscreen`              | boolean  | Yes      | Whether the viewer supports fullscreen mode                        |
-| `priority`                   | number   | Yes      | Selection order (lower = listed first when multiple viewers match) |
-| `dependencies`               | string[] | Yes      | Required library names (informational)                             |
-| `loadStrategy`               | string   | Yes      | `"lazy"` or `"eager"`. Not read; every viewer loads on first use.  |
-| `category`                   | string   | Yes      | Viewer category: `3d`, `media`, `document`, `data`, or `preview`   |
-| `enabled`                    | boolean  | Yes      | Whether the plugin is active                                       |
-| `dependencyManager`          | string   | No       | Path to the dependency manager module                              |
-| `dependencyManagerClass`     | string   | No       | Class name exported by the dependency module                       |
-| `dependencyManagerMethod`    | string   | No       | Static method to call for loading dependencies                     |
-| `dependencyCleanupMethod`    | string   | No       | Static method to call for cleanup                                  |
-| `featuresEnabledRestriction` | string[] | No       | Required feature flags (all must be enabled)                       |
-| `isPreviewViewer`            | boolean  | No       | `true` for the preview-only viewer                                 |
-| `requiresPreprocessing`      | boolean  | No       | `true` if the viewer needs a preprocessing pipeline                |
-| `customParameters`           | object   | No       | Viewer-specific configuration passed to the component              |
+| Field                        | Type     | Required | Description                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                         | string   | Yes      | Unique plugin identifier                                                                                                                                                                                                                                                                                                           |
+| `name`                       | string   | Yes      | Display name in the viewer selector UI                                                                                                                                                                                                                                                                                             |
+| `description`                | string   | Yes      | Description shown to users                                                                                                                                                                                                                                                                                                         |
+| `componentPath`              | string   | Yes      | Path for manifest lookup (must match manifest.ts key)                                                                                                                                                                                                                                                                              |
+| `supportedExtensions`        | string[] | Yes      | File types this viewer handles: lowercase extensions (e.g., `[".obj", ".fbx"]`), `"*"` for any file, or `"(none)"` for files with no extension (see [Files without an extension](#files-without-an-extension))                                                                                                                     |
+| `supportsMultiFile`          | boolean  | Yes      | Whether the viewer can handle multiple files simultaneously                                                                                                                                                                                                                                                                        |
+| `canFullscreen`              | boolean  | Yes      | Whether the viewer supports fullscreen mode                                                                                                                                                                                                                                                                                        |
+| `priority`                   | number   | Yes      | Selection order (lower = listed first when multiple viewers match)                                                                                                                                                                                                                                                                 |
+| `dependencies`               | string[] | Yes      | Required library names (informational)                                                                                                                                                                                                                                                                                             |
+| `loadStrategy`               | string   | Yes      | `"lazy"` or `"eager"`. Not read; every viewer loads on first use.                                                                                                                                                                                                                                                                  |
+| `category`                   | string   | Yes      | Viewer category: `3d`, `media`, `document`, `data`, or `preview`                                                                                                                                                                                                                                                                   |
+| `enabled`                    | boolean  | Yes      | Whether the plugin is active                                                                                                                                                                                                                                                                                                       |
+| `dependencyManager`          | string   | No       | Path to the dependency manager module                                                                                                                                                                                                                                                                                              |
+| `dependencyManagerClass`     | string   | No       | Class name exported by the dependency module                                                                                                                                                                                                                                                                                       |
+| `dependencyManagerMethod`    | string   | No       | Static method to call for loading dependencies                                                                                                                                                                                                                                                                                     |
+| `dependencyCleanupMethod`    | string   | No       | Static method to call for cleanup                                                                                                                                                                                                                                                                                                  |
+| `featuresEnabledRestriction` | string[] | No       | Required feature flags (all must be enabled)                                                                                                                                                                                                                                                                                       |
+| `isPreviewViewer`            | boolean  | No       | `true` for the preview-only viewer                                                                                                                                                                                                                                                                                                 |
+| `requiresPreprocessing`      | boolean  | No       | `true` if the viewer needs a preprocessing pipeline                                                                                                                                                                                                                                                                                |
+| `customParameters`           | object   | No       | Viewer-specific configuration passed to the component                                                                                                                                                                                                                                                                              |
+| `compareMode`                | object   | No       | Compare capability: `enabled`, `minFiles` and `maxFiles` (the file-count window), `allowSameFileDifferentVersions`, `allowDifferentFiles`, `allowCrossAsset`, and `compareOnly` (offer the viewer only in compare mode). A compare-capable viewer receives the ordered files as `compareFiles`, index 0 being the left (base) file |
+
+### Files without an extension
+
+A viewer accepts files that have no extension (`README`, `LICENSE`, `Makefile`, `.gitignore`) by listing the token `"(none)"` in `supportedExtensions`. The shipped Text Viewer and Text Diff Viewer list it. The registry reads the extension from the last part of the file name, the same way as Python's `os.path.splitext`: a leading dot does not start an extension and a trailing dot leaves none, so `.gitignore` and `file.` have no extension, `.eslintrc.json` has `.json`, and `.env.example` has `.example`. A dotfile name listed as an extension (`".gitignore"`) therefore never matches; list `"(none)"` instead.
+
+Every file in a selection must still match, so a selection that mixes a file without an extension and other files is offered only by a viewer that lists `"(none)"` and every other extension in it. The `"*"` wildcard matches files without an extension too.
+
+A text-style viewer is offered by file name, so it can be handed binary content. Load the file through `loadTextFile(url, signal)` from `core/textContent.ts`, as the text viewers do: it reads the first 8 KiB with an HTTP `Range` request, classifies it with `classifyTextSample`, and returns `binary` or `unsupported-encoding` without downloading the rest when it is not text, or the decoded text (UTF-8, or UTF-16 with a byte-order mark) otherwise.
 
 ## Dependency Chain Loading
 
@@ -313,10 +338,10 @@ To enable this viewer, set `app.webUi.allowUnsafeEvalFeatures` to `true` in the 
 
 ### Available Feature Flags
 
-| Flag               | Effect on Viewers                                                                                                                                    |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ALLOWUNSAFEEVAL`  | Enables the Needle USD, SuperSplat Editor, and ThatOpen IFC BIM viewers, plus the Three.js CAD formats (all require the `unsafe-eval` CSP directive) |
-| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                                                                               |
+| Flag               | Effect on Viewers                                                                                                                                                                              |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALLOWUNSAFEEVAL`  | Enables the Needle USD, SuperSplat Editor, ThatOpen IFC BIM and Robotics Data viewers, plus the Online 3D Viewer `.3dm` and Three.js CAD formats (all require the `unsafe-eval` CSP directive) |
+| `LOCATIONSERVICES` | Enables the GeoTIFF Map Viewer; can also gate other geospatial viewers                                                                                                                         |
 
 ### Multiple Requirements
 
@@ -339,6 +364,7 @@ interface ViewerPluginProps {
     assetKey?: string; // Single file S3 key
     multiFileKeys?: string[]; // Multiple file S3 keys
     multiFiles?: FileInfo[]; // Owning asset and database of each file in multiFileKeys
+    fileInfo?: FileInfo; // The one file of a single-file selection: size and generated preview key
     versionId?: string; // File version
     assetVersionId?: string; // Asset version to read files from
     viewerMode: string; // Display mode ("collapse", "wide", "fullscreen")
@@ -346,10 +372,30 @@ interface ViewerPluginProps {
     onDeletePreview?: () => void; // Callback to delete preview
     isPreviewFile?: boolean; // Whether this is a preview file
     customParameters?: Record<string, any>; // The entry's customParameters from viewerConfig.json
+    compareMode?: boolean; // True when the viewer is rendered in compare mode
+    compareFiles?: FileInfo[]; // Ordered files to compare (compare mode only); index 0 is the base
 }
 ```
 
-A multi-file selection can span assets. Build each file's URL from its `multiFiles` entry's `assetId` and `databaseId`, and fall back to the top-level pair when the entry carries none.
+`fileInfo` is set only for a single-file selection. It carries the file's `size` and its generated preview key (`previewFile`), when the host listed them, so a viewer can check a size cap before it downloads the file and show the generated preview when it cannot open the file itself (the TIFF/TGA Image Viewer does both). A multi-file selection can span assets. Build each file's URL from its `multiFiles` entry's `assetId` and `databaseId`, and fall back to the top-level pair when the entry carries none.
+
+### File Keys and Viewer Data
+
+`assetKey` and each `multiFileKeys` entry carry the key the host has for the file: the full Amazon S3 key the file list returns (the file manager, the file page) or the file's path in the asset (search results, with its leading `/`; the asset version views). Send it to the API as given, its leading `/` included; never strip or add a prefix to guess another form. The auxiliary preview stream reads the full key and the path in the asset, for assets on a folder and assets created from one object, and decides which file of the asset a path names: a path with a leading `/` is the path in the asset, and a path without one that starts with the asset's location key is the full key.
+
+A viewer that reads data a pipeline wrote for the file, such as the octree of the Point Cloud Potree Viewer pipeline, builds the URL with `auxiliaryPreviewStreamUrl(config.api, databaseId, assetId, fileKey, dataPath)` from `core/viewerData.ts`. It requests `{file key}/preview/{dataPath}` on the auxiliary preview stream, keeps one leading `/` of a path in the asset, and URL-encodes each segment with the slashes kept, so a loader that resolves sibling files relative to `metadata.json` stays in the file's folder:
+
+```typescript
+import { auxiliaryPreviewStreamUrl, POTREE_VIEWER_METADATA } from "../../core/viewerData";
+
+const url = auxiliaryPreviewStreamUrl(
+    config.api,
+    databaseId,
+    assetId,
+    assetKey,
+    POTREE_VIEWER_METADATA
+);
+```
 
 ### Custom Parameters
 
@@ -362,6 +408,8 @@ const MyViewer: React.FC<ViewerPluginProps> = ({ customParameters }) => {
     // Use parameters to configure the viewer
 };
 ```
+
+The TIFF/TGA Image Viewer reads two parameters, set on the `tiff-tga-viewer` entry in `viewerConfig.json`: `maxDecodeBytes` (default 268435456, the largest file it downloads to decode) and `maxDecodePixels` (default 100000000, the most pixels it decodes for one image or TIFF page). Both are checked from the file size or header before any pixel is decoded. They are build-time values in the shipped viewer configuration: there is no deployment configuration key for them, and a fork cannot override a shipped viewer's entry from `customViewerConfig.json` (a repeated `id` is skipped), so changing a cap means editing `viewerConfig.json` in the fork. A missing or invalid value keeps the default.
 
 ## DynamicViewer and ViewerErrorBoundary
 
@@ -391,8 +439,8 @@ import { DynamicViewer } from "./visualizerPlugin";
 
 ### Plugin Not Appearing
 
-1. Check that `enabled` is `true` in `viewerConfig.json`
-2. Verify the component path exists in `manifest.ts`
+1. Check that `enabled` is `true` in the viewer's entry: `viewerConfig.json` for a core viewer, `addonViewerConfig.json` for an add-on or licensed viewer (VNTANA, VEERUM)
+2. Verify the component path exists in `manifest.ts` (or `addonManifest.ts` for an add-on viewer)
 3. Check the browser console for feature restriction messages
 4. Confirm required feature flags are enabled in the deployment configuration
 
@@ -413,3 +461,4 @@ import { DynamicViewer } from "./visualizerPlugin";
 -   [Frontend Development](frontend.md) -- React component patterns used by viewer plugins
 -   [CDK Infrastructure](cdk.md) -- Feature flag configuration for viewer restrictions
 -   [Local Development Setup](setup.md) -- Running the dev server with viewer plugins
+-   [Extending VAMS in a Fork](customizing-vams.md) -- Registering a fork's viewer in `customViewerConfig.json` and `viewers/custom/` instead of the core files

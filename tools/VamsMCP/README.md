@@ -12,7 +12,8 @@ This server **does not store any keys, tokens, or URLs**. It reuses the
 [`vamscli`](../VamsCLI) profile you already configured on your machine — the
 same one you use for the CLI. Each user runs the server against **their own**
 VAMS account using **their own** vamscli login, which makes it safe to
-distribute publicly.
+distribute publicly. (A [remote](#remote-mode) server reads an auth configuration file of URLs and
+client ids that its operator writes; it holds no secret either.)
 
 ```
 MCP host ──stdio──> vams-mcp (FastMCP) ──> vamscli APIClient + ProfileManager ──HTTPS──> your VAMS API
@@ -23,30 +24,33 @@ MCP host ──stdio──> vams-mcp (FastMCP) ──> vamscli APIClient + Profi
 The server reuses the CLI's `APIClient`, so it inherits retries, 429 backoff,
 typed errors, and automatic token refresh.
 
+The server can also be **hosted remotely** for MCP clients that connect over HTTP (for example
+Amazon Quick). In that mode it reads no profile: each request carries its user's OAuth access token,
+which the server verifies itself and sends on to the VAMS API for that request only, so every call
+still runs as that user under that user's VAMS permissions. See [Remote mode](#remote-mode).
+
+```
+MCP client ──HTTPS──> your front end (TLS, port 443) ──> vams-mcp (streamable HTTP, 127.0.0.1:8000)
+                                                            │ verifies the user's token, then
+                                                            └── APIClient(bearer_token=<that token>) ──HTTPS──> VAMS API
+```
+
 ## Requirements
 
 -   Python 3.12+
 -   [`vamscli`](../VamsCLI) installed and configured (see below)
--   `mcp` 1.2+ or 2.x — both SDK generations are supported
+-   `mcp` 1.10.0+ or 2.x and `pydantic` 2.11+, installed with the server. `mcp` 1.10.0 to 1.21.1
+    need `pydantic` below 2.12.
+-   `PyJWT[crypto]` 2.15.1, installed with the server (remote mode verifies tokens with it).
+
+The full installation, client registration, configuration, upgrade and troubleshooting guide is the
+documentation site's **MCP Server** page
+(`documentation/docusaurus-site/docs/mcp/mcp-server.md`). The steps below are the short form.
 
 ## Setup
 
-**1. Install and configure vamscli** (if you haven't already):
-
-```bash
-pip install ./tools/VamsCLI
-vamscli setup https://<your-api-id>.execute-api.<region>.amazonaws.com
-vamscli auth login -u you@example.com
-```
-
-> Use the **API Gateway** URL, not the CloudFront web URL.
-
-> If the deployment authenticates through an external identity provider, or through an Amazon
-> Cognito user pool federated to SAML or OIDC, the user has no password in the pool. Sign in with a
-> token instead — `vamscli auth login --user-id you@example.com --token-override "<token>"` — and
-> the MCP server picks it up from the profile like any other login.
-
-**2. Install the MCP server:**
+**1. Create a virtual environment and install vamscli, then the server** (vamscli is not on PyPI,
+so it goes first):
 
 ```bash
 # from tools/VamsMCP
@@ -55,11 +59,87 @@ pip install -e ../VamsCLI     # provides the reused APIClient + ProfileManager
 pip install -e .
 ```
 
+**2. Point vamscli at your deployment and sign in:**
+
+```bash
+vamscli setup https://<your-vams-web-or-api-url>
+vamscli auth login -u you@example.com
+# or with a VAMS API key, read from stdin:
+echo "$VAMS_API_KEY" | vamscli auth login --user-id you@example.com --token-override-stdin
+```
+
+> `vamscli setup` takes the web application URL or the API Gateway URL. Either way the profile
+> stores the API Gateway invoke URL, which the MCP server reads.
+
+> If the deployment authenticates through an external identity provider, or through an Amazon
+> Cognito user pool federated to SAML or OIDC, the user has no password in the pool. Sign in with a
+> token on stdin the same way, and the MCP server picks it up from the profile like any other login.
+
+**Upgrading from 2.6.x:** `git pull`, then `pip install -e ../VamsCLI` and
+`pip install --upgrade -e .` in the server's virtual environment, and restart the server in the
+client. A client that caches the tool list needs it refreshed.
+
 ## Run
 
 ```bash
 vams-mcp        # stdio transport; uses your active vamscli profile
 ```
+
+The server sends the client a short usage guide (MCP `instructions`): how VAMS identifies assets and
+files, where to start, what a bounded result means, and that the agent should use these tools rather
+than a shell, the CLI or the source code. The most-used reads also publish an `outputSchema` and
+return the same JSON as structured content.
+
+**Without a sign-in the server still starts.** When the profile is not set up, nobody is signed in,
+or the sign-in expires during a session, every tool returns
+`{"error": ..., "error_type": "NotAuthenticated", "user_action": ...}`. The error asks the agent to
+have you sign in; `user_action` names the command you run (`vamscli auth login -u <user>`, with
+`--profile` when `VAMS_PROFILE` is set). The next call after you sign in works without a restart;
+add-on tools appear after a restart. `vams_status` always answers: profile, API URL, signed-in user,
+feature switches, which tool tiers are on, and the MCP and CLI versions.
+
+## Remote mode
+
+VAMS does not deploy a remote MCP server; an operator hosts one. The full recipe (container image,
+HTTPS front end, private networks, client registration for Amazon Cognito and external IdPs,
+connecting Amazon Quick, and a threat model) is the documentation site's **Remote MCP Server** page
+(`documentation/docusaurus-site/docs/mcp/remote-mcp-server.md`). The short form:
+
+1. Register an OAuth client for remote MCP clients (user sign-in: authorization code with PKCE; never
+   a client credentials client), and list its client id in
+   `app.authProvider.useCognito.additionalTokenAudiences` (or `useExternalOAuthIdp`), then deploy VAMS.
+   For an external IdP, the next step reads the deployment's audience and user id claims from
+   `/api/amplify-config`; pass `--audience-claim` only to override them, or when the deployment
+   predates the published `externalOAuthIdpAudienceClaims` and its
+   `lambdaAuthorizorJWTAudienceClaims` is not `aud`. For an external IdP, pass `--issuer` whenever
+   the provider URL serves no discovery document (for example an Amazon Cognito hosted UI domain).
+2. Write the server's auth configuration from the deployment's own settings, and note the values it
+   prints for the MCP client:
+
+    ```bash
+    vams-mcp setup-remote --vams-url https://<your-vams-url> \
+        --resource-url https://mcp.example.com/mcp --client-id <app-client-id> \
+        --cognito-domain <your-domain>.auth.<region>.amazoncognito.com --output /etc/vams-mcp/auth.json
+    ```
+
+3. Start the server behind an HTTPS front end that forwards to it:
+
+    ```bash
+    VAMS_MCP_TRANSPORT=streamable-http VAMS_MCP_AUTH_CONFIG=/etc/vams-mcp/auth.json vams-mcp
+    ```
+
+The server listens on `127.0.0.1:8000` by default and serves MCP at `/mcp`. Every request needs
+`Authorization: Bearer <access token>`, which the server verifies (signature against the issuer's
+keys, issuer, audience, expiry, token use, and a named user) before any tool runs; without one it
+answers `401` with `WWW-Authenticate: Bearer resource_metadata="..."`, pointing at the OAuth
+Protected Resource Metadata (RFC 9728) at `/.well-known/oauth-protected-resource/mcp`, the only route
+answered without a token. If the issuer's keys cannot be read, every request is refused with `503`.
+The default tool set is the read-only `consumer` set, and each call has a time budget
+(`VAMS_MCP_TOOL_TIMEOUT`, 240 seconds): a list stops early with a `NextToken` rather than run past it. A write,
+delete or compute call still running at the budget may yet complete, so its answer says the outcome is
+unknown (`outcomeUnknown`) and names the read tool to check with (`checkWith`) instead of inviting a
+retry. A call that could not start before its budget ran out is answered `ServerBusy`: nothing ran,
+so it can be called again. One user may have at most `VAMS_MCP_MAX_CALLS_PER_USER` (8) calls in progress.
 
 ## Configure (optional)
 
@@ -67,13 +147,52 @@ All configuration is via environment variables — none are required. Set them i
 of your MCP host's server entry (see the `mcpServers` sample below); no `.env` file is read.
 `.env.example` lists every supported variable for reference.
 
-| Variable                  | Description                                                          |
-| ------------------------- | -------------------------------------------------------------------- |
-| `VAMS_PROFILE`            | vamscli profile to use (default: active profile)                     |
-| `VAMS_ENABLE_WRITES`      | `true` to expose create/update tools (default off)                   |
-| `VAMS_ENABLE_DESTRUCTIVE` | `true` to expose archive/delete tools (needs writes on; default off) |
-| `VAMS_MAX_PAGES`          | Max pages auto-followed for list endpoints (default 20)              |
-| `VAMS_PAGE_SIZE`          | Page size per paginated call (default 100, clamped to 1000)          |
+| Variable                      | Description                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------------- |
+| `VAMS_PROFILE`                | vamscli profile to use (default: active profile). Refused in remote mode                      |
+| `VAMS_ENABLE_WRITES`          | `true` to expose create/update tools and tools that issue a credential (default off)          |
+| `VAMS_ENABLE_DESTRUCTIVE`     | `true` to expose archive/delete tools (needs writes on; default off)                          |
+| `VAMS_MAX_PAGES`              | Max pages auto-followed for list endpoints (default 20)                                       |
+| `VAMS_PAGE_SIZE`              | Page size per paginated call (default 100, clamped to 1000)                                   |
+| `VAMS_MCP_TOOLSETS`           | Comma-separated [tool sets](#tool-sets) (default `all` over stdio, `consumer` in remote mode) |
+| `VAMS_MCP_TRANSPORT`          | `stdio` (default) or `streamable-http` ([remote mode](#remote-mode))                          |
+| `VAMS_MCP_AUTH_CONFIG`        | Remote mode: the auth configuration file `vams-mcp setup-remote` writes (required)            |
+| `VAMS_MCP_HOST`               | Remote mode: listen address (default `127.0.0.1`; wider only behind an HTTPS front end)       |
+| `VAMS_MCP_PORT`               | Remote mode: listen port (default `8000`)                                                     |
+| `VAMS_MCP_TOOL_TIMEOUT`       | Remote mode: seconds one tool call may take (default `240`, 10 to 1800)                       |
+| `VAMS_MCP_MAX_CALLS_PER_USER` | Remote mode: tool calls one user may have in progress (default `8`, 1 to 64)                  |
+
+### Tool sets
+
+`VAMS_MCP_TOOLSETS` selects which tools the server registers. Sets combine (`consumer,edh`), and the
+write and destructive gates still apply inside a set. Each named set holds at most 100 tools and
+30,000 characters of descriptions with every gate and add-on on, so it fits a client that lists at
+most 100 tools per connection.
+
+| Set          | Tools                                                                                                                                         |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `consumer`   | Read-only: databases, assets, files, metadata, versions, links, search, download links, workflows and runs, tags, comments, zip download jobs |
+| `operator`   | `consumer` plus the writes and deletes of asset content, comments, subscriptions, zip downloads, and running workflows                        |
+| `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, executions, the subscription list, API keys                     |
+| `compliance` | Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades, the compliance audit trail                        |
+| `audit`      | Audit log search: `vams_audit_groups`, `vams_audit_search`, `vams_audit_results`, `vams_audit_stop`. Opt-in, see below                        |
+| `edh`        | EDH Workstations add-on: workstations, catalog and container jobs                                                                             |
+| `edh-admin`  | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances, settings                                                      |
+| `custom`     | The tools a fork adds in `custom_tools.py`                                                                                                    |
+| `all`        | Every tool the gates allow, except the `audit` tools (the stdio default)                                                                      |
+
+The `audit` set is opt-in on both transports: name it (`VAMS_MCP_TOOLSETS=consumer,audit`) and the four
+audit tools register. It is not part of `consumer`, `operator`, `admin` or `all`, because a search starts a
+billable Amazon CloudWatch Logs Insights query and audit records may be sensitive. Audit search is core
+VAMS, on by default (a deployment can turn it off with `app.auditLogging.search.enabled`; the EU Sovereign
+Cloud template does), and the tools need no write or destructive gate. On a deployment without it (no
+`AUDITLOGSEARCH` in the feature list read at sign-in) a local server registers no audit tool and
+`vams_status` adds `gates.auditSearch` with the sentence "Audit Log Search is not enabled on this deployment" (the key is absent while the feature is on); a remote server answers each audit call with "Audit Log Search is
+not enabled on this deployment". Sign in again and restart the server after the setting changes; the API decides which log
+groups and rows a caller may see.
+
+`vams_status` reports the selected sets in `gates.toolsets`. `vams_mcp/toolsets.py` lists each set's
+tools; `tests/test_toolsets.py` holds every set to the limits.
 
 ## Register with Kiro / Claude Desktop
 
@@ -88,19 +207,67 @@ secrets** — just the command:
             "env": {},
             "disabled": false,
             "autoApprove": [
+                "vams_status",
+                "list_features",
                 "list_allowed_api_routes",
                 "list_api_routes",
                 "list_constraint_permission_objects",
                 "list_databases",
                 "get_database",
+                "list_buckets",
                 "list_assets",
                 "get_asset",
+                "list_asset_files",
+                "get_file_info",
+                "get_file_metadata",
+                "get_asset_metadata",
+                "get_database_metadata",
+                "list_asset_versions",
+                "get_asset_version",
+                "get_asset_history",
+                "get_asset_links",
+                "get_asset_link_metadata",
+                "export_asset",
                 "search_assets",
+                "search_files",
+                "get_search_fields",
+                "list_workflows",
+                "list_workflow_executions",
+                "list_tags",
+                "list_tag_types",
+                "list_metadata_schemas",
                 "find_and_summarize",
+                "list_pipelines",
+                "get_pipeline",
+                "list_pipeline_templates",
+                "get_pipeline_template",
+                "get_pipeline_template_tag_schema",
+                "get_workflow",
+                "list_workflow_triggers",
+                "get_workflow_trigger",
+                "list_executions",
+                "get_execution_details",
+                "page_execution_detail_metadata",
+                "page_execution_detail_files",
+                "get_execution_results",
+                "get_execution_logs",
                 "list_asset_comments",
                 "list_asset_version_comments",
                 "get_comment",
-                "check_subscription"
+                "check_subscription",
+                "list_zip_downloads",
+                "get_zip_download",
+                "list_compliance_schemas",
+                "get_compliance_schema",
+                "get_compliance_bindings",
+                "get_asset_compliance_state",
+                "get_database_compliance_overview",
+                "list_compliance_evaluations",
+                "list_quarantined_assets",
+                "list_compliance_cascades",
+                "get_compliance_cascade",
+                "query_compliance_audit",
+                "get_asset_compliance_audit"
             ]
         }
     }
@@ -111,15 +278,60 @@ To use a non-default profile, add `"env": { "VAMS_PROFILE": "myprofile" }`.
 
 ## Tools
 
+A tool returns a failure as data rather than raising it: `{"error", "error_type"}`
+plus the machine-readable fields the CLI's `--json-output` carries for the same
+error. An `error_type` of `RequestBlockedError` is a request the deployment's AWS
+WAF web ACL blocked before VAMS handled it, ahead of both authorization tiers. It
+carries `blockedBy` (`waf`, or `waf-or-stage` for a bare API Gateway `Forbidden`,
+which a base URL that names no deployed stage also produces) and, when known,
+`requestId`. Signing in again does not change it, and neither does retrying it:
+report the `requestId` to the VAMS administrator, who finds the rule that matched
+in the web ACL's sampled requests or its `aws-waf-logs-vams-*` log group.
+
+File uploads, `vamscli sync`, and user, role and constraint administration have no
+tools: they stay in the CLI, and the server's instructions tell the agent so.
+`tests/api_coverage.py` records, for every `APIClient` method of the CLI, the tools that
+call it, or why none does, or that it is not exposed yet.
+
 ### Read / search (always available)
 
-`list_allowed_api_routes`, `list_api_routes`, `list_constraint_permission_objects`,
-`list_databases`, `get_database`, `list_buckets`, `list_assets`, `get_asset`,
-`list_asset_files`, `get_asset_metadata`, `get_database_metadata`,
-`list_asset_versions`, `get_asset_version`, `get_asset_history`, `get_asset_links`,
-`search_assets`, `search_files`, `get_search_fields`, `list_workflows`,
+`vams_status`, `list_features`, `list_allowed_api_routes`, `list_api_routes`,
+`list_constraint_permission_objects`, `list_databases`, `get_database`, `list_buckets`,
+`list_assets`, `get_asset`, `list_asset_files`, `get_file_info`, `get_file_metadata`,
+`get_asset_metadata`, `get_database_metadata`, `list_asset_versions`, `get_asset_version`,
+`get_asset_history`, `get_asset_links`, `get_asset_link_metadata`, `export_asset`,
+`search_assets`, `search_files`, `search_nlp`, `get_search_fields`, `list_workflows`,
 `list_workflow_executions`, `list_tags`, `list_tag_types`, `list_metadata_schemas`,
 `generate_download_url`, `generate_download_urls_bulk`, `find_and_summarize`.
+
+`list_features` returns the deployment's enabled feature switches (`enabled`, `total`) and
+`fetched_at`, the sign-in that recorded them: the same snapshot `vams_status` reports, read
+from the profile without a request. A switch an administrator changes later appears after
+the user signs in again. A profile whose sign-in recorded no switches answers with an empty
+list and a `note` saying none are known.
+
+`get_file_info` reads one file by `file_key` (its `relativePath`): size, content type,
+last-modified time, archive state, `primaryType`, preview file and how its current version
+was made (`changeSource`). `include_versions` adds the file's versions, and
+`include_archived` reads a file of an archived asset.
+
+`get_file_metadata` reads one file's metadata rows, or with `metadata_type="attribute"` its
+attributes, and `get_asset_link_metadata` an asset link's metadata (`assetLinkId` from
+`get_asset_links`). Both page like `get_asset_metadata`: `max_items`, `starting_token`, and
+`include_archived` for an archived asset.
+
+`export_asset` returns an asset and its child assets in one call: each asset's metadata
+and files, the parent/child `relationships` and `totalAssetsInTree`. It takes the export
+route's own filters (`fetch_relationships`, `fetch_entire_subtrees`,
+`include_parent_relationships`, `include_archived_files`, `include_folder_files`,
+`include_only_primary_type_files`, `file_extensions`, and the three `include_*_metadata`
+switches) and reads ONE page per call: `max_assets` (default 25) and `max_files` (default
+500 across the page's assets). The tool lowers a larger request to 100 assets and 1000
+files, well under the route's own maxima, because the whole page lands in the agent's
+context; a larger tree is read page by page. A result with `NextToken` is
+marked `truncated` with a `note`; pass the token back as `starting_token`. An asset holding
+more files than the page allows reports `files_truncated` and continues on the next page.
+It never requests presigned URLs; use `generate_download_urls_bulk` for downloads.
 
 `list_tags` and `list_tag_types` accept an optional `database` (return ONLY that
 database's tags/tag types — global ones are not included) and `scope` (`global`
@@ -130,11 +342,103 @@ Pipelines, workflows, and executions: `list_pipelines`, `get_pipeline`,
 `list_pipeline_templates`, `get_pipeline_template`,
 `get_pipeline_template_tag_schema`, `get_workflow`, `list_workflow_triggers`,
 `get_workflow_trigger`, `list_executions`, `get_execution_details`,
-`page_execution_detail_metadata`, `get_execution_logs`.
+`page_execution_detail_metadata`, `page_execution_detail_files`,
+`get_execution_results`, `get_execution_logs`.
 
 Comments, subscriptions, and API keys: `list_asset_comments`,
 `list_asset_version_comments`, `get_comment`, `list_subscriptions`,
 `check_subscription`, `get_api_key`, `get_user_api_key`, `list_api_keys`, `list_user_api_keys`.
+
+Zip downloads: `list_zip_downloads`, `get_zip_download`. A zip download is a server-side job that archives part or
+all of one asset; jobs expire 7 days after they were created. Only the user who
+created a job can get, cancel or delete it.
+`list_zip_downloads` lists the caller's own jobs: it takes `database_id` and
+`asset_id` together for one asset, or neither for every asset, and is paginated
+like every other list. With `all_users=True` (both IDs required) it lists every
+user's jobs for that asset (the web Download Queue's "Show all users"); the API
+allows it only to a role granted that list route that may also read the asset,
+and each row adds `requestedBy`, `isOwn` and the API's `canDownload` /
+`canRemove` decisions. Jobs on assets the caller can no longer read, and expired
+jobs, are left out.
+`get_zip_download_url` (a write-tier tool) also signs another user's archive
+when the caller may download from the asset. Every archive, the caller's own or
+another user's, is signed only while every file in it is still downloadable.
+When the server cannot check every file in time (a very large archive), the
+tool returns its "could not be checked right now. Try again in a moment."
+error; call it again.
+`get_zip_download` reads one job's `status` (QUEUED, RUNNING, SUCCEEDED, FAILED,
+CANCELLED), `progress` and, on failure, `errorMessage`. On a deployment without
+zip downloads (no `ZIPDOWNLOADS` feature switch in the vamscli profile, or the
+API's 404) every zip tool returns `error_type` `ZipDownloadDisabledError` with
+"Zip downloads are not available for this deployment".
+
+Audit log search (the opt-in `audit` set): `vams_audit_groups`, `vams_audit_search`,
+`vams_audit_results`, `vams_audit_stop`. `vams_audit_groups` lists the log groups the caller may search,
+the action names, entity types and outcomes the filters accept, and the deployment's limits.
+`vams_audit_search` starts a search with the same filters as `vamscli audit search` (log groups, actions,
+entity types and ids, users, API key ids, databases, assets, outcomes, request ids, `contains`
+terms (the most terms and the longest term are the deployment's limits from `vams_audit_groups`), a time range such as `24h` or ISO 8601, probe records, sort) and waits on the server
+for about 20 seconds; when the search is Complete it returns up to `max_rows` rows (25 by default, at
+most 200) with `statistics`, and `NextToken` and `truncated` when more exist. A search still Running
+returns its `queryId`: `vams_audit_results` waits up to about 20 seconds more, or pages a Complete search
+(`starting_token`). `vams_audit_stop` stops the caller's own search and frees its slot; it removes no
+data and is not read-only, but it is registered with the set alone, like the three reads. A stopped
+search returns no rows, and a finished search that used `contains` can no longer be read once it is
+stopped; a handle expires an hour after its last use, and a refusal for an unknown,
+expired or not-yours handle is one generic not-found. No tool reports a count of records the caller may
+not see: `statistics.candidateLimitReached` says the search reached its row limit with a filter the query
+could not apply itself, so narrow the time range. Over the remote server each call carries the signed-in
+user's own token, runs inside the call's time budget (`VAMS_MCP_TOOL_TIMEOUT`) and counts toward the
+per-user limit of concurrent calls. Exports (CSV, NDJSON) stay in `vamscli audit export` and the web page.
+All four stay out of `autoApprove`: a search is billable and the records may be sensitive.
+
+Compliance: `list_compliance_schemas`, `get_compliance_schema`,
+`get_compliance_bindings`, `get_asset_compliance_state`,
+`get_database_compliance_overview`, `list_compliance_evaluations`,
+`list_quarantined_assets`, `list_compliance_cascades`, `get_compliance_cascade`,
+`query_compliance_audit`, `get_asset_compliance_audit`.
+
+A compliance schema is a rule set (`vams-rules-v1`: pipeline, metadata,
+relationship, fileStructure, versionCoverage and assetAttributes rules, each
+enforced at quarantine / warn / inform) bound to a database, or to one asset as an override; `get_compliance_bindings` shows both
+for a database. Each schema record carries `schemaFormat` — `vams-rules-v1`, or
+`legacy` for a row whose body is not such a document; a legacy schema cannot be
+bound, updated or evaluated and is listed only so it can be found and deleted.
+`get_asset_compliance_state` answers `unknown` for an asset with
+no binding rather than an error, and reports `exception` for an asset released
+under an active quarantine exception (scoped to `exceptionSchemaName` /
+`exceptionSchemaVersion`); its `lastEvaluationStatus` is `error` when the last
+evaluation produced no verdict, in which case `complianceState` is the state the
+asset held before it. `get_database_compliance_overview` counts only assets
+that have a compliance record, with an `exception` bucket in its `summary` and an
+`error` count that overlays the state buckets (assets whose last evaluation
+errored) rather than adding to them.
+`list_compliance_schemas` (in name order; a page leaves out the schemas the caller
+may not read, so it can be short or empty while a `NextToken` remains),
+`list_compliance_cascades` (pending approval unless `state` names another; each
+row carries `databaseId` / `assetId` / `assetName` of the trigger asset, and an
+automatically opened cascade is not duplicated while one for the same parent is
+pending), `list_compliance_evaluations`, `list_quarantined_assets`,
+`query_compliance_audit` and `get_asset_compliance_audit` are real pages (`max_items`, `starting_token`,
+`NextToken`), auto-paginated and marked `truncated` when a bound stopped the walk;
+the evaluation rows carry the `executionId` of the workflow execution behind a
+pipeline rule, `exceptionApplied` when the evaluation ran under an exception, and
+`hasRuleErrors` / `errorRules` when a rule's tooling failed — such a rule result
+has `status` `error`, is not a verdict, and its enforcement did not apply (an
+`evaluation_error` audit entry names the rules) —
+and a quarantine page is filtered to the caller's databases after it is read, so
+the walk follows an empty page's token (the global audit trail and the cascade
+listing return only rows whose database the caller may read, too).
+`get_database_compliance_overview` and `get_compliance_bindings` take
+`max_items` / `starting_token` too but return the route's own page: `summary` /
+`totalAssets` and `assetOverrideCount` describe the full set while `assets` /
+`assetOverrides` are one page, with `NextToken` when more exist. The listings
+filter on the server: the overview by `state`, `schema_name`, `schema_source`,
+`evaluation_error` and `text` (sorted by `sort`), the quarantine list and the
+cascade list by `database_id` and `text` (cascades also `state`), and the global
+audit trail by `database_id`, `asset_id` and `text`; a filtered page can be short
+while a `NextToken` remains. `event_type` exists on the global audit trail only —
+the per-asset route ignores it, so the tool does not offer it.
 
 The two comment listings take `max_items` and `page_size` but **no**
 `starting_token`: the routes apply those bounds and then discard the pagination
@@ -147,8 +451,9 @@ ignores, so neither tool offers one. `get_comment` reports a comment that does
 not exist as an error, because the endpoint answers 200 with an empty object
 rather than a 404.
 
-`check_subscription` answers one asset without paging and returns `subscribed`
-alongside the endpoint's raw `message`. Both real answers are HTTP 200 and the
+`check_subscription` answers one asset (`database_id`, `asset_id`) for one user
+without paging and returns `subscribed` alongside the endpoint's raw `message`.
+Both real answers are HTTP 200 and the
 verdict is carried only in that string, so a successful call is not on its own an
 answer; `unrecognizedResponse` marks a message that is neither known value, which
 means unknown rather than not subscribed.
@@ -156,9 +461,9 @@ means unknown rather than not subscribed.
 `get_api_key` (any user's keys) and `get_user_api_key` (the caller's own) return
 key METADATA only — name, the user the key acts as, expiry, enabled state. The
 key value is shown once at creation and never again, and the stored hash is
-stripped by the handler, so nothing usable as a credential is returned. There is
-no list tool for API keys, so the `api_key_id` comes from `vamscli api-key list`
-or `vamscli api-key user list`.
+stripped by the handler, so nothing usable as a credential is returned. The
+`api_key_id` comes from `list_api_keys` (every user's keys, admin scope) or
+`list_user_api_keys` (the caller's own).
 
 `list_workflow_triggers` is paged: the endpoint serves one bounded page and the
 tool walks it, so the result carries `truncated` and `NextToken` like every other
@@ -171,6 +476,19 @@ that for a workflow whose trigger set is small.
 past the bound `get_execution_details` applies — use it when that response names
 a metadata collection in `truncatedCollections`.
 
+`page_execution_detail_files` does the same for a FILE collection (`input` or
+`output`, no `inputDatabase`) — use it when `truncatedCollections` names
+`inputFiles` or `outputs.files`. `get_execution_results` returns a run's
+concatenated result TEXT (output-only, no collection). The API pages the result
+by a 5 MiB response budget; the tool follows those pages while the next one still
+fits a 5 MiB answer (counted as sent) and `VAMS_MAX_PAGES` allows, so one answer
+never carries more than 5 MiB of text, and when it stops early it returns a
+`NextToken` and a `note` — pass the token back as `starting_token` for the rest.
+`resultContentTruncated` means a row was itself cut (not retrievable). It returns
+the empty shape for a run that produced no result. Each listed/detailed execution also
+carries `outputTypes` (the File/Metadata/Result subset it produced), and `Result`
+present there means `get_execution_results` has text to return.
+
 `get_execution_details` returns a step's configuration in two forms:
 `renderedConfig` inline (pre-system-tag, and size-bounded) and
 `renderedConfigLocation` whenever that S3 object exists — the fully substituted
@@ -181,6 +499,18 @@ by, and `include_sub_executions=True` adds `subExecutions` — each registered
 sub-process (a nested state machine or a container job) with per-stage status
 derived from its own execution history. The flag is off by default because that
 derivation reads Step Functions history.
+
+`get_execution_details` also reports `workflowVersion`, the published workflow
+state machine version the run started on, and `workflowVersionCurrent`, false
+once the workflow's state machine has been redeployed since the run. A save
+from the workflow builder always redeploys it, as does an API or CLI update that
+supplies the step list; a change to a setting one of its pipelines contributes
+to the state machine (execution type, target, callback mode, timeouts, Deadline
+Cloud job settings) redeploys it too. The flag does not track
+`workflowSystemConfig` or the pipeline names and descriptions, which are read
+live and can change without a redeploy; each step's `effectiveSystemConfig` is
+the snapshot it ran under. Both are null for a run started before versions were
+recorded.
 
 `get_execution_logs` full mode takes `limit` (default 100, server cap 1000),
 `next_token`, `filter_pattern`, `start_time`, and `end_time` (epoch
@@ -199,6 +529,11 @@ global, cross-asset list. A workflow id is unique across every database includin
 an additional narrowing filter rather than a disambiguator, and a value that is not
 the workflow's own database empties the result instead of erroring.
 
+Both list tools accept `exclude_status`, one status or a comma-separated list (for
+example `SKIPPED`), which the service drops before it cuts the page, so pages stay
+full. A `SKIPPED` row is not a run: it records file-upload trigger launches a
+concurrency restriction refused (`skippedLaunchCount`, `skipScope`, `skipReason`).
+
 Both accept the same equality filters (`workflow_id`, `workflow_database_id`,
 `status`, `trigger_type`, `group_id`, `triggered_by_user_id`) and the same date
 window (`filter_start_date`, `filter_end_date`, UTC `YYYY-MM-DDTHH:MM:SSZ`). Both
@@ -207,6 +542,13 @@ are lower-bounded by start date at 90 days back by default and echo the applied
 absent by design — widen `filter_start_date` to reach it. `group_id` is how a
 group's members are enumerated, since `rerun_execution` re-runs one execution at a
 time.
+
+Both hide runs of system workflows unless `include_system` is true. A listing
+narrowed to one system workflow (`workflow_id` plus `workflow_database_id`) shows its
+runs unless `include_system` is false. The applied value is echoed as
+`includeSystem`, and each row carries `isSystem`. A `workflow_id` without its
+`workflow_database_id` is not that scope; when runs were hidden there the result adds
+a `systemRunsHint` naming both ways to list them.
 
 Both also surface a `warnings` array — plus `truncated` — when a page withheld
 rows, so a short list is never mistaken for a complete one. On `list_executions` a
@@ -220,6 +562,14 @@ even when its inputs are readable.
 `list_workflows` takes `include_archived` (default off, matching `list_pipelines`
 and `list_assets`); it is how an archived workflow's id is found in order to
 restore it with `unarchive_workflow`.
+
+`get_asset`, `list_asset_files`, `get_asset_metadata`, `list_asset_versions`,
+`get_asset_version`, `get_asset_links`, `list_asset_comments` and
+`list_asset_version_comments` take `include_archived` (default off) to read an
+archived asset: `get_asset` reports its `status` as `archived`, and the others read
+its files, metadata, versions, relationships and comments. An archived asset is
+read-only; every write tool refuses it until `unarchive_asset` (destructive tier)
+restores it.
 
 Call `list_allowed_api_routes` first — it reports what the authenticated user is
 actually authorized to do, so an agent can scope its plan instead of discovering
@@ -267,10 +617,63 @@ conclude that something does not exist. `find_and_summarize` issues one extra
 paginated request per hit, so its `size` is clamped to 25; use
 `search_assets(from_offset=...)` to page a larger result set.
 
+`search_nlp` is the natural-language search: the query is embedded with the
+deployment's Amazon Bedrock model and ranked against the vector index, with or
+without OpenSearch (it needs the `VECTORSEARCH` feature switch instead). The tool
+is registered on every deployment and does not read the switch itself: where vector
+search is off the route does not exist, and the call returns an `APIError` result
+(`No deployed API route matches POST …/search/nlp (HTTP 403)…`) instead of hits. It takes
+`database_ids`, `entity_type`, `size` (1–100), `include_archived`, `file_classes`
+(validated against the indexed class ids, which the docstring lists),
+`file_extensions`, `metadata_query`, `geo_search`, `tags` and `include_segments`,
+and returns `relation`, `nlp` and `warnings` beside the hits — a `gte` relation
+means the total is a lower bound, and every total that is not zero is one,
+because the vector index uses approximate nearest-neighbour search, as is a zero
+total when `nlp.truncated` is `true` (a filled window, an unsearched database, or a
+database the caller may open only in part).
+`metadata_query`, `geo_search` and `tags` are
+OpenSearch-only constraints: without OpenSearch they are ignored and reported as
+the `opensearch:fields_ignored` warning. It is a read tool, but every call bills a
+Bedrock embedding, so it is deliberately left out of the `autoApprove` sample
+above.
+
 ### Write (require `VAMS_ENABLE_WRITES=true`)
 
 `create_database`, `create_asset`, `update_asset`, `set_asset_metadata`,
 `create_folder`, `create_asset_version`.
+
+File metadata and roles: `set_file_metadata`, `set_primary_file`, `revert_file_version`.
+
+`set_file_metadata` upserts key/value pairs on one file's metadata, or with
+`metadata_type="attribute"` its attributes (string values); keys not listed are untouched.
+`set_primary_file` marks a file's role (`primary_type` `primary`, `lod1` to `lod5`, `other` with
+`primary_type_other` naming it, or `""` to remove the mark). `revert_file_version` restores an
+earlier version of one file (`version_id` from `get_file_info` with `include_versions`): it writes
+that content as a new current version and removes none.
+
+Files and links: `move_file`, `copy_file`, `create_asset_link`.
+
+`move_file` moves or renames a file inside its asset (the source path then stays
+listed as an archived entry, which `unarchive_file` can restore); `copy_file` copies one within
+the asset, or into `destination_asset_id` (in `destination_database_id`, which defaults
+to the source database). Both take relative paths and return `affectedFiles`.
+`create_asset_link` links two assets: `relationship_type` is `related` or
+`parentChild` (the `from` asset is the parent; a link that would close a cycle is
+refused), `alias_id` (parentChild only) allows another link between the same pair,
+and `tags` labels the link. It returns the `assetLinkId` that `delete_asset_link`
+takes; `get_asset_links` lists an asset's links with their ids.
+
+Tags and tag types: `create_tag`, `update_tag`, `create_tag_type`, `update_tag_type`.
+
+Each takes `database_id` to address a tag or tag type scoped to one database; without
+it the tool acts on the global one. A tag needs an existing tag type. `update_tag`
+replaces both the description and the tag type, and `update_tag_type` both the
+description and `required`, so send the current value of the field you keep (from
+`list_tags` / `list_tag_types`). `list_tags` shows a required tag type as
+`<name> [R]`; every tag and tag-type tool drops that marker before sending the name,
+as the CLI does, because the API refuses a name with brackets. A tag type with `required` true makes asset creation and
+updates in its scope require one of its tags, once the type has any. A successful tag save can carry `warnings` (for example, a
+name that now exists both globally and in a database); relay them.
 
 Pipelines, workflows, and executions: `create_pipeline`, `update_pipeline`,
 `create_pipeline_template`, `update_pipeline_template`,
@@ -283,12 +686,38 @@ AWS compute and can incur cost. `abort_execution` irreversibly STOPS running
 compute and, with `group_id`, fans out across every active execution in that group.
 Keep all three out of `autoApprove`, and confirm a group abort with the user first.
 `rerun_execution` re-runs ONE execution; its `execution_group_id` assigns the new
-execution's group membership rather than selecting a group to re-run.
+execution's group membership rather than selecting a group to re-run. It reads
+each input file at the version the original launch pinned (a `versionId` someone
+chose) and every other file at its current version; an execution recorded before
+versions were pinned re-runs every file on its current version.
+`abort_execution` answers `message` "Execution aborted" only when it stopped the
+run; an execution that was not running answers a `message` that says so and
+names its status (`SUCCEEDED`, `FAILED`, `ABORTED` or `TIMED_OUT`, or `unknown`
+when the record is gone).
+`abort_execution` returns `warnings` and `notAbortable` beside `message` when a
+registered sub-process could not be stopped: each `notAbortable` entry
+(`resourceType`, `label`, `stageName`, `locator`) is compute of a type VAMS has no
+stop API for — an externally owned pipeline's own job, say — that keeps running
+after the execution reads ABORTED. Treat a non-empty list as "not everything
+stopped", not as a failed abort. A group abort returns the group's results with
+both arrays beside them, gathered from its members: each warning is prefixed with
+its member's execution id and each `notAbortable` entry carries its member's
+`executionId`.
+The compliance tools that evaluate assets start compute the same way — a pipeline
+rule runs one workflow execution per evaluated asset — so `evaluate_asset_compliance`,
+`sweep_compliance_schema` (every asset bound to the schema), `evaluate_database_compliance`
+(every tracked asset of one database), `create_compliance_cascade`
+(starts at once with `require_approval=False`) and `approve_compliance_cascade`
+(starts the run) stay out of `autoApprove` as well, and so do `bind_compliance_schema` and
+`unbind_compliance_schema`: under automatic evaluation a binding change queues an evaluation
+of every asset it reaches.
 
 `create_pipeline` and `update_pipeline` can return a `warnings` array on a
 successful save (for example a `requireTemplate` pipeline with no default template
-chosen, or the stale-deployment notice after an `executionConfig` change).
-The save succeeded; the warnings still need relaying.
+chosen, or, after an `executionConfig` change, how many referencing workflows are
+being redeployed in the background). The save succeeded; the warnings still need
+relaying. A workflow launch that the background redeploy has not reached yet
+redeploys the workflow first, or returns a retryable `409` and starts nothing.
 
 `create_pipeline_template`, `update_pipeline_template`, and
 `set_pipeline_template_tag_schema` reject an unrecognized key in a tag definition
@@ -296,16 +725,29 @@ instead of ignoring it, so an invented spelling fails the call rather than stori
 a tag that is silently optional or untyped. A template's `overrides` block is
 bounded at 64 KB serialized.
 
+**System pipelines and workflows.** A record whose response carries
+`"isSystem": true` was registered by the deployment and is read-only through the
+API. On a system pipeline, `update_pipeline` accepts only `{"enabled": ...}`, and
+`update_pipeline_template` may change only `configBody`, `tagSchema` and
+`webFormJson`. On a system workflow, `update_workflow` accepts only
+`{"enabled": ...}`, and `set_workflow_trigger` may switch a stored trigger's
+`enabled` but not change its filters or default templates or add a trigger key.
+Every other change is refused with a `400` whose message names the refused field
+or action, and the tool returns that message as its `error`. Relay it rather than
+retrying with a different body. A disable is a pause: the next deployment that
+registers the bundle re-asserts the shipped values.
+
 Comments, subscriptions, and metadata schemas: `add_comment`, `update_comment`,
 `create_subscription`, `update_subscription`, `create_metadata_schema`,
 `update_metadata_schema`.
 
-`add_comment` returns the `commentId` it wrote, because the endpoint's
-acknowledgement does not contain it. The id is the caller's to choose and the
-write is unconditional, so passing an existing one REPLACES that comment with no
-error; leave `comment_id` unset and a `uuid4` is generated. `update_comment` and
-`delete_comment` are creator-only — anyone else gets a 403 whatever their VAMS
-role.
+Every comment and subscription tool takes `database_id` first: the same asset id
+can exist in more than one database, so the database and asset ids together
+address an asset's comments and subscriptions. `add_comment` takes the asset version the
+comment is about and returns the `commentId` the API generates; `get_comment`,
+`update_comment` and `delete_comment` address one comment by `database_id`,
+`asset_id` and `comment_id`. `update_comment` and `delete_comment` are
+creator-only — anyone else gets a 403 whatever their VAMS role.
 
 `update_subscription` REPLACES the subscriber list rather than adding to it: every
 user absent from the list is unsubscribed from the notification topic. Read the
@@ -330,17 +772,129 @@ the host's conversation log and telemetry. Keep both create tools out of
 `autoApprove`, and relay the value to the user once rather than repeating it.
 `create_api_key` (administrative) mints a key acting as ANY `user_id`;
 `create_user_api_key` (self-service) always binds the key to the authenticated
-user and requires an expiry within 365 days. `update_*_api_key` with
+user and requires an expiry within 365 days. A session whose `vamscli` profile is
+signed in with an API key cannot create keys or change an expiry: both create
+tools, and `update_*_api_key` with `expires_at`, are refused with `403` (the
+message says to sign in through the identity provider), while the reads, the
+deletes and `update_*_api_key` with only `description` or `is_active` work. A
+remote MCP session, signed in with OAuth, is unaffected. `update_*_api_key` with
 `is_active=False` is the reversible revoke: the key stops authenticating until it
-is re-enabled, and nothing is destroyed. The API Gateway authorizer caches its
-decision for about 30 seconds in both directions: a key that authenticated within
-that window keeps working until it expires, a key refused within it stays refused
-for the same time after re-enabling, and a disabled key not in use is refused on
-its next call.
+is re-enabled, and nothing is destroyed. VAMS briefly caches API key authorization
+in both directions (the API Gateway authorizer cache for 30 seconds and the
+authorizer's API key record cache for 15 seconds): a disabled key can keep working
+for up to about 45 seconds, and a re-enabled key can stay refused for as long.
+
+Zip downloads: `create_zip_download`, `get_zip_download_url`.
+
+`create_zip_download` selects with `files` (asset-relative paths; `PATH@VERSIONID`
+pins one file, and a path that itself contains `@` ends in a bare `@`), `folders`,
+or `whole_asset` alone, up to 1000 entries; `asset_version_id` or
+`asset_version_alias` archives the selection as recorded in that asset version and
+cannot be combined with per-file versions. `archive_format` is `zip`, `tar` or
+`tar.gz`, and `compression` (`store` or `deflate`) applies to zip only. The whole
+job is refused when a selected file is archived, deleted, in an archive storage
+tier or of a blocked type, or the selection exceeds the deployment's limits. It
+starts a Batch job that can run for hours on a large asset, and
+`ZipDownloadLimitError` means the caller already has the maximum number of active
+jobs, which retrying does not clear. `get_zip_download_url` returns a presigned
+URL for a SUCCEEDED job: a bearer credential to the whole archive until it expires,
+which lands in the transcript and the host's logs once returned. Keep both out of
+`autoApprove`, and prefer `vamscli zip-download download`, which streams the
+archive to a file without exposing the URL.
+
+Compliance: `create_compliance_schema`, `update_compliance_schema`,
+`bind_compliance_schema`, `unbind_compliance_schema`, `evaluate_asset_compliance`,
+`sweep_compliance_schema`, `evaluate_database_compliance`, `release_quarantine`,
+`grant_quarantine_exception`,
+`revoke_quarantine_exception`, `create_compliance_cascade`,
+`approve_compliance_cascade`, `reject_compliance_cascade`.
+
+`create_compliance_schema` takes the rule document as `schema_body`, which must be
+a `vams-rules-v1` document (`{"schemaFormat": "vams-rules-v1", "rules": {...}}`;
+any other body is refused). A pipeline rule's `pipelineRef` names the workflow's
+`databaseId` + `workflowId` and the pipeline's `pipelineDatabaseId` + `pipelineId`,
+with an optional `templateId`, and its `inputFiles` selects the asset files the
+execution receives: `mode` `matching` (the default; the asset's files that pass the
+workflow's and pipeline's input-file filters, narrowed by the rule's `filter` globs),
+`wholeAsset` (the asset root, only where the workflow allows it) or `explicit` (the
+listed `keys`, which must all exist). A workflow that takes exactly one input file
+needs the selection to resolve to exactly one file, otherwise the rule records an
+`error` result — a non-verdict `status` `error` whose enforcement does not apply;
+files a workflow execution wrote are never selected, so a filter names source
+formats only. A pipeline that writes no `compliance-output.json` is checked on the derived
+`execution_success` / `processing_duration_seconds` measurements only. A metadata rule's
+`scope` selects what it validates: `asset` (the default; the asset's own metadata),
+`files` or `fileAttributes` (each current, non-archived file's metadata or attributes,
+narrowed by the schema's file type restriction and the rule's `includePaths` /
+`excludePaths` regular expressions) or `links` (each asset link's metadata, narrowed by
+`linkDirection` and `relationshipType`); every file or link in scope must pass, and the
+`metadataSchemaRef` must name a schema of the scope's entity type — a missing or
+mismatched schema records an `error` result, never a pass. Registering an
+existing name writes the next version, and `update_compliance_schema` replaces the
+body wholesale rather than merging. Moving a schema to a database scope (`database_id`
+on an update, or on a create that registers an existing name) is refused while the
+schema is bound (a database binding or an asset override) in another database; moving
+it to GLOBAL is not refused for that reason. `bind_compliance_schema` binds a database (or,
+with `asset_id`, one asset as an override); only a GLOBAL schema or one scoped to
+that database can be bound, a `legacy` schema is refused, and `auto_eval` is sent on
+the database binding only because the asset route does not read it.
+`unbind_compliance_schema` on a database
+deletes the compliance record of every asset that inherited the binding
+(`removedComplianceRecords`) — evaluation history and the audit trail stay.
+`evaluate_asset_compliance` evaluates against the asset's bound schema; its response
+carries `schemaVersion`, `exceptionApplied`, `hasRuleErrors` and `dryRun`, and when
+every rule errored the asset's state is left unchanged with `lastEvaluationStatus`
+`error`. A `schema_name` other than the bound one runs a dry run (`dryRun: true`, no
+`evaluationId`): the rule results and verdict are returned and nothing is recorded
+(no evaluation record, no state change, no audit entry, no workflow launch, no
+cascade); pipeline rules do not run and are counted in `pipelineRulesNotRun`. The
+caller needs read access to the named schema, and it must be GLOBAL or available to
+the asset's database. `sweep_compliance_schema` returns `assetsTriggered` plus
+`skipped` (bound assets not evaluated: `skippedNotAuthorized` those the caller may not
+evaluate or read, counted but never listed, and `skippedArchived` the archived assets the caller may see;
+an archived asset the caller may not see is counted nowhere) and
+`assetsRemaining` (the assets this call read and did not reach; a call reads under a
+time budget, so it can be 0 while more remain). While the response carries
+`NextToken`, calling again with it as `starting_token` continues the sweep; it is done
+when no token is returned. `evaluate_database_compliance` evaluates
+the tracked assets of one database, each against its own bound schema, with the same
+bounds and continuation, and adds `registered` and `withoutSchema`. Both remove,
+rather than evaluate, the compliance record of an asset that no longer exists
+(`removedOrphans`). `release_quarantine` returns an asset to
+compliant until its next evaluation; `grant_quarantine_exception` records a
+deliberate waiver with its required `reason` and moves the asset to state
+`exception`, scoped to its bound schema at its current version — a re-evaluation
+against that version records the violations (`exceptionApplied`) but keeps the asset
+released, while an evaluation against another schema or a newer version supersedes
+the exception. `revoke_quarantine_exception` (no reason; the route carries no body)
+clears it and returns the asset to its last verdict's state — quarantined again when
+that verdict was quarantined, `pending_evaluation` when it has no recorded
+evaluation — and is refused when no exception is active. A cascade waits in
+`pending_approval` unless created with `require_approval=False`; the cascade an
+evaluation opens automatically is not duplicated while one for the same parent is
+pending, but `create_compliance_cascade` always opens a new one.
+`approve_compliance_cascade` (and a create without approval) returns at once with
+`state` `executing` and no `result` — the run continues in the background, so poll
+`get_compliance_cascade` until `state` is `completed` or `aborted` (`abortReason`)
+— and `reject_compliance_cascade` aborts it, recording `rejectionReason` (no
+`abortReason`).
 
 ### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
 
 `archive_asset`, `unarchive_asset`, `delete_asset`, `delete_database`.
+
+Files, links, metadata and tags: `archive_file`, `unarchive_file`, `delete_file`,
+`delete_asset_link`, `delete_asset_metadata`, `delete_tag`, `delete_tag_type`.
+
+`delete_asset_metadata` removes the named metadata keys from an asset (`set_asset_metadata` only
+adds and changes keys). Not reversible.
+
+`archive_file` is the soft delete: the file is hidden and can be restored with
+`unarchive_file`. `delete_file` PERMANENTLY removes the file and every one of its
+versions, and is not reversible. Both take `is_prefix` to act on every file under a
+folder path. `delete_asset_link` removes the link, not the assets.
+`delete_tag` and `delete_tag_type` remove the definition (pass `database_id` for a
+database's own); a tag type that tags still use is refused.
 
 Pipelines, workflows, and executions: `archive_pipeline`, `unarchive_pipeline`,
 `archive_workflow`, `unarchive_workflow`, `delete_pipeline_template`,
@@ -350,7 +904,10 @@ Archiving a pipeline or workflow is a soft delete, reversible through the
 matching `unarchive_*` tool. Archiving also disables the row, so the
 `unarchive_*` tools re-enable it — pass `keep_disabled` to restore it archived-off
 but still not runnable. `delete_pipeline_template`, `delete_workflow_trigger`, and
-`permanent_delete_execution` are not reversible.
+`permanent_delete_execution` are not reversible. On a system pipeline or workflow
+(`"isSystem": true`), `archive_*`, `unarchive_*`, `create_pipeline_template`,
+`delete_pipeline_template` and `delete_workflow_trigger` are refused with a `400`
+whose message the tool returns.
 
 `delete_pipeline_template` can return a `warnings` array naming the auto-triggered
 workflows whose trigger still picks the deleted template as a default. The delete
@@ -370,14 +927,39 @@ unrecoverable from an agent's position. `delete_metadata_schema` is not
 reversible and has no archived state; metadata already stored against the schema
 is left in place, unvalidated.
 
+Zip downloads: `cancel_zip_download`, `delete_zip_download`. Both use the one
+DELETE route, which cancels an active job and deletes a finished one, so each tool
+reads the job first and refuses the other state with `ZipDownloadStateError`.
+`cancel_zip_download` stops a QUEUED or RUNNING job and discards its partial
+archive; the job stays listed as CANCELLED. Its DELETE carries the cancel intent,
+so it never deletes a job: one that finished after the check is kept and the
+result reads `action: "ended"` with the final `status`. `delete_zip_download` permanently
+removes a finished job and its archive, and any URL already issued stops working.
+
 API keys: `delete_api_key`, `delete_user_api_key`. Both are permanent and lock
-out every client still presenting the key at once; `update_api_key` /
+out every client still presenting the key within about 45 seconds (VAMS briefly
+caches API key authorization); `update_api_key` /
 `update_user_api_key` with `is_active=False` revokes the same access reversibly
 and is the better first move.
 
+Compliance: `delete_compliance_schema`. Permanent — every version of the schema is
+removed and there is no archived state. The API refuses to delete a schema that a
+database or asset is still bound to, so `unbind_compliance_schema` first; the
+deletion is written to the audit trail as `schema_deleted`.
+
 ## Security notes
 
--   Authorization is exactly your vamscli user's VAMS permissions (RBAC/ABAC).
+-   Authorization is exactly your vamscli user's VAMS permissions (RBAC/ABAC). In remote mode it is
+    exactly the permissions of the user whose token the request carries: the server never decides a
+    permission, and the VAMS API's authorizer and Casbin policy check every call.
+-   Remote mode: the server verifies every token itself, accepts only tokens issued to the clients in
+    its auth configuration (not the web application's client), sends each token on only to the VAMS
+    API in that configuration for the same request (by design it forwards the token rather than
+    exchanging it; see the Remote MCP Server page), never reads a profile, never logs or
+    returns a token, and writes no CLI request log (one process serves many users). It logs one line
+    per request and per tool call: user, client, tool, outcome and duration. Bind beyond `127.0.0.1`
+    only inside a container or private network behind an HTTPS front end, and keep the write and
+    destructive tool sets off unless they are needed.
 -   Writes and destructive tools are **off by default**. Keep destructive tools
     out of `autoApprove`.
 -   `generate_download_url` and `generate_download_urls_bulk` return presigned Amazon S3 URLs
@@ -409,6 +991,458 @@ and is the better first move.
     caller's own API-key route permissions.
 -   The server persists nothing; revoking access is just `vamscli auth logout`
     (or letting your session expire).
+-   Every tool carries MCP annotations matching its gate: reads are `readOnlyHint: true`, writes
+    `readOnlyHint: false` with `destructiveHint: false`, destructive tools `destructiveHint: true`,
+    and the tools that start, stop or extend billed compute `openWorldHint: true`. The hints are
+    advice to the client, not a control. The presigned-URL tools above are reads, so they carry
+    `readOnlyHint: true`: a client set to approve every read-only tool automatically approves them
+    too, so keep that setting off where a URL in the transcript matters, and rely on the
+    `autoApprove` list instead.
+
+## Add-on tools
+
+The optional add-ons' tools are part of this server, in `vams_mcp/addon_tools/`, under the same
+`VAMS_ENABLE_WRITES` and `VAMS_ENABLE_DESTRUCTIVE` gates as the tools above. An add-on's tools are
+registered only when the feature switches the vamscli profile recorded at its last
+`vamscli auth login` include the add-on's switch, read once when the server starts: on a deployment
+that has not enabled the add-on, the server lists none of its tools. After an administrator enables
+the add-on, run `vamscli auth login` again and restart the MCP server (reload or restart its entry in
+the client) to see them. A registered add-on tool still checks the switches before any request, and
+answers the sentence the CLI prints, with `error_type` `FeatureDisabledError`, without making a
+request when the deployment lacks the switch it needs. The `autoApprove` sample above names no
+add-on tool: each add-on below lists the reads that are safe to add to it.
+
+### EDH Workstations
+
+The EDH Workstations add-on's tools manage its GPU virtual desktops, their images, the AMI recipes
+that build them and its container jobs. The add-on's guide is in
+`documentation/docusaurus-site/docs/developer/edh-workstations/`.
+
+#### Read (always available)
+
+`list_edh_workstations`, `get_edh_workstation`, `list_edh_catalog_images`,
+`list_edh_catalog_instance_types`, `get_edh_catalog_lease`, `list_edh_admin_images`,
+`list_edh_admin_instances`, `list_edh_stale_instances`, `get_edh_capacity`,
+`get_edh_health`, `get_edh_admin_settings`, `list_edh_container_catalog`, `list_edh_container_jobs`,
+`list_edh_ami_recipes`, `get_edh_ami_recipe`, `list_edh_ami_recipe_builds`,
+`list_edh_catalog_capacity_reservations`, `list_edh_admin_capacity_reservations`. On a
+deployment that has not enabled the add-on the server lists no EDH tool; should the profile sign in
+to such a deployment while the server runs, every EDH tool answers
+`The EDH Workstations add-on is not enabled for this deployment ...` until the server restarts. The
+two container reads answer only when the deployment also enables the add-on's
+container jobs, and otherwise answer `EDH container jobs are not enabled for
+this deployment ...` the same way. The three AMI recipe reads answer only when
+the deployment also enables the add-on's AMI recipe builds, and otherwise answer
+`EDH AMI recipes are not enabled for this deployment ...` the same way. `list_edh_container_jobs` takes
+an optional `backend` (`batch`, the server default, or the experimental `eks`,
+which also takes `cluster` — required — and `namespace`, server default
+`default`) and lists that backend's jobs only; each row's `jobId` is the value
+`kill_edh_container_job` takes.
+
+The EDH lists are not paginated — each returns every row in one `Items` page,
+so none takes `max_items` or `starting_token` and none is ever `truncated`.
+`list_edh_workstations` and `get_edh_workstation` cover the authenticated
+user's own desktops; a workstation owned by someone else is reported as not
+found. `list_edh_catalog_images` marks each image with `category`: `amiRecipe`
+for an image an AMI recipe build registered, which also carries `recipeId`,
+`recipeDisplayName` and `recipeVersion`, and `baseline` for every other image;
+recipe images come first, each group sorted by name. Each image also carries
+`architecture`, its CPU architecture as EDH reports it (`x86_64`, `arm64`, ...),
+or null when EDH reports none.
+`list_edh_catalog_instance_types` returns `Items` of `{instanceType, architectures}`,
+sorted by name with numbers in numeric order (`g5.2xlarge` before `g5.12xlarge`);
+`architectures` names the desktop profile's architecture groups that list the
+type, and is `[]` when the profile does not group its types. Each item also
+carries Amazon EC2's `vcpus`, `memoryGiB` and `gpus` (`{count, manufacturer,
+name, memoryGiB, share}` per kind of GPU, with `share` the part of a GPU a type
+is given, `[]` for none), absent when EC2 could not be
+read or does not offer the type in the Region. A recipe image whose recipe
+lists `launchInstanceTypes` also carries `defaultInstanceType`, the first of
+them a launch of the image accepts. A type runs an
+image when the image's `architecture` is null, the type's `architectures` is
+empty, or it contains the image's architecture; pass only such a type to
+`create_edh_workstation`.
+`get_edh_catalog_lease` returns the user-readable lease policy (no audit fields).
+`list_edh_catalog_capacity_reservations` returns the EC2 capacity reservations the
+user may launch into — registered by an administrator, enabled, granted to the
+user's role (object type `edhCapacityReservation`), active in EC2, and in an
+Availability Zone where EDH has a private subnet — as `Items`
+carrying `capacityReservationId`, `label`, `fallbackToOnDemand`, `instanceType`,
+`availabilityZone`, `instancePlatform`, `state`, `totalInstanceCount`,
+`availableInstanceCount`, `instanceMatchCriteria`, `endDate`, `reservationType`,
+`edhSubnetAvailable` (true, or null when VAMS could not read EDH's private
+subnets) and `launchAllowed` (false for a reservation the role may see but not
+launch into; `create_edh_workstation` refuses it with 403, `error_type`
+`EdhReservationNotPermittedError`, `code` `RESERVATION_NOT_PERMITTED`);
+its optional `instance_type` and `os_family` (`linux` or `windows`) keep the
+reservations a launch of that type and image family can take. An empty list means
+every launch is on-demand, which is also the answer when EC2 could not be read.
+`list_edh_admin_capacity_reservations` lists every registered reservation the same
+way, without `launchAllowed`, with `state` `notFound` for one EC2 no longer knows
+and `unknown` when the read failed, and with `edhSubnetAvailable` false for one in
+an Availability Zone with no EDH private subnet, which the user catalog leaves out.
+A row's `session_id` is its `sessionId` or its `bootstrapId`, which addresses the
+row at any time, before and after EDH assigns the session id (`create_edh_workstation`
+answers 202 with `sessionId` null and `state` CREATING; `lastError` names why a launch
+ended ORPHANED).
+A row also carries `edhFailure`, the launch failure VAMS captured from EDH's own
+record of a desktop that never ran: `event` (`placement_failed` or
+`session-failed`), `errorCode` and `operation` (the AWS error code and operation
+EDH's status named, such as `InsufficientInstanceCapacity` from
+`CreateCapacityReservation`), `checkpoint` (the desktop setup step a
+`session-failed` stopped at) and `observedAt`, the first three absent when not
+captured; it is null when VAMS captured none, and EDH's own wording is never
+returned. The items of `list_edh_admin_instances` and `list_edh_stale_instances`
+carry it from the joined VAMS row, null for a session VAMS did not launch.
+Every workstation record, and every `list_edh_admin_instances` item, also carries
+`activity`, what the workstation is doing whatever `state` says, derived on each
+read: `starting` from a start request until EDH reports the desktop connectable
+(a STOPPED row whose start is in progress, a CREATING row with a `sessionId`, an
+ACTIVE row not yet connectable), `stopping` while EDH still stops the desktop, and
+null otherwise; and `startFailure`, why the last start left a STOPPED row stopped
+(`lastError` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL`, `RESERVATION_ENDED` or
+`START_FAILED`), as `{errorCode, availabilityZone, observedAt}`, null when it did not.
+A CREATING row with `activity` null and `lastError` `START_STALLED` is a start EDH
+accepted and has not finished after 30 minutes: EDH never reported the desktop
+ready, and VAMS does not stop it, so stop it with `stop_edh_workstation` (with
+`confirm=True`, once the user agrees), then
+start it again. Its `startFailure` carries `observedAt` (and `availabilityZone`
+when read) but no `errorCode`.
+A CREATING row with a `sessionId`, `activity` null and `lastError`
+`LAUNCH_STALLED` is a new launch EDH has not placed 3 hours after it was
+accepted. It never ran, so it is not a start to stop: `stop_edh_workstation`
+returns an `EdhOperationError` (HTTP 409) that says to delete it. Delete it with
+`delete_edh_workstation`, or wait, since EDH may still place it. Its
+`startFailure` carries `observedAt` only.
+They also name the image the workstation was launched from: `imageName` (the EDH
+image name), `recipeId` (the AMI recipe whose build produced it, null for a
+baseline image), `recipeDisplayName`, `recipeVersion` (the build it runs),
+`latestRecipeVersion` (the recipe's newest AVAILABLE build, derived on each read)
+and `imageLatest` (`true` on that build, `false` only when a newer AVAILABLE build
+exists, null when that is not known), each null when not known. A workstation
+keeps the image it was launched from; launch a new workstation to use a newer
+build.
+The `admin` reads require the EDH admin routes;
+`get_edh_capacity` and `get_edh_health` are in the `autoApprove` addition below, while
+`list_edh_admin_instances` and `list_edh_stale_instances` name other users,
+`list_edh_admin_images` returns the cluster's whole image inventory, and
+`get_edh_admin_settings` returns the admin lease settings including `updatedBy`,
+and the three AMI recipe reads name the administrators who created, changed or
+built each recipe (`createdBy`, `updatedBy`, `requestedBy`), and
+`list_edh_admin_capacity_reservations` returns the whole registry whatever a role
+grants, so those eight are
+not. Each `list_edh_admin_images` item also carries `architecture`, the CPU
+architecture EDH reports for the image, such as `x86_64` or `arm64`, or null
+when EDH reports none. `list_edh_ami_recipes` returns each recipe with `latestBuild` (its newest
+build, or null before the first); `get_edh_ami_recipe` returns one recipe the same
+way, not its build history; `list_edh_ami_recipe_builds` returns the builds newest
+first, each with a `status` of QUEUED, BUILDING, REGISTERING, AVAILABLE,
+REGISTER_FAILED, FAILED or RETIRED. `list_edh_stale_instances` takes an optional `idle_minutes`
+(server default 120). `get_edh_health` reports whether the proxy can reach the
+EDH API and is the first call to make when an edh tool says the cluster did not
+answer. An edh write or destructive tool whose error carries `error_type`
+`EdhOutcomeUnknownError` and `outcomeUnknown: true` (`... not confirmed`) is not
+a health problem: EDH may have carried the request out, so call the matching list tool
+(`list_edh_workstations`, `list_edh_admin_instances`, `list_edh_admin_images` or
+`list_edh_container_jobs`) before retrying.
+
+Add the safe EDH reads to the sample's `autoApprove` array when the deployment
+enables the add-on:
+
+```json
+[
+    "list_edh_workstations",
+    "get_edh_workstation",
+    "list_edh_catalog_images",
+    "list_edh_catalog_instance_types",
+    "get_edh_catalog_lease",
+    "list_edh_catalog_capacity_reservations",
+    "get_edh_capacity",
+    "get_edh_health"
+]
+```
+
+#### Write (require `VAMS_ENABLE_WRITES=true`)
+
+`get_edh_workstation_connect`, `create_edh_workstation`,
+`renew_edh_workstation`, `start_edh_workstation`, `stop_edh_workstation`, `register_edh_vdi_image`,
+`register_edh_simulation_image`, `stop_edh_admin_instance`, `update_edh_admin_settings`,
+`submit_edh_container_job`, `create_edh_ami_recipe`, `update_edh_ami_recipe`,
+`duplicate_edh_ami_recipe`, `start_edh_ami_recipe_build`, `register_edh_ami_recipe_build`,
+`register_edh_capacity_reservation`, `update_edh_capacity_reservation`.
+
+`get_edh_workstation_connect` changes nothing, but it issues the DCV
+`connectionUrl` of one of the caller's ACTIVE workstations — a URL carrying a
+session auth token (see the security notes below) — so it is exposed with the writes rather
+than always available, and it is never in `autoApprove`. A workstation that is
+not connectable (CREATING, STOPPED, or without an EDH session) is refused with a 409.
+A running workstation whose remote display session has ended is refused with a
+409 returned as `error_type` `EdhDisplaySessionEndedError`, `code`
+`DISPLAY_SESSION_ENDED`: stop it, then start it again, to reconnect. Its record
+then carries `connectionUnavailableReason` `DISPLAY_SESSION_ENDED` (null
+otherwise), and its `activity` is null: it is running, not starting.
+A workstation that has run which EDH reports in its error state (its remote
+display stopped responding) keeps its state, disk and data; its record carries
+`connectionUnavailableReason` `DESKTOP_ERROR` and its connect (and a start of it)
+is refused with a 409 returned as `error_type` `EdhDesktopErrorError`, `code`
+`DESKTOP_ERROR`: wait a few minutes, or stop it, then start it again.
+Each call makes EDH issue at most one connection token per request EDH answers,
+for that desktop; VAMS repeats a read once after a transport failure or a gateway
+error, which can make a second. `list_edh_workstations` and `get_edh_workstation`
+make EDH issue no connection token; a row's `connectionAvailable` is true while
+EDH reports the desktop running.
+`create_edh_workstation` and `start_edh_workstation` start real GPU compute that
+is billed until the desktop is stopped or deleted; `stop_edh_workstation` and
+`stop_edh_admin_instance` interrupt whatever is running on a desktop (the admin
+form on ANOTHER user's); `renew_edh_workstation` extends a leased workstation's
+`leaseExpiresAt` to the full policy window from now, thereby extending the runtime
+of a GPU desktop. Keep all five out of `autoApprove` and confirm each with the user
+first, as for `execute_workflow`. `stop_edh_workstation` also takes `confirm`
+(default false): without `confirm=True` it returns an error (`error_type`
+`ValueError`) telling the agent to confirm with the user and call again, and
+stops nothing. Stopping closes the desktop's open applications; the disk is kept.
+`update_edh_admin_settings` is a partial patch of
+the lease policy: only the arguments you pass are changed.
+`create_edh_workstation` returns the record with `state` CREATING and `sessionId`
+null (HTTP 202), plus `sessionBootstrap` (`provisioned`, `skipped`, `unavailable`
+or `disabled`, the outcome of placing a session key for the desktop). The launch
+runs asynchronously — poll `get_edh_workstation` with its `bootstrapId`, or
+`list_edh_workstations` selecting the row by it, until it reports ACTIVE and a
+`sessionId`; the `bootstrapId` keeps addressing the row after EDH assigns the
+`sessionId`. Read `lastError` on a
+row that ended ORPHANED. A repeat with the same `bootstrap_id` by the same user
+returns the stored record (HTTP 200) and launches nothing, while one that another
+user's launch holds is refused (409).
+Its `os_family` (`linux` or `windows`) is the chosen catalog image's `osFamily`
+and is required; its `bootstrap_id` is the idempotency key, and an error carries
+the `bootstrapId` that was sent (generated when the call gave none). When the
+answer was lost (`outcomeUnknown`, a timeout), look that id up with
+`get_edh_workstation` and re-send it only if it is not found, rather than
+launching again. Its optional `lease_hours` (1 up to the
+policy's `leaseHours`, see `get_edh_catalog_lease`) stamps a lease on the launch; it is
+refused (400) when leases are disabled and ignored when the policy is `forced`. An
+`instance_type` the image's profile lists only under architectures of another family
+than the image's (`x86_64` and `i386` are one family) is refused (400,
+`instanceType does not match the image's architecture`), and one outside the
+`launchInstanceTypes` a recipe image carries in `list_edh_catalog_images` is
+refused (400, `instanceType is not offered for this image`). A launch
+is refused (403) for a session authenticated with a VAMS API key.
+Its optional `capacity_reservation_id` launches into a reservation
+`list_edh_catalog_capacity_reservations` lists whose `instanceType` and platform
+match the launch; omitted, the launch is on-demand, exactly as before. It is refused
+(400) when the reservation is not registered, not active, of another instance type
+or platform, or in an Availability Zone with no EDH private subnet; (403,
+`error_type` `EdhReservationNotPermittedError`, `code` `RESERVATION_NOT_PERMITTED`)
+when the user's role may see it but not launch into it (`launchAllowed` false);
+(403, `PermissionDeniedError`) when the role does not grant it at all; and (503)
+when EC2 could not be read. A full reservation whose `fallbackToOnDemand` is true
+launches on-demand, and the record carries `capacityReservationFallback: true`; one
+whose `fallbackToOnDemand` is false is refused (409, `error_type`
+`EdhReservationFullError`, `code` `RESERVATION_FULL`). A record names the
+reservation it launched into in `capacityReservationId` and
+`capacityReservationLabel`, and a record that runs on-demand after asking for one
+carries `capacityReservationFallbackReason`: `full` (the reservation was full at
+launch) or `ended` (VAMS moved the stopped desktop to on-demand because its
+reservation ended; a fallback without the field was a full reservation's). A start
+of a stopped desktop whose reservation is full leaves it stopped with `lastError`
+`RESERVATION_FULL`; one whose reservation has ended starts on-demand, or stays
+stopped with `lastError` `RESERVATION_ENDED` when VAMS could not move it to
+on-demand capacity (see below).
+`register_edh_capacity_reservation` (`capacity_reservation_id`, `label`, and the
+optional `fallback_to_on_demand` and `enabled`, both server default true) and
+`update_edh_capacity_reservation` (a partial patch of `label`,
+`fallback_to_on_demand` and `enabled`) maintain VAMS's registry of reservations and
+require the EDH admin routes; neither changes the reservation in EC2.
+`start_edh_workstation` is accepted (HTTP 202) and returns at once with the record,
+still STOPPED with `activity` `starting`, plus `sessionBootstrap`, as for a launch;
+the start runs in the background, so follow it with `list_edh_workstations` until
+the row is ACTIVE with `activity` null. A start EDH refuses leaves the row STOPPED
+with `activity` null, `lastError` `CAPACITY_UNAVAILABLE` (AWS had no capacity for
+the instance type in the desktop's Availability Zone; the desktop keeps its disk
+there, so start it again later), `RESERVATION_FULL`, `RESERVATION_ENDED` (its
+capacity reservation has ended and VAMS could not move it to on-demand capacity; ask
+an administrator) or `START_FAILED`, and
+`startFailure` `{errorCode, availabilityZone, observedAt}`; the desktop is never
+deleted for a refused start. While EDH still lists the desktop stopped, a start is refused (409,
+`error_type` `EdhStartInProgressError`, `startInProgress: true`) when another start
+of it is being processed,
+within 3 minutes of one EDH did not confirm, while the reconciler revokes the stopped
+desktop's key, or while a lease renewal re-issues its key (up to 5 minutes); if the
+list still shows it stopped after 5 minutes, start it again.
+`renew_edh_workstation` adds `sessionBootstrap` when it re-issued, or tried to
+re-issue, the desktop's session key: for an ACTIVE workstation with no start in
+progress, renewed by a session that did not authenticate with a VAMS API key;
+otherwise the field is absent and the renew extends the lease only. The two `register_*` tools
+take the model's
+fields by name (`ami_id`, `stack_name`, `root_size`, plus `base_os` and
+`virtual_desktop_profile_id` for desktops or `target_node_profile_id` — and an
+optional `target_node_user_data_id`, the EDH target-node user-data template,
+sent only when given so the server keeps its default of template 1 — for
+simulation nodes) and require the EDH admin routes. Their `imageId` is the new
+stack's id, read back from the catalog; a read-back that does not find the stack,
+or a project assignment that fails, is returned as the error with the stack left
+registered.
+`submit_edh_container_job` starts a Batch or EKS job through EDH that is billed
+until it finishes or is killed; like the workstation tools it stays out of
+`autoApprove`. Its `job_queue` is required (the Batch job queue, or the EKS
+cluster for the experimental `eks` backend), its `command` is a token list and
+`environment` a name→value map, sent under the request model's `command` /
+`environment` keys, and `memory` is in MiB (at least 512). It answers 202 with
+the job's `jobId` and `backend`, the pair `kill_edh_container_job` takes. When
+EDH's quota is used up it answers `error_type` `EdhQuotaExceededError` (HTTP 429,
+`The EDH quota for this operation has been reached.`): the client does not resend
+it, and submitting again fails until a job ends (`list_edh_container_jobs`).
+`start_edh_ami_recipe_build` starts an EC2 Image Builder build instance that is
+billed until the image completes; like the other compute tools it stays out of
+`autoApprove`.
+`create_edh_ami_recipe` and `update_edh_ami_recipe` take the recipe as a dict in
+the shape of the CLI's recipe file, with inline components only — each `{arn}` or
+`{name, data}`; the `{file}` components the CLI reads from disk are not resolved
+here. `update_edh_ami_recipe` replaces the whole definition of an `admin` recipe;
+a `config` recipe is refused (409), and neither tool starts a build. Both refuse
+(409) a `stackName` another recipe already uses. Both, and
+`duplicate_edh_ami_recipe`, refuse (400) a `buildInstanceType` or `parentImage`
+that EC2 reports as running another architecture family than the recipe's
+`architecture` (`x86_64` and `i386` are one family), with
+`buildInstanceType does not match the recipe's architecture` or
+`parentImage does not match the recipe's architecture`; a lookup that fails
+refuses nothing.
+A recipe's optional `launchInstanceTypes` (1-64 distinct instance types) is the
+list a desktop of its image may launch on; absent, null or empty offers every
+type the deployment allows, and it is outside the content hash, so changing it
+starts no build.
+`duplicate_edh_ami_recipe` takes `source_recipe_id` (a `config` or `admin`
+recipe) and the new `recipe_id`, plus an optional `display_name` (default: the
+source's plus ` (copy)`), `stack_name` (default: the source's plus ` Copy`) and
+`keep_versions` (the number of AMIs pruning keeps for the copy, 1-20; default:
+the source's `keepVersions`).
+It reads the source and creates an `admin` recipe with its definition, its
+`launchInstanceTypes` included, and
+`duplicateOf`; the service copies the source's bundled files (`assets`), which
+an update of the copy keeps and cannot change, and records `duplicatedFrom`. It
+starts no build.
+`start_edh_ami_recipe_build` answers 202 with the build row and an `outcome` of
+`started` (status BUILDING) or `queued` (status QUEUED, behind the recipe's
+running build of other content), or 200 with `outcome: in-progress` and the
+build already QUEUED, BUILDING or REGISTERING for the recipe's current content,
+starting nothing; registration in EDH, retirement of the recipe's other AVAILABLE
+builds' stacks and pruning of AMIs beyond `keepVersions` follow automatically. A build
+that starts is refused (409), with nothing created, for a parent AMI EC2 does not
+find (`the parent image could not be found`) and for a parent or build instance
+type EC2 reports as running another architecture family than the recipe's
+(`the parent image's architecture does not match the recipe's architecture`,
+`buildInstanceType does not match the recipe's architecture`). A build is registered
+automatically when its image completes, so `register_edh_ami_recipe_build` is the
+retry for a REGISTER_FAILED build — any other status is refused (409) — and a
+successful retry retires the recipe's other AVAILABLE builds.
+
+#### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
+
+`delete_edh_workstation`, `delete_edh_vdi_image`,
+`delete_edh_simulation_image`, `deactivate_edh_admin_instance`,
+`kill_edh_container_job`, `delete_edh_ami_recipe`, `retire_edh_ami_recipe_build`,
+`unregister_edh_capacity_reservation`.
+`unregister_edh_capacity_reservation` removes a reservation from VAMS's registry so
+it is no longer offered; the EC2 reservation itself is not changed, and
+workstations launched into it keep running.
+Deleting a
+workstation removes the desktop and its session; stopping it first
+(`stop_edh_workstation`) releases the GPU reversibly. The two image deletes
+unregister a software stack for a specific kind — a desktop id sent to the
+simulation delete is not found, and vice versa. `deactivate_edh_admin_instance`
+terminates ANOTHER user's desktop and, like `abort_execution`, acts on running
+compute; `stop_edh_admin_instance` is the reversible form.
+`kill_edh_container_job` stops a running job's compute and cannot be undone; pass
+the listing's `jobId` and the `backend` the job was listed under (server default
+`batch`; `eks` also needs its `cluster` and `namespace`), because a job on the
+other backend is reported as not found. `delete_edh_ami_recipe` removes an `admin`
+recipe, the EC2 Image Builder resources its last build recorded and every build
+row, answering `recipeId`, `deleted` and `warnings`; the AMIs, snapshots, EC2 Image
+Builder images and EDH stacks its builds still hold stay, and without the build
+rows VAMS cannot retire or prune them, so first retire the AVAILABLE builds, and
+the REGISTER_FAILED builds whose EDH stack exists, that should go. A `config`
+recipe, one with a QUEUED, BUILDING or REGISTERING build, or one another delete
+is already removing, is refused (409), and so is a recipe while a build's AMI
+removal is pending: a RETIRED build with `amiRemovalPending`, or a RETIRED,
+REGISTER_FAILED or FAILED build outside the recipe's `keepVersions` newest AMIs
+that still holds its AMI, as while an Amazon EC2 instance uses the AMI. Delete
+the recipe once the sweep has deregistered those AMIs (`amiDeregisteredAt`).
+`retire_edh_ami_recipe_build` deactivates an
+AVAILABLE or REGISTER_FAILED build's EDH stack, then deregisters its AMI and
+snapshots and deletes its Image Builder image once no Amazon EC2 instance uses the
+AMI; while one does, the build stays RETIRED with `amiRemovalPending` and
+`amiInUseBy`, and VAMS removes the AMI after the last instance is terminated.
+Retiring the AVAILABLE build leaves the recipe with no launchable image. Any other
+status, or a build whose stack cannot be found, is refused (409).
+
+#### Security notes
+
+-   `get_edh_workstation_connect` (write tier, for this reason) returns a DCV
+    `connectionUrl` carrying a session auth token: anyone holding it can open that
+    desktop until the token expires, and it needs no further authentication. It is
+    returned as tool output, so it lands in the host's conversation log and
+    telemetry — the same exposure as the presigned-URL tools, which is why it is
+    absent from the `autoApprove` addition above. Relay it to the user once; do not
+    repeat it. Each call makes EDH issue at most one connection token per request
+    EDH answers, for that desktop; VAMS repeats a read once after a transport
+    failure or a gateway error, which can make a second. `list_edh_workstations`
+    and `get_edh_workstation` make EDH issue none.
+-   No tool returns the desktop sign-in of an EDH workstation: a Windows desktop's
+    password is a credential for the desktop, so VAMS shows it to the owner only in
+    the web app and with `vamscli edh workstation connect --show-sign-in`. The EDH
+    workstation tools pass their `session_id` through vamscli's client, which
+    refuses, before any request, an id that is not a single path segment and
+    any request path with an empty, `.` or `..` segment, so no workstation id
+    can address the sign-in route.
+
+## Adding tools in a fork
+
+A fork of VAMS adds its own tools in `vams_mcp/custom_tools.py`, which upstream ships
+as a no-op and does not modify, so the fork's tools do not conflict when it merges an
+upstream release. `server.py` calls `register_custom_tools(mcp, client, config,
+tool_result)` once, after its own tools are defined:
+
+```python
+# vams_mcp/custom_tools.py (in the fork)
+from typing import Any, Dict, Optional
+
+
+def register_custom_tools(mcp, client, config, tool_result) -> None:
+    @mcp.tool()
+    @tool_result
+    def custom_list_widgets(
+        database_id: str, max_items: Optional[int] = None, starting_token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """List the widgets of one database. The walk is bounded: `truncated` means rows were not
+        seen, and `NextToken` continues it when passed back as `starting_token`."""
+        return client.paginate(
+            lambda params: client.api.list_custom_widgets(database_id, params=params),
+            max_items=max_items,
+            starting_token=starting_token,
+        )
+
+    if config.enable_writes:
+
+        @mcp.tool()
+        @tool_result
+        def custom_create_widget(database_id: str, name: str) -> Dict[str, Any]:
+            """Create a widget in a database."""
+            return client.api.create_custom_widget(database_id, name)
+```
+
+-   Gate write tools on `config.enable_writes` and destructive tools on
+    `config.enable_destructive`, as the upstream tools are; the `VAMS_ENABLE_*`
+    variables then govern them too.
+-   `client.api` is the `vamscli` `APIClient`, which inherits the fork's methods from
+    `vamscli/utils/custom_api_client.py`, so a custom tool calls the fork's API
+    through the same authentication and retry path as the upstream tools, and
+    `client.paginate` follows `NextToken` with the same bounds as the upstream list tools.
+-   Prefix tool names with `custom_` so a later upstream tool does not collide with
+    one of yours, and list your tools (and any `autoApprove` choice) in your own
+    documentation. A tool whose name an upstream tool already uses is not registered:
+    the server keeps the upstream tool and logs `Tool already exists: <name>`.
+
+The "Extending VAMS in a fork" developer guide has the end-to-end example.
 
 ## License
 

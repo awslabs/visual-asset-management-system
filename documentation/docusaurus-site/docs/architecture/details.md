@@ -62,9 +62,9 @@ Before calling Tier 2 enforcement, handlers must annotate the data object with i
 
 ## Data Indexing Flow
 
-![Data Queue Architecture](/img/dataQueues_MainFlow.png)
+![Data queue architecture, including the vector indexing branch](/img/dataQueues_MainFlow.png)
 
-VAMS maintains search indexes in Amazon OpenSearch that mirror data from Amazon DynamoDB. The indexing pipeline uses Amazon DynamoDB Streams, Amazon SNS, and Amazon SQS to decouple producers from consumers.
+VAMS maintains search indexes in Amazon OpenSearch that mirror data from Amazon DynamoDB, and — when vector search is enabled — a DynamoDB vector index of per-file-version embeddings. Both are fed through Amazon DynamoDB Streams, Amazon SNS, Amazon SQS, and the VAMS orchestration bus on Amazon EventBridge, which decouple producers from consumers.
 
 ```mermaid
 graph LR
@@ -93,6 +93,11 @@ graph LR
     subgraph SQS + Indexer Lambdas
         FSQS["File SQS"] --> FI["File Indexer"]
         ASQS["Asset SQS"] --> AI["Asset Indexer"]
+        VSQS["Vector Indexer SQS"] --> VI["Vector Indexer"]
+    end
+
+    subgraph Orchestration Bus
+        EBR["VectorEmbeddingReadyRule<br/>vector.embedding.ready"]
     end
 
     subgraph OpenSearch
@@ -100,10 +105,15 @@ graph LR
         AIdx["Asset Index"]
     end
 
+    subgraph DynamoDB Vector Index
+        VT["Vector Embeddings Table<br/>vec-&lt;model&gt;-&lt;dims&gt;"]
+    end
+
     MT -->|Stream| FQL
     FT -->|Stream| FQL
     FQL --> FSNS
     FSNS --> FSQS
+    FSNS --> VSQS
     FI --> FIdx
 
     AT -->|Stream| AQL
@@ -112,15 +122,24 @@ graph LR
     LMT -->|Stream| AQL
     AQL --> ASNS
     ASNS --> ASQS
+    ASNS --> VSQS
     AI --> AIdx
 
     DT -->|Stream| DQL
     DMT -->|Stream| DQL
     DQL --> DSNS
+
+    GP["SYSTEM GenAI metadata pipeline"] -->|PutEvents| EBR
+    EBR --> VSQS
+    VI --> VT
 ```
 
 :::info[Dual Index Architecture]
 VAMS uses a dual-index architecture with separate **file index** and **asset index** in Amazon OpenSearch. The file index stores per-file metadata, attributes, and S3 information. The asset index stores per-asset metadata, version information, tags, and relationship flags. Both indexes use `flat_object` fields for dynamic metadata and attributes to prevent field explosion.
+:::
+
+:::info[Vector Index]
+When `app.vectorSearch.enabled` is `true`, the SYSTEM GenAI metadata pipeline publishes one `vector.embedding.ready` event per analyzed file version on the orchestration bus. An Amazon EventBridge rule and the file and asset indexer SNS topics all feed one vector indexer queue, and a single vector indexer Lambda function owns the vector table: it writes new items, flips `isLatest` when a new version arrives, flips `isArchived` on archive and unarchive, and deletes items on permanent delete. Search reads the table with `SearchVectors` through the `POST /search/nlp` Lambda function. See [Vector search](../concepts/vector-search.md).
 :::
 
 ## File Upload Flow
@@ -155,8 +174,8 @@ sequenceDiagram
 
 ### Upload Process Details
 
-1. The web application requests a presigned URL from the upload API endpoint, providing file metadata (name, size, content type).
-2. The Lambda handler validates the file against blocked extension and MIME type lists, then generates an Amazon S3 presigned URL.
+1. The web application requests a presigned URL from the upload API endpoint, providing each file's path and size.
+2. The Lambda handler checks each file name against the blocked extension list and the database's extension restriction, then generates an Amazon S3 presigned URL.
 3. The browser uploads the file directly to Amazon S3 using the presigned URL (supporting multipart for large files).
 4. Amazon S3 emits an `ObjectCreated` event to the bucket-specific Amazon SNS topic.
 5. The Amazon SNS topic fans out to an Amazon SQS queue subscribed by the bucket sync Lambda.
@@ -164,7 +183,7 @@ sequenceDiagram
 
 ## Pipeline Execution Flow
 
-VAMS supports three pipeline execution types: **Lambda** (synchronous or asynchronous invocation), **SQS** (asynchronous message delivery), and **EventBridge** (asynchronous event delivery). All pipeline types are orchestrated through AWS Step Functions.
+VAMS supports four pipeline execution types: **Lambda** (synchronous or asynchronous invocation), **SQS** (asynchronous message delivery), **EventBridge** (asynchronous event delivery), and **DeadlineCloud** (AWS Deadline Cloud job submission, commercial partition only). All pipeline types are orchestrated through AWS Step Functions.
 
 ```mermaid
 graph TD
@@ -216,23 +235,30 @@ Each pipeline step in a workflow receives designated Amazon S3 output paths from
 | -------------------------------------- | ---------------- | -------------------------------------------------------------------- |
 | `outputS3AssetFilesPath`               | Asset bucket     | File-level outputs including `.previewFile.*` thumbnails (versioned) |
 | `outputS3AssetPreviewPath`             | Asset bucket     | Asset-level preview images only (versioned)                          |
-| `outputS3AssetMetadataPath`            | Asset bucket     | Metadata files produced by the pipeline (versioned)                  |
+| `outputS3AssetMetadataPath`            | Asset bucket     | Metadata and attribute files produced by the pipeline (versioned)    |
 | `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or non-versioned viewer data                 |
 
 ### Available Pipelines
 
-| Pipeline                           | Compute             | Description                                                              |
-| ---------------------------------- | ------------------- | ------------------------------------------------------------------------ |
-| 3D Basic Conversion                | AWS Batch (Fargate) | Convert 3D file formats                                                  |
-| CAD/Mesh Metadata Extraction       | AWS Batch (Fargate) | Extract metadata from CAD and mesh files                                 |
-| Point Cloud Potree Viewer          | AWS Batch (Fargate) | Generate Potree octree data for point cloud visualization                |
-| 3D Preview Thumbnail               | AWS Batch (Fargate) | Generate GIF/JPG/PNG preview thumbnails for 3D files                     |
-| Gaussian Splatting (Splat Toolbox) | AWS Batch (Fargate) | Generate Gaussian splat reconstructions                                  |
-| GenAI Metadata 3D Labeling         | AWS Batch (Fargate) | AI-powered metadata labeling using Amazon Bedrock and Amazon Rekognition |
-| Model Optimization (ModelOps)      | AWS Batch (Fargate) | Optimize 3D models for web delivery                                      |
-| RapidPipeline (ECS)                | AWS Batch (Fargate) | RapidPipeline integration via Amazon ECS                                 |
-| RapidPipeline (EKS)                | Amazon EKS          | RapidPipeline integration via Amazon EKS                                 |
-| Isaac Lab Training                 | AWS Batch (GPU)     | NVIDIA Isaac Lab simulation training                                     |
+| Pipeline                                   | Compute                                                     | Description                                                                                              |
+| ------------------------------------------ | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 3D Basic Conversion                        | AWS Lambda (container image)                                | Convert 3D file formats                                                                                  |
+| SYSTEM - GenAI Metadata Generation         | AWS Lambda (container images); optional AWS Batch (Fargate) | Stored attributes of every uploaded file; Amazon Bedrock GenAI metadata when the layer is on; embeddings |
+| 3D Preview Thumbnail (SYSTEM - Preview)    | AWS Batch (Fargate)                                         | Generate GIF/JPG/PNG preview thumbnails for 3D files                                                     |
+| Media Preview Thumbnail (SYSTEM - Preview) | AWS Batch (Fargate), the 3D Preview Thumbnail container     | Generate JPEG/GIF previews for images, TGA/TIFF and video (optional)                                     |
+| Coordinate Transform                       | AWS Batch (Fargate)                                         | Reproject point clouds between coordinate reference systems                                              |
+| Point Cloud Potree Viewer                  | AWS Batch (Fargate)                                         | Generate Potree octree data for point cloud visualization                                                |
+| Gaussian Splatting (Splat Toolbox)         | AWS Batch (GPU)                                             | Generate Gaussian splat reconstructions                                                                  |
+| Video SOP/BOM Extraction                   | AWS Batch (Fargate)                                         | Teardown-video transcription and SOP/BOM extraction using Amazon Transcribe and Amazon Bedrock           |
+| GenAI CAD STEP Agent                       | Amazon Bedrock AgentCore Runtime or AWS Batch (Fargate)     | Create or modify a CAD STEP file from a natural-language instruction with a Strands agent                |
+| NVIDIA Cosmos Predict / Reason / Transfer  | AWS Batch (GPU)                                             | World-model video generation, video reasoning, and control-signal video transfer                         |
+| NVIDIA Cosmos 3                            | AWS Batch (GPU)                                             | Omnimodal world-model generation                                                                         |
+| NVIDIA Gr00t Fine-Tuning                   | AWS Batch (GPU)                                             | Fine-tune the GR00T embodied AI model                                                                    |
+| Isaac Lab Training                         | AWS Batch (GPU)                                             | NVIDIA Isaac Lab simulation training                                                                     |
+| Image to 3D                                | AWS Batch (GPU)                                             | Generate a 3D mesh from a single photograph with a selectable open-weight model                          |
+| RapidPipeline (ECS)                        | Amazon ECS (Fargate)                                        | RapidPipeline integration via Amazon ECS                                                                 |
+| RapidPipeline (EKS)                        | Amazon EKS                                                  | RapidPipeline integration via Amazon EKS                                                                 |
+| Model Optimization (ModelOps)              | Amazon ECS (Fargate)                                        | Optimize 3D models for web delivery                                                                      |
 
 ## Configuration Flow
 
@@ -264,35 +290,34 @@ graph LR
 
 ### Configuration Resolution Order
 
-Configuration values resolve through a four-tier fallback chain:
-
-1. **CDK context** (`-c key=value` on command line)
-2. **config.json** file (`infra/config/config.json`)
-3. **Environment variables**
-4. **Hardcoded defaults** (in `getConfig()`)
+Most values come from `config.json` (`infra/config/config.json`), with defaults that `getConfig()` fills in for absent keys. A few values can also come from CDK context (`-c key=value`) or environment variables, in an order that differs by value: the environment comes before `config.json` for the admin and default role settings, and a boolean such as `useWaf` is true when any source says so. The [configuration reference](../deployment/configuration-reference.md) lists each value and its order.
 
 ### Feature Flags
 
-| Feature Flag                    | Description                                                                          |
-| ------------------------------- | ------------------------------------------------------------------------------------ |
-| `GOVCLOUD`                      | AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments) |
-| `ALLOWUNSAFEEVAL`               | Allow `unsafe-eval` in Content Security Policy                                       |
-| `LOCATIONSERVICES`              | Amazon Location Service enabled                                                      |
-| `ALBDEPLOY`                     | Application Load Balancer deployment mode                                            |
-| `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode                                                    |
-| `NOOPENSEARCH`                  | Amazon OpenSearch disabled                                                           |
-| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                               |
-| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito with SAML federation                                                  |
-| `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito with OIDC federation                                                  |
-| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                                     |
-| `PHYSNA_ADDON`                  | Physna add-on frontend features enabled                                              |
-| `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type enabled                                   |
+| Feature Flag                    | Description                                                                                                               |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `GOVCLOUD`                      | AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments)                                      |
+| `ALLOWUNSAFEEVAL`               | Allow `unsafe-eval` in Content Security Policy                                                                            |
+| `LOCATIONSERVICES`              | Amazon Location Service enabled                                                                                           |
+| `ALBDEPLOY`                     | Application Load Balancer deployment mode                                                                                 |
+| `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode                                                                                         |
+| `NOOPENSEARCH`                  | Amazon OpenSearch disabled                                                                                                |
+| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                                                                    |
+| `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito with SAML federation                                                                                       |
+| `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito with OIDC federation                                                                                       |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                                                                          |
+| `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type enabled                                                                        |
+| `VECTORSEARCH`                  | Natural-language (vector) search enabled; the search page shows the natural-language toggle and `POST /search/nlp` exists |
+| `ZIPDOWNLOADS`                  | Download as Zip enabled (`app.pipelines.useZipDownloads.enabled`)                                                         |
+| `AUDITLOGSEARCH`                | Audit Log Search deployed (`app.auditLogging.search.enabled`, default `true`)                                             |
+
+An enabled add-on adds feature flags of its own, which are listed on the add-on's pages. See [Add-ons Overview](../developer/addons-overview.md).
 
 ## Nested Stack Dependency Chain
 
-The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency. RestApi renders the routes that ApiBuilder, ApiBuilder2, SearchBuilder, and AddonBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them.
+The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency, except LocationService, which declares one on StaticWeb when the static web stack is built. RestApi renders the routes that ApiBuilder, ApiBuilder2, ApiBuilder3, SearchBuilder, AddonBuilder, and CustomBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them. The dashed arrow is declared only under a condition: AddonBuilder deploys after ApiBuilder only while an enabled add-on invokes a function built there. ApiBuilder3 is built only while `app.auditLogging.search.enabled` is `true` (the default; `false` in the EU Sovereign Cloud template).
 
-Stacks also read each other's outputs (the Lambda layers, `storageResources`, `authResources`, and the VPC), and AWS CloudFormation orders each such reference implicitly. The dotted arrow marks the one that places StaticWeb: it reads the REST API endpoint, so it deploys after RestApi. When `env.loadContextIgnoreVPCStacks` is `true`, ApiBuilder, ApiBuilder2, SearchBuilder, PipelineBuilder, AddonBuilder, RestApi, and StaticWeb are not built.
+Stacks also read each other's outputs (the Lambda layers, `storageResources`, `authResources`, and the VPC), and AWS CloudFormation orders each such reference implicitly. StaticWeb reads the REST API endpoint and `authResources`, and declares its dependencies on RestApi and AuthBuilder explicitly. The dotted arrow from PipelineBuilder to SearchBuilder is an explicit dependency declared only when `vectorSearch.enabled` is `true`, so the vector reindex custom resource runs after the system pipelines it launches exist. When `env.loadContextIgnoreVPCStacks` is `true`, ApiBuilder, ApiBuilder2, ApiBuilder3, SearchBuilder, PipelineBuilder, AddonBuilder, CustomBuilder, RestApi, and StaticWeb are not built.
 
 ```mermaid
 graph TD
@@ -312,33 +337,46 @@ graph TD
     SRB --> APIBuild["ApiBuilder"]
     RNB --> APIBuild
 
+    SRB --> APIBuild3["ApiBuilder3"]
+    RNB --> APIBuild3
+
     SRB --> APIBuild2["ApiBuilder2"]
     RNB --> APIBuild2
     APIBuild --> APIBuild2
 
-    SRB --> SearchB["SearchBuilder"]
+    SRB --> SearchB["SearchBuilder<br/>(OpenSearch, vector indexing, /search/nlp)"]
     RNB --> SearchB
+    APIBuild2 --> SearchB
 
     SRB --> PB["PipelineBuilder"]
     APIBuild2 --> PB
+    PB -.->|vectorSearch.enabled| SearchB
 
     SRB --> Addon["AddonBuilder"]
     RNB --> Addon
+    APIBuild -.-> Addon
+
+    SRB --> Custom["CustomBuilder"]
+    RNB --> Custom
 
     SRB --> REST["RestApi"]
     AB --> REST
     APIBuild --> REST
     APIBuild2 --> REST
+    APIBuild3 --> REST
     SearchB --> REST
     Addon --> REST
+    Custom --> REST
 
     SRB --> SW["StaticWeb<br/><i>Conditional</i>"]
-    REST -.->|API endpoint| SW
+    REST --> SW
+    AB --> SW
+    SW --> LS
 ```
 
 ## Resource Name Resolution
 
-VAMS Lambda functions resolve AWS resource names (Amazon DynamoDB tables, Amazon S3 buckets, Amazon CloudWatch log groups) from AWS Systems Manager Parameter Store at cold start. The CDK deployment publishes one SSM String parameter per registered resource name under `/{config.name}-{baseStackName}/resourceNames/` — 65 in the shipped configuration (53 DynamoDB tables, of which 7 are deprecated tables retained for migration under `dynamoTables/legacy/`; 9 audit log groups; 2 S3 buckets; 1 Lambda function name). The set is derived from the `resourceNameRegistry`, so it grows with each registered resource. The Resource Names nested stack materializes 64 of them; the Amazon OpenSearch Service stack publishes the remaining one, because the reindexer function it names is created there. Non-pipeline handlers receive a single `VAMS_RESOURCE_PARAM_PREFIX` environment variable pointing to this SSM prefix, plus AWS IAM permissions for `ssm:GetParameter`, `ssm:GetParameters`, and `ssm:GetParametersByPath`.
+VAMS Lambda functions resolve AWS resource names (Amazon DynamoDB tables, Amazon S3 buckets, Amazon CloudWatch log groups) and the values VAMS creates at deploy time (the Amazon OpenSearch Service endpoint and index names, the web application URL and the Amazon Location Service map API key ARN) from AWS Systems Manager Parameter Store at cold start. The CDK deployment publishes one SSM String parameter per registered resource name under `/{config.name}-{baseStackName}-{region}/resourceNames/` — 88 in the shipped configuration (65 DynamoDB tables, of which 9 are deprecated tables retained for migration under `dynamoTables/legacy/`; 9 audit log groups; 2 S3 buckets; 3 integration values for externally owned pipeline bridges; 4 Lambda function names; 5 deploy-time values under `openSearch/`, `web/` and `location/`). The set is derived from the `resourceNameRegistry`, so it grows with each registered resource. The Resource Names nested stack materializes 78 of them; the search nested stack (`SearchBuilder`) publishes the two reindexer function names (`lambdaFunctions/crOsReindexer`, `lambdaFunctions/vectorReindexer`): the OpenSearch one when Amazon OpenSearch Service is enabled, the vector one whenever the SYSTEM GenAI metadata pipeline is on and registers its workflow, and the secondary API stack publishes the workflow role ARN, the `vamsSchema` import function name and the large object copy engine function name, because those resources are created there. The search stack publishes the OpenSearch endpoint and the two index names after the custom resource that creates the indexes, the static web stack the web application URL and the Location Service stack the map API key ARN, each only when its feature is deployed; the `aos/*`, `web/deployedUrl` and `location/apiKeyArn` parameters beside the prefix keep the same values. The deployment also publishes every registered name a second time as JSON in a few numbered chunk parameters beside the prefix, `/{config.name}-{baseStackName}-{region}/resourceNamesChunks/0`, `/1` and so on: 7 in the shipped configuration, one more for each stack with names of its own, such as an add-on's. They carry the deploy-time values and the copy engine's function name too, so search, its indexers, the web application's configuration call and workflow output processing read those with the resource names, in the same call. The chunk parameters wait for every stack a value they carry comes from, so they are created, or updated when their layout changes, at the end of a deployment. On a fresh deployment, and on the first upgrade from a release without chunk parameters, a function that starts before then reads the prefix page by page instead, within the same time limit; during an upgrade between releases that both have them, functions keep reading the previous chunk parameters until the new ones replace them. Non-pipeline handlers receive a single `VAMS_RESOURCE_PARAM_PREFIX` environment variable pointing to this SSM prefix, plus AWS IAM permissions for `ssm:GetParameter`, `ssm:GetParameters`, and `ssm:GetParametersByPath` on the prefix and `ssm:GetParameters` on the chunk parameters.
 
 At cold start, each handler calls `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)`, or `get_log_group_name(ResourceKeys.*)` from `backend/backend/common/resourceNames.py`, which caches the parameter fetch for 60 minutes. This centralizes name management, enables environment variable overrides for testing, and reduces CDK template size by removing per-handler table/bucket/log-group environment variables (pipelines in `backendPipelines/` retain their direct environment variables).
 
@@ -347,7 +385,7 @@ At cold start, each handler calls `get_table_name(ResourceKeys.*)`, `get_bucket_
 1. **Environment variable override** — check for a legacy-style env var (e.g., `ASSET_STORAGE_TABLE_NAME`), used by tests and local utilities
 2. **In-module cache** — 60-minute TTL per resource key
 3. **Negative record** — a key a completed sweep did not carry is remembered as absent for a short window, so an unpublished parameter costs one sweep per window rather than one call. A later sweep that does carry the key clears the record.
-4. **SSM GetParametersByPath** — one paginated call fetching all parameters under the prefix on first access
+4. **SSM chunk parameters** — one `GetParameters` call for chunks 0 to 9 on first access, and one more for each further 10 chunks, loads every registered name. All chunks must belong to the same layout; when chunk 0 is absent, a chunk is missing, two chunks belong to different layouts or one cannot be read, the function falls back to one paginated `GetParametersByPath` sweep of everything under the prefix. A name the chunks do not carry costs one `GetParameter`; for a deploy-time value the chunks do not carry yet, the function then reads the parameter that held it before. A refresh runs one at a time per function container and finishes or fails within about 4 seconds, retrying a throttled call with a randomized delay. The `GetParameter` that may follow it uses what is left of those 4 seconds, or makes a single attempt when none is left. After a refresh or a single-name read fails on throttling, a timeout or a connection failure, the container starts no new refresh for a short back-off window (about 2 seconds, doubling up to 30 seconds): names already cached are served, and other lookups fail at once instead of reading Parameter Store again. A read refused for a reason a retry cannot fix, such as a role without `ssm:GetParametersByPath` for the sweep or without `ssm:GetParameter` for a single name, opens no window and fails the lookup at once. See [Requests time out or workflow runs fail after an idle period](../troubleshooting/common-issues.md#requests-time-out-or-workflow-runs-fail-after-an-idle-period).
 
 :::tip[Lambda Builder Pattern]
 Every Lambda function is constructed by a builder function in `infra/lib/lambdaBuilder/`. Non-pipeline builders inject only handler-specific environment variables (e.g., `PRESIGNED_URL_TIMEOUT_SECONDS`); resource names are resolved from SSM. Each builder calls four required security helpers: `kmsKeyLambdaPermissionAddToResourcePolicy`, `setupSecurityAndLoggingEnvironmentAndPermissions`, `globalLambdaEnvironmentsAndPermissions` (injects `VAMS_RESOURCE_PARAM_PREFIX` and grants SSM read), and `suppressCdkNagErrorsByGrantReadWrite`.

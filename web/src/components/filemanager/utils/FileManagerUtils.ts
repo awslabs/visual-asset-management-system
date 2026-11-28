@@ -1,3 +1,4 @@
+import { assetFilePath } from "../../../utils/assetFilePath";
 import { FileKey, FileTree } from "../types/FileManagerTypes";
 import { downloadAsset } from "../../../services/APIService";
 
@@ -55,12 +56,19 @@ export function getRootByPath(root: FileTree | null, path: string): FileTree | n
 }
 
 /**
- * The tree form of an asset-relative path: one leading "/" and no repeated "/". A path stored
- * without its leading slash (a workflow output row's relativeFilePath, for example) and the
- * tree's own relativePath map to the same string.
+ * The tree form of an asset-relative path: a leading "/" added when it has none. A path stored without
+ * its leading slash (a workflow output row's relativeFilePath, for example) and the tree's own
+ * relativePath map to the same string. Repeated slashes are kept: "//x" is the file whose key has an
+ * empty segment right after the asset's location, listed at "//x", and "/x" is another file (#1977).
  */
 export function normalizeFileManagerPath(path: string): string {
-    return `/${path || ""}`.replace(/\/{2,}/g, "/");
+    return assetFilePath(path);
+}
+
+/** The name the tree shows for a path segment: an empty segment is shown as "/", as the Amazon S3
+ *  console shows it, so a key "A1//x" is the file "x" in a folder named "/" (#1977). */
+export function segmentDisplayName(name: string): string {
+    return name === "" ? "/" : name;
 }
 
 /**
@@ -182,7 +190,7 @@ function addDirectories(root: FileTree, directories: string): FileTree {
         if (subTree == null) {
             subTree = {
                 name: part,
-                displayName: part,
+                displayName: segmentDisplayName(part),
                 relativePath: parts.slice(0, i + 1).join("/") + "/",
                 keyPrefix: part,
                 level: currentRoot.level + 1,
@@ -367,15 +375,9 @@ export function addFiles(fileKeys: FileKey[], root: FileTree, expandedFolders?: 
     };
 
     try {
-        // Filter out problematic entries
-        const filteredFileKeys = fileKeys.filter((fileKey) => {
-            // Skip entries with double slashes in the key (these are artifacts)
-            if (fileKey.key.includes("//")) {
-                return false;
-            }
-
-            return true;
-        });
+        // Every listed entry is shown. A key with an empty segment ("A1//x") is a file of its own, listed
+        // at "//x", and appears in a folder named "/" (#1977).
+        const filteredFileKeys = fileKeys;
 
         // Track all created paths to avoid duplicates
         const createdPaths = new Set<string>();
@@ -501,17 +503,17 @@ export function addFiles(fileKeys: FileKey[], root: FileTree, expandedFolders?: 
 
                 for (let i = 0; i < pathParts.length - 1; i++) {
                     const part = pathParts[i];
-                    if (!part) continue; // Skip empty parts
 
-                    // Update the current path
-                    currentPath = currentPath ? `${currentPath}/${part}` : part;
+                    // Update the current path. An empty segment is a folder of its own ("//" for the
+                    // key "A1//x"), shown as "/" (segmentDisplayName), never merged into its parent.
+                    currentPath = pathParts.slice(0, i + 1).join("/");
                     const folderPath = `/${currentPath}/`;
 
                     // Check if this folder already exists
                     let folderNode = currentNode.subTree.find(
                         (item) =>
                             item.relativePath === folderPath ||
-                            (item.name === part && item.isFolder)
+                            (part !== "" && item.name === part && item.isFolder)
                     );
 
                     if (!folderNode) {
@@ -523,7 +525,7 @@ export function addFiles(fileKeys: FileKey[], root: FileTree, expandedFolders?: 
                         // Create the folder node
                         folderNode = {
                             name: part,
-                            displayName: part,
+                            displayName: segmentDisplayName(part),
                             relativePath: folderPath,
                             keyPrefix: part,
                             level: currentNode.level + 1,
@@ -600,20 +602,20 @@ export function addFiles(fileKeys: FileKey[], root: FileTree, expandedFolders?: 
                 continue;
             }
 
-            // Extract folder name from path or use fileName
+            // Extract folder name from path or use fileName. The segments keep empty ones: "//" is a
+            // folder named "" (shown as "/") directly under the root (#1977).
+            const folderSegments = normalizedPath.slice(1, -1).split("/");
             let folderName = folderKey.fileName;
             if (!folderName || folderName.trim() === "") {
-                // Extract the folder name from the path
-                const pathParts = normalizedPath.split("/").filter(Boolean);
-                folderName = pathParts[pathParts.length - 1] || "";
+                folderName = folderSegments[folderSegments.length - 1] || "";
             }
 
             // For root level folders (directly under the root)
-            if (normalizedPath.split("/").filter(Boolean).length === 1) {
+            if (folderSegments.length === 1) {
                 // Create node for root level folder
                 root.subTree.push({
                     name: folderName,
-                    displayName: folderName,
+                    displayName: segmentDisplayName(folderName),
                     relativePath: normalizedPath,
                     keyPrefix: folderKey.key,
                     level: 1,
@@ -655,7 +657,7 @@ export function addFiles(fileKeys: FileKey[], root: FileTree, expandedFolders?: 
                     // Add the folder to its parent
                     parentNode.subTree.push({
                         name: folderName,
-                        displayName: folderName,
+                        displayName: segmentDisplayName(folderName),
                         relativePath: normalizedPath,
                         keyPrefix: folderKey.key,
                         level: parentNode.level + 1,
@@ -758,13 +760,20 @@ export function toggleExpanded(fileTree: FileTree, relativePath: string): FileTr
     };
 }
 
+export interface DownloadFileResult {
+    ok: boolean;
+    message?: string;
+    // HTTP status of a rejected download request, when known
+    status?: number;
+}
+
 export async function downloadFile(
     assetId: string,
     databaseId: string,
     keyPrefix: string,
     versionId = "",
     assetVersionId?: string
-) {
+): Promise<DownloadFileResult> {
     try {
         const response = await downloadAsset({
             assetId: assetId,
@@ -778,18 +787,22 @@ export async function downloadFile(
         if (response !== false && Array.isArray(response)) {
             if (response[0] === false) {
                 console.error("API Error with downloading file");
-                return false;
+                return {
+                    ok: false,
+                    message: response[1] || "Unknown error",
+                    status: response[2],
+                };
             } else {
                 const link = document.createElement("a");
                 link.href = response[1];
                 link.click();
-                return true;
+                return { ok: true };
             }
         }
-        return false;
-    } catch (error) {
+        return { ok: false, message: "No download URL was returned" };
+    } catch (error: any) {
         console.error(error);
-        return false;
+        return { ok: false, message: error?.message || "Unknown error" };
     }
 }
 

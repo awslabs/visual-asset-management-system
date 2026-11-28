@@ -40,6 +40,12 @@ import {
     suppressCdkNagEcrAuthTokenWildcard,
 } from "../../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    TaggedBatchSubmitJob,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../../constructs/pipelineJobTags";
 import { populateHuggingFaceTokenSecret } from "../../customResources/populateHuggingFaceTokenSecret";
 import { DockerImageAsset, Platform } from "aws-cdk-lib/aws-ecr-assets";
 
@@ -73,7 +79,6 @@ export class Gr00tFinetuneConstruct extends Construct {
         props = { ...defaultProps, ...props };
 
         const region = Stack.of(this).region;
-        const account = Stack.of(this).account;
         const gr00tConfig = props.config.app.pipelines.useNvidiaGr00t;
 
         /**
@@ -307,6 +312,7 @@ yum install -y amazon-efs-utils
 mkdir -p /mnt/efs/gr00t-models
 mount -t efs -o tls ${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models
 echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /etc/fstab
+chown -R 10000:10000 /mnt/efs/gr00t-models
 
 --==MYBOUNDARY==--
 `;
@@ -623,7 +629,8 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             resultPath: "$.error",
         });
 
-        const batchJob = new tasks.BatchSubmitJob(this, "Gr00tBatchJob", {
+        const batchJob = new TaggedBatchSubmitJob(this, "Gr00tBatchJob", {
+            jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.nvidiaGr00tFinetune),
             jobName: sfn.JsonPath.stringAt("$.jobName"),
             jobDefinitionArn: batchJobDefinition.attrJobDefinitionArn,
             jobQueueArn: batchJobQueue.ref,
@@ -672,6 +679,7 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
             tracingEnabled: true,
         });
 
+        suppressBatchJobTaggingNag(pipelineStateMachine);
         // The Batch `.sync` integration polls the submitted job and cancels it when the
         // execution stops. Batch job ids are runtime-generated with no name pattern to
         // scope on, so both actions take a wildcard resource.
@@ -879,7 +887,9 @@ echo "${gr00tEfs.fileSystemId}:/ /mnt/efs/gr00t-models efs _netdev,tls 0 0" >> /
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
-                        `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                        },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                         },

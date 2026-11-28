@@ -114,9 +114,12 @@ def build_pipeline_record(
     database_id, pipeline_id, pipeline_name, category, description,
     execution_config, system_config,
     enabled=True, archived=False, created_by="", modified_by="",
-    date_created="", date_modified="",
+    date_created="", date_modified="", is_system=False,
 ):
-    """PipelineStorageTableV2 row (database-scoped: PK databaseId, SK pipelineId)."""
+    """PipelineStorageTableV2 row (database-scoped: PK databaseId, SK pipelineId).
+
+    `is_system` marks a record the deployment registered from a vamsSchema bundle and owns; the API
+    holds such a record read-only except for its enabled switch and its templates' content."""
     now = iso_now()
     return {
         "databaseId": database_id,  # PK
@@ -130,6 +133,7 @@ def build_pipeline_record(
         "systemConfig": system_config or build_pipeline_system_config(),
         "enabled": bool(enabled),
         "archived": bool(archived),
+        "isSystem": bool(is_system),
         "dateCreated": date_created or now,
         "dateModified": date_modified or now,
         "createdBy": created_by or "",

@@ -23,20 +23,33 @@ API keys grant the same level of access as the associated user. Treat API keys w
 The user ID specified during API key creation must already have at least one VAMS role assigned. You cannot create an API key for a user with no roles.
 :::
 
+:::note[An API key cannot create or extend keys]
+A request authenticated with an API key cannot create an API key or change a key's expiration date, whatever its user's roles grant; VAMS answers `403`. Create, rotate and extend keys while signed in through your identity provider (Amazon Cognito, or the external OAuth identity provider): in the web app, or from a CLI or MCP session signed in as your user rather than with a key. A key can still list keys, change a description, deactivate, reactivate and delete keys, so a script can revoke its own key; a reactivated key still stops working at its stored expiration date.
+:::
+
 ### Admin and self-service modes
 
 The API Key Management page operates in two modes, depending on which API routes your roles grant access to:
 
 -   **All Keys (Admin)** -- View and manage API keys across all users. Keys may be created for any user, and an expiration date is optional.
--   **My Keys (self-service)** -- View and manage only your own API keys. Created keys are always tied to your user, an **expiration date is required**, and the expiration may be at most **365 days** from the key's creation. Later edits cannot extend the expiration beyond that window -- create a new key to rotate after it elapses.
+-   **My Keys (self-service)** -- View and manage only your own API keys. Created keys are always tied to your user, an **expiration date is required**, and the expiration may be at most **365 days** from the key's creation. Later edits cannot extend the expiration beyond that window -- create a new key to rotate after it elapses. On the last selectable date the expiration time is limited to the end of that window: the time field shows the latest allowed time (UTC), lowers a later time to it when you pick the date, and blocks a later time you type.
 
-Users with access to both modes see a toggle at the top of the page.
+Users with access to both modes see a toggle at the top of the page. **Create API Key**, **Edit** and **Delete** are offered only when your roles allow creating, updating or deleting keys in the mode shown, so a read-only role can list its own keys but not change them.
+
+You reach the page from two places:
+
+-   **API Key Management** in the profile menu (the menu with your user name in the top bar) opens **My Keys**, your own keys.
+-   **API Keys (all users)** under **Admin - Auth** in the left sidebar opens **All Keys (Admin)**. It appears only when your roles allow the administrative `GET /auth/api-keys` route.
+
+![The profile menu open in the top bar, listing API Key Management under Your pages above Sign out](/img/API_key_managment_page_profile_menu_20261109_v2.7.png)
+
+The mode a link asks for is a preference: the page opens it only when your roles allow it, and otherwise opens the mode they do allow. The API checks every request either way.
 
 ---
 
 ## Creating an API key
 
-1. Navigate to **User** > **API Key Management** in the left sidebar. The page offers an **All Keys (Admin)** mode for administrators and a **My Keys** self-service mode for managing your own keys; users with access to both see a mode toggle.
+1. Open the profile menu in the top bar and choose **API Key Management**, or, for keys of any user, choose **Admin - Auth** > **API Keys (all users)** in the left sidebar. The page offers an **All Keys (Admin)** mode for administrators and a **My Keys** self-service mode for managing your own keys; users with access to both see a mode toggle.
 2. Choose **Create API Key**.
 3. Complete the form fields:
 
@@ -51,7 +64,7 @@ Users with access to both modes see a toggle at the top of the page.
 4. Choose **Create API Key**.
 5. **Copy the generated key immediately.** The key value is displayed only once in the confirmation dialog.
 
-![API Key Management page showing key listing and management options](/img/API_key_managment_page_20260323_v2.5.png)
+![API Key Management page in the All Keys (Admin) view, with API Keys (all users) highlighted under Admin - Auth in the side navigation](/img/API_key_managment_page_20261109_v2.7.png)
 
 :::warning[Save the key now]
 The API key value is shown only once after creation. If you close the dialog without copying the key, you must delete the API key and create a new one. There is no way to retrieve the key value after creation.
@@ -92,7 +105,7 @@ vamscli assets list --database-id my-database
 :::
 
 :::tip[CI/CD best practices]
-For CI/CD pipelines, create a dedicated VAMS user with a role that has only the minimum permissions required by the pipeline. Set an expiration date on the API key and rotate it regularly.
+For CI/CD pipelines, create a dedicated VAMS user with a role that has only the minimum permissions required by the pipeline. Set an expiration date on the API key and rotate it regularly. The pipeline's key cannot create its replacement or extend itself, so run the rotation as a user signed in through your identity provider.
 :::
 
 ---
@@ -133,13 +146,15 @@ You can update the description, expiration date, and active status of an existin
     - **Active** -- Toggle the key between active and inactive states.
 4. Choose **Update API Key**.
 
+The expiration is sent only when you change it, so you can still change the description of an expired key or deactivate it. When a self-service key's 365-day window from creation has ended, its expiration date cannot change; create a new key to keep access.
+
 :::tip[Deactivate instead of delete]
-If you need to temporarily revoke access, toggle the key to **Inactive** instead of deleting it. This preserves the key record and allows you to reactivate it later.
+If you need to temporarily revoke access, toggle the key to **Inactive** instead of deleting it. This preserves the key record and allows you to reactivate it later. Access ends within about 45 seconds, because VAMS briefly caches API key authorization.
 :::
 
 ### Deleting an API key
 
-Deleting an API key is permanent and cannot be undone. Any applications or scripts using the key will immediately lose access.
+Deleting an API key is permanent and cannot be undone. Applications or scripts using the key lose access shortly afterward. VAMS briefly caches API key authorization, so a deleted key can keep working for up to about 45 seconds.
 
 1. Select the API key in the table.
 2. Choose **Delete**.
@@ -151,14 +166,14 @@ Deleting an API key is permanent and cannot be undone. Any applications or scrip
 
 Follow these recommendations to maintain the security of your VAMS API keys:
 
-| Practice                            | Description                                                                                     |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Set expiration dates                | Always set an expiration date on API keys, especially for CI/CD pipelines and automation.       |
-| Use least-privilege users           | Associate API keys with users that have only the minimum permissions required for the use case. |
-| Rotate keys regularly               | Create new keys and decommission old ones on a regular schedule.                                |
-| Never commit keys to source control | Store API keys in secrets managers (such as AWS Secrets Manager) or CI/CD secret variables.     |
-| Monitor key usage                   | Review the API Key Management page periodically to identify unused or expired keys.             |
-| Deactivate compromised keys         | If a key is compromised, immediately set it to **Inactive** and create a replacement.           |
+| Practice                            | Description                                                                                                                                     |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Set expiration dates                | Always set an expiration date on API keys, especially for CI/CD pipelines and automation.                                                       |
+| Use least-privilege users           | Associate API keys with users that have only the minimum permissions required for the use case.                                                 |
+| Rotate keys regularly               | Create new keys and decommission old ones on a regular schedule, signed in through your identity provider (a key cannot create or extend keys). |
+| Never commit keys to source control | Store API keys in secrets managers (such as AWS Secrets Manager) or CI/CD secret variables.                                                     |
+| Monitor key usage                   | Review the API Key Management page periodically to identify unused or expired keys.                                                             |
+| Deactivate compromised keys         | Set a compromised key to **Inactive** right away (takes up to about 45 seconds) and replace it.                                                 |
 
 :::warning[Audit logging]
 All API key operations (creation, update, deletion) are recorded in the VAMS audit log. Administrators can review these logs in Amazon CloudWatch to track who created, modified, or deleted API keys.

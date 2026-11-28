@@ -187,12 +187,18 @@ describe("rapidPipelineEKS CONSTRUCT_PIPELINE task payload", () => {
 
     test("the payload reads each field from the top level of the state input", () => {
         // openPipeline starts the state machine with a flat input, so a JsonPath that reached into a
-        // nested object would resolve to nothing at runtime.
-        for (const [key, value] of Object.entries(payload())) {
-            if (key.endsWith(".$")) {
-                expect(value).toEqual(`$.${key.slice(0, -2)}`);
-            }
+        // nested object would resolve to nothing at runtime. A context-object path (`$$.`) reads the
+        // execution, not the state input, and is always present.
+        const entries = Object.entries(payload()).filter(([key]) => key.endsWith(".$"));
+        expect(entries.length).toBeGreaterThan(0);
+        for (const [key, value] of entries) {
+            if (String(value).startsWith("$$.")) continue;
+            expect(value).toEqual(`$.${key.slice(0, -2)}`);
         }
+    });
+
+    test("the payload names the execution, which keys the run's job records", () => {
+        expect(payload()["executionName.$"]).toEqual("$$.Execution.Name");
     });
 });
 

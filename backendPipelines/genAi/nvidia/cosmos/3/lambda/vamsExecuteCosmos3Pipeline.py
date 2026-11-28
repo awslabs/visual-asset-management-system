@@ -153,6 +153,7 @@ def lambda_handler(event, context):
         cosmos_control_guidance = _setting(
             ("CONTROL_GUIDANCE", "controlGuidance"), "COSMOS3_CONTROL_GUIDANCE")
 
+        first_input = (resolved['inputFiles'] or [{}])[0] or {}
         payload = {
             "modelVariant": model_variant,
             "taskMode": task_mode,
@@ -171,6 +172,18 @@ def lambda_handler(event, context):
             "executingRequestContext": data.get('executingRequestContext', ''),
             "assetId": resolved['assetId'],
             "databaseId": resolved['databaseId'],
+            # The Regions of the input and output asset buckets, from the manifest (empty when a bucket
+            # is in the deployment Region), so the Batch container addresses each bucket in its Region.
+            "inputBucketRegion": resolved['inputBucketRegion'],
+            # The S3 version the run reads its input at, recorded at launch; "" reads the
+            # current object.
+            "inputVersionId": resolved['inputVersionId'],
+            # Where the input sits in its asset, from its manifest entry (empty without one): its
+            # asset-relative path, whose folder is the output subfolder, and the asset root.
+            "inputRelativePath": first_input.get('relativePath') or "",
+            "inputAssetRootS3Key": first_input.get('assetRootS3Key') or "",
+            "inputAssetRootBucket": first_input.get('assetRootBucket') or "",
+            "outputBucketRegion": resolved['outputBucketRegion'],
             "cosmosPrompt": cosmos_prompt,
             "cosmosNegativePrompt": cosmos_negative_prompt,
             "cosmosSeed": cosmos_seed,

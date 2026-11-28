@@ -20,9 +20,13 @@ import TriggersEditor from "./TriggersEditor";
 import Breadcrumb from "../components/Breadcrumb";
 import Stepper from "../components/Stepper";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
+import { BusyButton } from "../components/BusyControls";
+import { DisabledReasonButton, DisabledReasonTooltip } from "../components/DisabledReason";
+import { routeDisabledReason } from "../permissions/routeDisabledReason";
+import { useFocusHandOff } from "../components/useFocusHandOff";
 import { validateWorkflow, allPipelineRefsSelected } from "./workflowValidation";
 import TriggerDraftsEditor from "./TriggerDraftsEditor";
-import { withCurrentPipelineTemplates } from "./triggerDraft";
+import { TRIGGER_ROUTE, withCurrentPipelineTemplates } from "./triggerDraft";
 import type { PendingTrigger } from "./triggerDraft";
 import { setTrigger } from "../api/workflows";
 import { invalidateTriggerQueries, seedWorkflowCache } from "../api/triggerCache";
@@ -46,9 +50,6 @@ interface WorkflowBuilderProps {
     databaseId: string;
     workflowId?: string;
 }
-
-/** The route template the allowed-routes API returns for the trigger endpoint. */
-const TRIGGER_ROUTE = "/database/{databaseId}/workflows/{workflowId}/triggers/{triggerType}";
 
 /** What the create flow hands the edit route once the workflow exists. */
 interface BuilderHopState {
@@ -243,13 +244,27 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
         });
     }, [isGlobalWorkflow, dbPipelines, globalPipelines]);
     const { data: workflow } = useWorkflow(databaseId, workflowId || "");
+    // A system workflow (shipped by a vamsSchema bundle) accepts only `enabled` on update; every other
+    // field is locked and the save sends nothing else, so the unsent body is not validated either.
+    const isSystemWorkflow = mode === "edit" && !!workflow?.isSystem;
     const { createWorkflow, updateWorkflow } = useWorkflowMutations();
     const location = useLocation();
     const queryClient = useQueryClient();
     // Trigger writes go to their own endpoint with their own Tier-1 grant, so a role may create a
     // workflow yet be unable to set a trigger on it.
-    const { loading: permissionsLoading, can } = useAllowedRoutes();
+    const { loading: permissionsLoading, failed: permissionsFailed, can } = useAllowedRoutes();
     const canSetTriggers = can("PUT", TRIGGER_ROUTE);
+    // The View page of a system workflow is open to every role that may read it; Enabled and Save
+    // change the workflow, so they follow the role's update route (web/CLAUDE.md 6.4: the route
+    // check runs first). An ordinary workflow's Edit is only offered with that route.
+    const systemChangeDeniedReason = isSystemWorkflow
+        ? routeDisabledReason(
+              permissionsLoading,
+              !!permissionsFailed,
+              can("PUT", "/database/{databaseId}/workflows/{workflowId}"),
+              "Your role does not allow changing this workflow."
+          )
+        : undefined;
 
     const [state, dispatch] = useReducer(workflowFormReducer, initialState);
     const [wizardStep, setWizardStep] = useState<string>("basic");
@@ -488,11 +503,25 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
     };
 
     const handleSave = async () => {
-        if (state.validationErrors.length > 0) return;
+        if (!isSystemWorkflow && state.validationErrors.length > 0) return;
+        if (systemChangeDeniedReason) return;
 
         dispatch({ type: "SET_SAVING", saving: true });
         dispatch({ type: "SET_SAVE_ERROR", error: null });
         try {
+            const targetWorkflowId = workflowId || state.workflowIdValue;
+
+            if (isSystemWorkflow) {
+                await updateWorkflow.mutateAsync({
+                    databaseId,
+                    workflowId: targetWorkflowId,
+                    body: { enabled: state.enabled },
+                });
+                toast.success("Workflow saved", { description: state.workflowName || undefined });
+                navigate(`/databases/${databaseId}/workflows`);
+                return;
+            }
+
             const body = assembleWorkflow();
 
             if (mode === "create") {
@@ -503,8 +532,8 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
             const result = await updateWorkflow.mutateAsync({
                 databaseId,
                 // The route param is authoritative; reducer state lags a workflowId change.
-                workflowId: workflowId || state.workflowIdValue,
-                body: { ...body, workflowId: workflowId || state.workflowIdValue },
+                workflowId: targetWorkflowId,
+                body: { ...body, workflowId: targetWorkflowId },
             });
 
             const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
@@ -530,7 +559,13 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
         }
     };
 
-    const isSaveDisabled = state.validationErrors.length > 0 || state.saving;
+    // Unavailable for a reason other than a save in flight; a save in flight keeps Save focusable,
+    // reading "Saving...".
+    const isSaveDisabled = !isSystemWorkflow && state.validationErrors.length > 0;
+    // A create answered with warnings and no workflow id withdraws Save and offers Continue; focus
+    // Save held moves there.
+    const continueRef = useRef<HTMLButtonElement>(null);
+    const saveRef = useFocusHandOff<HTMLButtonElement>(() => continueRef.current);
 
     // Wizard steps. Each section is one step; Review is last. Triggers are optional in both modes:
     // when editing they are written live; when creating they are drafted and written once the
@@ -603,131 +638,160 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                     ]}
                 />
                 <h1 className="text-text-primary">
-                    {mode === "create" ? "Create Workflow" : "Edit Workflow"}
+                    {mode === "create"
+                        ? "Create Workflow"
+                        : isSystemWorkflow
+                        ? "View Workflow"
+                        : "Edit Workflow"}
                 </h1>
             </div>
+
+            {isSystemWorkflow && (
+                <div className="p-3 bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300 rounded">
+                    <strong>System workflow:</strong> shipped with the deployment and read-only
+                    here. Only <em>Enabled</em> can be changed, and a redeploy re-asserts the
+                    shipped values.
+                </div>
+            )}
 
             <Stepper steps={WIZARD_STEPS} current={wizardStep} />
 
             {wizardStep === "basic" && (
                 <div className="space-y-4">
-                    {/* Workflow ID is auto-generated by the backend on create (prevents collisions);
-                        it is not a user-entered field on the web. It is shown read-only when editing.
-                        The CLI keeps it as an optional override for CDK auto-registration. */}
-                    {mode === "edit" && (
+                    <fieldset
+                        disabled={isSystemWorkflow}
+                        className="m-0 p-0 border-0 min-w-0 space-y-4"
+                    >
+                        {/* Workflow ID is auto-generated by the backend on create (prevents collisions);
+                            it is not a user-entered field on the web. It is shown read-only when editing.
+                            The CLI keeps it as an optional override for CDK auto-registration. */}
+                        {mode === "edit" && (
+                            <div>
+                                <label
+                                    htmlFor="workflowId"
+                                    className="block text-sm font-medium mb-1 text-text-primary"
+                                >
+                                    Workflow ID
+                                </label>
+                                <input
+                                    id="workflowId"
+                                    type="text"
+                                    value={state.workflowIdValue}
+                                    disabled
+                                    className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-secondary text-text-primary opacity-50"
+                                />
+                            </div>
+                        )}
                         <div>
                             <label
-                                htmlFor="workflowId"
+                                htmlFor="workflowName"
                                 className="block text-sm font-medium mb-1 text-text-primary"
                             >
-                                Workflow ID
+                                Workflow Name
                             </label>
                             <input
-                                id="workflowId"
+                                id="workflowName"
                                 type="text"
-                                value={state.workflowIdValue}
-                                disabled
-                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-secondary text-text-primary opacity-50"
-                            />
-                        </div>
-                    )}
-                    <div>
-                        <label
-                            htmlFor="workflowName"
-                            className="block text-sm font-medium mb-1 text-text-primary"
-                        >
-                            Workflow Name
-                        </label>
-                        <input
-                            id="workflowName"
-                            type="text"
-                            value={state.workflowName}
-                            onChange={(e) =>
-                                dispatch({
-                                    type: "SET_FIELD",
-                                    field: "workflowName",
-                                    value: e.target.value,
-                                })
-                            }
-                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                        />
-                    </div>
-                    <div>
-                        <label
-                            htmlFor="category"
-                            className="block text-sm font-medium mb-1 text-text-primary"
-                        >
-                            Category (optional)
-                        </label>
-                        <input
-                            id="category"
-                            type="text"
-                            value={state.category}
-                            onChange={(e) =>
-                                dispatch({
-                                    type: "SET_FIELD",
-                                    field: "category",
-                                    value: e.target.value,
-                                })
-                            }
-                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                        />
-                    </div>
-                    <div>
-                        <label
-                            htmlFor="description"
-                            className="block text-sm font-medium mb-1 text-text-primary"
-                        >
-                            Description (optional)
-                        </label>
-                        <textarea
-                            id="description"
-                            value={state.description}
-                            onChange={(e) =>
-                                dispatch({
-                                    type: "SET_FIELD",
-                                    field: "description",
-                                    value: e.target.value,
-                                })
-                            }
-                            rows={3}
-                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                        />
-                    </div>
-                    <div>
-                        <label
-                            htmlFor="subDashboardUrl"
-                            className="block text-sm font-medium mb-1 text-text-primary"
-                        >
-                            Sub-Dashboard URL (optional)
-                        </label>
-                        <input
-                            id="subDashboardUrl"
-                            type="text"
-                            value={state.subDashboardUrl}
-                            onChange={(e) =>
-                                dispatch({
-                                    type: "SET_FIELD",
-                                    field: "subDashboardUrl",
-                                    value: e.target.value,
-                                })
-                            }
-                            className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
-                        />
-                    </div>
-                    <div>
-                        <label className="flex items-center gap-2">
-                            <input
-                                type="checkbox"
-                                checked={state.enabled}
+                                value={state.workflowName}
                                 onChange={(e) =>
                                     dispatch({
                                         type: "SET_FIELD",
-                                        field: "enabled",
-                                        value: e.target.checked,
+                                        field: "workflowName",
+                                        value: e.target.value,
                                     })
                                 }
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             />
+                        </div>
+                        <div>
+                            <label
+                                htmlFor="category"
+                                className="block text-sm font-medium mb-1 text-text-primary"
+                            >
+                                Category (optional)
+                            </label>
+                            <input
+                                id="category"
+                                type="text"
+                                value={state.category}
+                                onChange={(e) =>
+                                    dispatch({
+                                        type: "SET_FIELD",
+                                        field: "category",
+                                        value: e.target.value,
+                                    })
+                                }
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                            />
+                        </div>
+                        <div>
+                            <label
+                                htmlFor="description"
+                                className="block text-sm font-medium mb-1 text-text-primary"
+                            >
+                                Description (optional)
+                            </label>
+                            <textarea
+                                id="description"
+                                value={state.description}
+                                onChange={(e) =>
+                                    dispatch({
+                                        type: "SET_FIELD",
+                                        field: "description",
+                                        value: e.target.value,
+                                    })
+                                }
+                                rows={3}
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                            />
+                        </div>
+                        <div>
+                            <label
+                                htmlFor="subDashboardUrl"
+                                className="block text-sm font-medium mb-1 text-text-primary"
+                            >
+                                Sub-Dashboard URL (optional)
+                            </label>
+                            <input
+                                id="subDashboardUrl"
+                                type="text"
+                                value={state.subDashboardUrl}
+                                onChange={(e) =>
+                                    dispatch({
+                                        type: "SET_FIELD",
+                                        field: "subDashboardUrl",
+                                        value: e.target.value,
+                                    })
+                                }
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
+                            />
+                        </div>
+                    </fieldset>
+                    <div>
+                        <label className="flex items-center gap-2">
+                            <DisabledReasonTooltip reason={systemChangeDeniedReason}>
+                                <input
+                                    type="checkbox"
+                                    checked={state.enabled}
+                                    aria-disabled={systemChangeDeniedReason ? true : undefined}
+                                    aria-description={systemChangeDeniedReason}
+                                    className={
+                                        systemChangeDeniedReason
+                                            ? "opacity-50 cursor-not-allowed"
+                                            : undefined
+                                    }
+                                    onChange={(e) => {
+                                        // A denied change keeps the box focusable with its reason;
+                                        // the box is controlled, so ignoring the change keeps its value.
+                                        if (systemChangeDeniedReason) return;
+                                        dispatch({
+                                            type: "SET_FIELD",
+                                            field: "enabled",
+                                            value: e.target.checked,
+                                        });
+                                    }}
+                                />
+                            </DisabledReasonTooltip>
                             <span className="text-sm font-medium text-text-primary">
                                 {state.enabled ? "Enabled" : "Disabled"}
                             </span>
@@ -737,86 +801,101 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
             )}
 
             {wizardStep === "execution" && (
-                <WorkflowSystemConfigFields
-                    inputFileArity={state.inputFileArity}
-                    assetScope={state.assetScope}
-                    metadataInputs={state.metadataInputs}
-                    allowFilters={state.allowFilters}
-                    excludeFilters={state.excludeFilters}
-                    concurrencyRestriction={state.concurrencyRestriction}
-                    locationType={state.locationType}
-                    allowOverride={state.allowOverride}
-                    allowWorkflowTriggerChaining={state.allowWorkflowTriggerChaining}
-                    defaultOutputPathPrefix={state.defaultOutputPathPrefix}
-                    onInputFileArityChange={(value) =>
-                        dispatch({ type: "SET_FIELD", field: "inputFileArity", value })
-                    }
-                    onAssetScopeChange={(value) =>
-                        dispatch({ type: "SET_FIELD", field: "assetScope", value })
-                    }
-                    onMetadataInputsChange={(value) =>
-                        dispatch({ type: "SET_FIELD", field: "metadataInputs", value })
-                    }
-                    onAllowFiltersChange={(value) =>
-                        dispatch({ type: "SET_FIELD", field: "allowFilters", value })
-                    }
-                    onExcludeFiltersChange={(value) =>
-                        dispatch({ type: "SET_FIELD", field: "excludeFilters", value })
-                    }
-                    onConcurrencyRestrictionChange={(value) =>
-                        dispatch({ type: "SET_FIELD", field: "concurrencyRestriction", value })
-                    }
-                    onLocationTypeChange={(value) =>
-                        dispatch({ type: "SET_FIELD", field: "locationType", value })
-                    }
-                    onAllowOverrideChange={(value) =>
-                        dispatch({ type: "SET_FIELD", field: "allowOverride", value })
-                    }
-                    onAllowWorkflowTriggerChainingChange={(value) =>
-                        dispatch({
-                            type: "SET_FIELD",
-                            field: "allowWorkflowTriggerChaining",
-                            value,
-                        })
-                    }
-                    onDefaultOutputPathPrefixChange={(value) =>
-                        dispatch({ type: "SET_FIELD", field: "defaultOutputPathPrefix", value })
-                    }
-                />
+                <fieldset
+                    disabled={isSystemWorkflow}
+                    className={`m-0 p-0 border-0 min-w-0 space-y-4${
+                        isSystemWorkflow ? " [&_:disabled]:opacity-50" : ""
+                    }`}
+                >
+                    <WorkflowSystemConfigFields
+                        inputFileArity={state.inputFileArity}
+                        assetScope={state.assetScope}
+                        metadataInputs={state.metadataInputs}
+                        allowFilters={state.allowFilters}
+                        excludeFilters={state.excludeFilters}
+                        concurrencyRestriction={state.concurrencyRestriction}
+                        locationType={state.locationType}
+                        allowOverride={state.allowOverride}
+                        allowWorkflowTriggerChaining={state.allowWorkflowTriggerChaining}
+                        defaultOutputPathPrefix={state.defaultOutputPathPrefix}
+                        onInputFileArityChange={(value) =>
+                            dispatch({ type: "SET_FIELD", field: "inputFileArity", value })
+                        }
+                        onAssetScopeChange={(value) =>
+                            dispatch({ type: "SET_FIELD", field: "assetScope", value })
+                        }
+                        onMetadataInputsChange={(value) =>
+                            dispatch({ type: "SET_FIELD", field: "metadataInputs", value })
+                        }
+                        onAllowFiltersChange={(value) =>
+                            dispatch({ type: "SET_FIELD", field: "allowFilters", value })
+                        }
+                        onExcludeFiltersChange={(value) =>
+                            dispatch({ type: "SET_FIELD", field: "excludeFilters", value })
+                        }
+                        onConcurrencyRestrictionChange={(value) =>
+                            dispatch({ type: "SET_FIELD", field: "concurrencyRestriction", value })
+                        }
+                        onLocationTypeChange={(value) =>
+                            dispatch({ type: "SET_FIELD", field: "locationType", value })
+                        }
+                        onAllowOverrideChange={(value) =>
+                            dispatch({ type: "SET_FIELD", field: "allowOverride", value })
+                        }
+                        onAllowWorkflowTriggerChainingChange={(value) =>
+                            dispatch({
+                                type: "SET_FIELD",
+                                field: "allowWorkflowTriggerChaining",
+                                value,
+                            })
+                        }
+                        onDefaultOutputPathPrefixChange={(value) =>
+                            dispatch({ type: "SET_FIELD", field: "defaultOutputPathPrefix", value })
+                        }
+                    />
+                </fieldset>
             )}
 
             {wizardStep === "pipelines" && (
                 <div className="space-y-4">
-                    {state.specifiedPipelines.map((ref, idx) => {
-                        if (!ref.pipelineId || !ref.pipelineDatabaseId) return null;
-                        return (
-                            <TemplatesFetcher
-                                key={`${ref.pipelineDatabaseId}:${ref.pipelineId}-${idx}`}
-                                pipelineDatabaseId={ref.pipelineDatabaseId}
-                                pipelineId={ref.pipelineId}
-                                onTemplatesLoaded={handleTemplatesLoaded}
-                            />
-                        );
-                    })}
-                    <PipelineOrderList
-                        value={state.specifiedPipelines}
-                        pipelineOptions={pipelines}
-                        templatesByPipeline={state.templatesByPipeline}
-                        onChange={(value) =>
-                            dispatch({ type: "SET_FIELD", field: "specifiedPipelines", value })
-                        }
-                    />
-                    {state.specifiedPipelines.length > 0 && (
-                        <Suspense
-                            fallback={
-                                <div className="text-sm text-text-secondary">
-                                    Loading preview...
-                                </div>
+                    <fieldset
+                        disabled={isSystemWorkflow}
+                        className={`m-0 p-0 border-0 min-w-0 space-y-4${
+                            isSystemWorkflow ? " [&_:disabled]:opacity-50" : ""
+                        }`}
+                    >
+                        {state.specifiedPipelines.map((ref, idx) => {
+                            if (!ref.pipelineId || !ref.pipelineDatabaseId) return null;
+                            return (
+                                <TemplatesFetcher
+                                    key={`${ref.pipelineDatabaseId}:${ref.pipelineId}-${idx}`}
+                                    pipelineDatabaseId={ref.pipelineDatabaseId}
+                                    pipelineId={ref.pipelineId}
+                                    onTemplatesLoaded={handleTemplatesLoaded}
+                                />
+                            );
+                        })}
+                        <PipelineOrderList
+                            value={state.specifiedPipelines}
+                            pipelineOptions={pipelines}
+                            templatesByPipeline={state.templatesByPipeline}
+                            onChange={(value) =>
+                                dispatch({ type: "SET_FIELD", field: "specifiedPipelines", value })
                             }
-                        >
-                            <DagPreview refs={state.specifiedPipelines} />
-                        </Suspense>
-                    )}
+                            disabled={isSystemWorkflow}
+                        />
+                        {state.specifiedPipelines.length > 0 && (
+                            <Suspense
+                                fallback={
+                                    <div className="text-sm text-text-secondary">
+                                        Loading preview...
+                                    </div>
+                                }
+                            >
+                                <DagPreview refs={state.specifiedPipelines} />
+                            </Suspense>
+                        )}
+                    </fieldset>
                 </div>
             )}
 
@@ -825,6 +904,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                     databaseId={databaseId}
                     workflowId={workflowId || ""}
                     pipelineRefs={state.specifiedPipelines}
+                    systemLocked={isSystemWorkflow}
                     pendingTriggers={pendingTriggers}
                     onPendingTriggersChange={setPendingTriggers}
                     openFirstPending={openPendingTrigger}
@@ -944,14 +1024,14 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
 
             {/* Wizard navigation. Save is only on the final (Review) step. */}
             <div className="flex justify-between gap-2">
-                <button onClick={handleCancel} className={btnSecondary}>
+                <BusyButton busy={state.saving} onClick={handleCancel} className={btnSecondary}>
                     Cancel
-                </button>
+                </BusyButton>
                 <div className="flex gap-2">
                     {stepIndex > 0 && (
-                        <button onClick={goBack} className={btnSecondary}>
+                        <BusyButton busy={state.saving} onClick={goBack} className={btnSecondary}>
                             Back
-                        </button>
+                        </BusyButton>
                     )}
                     {stepIndex < WIZARD_STEPS.length - 1 && (
                         <button onClick={goNext} disabled={!stepValid} className={btnPrimary}>
@@ -964,17 +1044,30 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                 idempotent) so further edits remain saveable, but is withdrawn on
                                 the create path where a second submit would create a second
                                 workflow. Continue only leaves the form. */}
-                            {(!savedWithWarnings || mode === "edit") && (
-                                <button
-                                    onClick={handleSave}
-                                    disabled={isSaveDisabled}
+                            {systemChangeDeniedReason ? (
+                                <DisabledReasonButton
+                                    disabledReason={systemChangeDeniedReason}
                                     className={btnPrimary}
                                 >
-                                    {state.saving ? "Saving..." : "Save"}
-                                </button>
+                                    Save
+                                </DisabledReasonButton>
+                            ) : (
+                                (!savedWithWarnings || mode === "edit") && (
+                                    <BusyButton
+                                        ref={saveRef}
+                                        onClick={handleSave}
+                                        busy={state.saving}
+                                        busyLabel="Saving..."
+                                        disabled={isSaveDisabled}
+                                        className={btnPrimary}
+                                    >
+                                        Save
+                                    </BusyButton>
+                                )
                             )}
                             {savedWithWarnings && (
                                 <button
+                                    ref={continueRef}
                                     onClick={() => navigate(`/databases/${databaseId}/workflows`)}
                                     className={mode === "edit" ? btnSecondary : btnPrimary}
                                 >

@@ -3,8 +3,8 @@
 
 """A failed comment read answers 500 instead of an empty list.
 
-GET /comments/assets/{assetId} and GET /comments/assets/{assetId}/assetVersionId/{assetVersionId}
-let an exception from the comment query reach the handler, which answers 500, so a DynamoDB
+GET /comments/database/{databaseId}/assets/{assetId}, with and without the assetVersionId filter,
+lets an exception from the comment query reach the handler, which answers 500, so a DynamoDB
 fault is never reported as 200 {"message": []} ("this asset has no comments").
 """
 
@@ -49,22 +49,22 @@ def allowed(monkeypatch):
     monkeypatch.setattr(commentService, "CasbinEnforcer", MagicMock(return_value=enforcer))
     monkeypatch.setattr(
         commentService, "get_asset_object_from_id",
-        lambda database_id, asset_id: {"assetId": asset_id, "databaseId": "db1"},
+        lambda database_id, asset_id, include_archived=False: {"assetId": asset_id, "databaseId": database_id},
     )
     monkeypatch.setattr(commentService, "comment_database", "commentStorageTable")
 
 
-def _event(path_parameters):
+def _event(query_filter):
     return {
         "requestContext": {"http": {"method": "GET"}},
-        "pathParameters": path_parameters,
-        "queryStringParameters": {"maxItems": "10", "pageSize": "10", "startingToken": ""},
+        "pathParameters": {"databaseId": "db1", "assetId": ASSET_ID},
+        "queryStringParameters": {"maxItems": "10", "pageSize": "10", "startingToken": "", **query_filter},
     }
 
 
 ROUTES = [
-    pytest.param({"assetId": ASSET_ID}, id="asset comments"),
-    pytest.param({"assetId": ASSET_ID, "assetVersionId": "1"}, id="asset version comments"),
+    pytest.param({}, id="asset comments"),
+    pytest.param({"assetVersionId": "1"}, id="asset version comments"),
 ]
 
 

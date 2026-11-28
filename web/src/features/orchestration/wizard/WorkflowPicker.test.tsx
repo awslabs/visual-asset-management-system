@@ -331,6 +331,35 @@ describe("selectionErrorsFor", () => {
         expect(errors.some((e) => e.includes('Pipeline "conv"'))).toBe(true);
     });
 
+    it("judges a preset selection against the first step only (#715)", () => {
+        // obj -> glb conversion, then a glb-only step: the obj preset runs; the later step receives
+        // the glb when the run reaches it.
+        const chain: Workflow = {
+            ...CONVERT,
+            specifiedPipelines: [
+                { pipelineDatabaseId: "GLOBAL", pipelineId: "objToGlb" },
+                { pipelineDatabaseId: "GLOBAL", pipelineId: "glbOnly" },
+            ],
+        };
+        const pipelines: Record<string, Pipeline> = {
+            "GLOBAL:objToGlb": {
+                ...PIPELINES["GLOBAL:conv"],
+                pipelineId: "objToGlb",
+                systemConfig: { inputFileFilters: { allow: ["*.obj"] } },
+            } as Pipeline,
+            "GLOBAL:glbOnly": {
+                ...PIPELINES["GLOBAL:conv"],
+                pipelineId: "glbOnly",
+                systemConfig: { inputFileFilters: { allow: ["*.glb"] } },
+            } as Pipeline,
+        };
+        expect(
+            selectionErrorsFor(chain, pipelines, [
+                { databaseId: "db1", assetId: "a1", relativeFileKey: "/model.obj" },
+            ])
+        ).toEqual([]);
+    });
+
     it("keys a workflow by database and id", () => {
         expect(workflowKey(CONVERT)).toBe("db1:wf1");
     });

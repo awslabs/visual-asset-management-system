@@ -1,37 +1,65 @@
 # VAMS Cosmos Predict Pipeline Container
 # Based on the official NVIDIA Cosmos-Predict1 Dockerfile pattern
 # https://github.com/nvidia-cosmos/cosmos-predict1/blob/main/Dockerfile
+#
+# Not deployed (cosmosPredict-construct.ts keeps its asset commented out). Its build inputs are pinned
+# like the deployed images' all the same, so the day it is wired back in it builds what was reviewed.
 
-FROM nvcr.io/nvidia/pytorch:24.10-py3
+FROM nvcr.io/nvidia/pytorch:24.10-py3@sha256:36555b43d382425a4281ecfbcb41de2f95fb542ca8e531c5486be10df8026f9d
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y git tree ffmpeg wget curl unzip
+# Pinned upstream revisions; each clone below fails the build if HEAD is anything else.
+ARG COSMOS_PREDICT1_COMMIT=724daa1b2df5ec96bdf111bb947479d2216b3b08
+ARG APEX_COMMIT=4db540366dd9e3c1545825550685f630e3efbe01
+# The Miniconda installer at a fixed release, checked against the SHA-256 Anaconda publishes for it.
+ARG MINICONDA_INSTALLER=Miniconda3-py314_26.9.4-1-Linux-x86_64.sh
+ARG MINICONDA_SHA256=76cf791877078e74410f64e5c2ef7da4e217fd7a433c2c3674c9d9695225c3bb
+
+# Install system dependencies, after the security updates published since the base image was built
+RUN apt-get update && apt-get upgrade -y && apt-get install -y git tree ffmpeg wget curl unzip
 RUN rm /bin/sh && ln -s /bin/bash /bin/sh && ln -s /lib64/libcuda.so.1 /lib64/libcuda.so
 
-# Install AWS CLI v2
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
-    unzip awscliv2.zip && \
+# Install AWS CLI v2 at a fixed version, checked against its SHA-256 before it is installed.
+ARG AWS_CLI_VERSION=2.36.39
+ARG AWS_CLI_SHA256=2b337174417c159f8fd825637841f5425308108bd6f99681664409fb0d7ebe01
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
+    echo "${AWS_CLI_SHA256}  awscliv2.zip" | sha256sum -c - && \
+    unzip -q awscliv2.zip && \
     ./aws/install && \
     rm -rf aws awscliv2.zip
 
 # Clone cosmos-predict1 repository
-RUN git clone https://github.com/nvidia-cosmos/cosmos-predict1.git /opt/cosmos-predict1
+RUN git clone https://github.com/nvidia-cosmos/cosmos-predict1.git /opt/cosmos-predict1 && \
+    cd /opt/cosmos-predict1 && \
+    git checkout --detach ${COSMOS_PREDICT1_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${COSMOS_PREDICT1_COMMIT}" && \
+    git rev-parse HEAD > /opt/cosmos-predict1/VAMS_UPSTREAM_COMMIT
 
 # Copy yaml and requirements into container (needed for conda env setup)
 RUN cp /opt/cosmos-predict1/cosmos-predict1.yaml /cosmos-predict1.yaml && \
     cp /opt/cosmos-predict1/requirements.txt /requirements.txt
 
+# Create the non-root runtime user before installing Miniconda (issue #327) so Miniconda can be
+# installed directly under its home. Conda is NOT relocatable — every script shebang and the
+# activate scripts hardcode the install prefix — so it must be installed at its final path
+# (/home/vams/miniconda3), never installed elsewhere and moved. The build stays root (cloning into
+# /opt needs it); ownership is handed to vams after the install and USER is switched last.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams
+ENV CONDA_DIR=/home/vams/miniconda3
+
 # Install all dependencies in a single RUN matching the official NVIDIA Dockerfile exactly.
 # This includes: miniconda, conda env, pip requirements, symlinks, transformer-engine, APEX
 RUN echo "Installing dependencies. This will take a while..." && \
-    mkdir -p ~/miniconda3 && \
-    wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh && \
-    bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3 && \
-    rm ~/miniconda3/miniconda.sh && \
-    source ~/miniconda3/bin/activate && \
+    mkdir -p ${CONDA_DIR} && \
+    wget -q "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}" -O ${CONDA_DIR}/miniconda.sh && \
+    echo "${MINICONDA_SHA256}  ${CONDA_DIR}/miniconda.sh" | sha256sum -c - && \
+    bash ${CONDA_DIR}/miniconda.sh -b -u -p ${CONDA_DIR} && \
+    rm ${CONDA_DIR}/miniconda.sh && \
+    source ${CONDA_DIR}/bin/activate && \
     conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
     conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r && \
     conda env create --file /cosmos-predict1.yaml && \
@@ -42,6 +70,9 @@ RUN echo "Installing dependencies. This will take a while..." && \
     ln -sf $CONDA_PREFIX/lib/python3.10/site-packages/triton/backends/nvidia/include/* $CONDA_PREFIX/include/ && \
     pip install transformer-engine[pytorch]==1.12.0 && \
     git clone https://github.com/NVIDIA/apex && cd apex && \
+    git checkout --detach ${APEX_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${APEX_COMMIT}" && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/apex.VAMS_UPSTREAM_COMMIT && \
     CUDA_HOME=$CONDA_PREFIX pip install -v --disable-pip-version-check --no-cache-dir --no-build-isolation --config-settings "--build-option=--cpp_ext" --config-settings "--build-option=--cuda_ext" . && \
     cd / && rm -rf /apex && \
     pip install --no-cache-dir boto3 huggingface_hub && \
@@ -51,10 +82,20 @@ RUN echo "Installing dependencies. This will take a while..." && \
 RUN mkdir -p /opt/ml/code
 COPY __main__.py model_manager.py inference.py entrypoint.sh /opt/ml/code/
 RUN chmod +x /opt/ml/code/entrypoint.sh
+# Normalize read/traverse bits: COPY preserves the build host's umask, so on a hardened host
+# (umask 077/027) these files land root-owned 600/640 and the non-root USER below cannot read them
+# (PermissionError at import). a+rX = world-read files + traverse dirs, no plain-file exec bit.
+RUN chmod -R a+rX /opt/ml/code
+
+# Hand the runtime user ownership of Miniconda (installed at its final path above), the code dir,
+# and the cloned framework. The entrypoint activates the env via `source ~/miniconda3/bin/activate`,
+# which resolves to /home/vams/miniconda3 under HOME=/home/vams.
+RUN chown -R vams:vams /home/vams /opt/ml/code /opt/cosmos-predict1
 
 WORKDIR /opt/ml/code
-# Isolated AWS Batch GPU job (no inbound listener) built on a root-only NVIDIA base image; running
-# as a non-root USER needs a uid/volume-permission design first -- suppressed for the 2.6.1 gate per
-# release policy, flagged for follow-up.
-# nosemgrep: dockerfile.security.missing-user-entrypoint.missing-user-entrypoint
+
+# Run as the non-root vams user (issue #327), switched only after the last root-owned build step.
+# The EFS model cache is owned by this uid/gid via userdata chown after mount.
+USER 10000:10000
+
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

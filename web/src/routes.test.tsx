@@ -37,8 +37,22 @@ jest.mock("@cloudscape-design/components/app-layout", () => ({
 }));
 
 jest.mock("./layout/Navigation", () => ({
-    Navigation: () => <div data-testid="side-navigation" />,
+    Navigation: ({ activeHref }: any) => (
+        <div data-testid="side-navigation" data-active-href={activeHref} />
+    ),
 }));
+
+// Stands in for a page that picks its own highlighted side link (the API keys page does, from its
+// resolved mode).
+jest.mock("./pages/auth/ApiKeys", () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { useActiveNavHref } = require("./layout/activeNavHref");
+    function MockApiKeysPage() {
+        useActiveNavHref("#/auth/api-keys/?mode=admin");
+        return <div data-testid="api-keys-page" />;
+    }
+    return { __esModule: true, default: MockApiKeysPage };
+});
 
 let mockLandingThrows = false;
 jest.mock("./pages/LandingPage", () => ({
@@ -117,6 +131,24 @@ function pathsMissingParams(
 }
 
 describe("routeTable", () => {
+    it("highlights the Assets and Files navigation item on every search route", () => {
+        // Navigation matches activeHref to a nav item href by string equality, so a search route
+        // whose active value is "/" lights up Home while the search page is open.
+        const searchPage = pageFor("/assets");
+        const searchRoutes = routeTable.filter((route) => route.Page === searchPage);
+        expect(searchRoutes.map((route) => route.path)).toEqual(
+            expect.arrayContaining([
+                "/search",
+                "/search/:databaseId/assets",
+                "/assets",
+                "/databases/:databaseId/assets",
+            ])
+        );
+        for (const route of searchRoutes) {
+            expect(route.active).toBe("#/assets/");
+        }
+    });
+
     it("resolves /workflows/create to a page that needs no route parameters", () => {
         // Workflows are database-scoped: the builder reads :databaseId from the path and renders
         // "Missing Database ID" without one, so an unscoped create path must not point at it.
@@ -158,6 +190,12 @@ describe("routeTable", () => {
         const matched = matchRoutes(routeTable as any, url as string);
         const leaf = matched![matched!.length - 1];
         expect(leaf.params).toEqual(expected);
+    });
+
+    it("serves the asset page only under a database", () => {
+        // The asset page reads databaseId from the path; without it the page has no asset to load.
+        expect(routeTable.map((route) => route.path)).not.toContain("/assets/:assetId");
+        expect(pageFor("/databases/:databaseId/assets/:assetId")).toBeDefined();
     });
 
     it("routes /executions/:executionId to the execution detail page, not the board", () => {
@@ -205,7 +243,7 @@ describe("routeTable active highlight", () => {
 
     it.each([
         ["/", "#/"],
-        ["/search", "#/"],
+        ["/search", "#/assets/"],
         ["/databases/:databaseId/assets/:assetId", "#/assets/"],
         ["/databases/:databaseId/assets/:assetId/download", "#/assets/"],
         ["/metadataschema", "#/metadataschema/"],
@@ -244,14 +282,85 @@ describe("AppRoutes", () => {
         mockLandingThrows = false;
     });
 
-    it("falls open to the landing page only when the permission check fails", async () => {
-        mockCheckWebRoutesAllowed.mockRejectedValue(new Error("routes check unavailable"));
+    it("shows the could-not-check panel on a gated route when the permission check fails", async () => {
+        const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+        try {
+            mockCheckWebRoutesAllowed.mockRejectedValue(new Error("routes check unavailable"));
+
+            renderAt("/pipelines");
+
+            await waitFor(() =>
+                expect(screen.getByText("Page access could not be checked")).toBeInTheDocument()
+            );
+            // Neither the gated page nor a silent fall-through to the landing page.
+            expect(screen.queryByTestId("pipelines-page")).not.toBeInTheDocument();
+            expect(screen.queryByTestId("landing-page")).not.toBeInTheDocument();
+            expect(screen.getByTestId("side-navigation")).toBeInTheDocument();
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+
+    it("still renders the landing page at / when the permission check fails", async () => {
+        const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+        try {
+            mockCheckWebRoutesAllowed.mockRejectedValue(new Error("routes check unavailable"));
+
+            renderAt("/");
+
+            await waitFor(() => expect(screen.getByTestId("landing-page")).toBeInTheDocument());
+            expect(screen.queryByText("Page access could not be checked")).not.toBeInTheDocument();
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+
+    it("Retry runs the check again and opens the page once it succeeds", async () => {
+        const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+        try {
+            mockCheckWebRoutesAllowed.mockRejectedValueOnce(new Error("routes check unavailable"));
+            allowRoutes("/pipelines");
+
+            renderAt("/pipelines");
+
+            fireEvent.click(await screen.findByText("Retry"));
+
+            await waitFor(() => expect(screen.getByTestId("pipelines-page")).toBeInTheDocument());
+            expect(screen.queryByText("Page access could not be checked")).not.toBeInTheDocument();
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+
+    it("shows a no-access panel, not the landing page, for a route the role does not allow", async () => {
+        allowRoutes("/databases");
 
         renderAt("/pipelines");
 
-        // "/" and "*" are added back so the app is not a blank screen; the gated route is not.
-        await waitFor(() => expect(screen.getByTestId("landing-page")).toBeInTheDocument());
+        await waitFor(() =>
+            expect(screen.getByText("You do not have access to this page")).toBeInTheDocument()
+        );
         expect(screen.queryByTestId("pipelines-page")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("landing-page")).not.toBeInTheDocument();
+        expect(screen.getByText("Go to Home")).toBeInTheDocument();
+    });
+
+    it("shows a not-found panel for an unknown route", async () => {
+        allowRoutes("/pipelines");
+
+        renderAt("/no-such-page");
+
+        await waitFor(() => expect(screen.getByText("Page not found")).toBeInTheDocument());
+        expect(screen.queryByTestId("landing-page")).not.toBeInTheDocument();
+    });
+
+    it("shows the landing page at / for any role", async () => {
+        allowRoutes(/* none */);
+
+        renderAt("/");
+
+        await waitFor(() => expect(screen.getByTestId("landing-page")).toBeInTheDocument());
+        expect(screen.queryByText("You do not have access to this page")).not.toBeInTheDocument();
     });
 
     it("positive control: renders the gated page when the permission check allows it", async () => {
@@ -332,6 +441,32 @@ describe("AppRoutes", () => {
             consoleError.mockRestore();
             consoleWarn.mockRestore();
         }
+    });
+
+    it("highlights the side link a page chooses from its own state", async () => {
+        allowRoutes("/auth/api-keys");
+
+        renderAt("/auth/api-keys");
+
+        await waitFor(() => expect(screen.getByTestId("api-keys-page")).toBeInTheDocument());
+        await waitFor(() =>
+            expect(screen.getByTestId("side-navigation")).toHaveAttribute(
+                "data-active-href",
+                "#/auth/api-keys/?mode=admin"
+            )
+        );
+    });
+
+    it("positive control: a page that chooses nothing keeps its route's active href", async () => {
+        allowRoutes("/pipelines");
+
+        renderAt("/pipelines");
+
+        await waitFor(() => expect(screen.getByTestId("pipelines-page")).toBeInTheDocument());
+        expect(screen.getByTestId("side-navigation")).toHaveAttribute(
+            "data-active-href",
+            "#/pipelines/"
+        );
     });
 
     it("positive control: no error panel when the page renders normally", async () => {

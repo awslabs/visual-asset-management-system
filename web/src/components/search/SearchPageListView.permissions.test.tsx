@@ -1,0 +1,152 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/**
+ * The search list view's Create Asset, Delete Selected and Unarchive Selected actions are disabled,
+ * with the reason, when the page says the signed-in role may not use them (a selection with an archived row can only be
+ * permanently deleted, so it needs that permission); with no reason they behave
+ * as before.
+ */
+import React from "react";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import SearchPageListView from "./SearchPageListView";
+import { INITIAL_STATE } from "./SearchPageTypes";
+import Synonyms from "../../synonyms";
+
+jest.mock("../../services/APIService", () => ({
+    fetchtagTypes: jest.fn(() => Promise.resolve([])),
+}));
+jest.mock("../filemanager/modals/FileViewerModal", () => ({
+    __esModule: true,
+    default: () => null,
+}));
+// The viewer registry pulls in Vite's import.meta.glob, so the registry modules are stubbed.
+jest.mock("../../visualizerPlugin/core/viewableExtensions", () => ({
+    areFilenamesViewableTogether: () => false,
+    areFilesComparableTogether: () => false,
+}));
+jest.mock("../../visualizerPlugin/core/useViewerRegistryReady", () => ({
+    useViewerRegistryReady: () => true,
+}));
+jest.mock("../../visualizerPlugin/core/PluginRegistry", () => ({}));
+
+const hit = { _id: "a1", _source: { str_assetname: "Bracket", str_databaseid: "db1" } };
+const state = {
+    ...INITIAL_STATE,
+    initialResult: true,
+    recordType: "asset",
+    result: { hits: { hits: [hit], total: { value: 1 } } },
+    selectedItems: [{ ...hit._source, _id: "a1" }],
+    tablePreferences: { pageSize: 10, visibleContent: [] },
+};
+
+const CREATE_REASON = `Your role does not allow creating ${Synonyms.assets}.`;
+const DELETE_REASON = `Your role does not allow archiving or deleting ${Synonyms.assets}.`;
+
+const PERMANENT_DELETE_REASON = `Your role does not allow permanently deleting ${Synonyms.assets}.`;
+
+const mount = (
+    assetActionDisabledReasons?: { create?: string; delete?: string; permanentDelete?: string },
+    viewState: any = state
+) =>
+    render(
+        <MemoryRouter>
+            <SearchPageListView
+                state={viewState}
+                dispatch={jest.fn()}
+                onCreateAsset={jest.fn()}
+                assetActionDisabledReasons={assetActionDisabledReasons}
+            />
+        </MemoryRouter>
+    );
+
+const createButton = () => screen.getByRole("button", { name: `Create ${Synonyms.Asset}` });
+const deleteButton = () => screen.getByRole("button", { name: "Delete Selected" });
+
+beforeEach(() => {
+    jest.spyOn(console, "log").mockImplementation(() => undefined);
+});
+
+afterEach(() => jest.restoreAllMocks());
+
+describe("Search list view asset actions by permission", () => {
+    it("disables both actions and states why when the role may use neither", () => {
+        mount({ create: CREATE_REASON, delete: DELETE_REASON });
+        expect(createButton()).toHaveAttribute("aria-disabled", "true");
+        expect(createButton()).toHaveAccessibleDescription(CREATE_REASON);
+        expect(deleteButton()).toHaveAttribute("aria-disabled", "true");
+        expect(deleteButton()).toHaveAccessibleDescription(DELETE_REASON);
+    });
+
+    describe("Unarchive Selected, for one archived asset selected", () => {
+        const archivedHit = {
+            _id: "a2",
+            _source: { str_assetname: "Old bracket", str_databaseid: "db1", bool_archived: true },
+        };
+        const archivedState = {
+            ...state,
+            result: { hits: { hits: [archivedHit], total: { value: 1 } } },
+            selectedItems: [{ ...archivedHit._source, _id: "a2" }],
+        };
+        const unarchiveButton = () => screen.getByRole("button", { name: "Unarchive Selected" });
+        const UNARCHIVE_REASON = `Your role does not allow unarchiving ${Synonyms.assets}.`;
+
+        const mountArchived = (reasons?: { unarchive?: string }) =>
+            render(
+                <MemoryRouter>
+                    <SearchPageListView
+                        state={archivedState}
+                        dispatch={jest.fn()}
+                        onCreateAsset={jest.fn()}
+                        assetActionDisabledReasons={reasons}
+                    />
+                </MemoryRouter>
+            );
+
+        it("is disabled with the reason when the role may not unarchive", () => {
+            mountArchived({ unarchive: UNARCHIVE_REASON });
+            expect(unarchiveButton()).toHaveAttribute("aria-disabled", "true");
+            expect(unarchiveButton()).toHaveAccessibleDescription(UNARCHIVE_REASON);
+        });
+
+        it("is enabled when the role may unarchive", () => {
+            mountArchived({});
+            expect(unarchiveButton()).not.toBeDisabled();
+            expect(unarchiveButton()).not.toHaveAttribute("aria-disabled");
+        });
+    });
+
+    it("keeps both actions enabled when no reason is given", () => {
+        const onCreateAsset = jest.fn();
+        render(
+            <MemoryRouter>
+                <SearchPageListView
+                    state={state}
+                    dispatch={jest.fn()}
+                    onCreateAsset={onCreateAsset}
+                />
+            </MemoryRouter>
+        );
+        expect(deleteButton()).not.toBeDisabled();
+        expect(deleteButton()).not.toHaveAttribute("aria-disabled");
+        fireEvent.click(createButton());
+        expect(onCreateAsset).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps Delete Selected for a live selection when the role may archive but not permanently delete", () => {
+        mount({ permanentDelete: PERMANENT_DELETE_REASON });
+        expect(deleteButton()).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("disables Delete Selected for a selection with an archived row when the role may not permanently delete", () => {
+        mount(
+            { permanentDelete: PERMANENT_DELETE_REASON },
+            { ...state, selectedItems: [{ ...hit._source, _id: "a1", bool_archived: true }] }
+        );
+        expect(deleteButton()).toHaveAttribute("aria-disabled", "true");
+        expect(deleteButton()).toHaveAccessibleDescription(PERMANENT_DELETE_REASON);
+    });
+});

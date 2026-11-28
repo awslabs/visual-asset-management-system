@@ -117,6 +117,8 @@ export interface CreateFolderModalProps {
     onSubmit: (folderName: string) => void;
     parentFolder: string;
     isLoading: boolean;
+    // Error from the last create request, shown until the name is edited.
+    submitError?: string;
 }
 
 export interface EnhancedFileManagerProps {

@@ -26,6 +26,12 @@ jest.mock("../../../services/appCache", () => ({
 jest.mock("../../../utils/authTokenUtils", () => ({
     getDualAuthorizationHeader: jest.fn(() => Promise.resolve("Bearer test")),
 }));
+jest.mock("../../../services/APIService", () => ({
+    downloadAsset: jest.fn(async ({ key }: { key: string }) => [
+        true,
+        `https://bucket.s3.example.test/${key}?X-Amz-Signature=sig`,
+    ]),
+}));
 jest.mock("./dependencies", () => ({
     ThreeJSDependencyManager: {
         loadThreeJS: jest.fn(() => Promise.resolve()),
@@ -246,6 +252,7 @@ describe("ThreeJSViewerComponent stacking", () => {
         const infoBox = getInfoBox();
         expect(panel).toContainElement(clearSelection);
         expect(panel).toContainElement(screen.getByTitle("Controls"));
+        expect(panel).toContainElement(screen.getByRole("separator", { name: "Resize tree view" }));
         expect(isDrawnAbove(panel, infoBox)).toBe(true);
     });
 

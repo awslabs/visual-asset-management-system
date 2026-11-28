@@ -25,7 +25,7 @@ The asset detail page is organized into three vertically stacked sections:
 
 The details pane is the top section and displays the asset's core properties alongside action buttons.
 
-![Asset detail page showing preview thumbnail, properties, and action buttons](/img/view_asset_page_20260323_v2.5.png)
+![Asset detail page showing preview thumbnail, properties, and action buttons](/img/view_asset_page_20261109_v2.7.png)
 
 | Element                  | Description                                                                                                                                                     |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -64,15 +64,16 @@ To modify an asset's properties:
 1. Select the **Edit** button in the details pane header.
 2. In the **Update Asset** modal, modify any of the following fields:
 
-| Field                | Description                                        |
-| -------------------- | -------------------------------------------------- |
-| **Asset Name**       | The display name of the asset.                     |
-| **Description**      | A description of the asset's contents or purpose.  |
-| **Asset Type**       | The file type classification.                      |
-| **Is Distributable** | Whether file downloads are enabled for this asset. |
-| **Tags**             | Add or remove tags to categorize the asset.        |
+| Field                 | Description                                                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Asset Name**        | The display name of the asset.                                                                                                             |
+| **Description**       | A description of the asset's contents or purpose.                                                                                          |
+| **Asset Type**        | The file type classification.                                                                                                              |
+| **Is Distributable**  | Whether file downloads are enabled for this asset.                                                                                         |
+| **Tags**              | Add or remove tags to categorize the asset.                                                                                                |
+| **Compliance Schema** | The asset's own compliance schema, or **Inherit from database**. Shown to users who may list compliance schemas and bind one to the asset. |
 
-3. Select **Update** to save your changes. The page refreshes to display the updated properties.
+3. Select **Update Asset**. The asset is saved only when an asset field changed, and the compliance schema binding only when the schema changed. Once every request sent succeeds, the page refreshes to display the updated properties; a refused request is reported in the modal, which stays open.
 
 ---
 
@@ -212,9 +213,27 @@ Select **(versions)** beside the **Version Date** to open the file's version his
 
 To add files to an existing asset:
 
-1. In the File Manager, use the upload controls to select files or folders.
-2. Files are uploaded to the current directory location in the asset's file hierarchy.
-3. Upload progress is displayed for each file.
+1. In the File Manager, select the folder to add files to (or the asset root), then select **Upload Files**. The **Modify Asset Files** page opens with that folder as the **Destination folder**. The page header names the asset, its database and the destination. Beside the upload zone, the asset's overall preview file picker (asset root only), the database's upload restrictions, if any, and the **About preview files** guidance are shown. The guidance is expanded when the page opens; if you collapse it, it opens again on its own when the selection includes preview files.
+2. Change the destination if needed. It is also kept in the page address as `?folder=/scene/`, so a refresh or a shared link keeps it. Relative segments (`.`, `..`) and backslashes are refused.
+3. Add files with **Add files**, **Add folder**, or by dropping files and folders onto the upload zone. A picked folder and a dropped folder land at the same path:
+    - **A folder keeps its name** under the destination: `textures/` added at `/scene/` lands under `/scene/textures/`. For a single folder you can switch to **Upload folder contents** to put its files directly in the destination instead.
+    - **Loose files** land directly in the destination: `notes.txt` added at `/scene/` becomes `/scene/notes.txt`.
+4. Review the preview. Every path includes the destination, and changing the destination moves every previewed file. Files whose path already exists in the asset are marked before the upload starts, and you can remove them from the selection:
+
+    - **Exists: uploads a new version** -- the upload adds a new version of that file. The earlier versions stay in its history, and existing asset versions keep pointing at the version they captured.
+    - **Archived: uploading restores it with a new version** -- the archived file becomes visible and current again, with the uploaded content as its new version.
+
+    If VAMS cannot check every existing file (for example, the listing is refused or the folder holds more than 10,000 files), an info alert says so and no rows are marked; the upload still works the same way. Duplicate paths within the selection are errors and block the upload until removed. See [File versions](../concepts/files-and-versions.md#file-versions-amazon-s3).
+
+    The view switch above the table narrows the list:
+
+    - **All** -- every file in the selection.
+    - **Errors (n)** -- the files that block the upload: **Duplicate path**, **Invalid path**, and an extension the database does not allow (for example **Extension .gltf not allowed**). The reason also shows beside the disabled **Finalize and Upload** button. The error alert's **Show errors only** action switches to this view.
+    - **Existing (n)** -- appears once the existing-file check has finished, and lists the files marked **Exists** or **Archived**. These marks are warnings, not errors: they do not block the upload.
+
+5. Select **Finalize and Upload**, or **Cancel** to return to the asset. While the button is disabled, the reason is shown beside it. Upload progress is displayed for each file.
+
+![Add Files page with the destination folder /scene/, files at existing paths marked Exists: uploads a new version, and two Duplicate path errors](/img/upload_add_files_destination_20261117_v2.7.png)
 
 :::tip
 You can also navigate to the dedicated upload page for the asset from the asset detail page to use the full upload wizard with metadata and relationship options.
@@ -286,23 +305,39 @@ Permanent deletion is irreversible. The file and all its versions are removed fr
 To permanently delete a file:
 
 1. Select the file in the directory tree.
-2. Select the **Delete** action.
-3. In the confirmation dialog, choose **Permanent Delete**.
-4. Type the confirmation text if prompted.
+2. Select **Delete File** in the **File Operations** menu. The dialog that opens archives the file unless you change it.
+3. Turn on **Permanently delete file instead of archiving**. The option is shown only when your role may permanently delete files.
+4. Type `delete` in the **Confirmation** field and select **Delete**.
 5. The file is permanently removed from the asset.
+
+An archived file offers **Permanently Delete File** instead, which opens the same dialog already set to permanent deletion. It is unavailable, with the reason, when your role may not permanently delete files.
+
+If Amazon S3 does not delete every version of the file, or of every file in a folder, an error is shown and the files that could not be deleted stay in the asset with their previews. If a file's previews are the part that could not be deleted, the error says so. Ask an administrator to check the bucket's permissions and object lock settings, then delete the file again.
 
 ### File Previews and Preview Management
 
 Files can have associated preview thumbnails. These are generated by processing pipelines or uploaded manually.
 
--   **Automatic previews** -- When preview-generating pipelines (such as 3D preview or point cloud preview) are configured and triggered via workflows, preview thumbnails are created automatically.
--   **Manual previews** -- Upload a file named `{originalFile}.previewFile.{ext}` (for example, `model.gltf.previewFile.png`) alongside the original file. Valid preview formats are `.png`, `.jpg`, `.jpeg`, `.svg`, and `.gif`.
+-   **Automatic previews** -- When preview-generating pipelines (such as 3D preview, media preview for large images, TGA, TIFF and video, or point cloud preview) are configured and triggered via workflows, preview thumbnails are created automatically.
+-   **Manual previews** -- Upload a file named `{originalFile}.previewFile.{ext}` (for example, `model.gltf.previewFile.png`) alongside the original file. Valid preview formats are `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, and `.bmp`.
+-   **Images as their own preview** -- An image in one of those formats that is under 5 MiB (5,242,880 bytes) is shown as its own preview, so no preview file is generated for it. Images of 5 MiB or more, TGA and TIFF files, and video files get a generated preview when the Media Preview Thumbnail workflow is enabled for the deployment. Generated previews are always under 5 MiB. When the workflow runs on an image that is already shown as its own preview, it finishes successfully without writing a preview, and the execution's results say that no preview was generated because the file is under 5 MiB and already shown as its own preview.
 
-Preview images appear in the file details panel and are used as thumbnails in search results.
+Preview images appear in the file details panel and are used as thumbnails in search results. When a file has more than one preview (for example a GIF from one pipeline run and a PNG from a later run), VAMS shows the newest one that is not archived.
+
+### Comparing Files and Versions
+
+Two files, or two versions of one file, can be opened side by side when a compare viewer supports their type. For text files the **Text Diff Viewer** shows the changes as **Side-by-side** or **Inline**, at **Line**, **Word** or **Character** granularity. See [File Viewers](../concepts/viewers.md) for the types each viewer compares.
+
+-   **From the file manager.** Select two files in the tree; the file details panel shows a **Compare Selected Files** icon when they can be compared. Opening a single file offers a **Visualize** / **Compare** toggle when a compare viewer handles its type: **Compare** diffs it against another version of the same file.
+-   **From search.** Select two files in the search results and choose **Compare Selected**. The files may belong to different assets.
+-   **From a file's version list.** A text file's version history offers **Compare** on each version, between **View File** and **Download**; it compares that version with the latest one.
+-   **Between asset versions.** On the **Versions** tab, choose **Compare Versions**, then **Compare Two Versions** or **Compare with Current Files**. A file that changed between the two offers **Compare** when a compare viewer handles its type.
+
+The viewer opens on the mode you chose; when both modes apply, the toggle at the top of the viewer switches between them.
 
 ### Download and Share URLs
 
-![Download dialog for multiple file selection](/img/download_file_multiple_20260323_v2.5.png)
+![Download dialog for multiple file selection](/img/download_file_multiple_20261109_v2.7.png)
 
 For distributable assets, you can generate shareable download URLs:
 
@@ -312,7 +347,13 @@ For distributable assets, you can generate shareable download URLs:
     - **URLs (Embedded Auth)** -- Generates time-limited presigned URLs with embedded authentication. These expire after the timeout configured by your administrator (24 hours by default), or earlier if the credentials that signed them expire first.
     - **URLs (API Stream)** -- Generates long-lasting streaming URLs that require an Authorization header with a Bearer token. These do not expire as long as the caller is authenticated.
 
-![Share files modal for generating presigned URLs](/img/share_files_modal_20260323_v2.5.png)
+![Share files modal for generating presigned URLs](/img/share_files_modal_20261109_v2.7.png)
+
+Large uploads and downloads can be faster when your administrator has turned on Amazon S3 Transfer Acceleration for the asset bucket. Nothing changes in how you use VAMS.
+
+### Download as Zip
+
+When the deployment enables Download as Zip, the **Export** menu in the file details toolbar offers **Download as Zip** for any selection of files and folders, or for the asset root. VAMS builds one zip, tar, or tar.gz archive in the background from the current files or from an asset version, and lists the archive job in the asset's **Download Queue** tab, where you download, cancel, or delete it. The whole archive is refused when a selected file is archived, a deleted version, in an archive storage class, or has a blocked file type. See [Download as Zip and the Download Queue](zip-downloads.md).
 
 ---
 
@@ -369,12 +410,22 @@ Archiving an asset is a soft-delete operation that hides it from default search 
 3. Confirm the operation.
 4. The asset is archived and no longer appears in standard search results.
 
+### Viewing an Archived Asset
+
+To open an archived asset, enable the option to show archived assets on the search page and select the asset, or open a link to its detail page. The page shows a **This asset is archived** banner with the archive date, the user who archived it, and the reason, and it presents the asset read-only:
+
+-   The asset details, files (each marked archived), versions, metadata, file attributes, relationships, comments, and workflow executions are shown.
+-   Every change is unavailable until the asset is unarchived: **Edit**, **Subscribe**, uploads, folder and file actions, metadata and relationship edits, version changes, new comments, and workflow runs. Files cannot be downloaded or viewed while the asset is archived.
+-   The page header offers **Unarchive** and **Delete permanently**, each shown to users whose role allows that action.
+
+A role sees an archived asset only when its permission constraints match the archived record, whose database ID is stored as `<databaseId>#deleted`. A constraint on the database ID using the `equals` operator does not match it; see [Reading an archived asset](../api/assets.md#reading-an-archived-asset).
+
 ### Unarchiving an Asset
 
 1. In the search page, enable the option to show archived assets.
 2. Find the archived asset.
-3. On its detail page, use the restore action to unarchive it.
-4. The asset becomes visible in standard search results again.
+3. On its detail page, select **Unarchive** and confirm. You can choose to also restore the files archived with the asset.
+4. The asset becomes visible in standard search results again, and its page returns to the editable view.
 
 ---
 
@@ -386,11 +437,15 @@ Permanent deletion is irreversible. The asset, all its files in Amazon S3, all v
 
 To permanently delete an asset:
 
-1. On the asset detail page, select the **Delete** button.
-2. In the deletion modal, choose **Permanent Delete**.
-3. Type the confirmation text to acknowledge the irreversible nature of the operation.
-4. Select **Confirm**.
+1. On the asset detail page, select the **Delete** button. The dialog that opens archives the asset unless you change it.
+2. Turn on **Permanently delete asset instead of archiving**. The option is shown only when your role may permanently delete assets.
+3. Type `delete` in the **Confirmation** field to acknowledge the irreversible nature of the operation.
+4. Select **Delete**.
 5. You are redirected to the search page after successful deletion.
+
+An archived asset's page offers **Delete permanently** instead, which opens the same dialog already set to permanent deletion.
+
+The asset's files are deleted from Amazon S3 before any of its records. If Amazon S3 does not delete every file version, for example because VAMS is not allowed to delete objects in the asset's storage bucket or the objects are locked, the deletion modal shows an error and the asset stays, with the files that could not be deleted. Ask an administrator to check the bucket's permissions and object lock settings, then delete the asset again.
 
 ---
 
@@ -429,7 +484,7 @@ Comments are tied to the asset, not to a specific version. All comments remain v
 
 The **Executions** tab shows the execution history of all workflows that have been run against the asset. This provides a centralized view of processing activities without needing to navigate to the workflow management pages.
 
-![Asset workflow executions tab showing execution history](/img/view_asset_workflow_executions_tab_20260803_v2.6.png)
+![Asset workflow executions tab showing execution history](/img/view_asset_workflow_executions_tab_20261109_v2.7.png)
 
 ### Viewing Execution History
 

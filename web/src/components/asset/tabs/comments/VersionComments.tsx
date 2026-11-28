@@ -16,6 +16,7 @@ import {
 import JoditEditor from "jodit-react";
 import sanitizeHtml from "sanitize-html";
 import Synonyms from "../../../../synonyms";
+import { useAssetArchived } from "../../../../context/ArchivedAssetContext";
 
 // Tags/attributes the comment editor toolbar can produce
 const commentSanitizeOptions: sanitizeHtml.IOptions = {
@@ -56,8 +57,10 @@ type ShowMessageFunction = (props: {
 }) => void;
 
 interface CommentType {
+    databaseId: string;
     assetId: string;
-    "assetVersionId:commentId": string;
+    commentId: string;
+    assetVersionId: string;
     commentBody: string;
     commentOwnerID: string;
     commentOwnerUsername: string;
@@ -71,32 +74,18 @@ interface VersionCommentsProps {
     userId: string;
     setReload: (reload: boolean) => void;
     defaultExpanded: boolean;
-    version: {
-        Comment: string;
-        dateModified: string;
-        S3Version: string;
-        Version: string;
-        description: string;
-    };
     comments: CommentType[];
     showMessage: ShowMessageFunction;
 }
 
 export default function VersionComments(props: VersionCommentsProps) {
-    const {
-        loading,
-        showLoading,
-        userId,
-        setReload,
-        defaultExpanded,
-        version,
-        comments,
-        showMessage,
-    } = props;
+    const assetArchived = useAssetArchived();
+    const { loading, showLoading, userId, setReload, defaultExpanded, comments, showMessage } =
+        props;
     const [expanded, setExpanded] = useState(defaultExpanded);
     const [visible, setVisible] = useState(false);
     const [editVisible, setEditVisible] = useState(false);
-    const [commentToDelete, setCommentToDelete] = useState<string>("");
+    const [commentToDelete, setCommentToDelete] = useState<CommentType | null>(null);
     const [commentToEdit, setCommentToEdit] = useState<CommentType | null>(null);
     const [editedContent, setEditedContent] = useState<string>("");
     const editor = useRef(null);
@@ -166,15 +155,11 @@ export default function VersionComments(props: VersionCommentsProps) {
     const handleDeleteComment = async () => {
         if (!commentToDelete) return;
 
-        console.log("Deleting Comment-- " + commentToDelete);
-        const [assetId, assetVersionId, CommentId] = commentToDelete.split(":");
-
-        const assetVersionIdAndCommentId = assetVersionId + ":" + CommentId;
-
+        const { databaseId, assetId, commentId } = commentToDelete;
         showLoading(true);
 
         try {
-            const result = await deleteComment({ assetId, assetVersionIdAndCommentId });
+            const result = await deleteComment({ databaseId, assetId, commentId });
             // deleteComment resolves with 403 for a permission denial, [false, message] for any
             // other rejected request and false for an empty reply, so a failure never reaches the
             // catch below and has to be read off the result.
@@ -220,13 +205,14 @@ export default function VersionComments(props: VersionCommentsProps) {
     const handleEditComment = async () => {
         if (!commentToEdit) return;
 
-        const [assetId] = commentToEdit["assetVersionId:commentId"].split(":");
+        const { databaseId, assetId, commentId } = commentToEdit;
         showLoading(true);
 
         try {
             const response = await updateComment({
+                databaseId,
                 assetId,
-                assetVersionIdAndCommentId: commentToEdit["assetVersionId:commentId"],
+                commentId,
                 body: {
                     commentBody: editedContent,
                 },
@@ -279,19 +265,16 @@ export default function VersionComments(props: VersionCommentsProps) {
         <div>
             <ExpandableSection
                 variant="container"
-                header={`Version ${version.Version}`}
+                header={Synonyms.Comments}
                 expanded={expanded}
                 onChange={({ detail }) => setExpanded(detail.expanded)}
             >
                 <div>
                     {comments.length === 0 ? (
-                        <div className="noCommentsDiv">{`No ${Synonyms.comments} for this version`}</div>
+                        <div className="noCommentsDiv">{`No ${Synonyms.comments} yet`}</div>
                     ) : (
                         comments.map((comment) => (
-                            <div
-                                key={comment["assetVersionId:commentId"]}
-                                className="commentContainer"
-                            >
+                            <div key={comment.commentId} className="commentContainer">
                                 <div className="commentHeader">
                                     <div className="commentOwner">
                                         <strong>{comment.commentOwnerUsername}</strong>
@@ -312,7 +295,7 @@ export default function VersionComments(props: VersionCommentsProps) {
                                         ),
                                     }}
                                 ></div>
-                                {userId === comment.commentOwnerUsername && (
+                                {userId === comment.commentOwnerUsername && !assetArchived && (
                                     <div className="commentActions">
                                         <SpaceBetween direction="horizontal" size="xs">
                                             <Button
@@ -328,9 +311,7 @@ export default function VersionComments(props: VersionCommentsProps) {
                                             <Button
                                                 variant="link"
                                                 onClick={() => {
-                                                    setCommentToDelete(
-                                                        `${comment.assetId}:${comment["assetVersionId:commentId"]}`
-                                                    );
+                                                    setCommentToDelete(comment);
                                                     setVisible(true);
                                                 }}
                                             >

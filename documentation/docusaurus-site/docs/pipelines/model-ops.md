@@ -68,11 +68,15 @@ Add the following to your `config.json` under `app.pipelines`:
 -   **Internet access** -- The container requires internet access for AWS Marketplace metering API communication. The ECS cluster deploys in private subnets with a NAT Gateway.
 -   **VPC with private subnets** -- When using an external VPC, provide private subnet IDs in the VPC configuration for the ECS cluster.
 -   **Container image** -- The `ecrContainerImageURI` must point to a valid container image.
+-   **Asset buckets in the deployment Region** -- The VNTANA container reads the input and writes the output through its own AWS SDK, which VAMS does not control, so the pipeline processes assets in the deployment Region only. An execution whose input or output bucket is in another Region fails before the task is started, with a cause naming the pipeline as same-Region only ([External S3 setup](../deployment/external-s3-setup.md#pipelines-and-cross-region-inputs)).
+
+For the file of a single-file asset (an asset created on one existing Amazon S3 object), and for an input whose launch version is no longer the current one, the container reads the run's own copy of the file in the auxiliary bucket, under `pipelines/modelops.staged-inputs/`, which VAMS deletes when the run ends. That folder holds only the one file, so its companion files, such as a `.gltf` file's external buffers and textures, are not available to the container.
 
 :::warning[Verify where your container writes its output before running a same-format conversion]
 VAMS supplies the container two configuration blocks: `state`, which describes the **input** file and
-carries that file's own directory, and `output`, which carries the destination — the workflow's output
-prefix plus an `optimized` folder for a conversion whose output format matches its input.
+carries the folder it is read from (the file's own directory, or the folder of the run's copy described
+above), and `output`, which carries the destination — the workflow's output prefix plus an `optimized`
+folder for a conversion whose output format matches its input.
 
 Which block a given VNTANA container build reads is part of that container's contract, and VAMS cannot
 determine it. The distinction only matters in one case, and it matters a great deal there: for a

@@ -11,8 +11,18 @@ const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
 // Configuration
 const viewerId = "supersplat-viewer";
 const SUPERSPLAT_REPO = "https://github.com/playcanvas/supersplat.git";
-const SUPERSPLAT_TAG = "v3.1.1"; // pinned stable release; bump deliberately to upgrade
+const SUPERSPLAT_TAG = "v3.7.0"; // pinned stable release; bump deliberately to upgrade
 const BASE_HREF = "/viewers/supersplat/"; // MUST match the public hosting sub-path
+
+// SuperSplat v3.7.0 registers "WebMCP" editor tools (playcanvas/supersplat#1081) with the browser's
+// document/navigator.modelContext when a browser offers it. The hosted editor is same-origin with
+// VAMS, so a browser agent could then drive the editor (import a model from any URL, export the
+// scene) inside a signed-in VAMS tab. Upstream has no build flag for this, so the install removes
+// the registration from main.ts before building and checks the bundle for leftovers afterwards.
+// Each step fails the install if upstream code moves, so a future bump cannot drop it silently.
+const WEBMCP_IMPORT = "import { registerWebMCP } from './webmcp';";
+const WEBMCP_CALL = "registerWebMCP(editor);";
+const WEBMCP_BUNDLE_MARKERS = ["modelContext", "registerTool"];
 
 const cloneDir = path.resolve(__dirname, "src-clone");
 const cloneDistDir = path.join(cloneDir, "dist");
@@ -36,10 +46,46 @@ const cloneRepo = () => {
     console.log("SuperSplat: Clone complete");
 };
 
+const countOccurrences = (text, needle) => text.split(needle).length - 1;
+
+const disableWebMcp = async () => {
+    const mainTs = path.join(cloneDir, "src", "main.ts");
+    let source = await fs.readFile(mainTs, "utf8");
+    for (const needle of [WEBMCP_IMPORT, WEBMCP_CALL]) {
+        const found = countOccurrences(source, needle);
+        if (found !== 1) {
+            throw new Error(
+                `SuperSplat: expected one "${needle}" in src/main.ts, found ${found}; ` +
+                    "review the WebMCP registration for this tag before building"
+            );
+        }
+        source = source.replace(needle, "// WebMCP registration removed by the VAMS install");
+    }
+    await fs.writeFile(mainTs, source);
+    console.log("SuperSplat: WebMCP tool registration removed from src/main.ts");
+};
+
 const npmInstall = () => {
     console.log("SuperSplat: Installing dependencies (this can take a few minutes)...");
-    execSync("npm install", { cwd: cloneDir, stdio: "inherit" });
+    // The clone has its own package.json, so web/.npmrc does not reach this install: pass the
+    // 7-day release-age floor explicitly (#334).
+    execSync("npm install --min-release-age=7", { cwd: cloneDir, stdio: "inherit" });
     console.log("SuperSplat: NPM install complete");
+};
+
+const assertNoWebMcp = async () => {
+    const files = (await fs.readdir(cloneDistDir)).filter((f) => f.endsWith(".js"));
+    if (files.length === 0) {
+        throw new Error("SuperSplat: no JavaScript found in " + cloneDistDir);
+    }
+    for (const file of files) {
+        const text = await fs.readFile(path.join(cloneDistDir, file), "utf8");
+        const marker = WEBMCP_BUNDLE_MARKERS.find((m) => text.includes(m));
+        if (marker) {
+            throw new Error(`SuperSplat: built ${file} still contains "${marker}" (WebMCP)`);
+        }
+    }
+    console.log("SuperSplat: bundle carries no WebMCP registration");
 };
 
 const buildBundle = () => {
@@ -92,8 +138,10 @@ const main = async () => {
         }
 
         cloneRepo();
+        await disableWebMcp();
         npmInstall();
         buildBundle();
+        await assertNoWebMcp();
         await copyBundledFiles();
         await cleanupClone();
 

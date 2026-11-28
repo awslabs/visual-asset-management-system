@@ -21,6 +21,12 @@ import { storageResources } from "../../../../storage/storageBuilder-nestedStack
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { Service } from "../../../../../helper/service-helper";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
+import { grantBatchStateTimeoutCleanup } from "../../../constructs/stateTimeoutBatchSubmitJob";
+import {
+    configureLambdaBatchJobTagging,
+    pipelineJobTags,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 import {
     NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
     generateUniqueNameHash,
@@ -49,6 +55,16 @@ export interface CoordinateTransformConstructProps extends cdk.StackProps {
     kmsKey?: kms.IKey;
     importGlobalPipelineWorkflowV2FunctionName: string;
 }
+
+/**
+ * Timeout chain. The registered pipeline's 14,400-second `taskTimeout` (vamsSchema/pipeline.json)
+ * starts before the execution does, so the state machine ends 15 minutes inside it. The token wait
+ * on CoordTransformBatchJob leaves 15 minutes for ConstructPipelineTask and PipelineEndTask
+ * (5-minute Lambdas each), and the job's attempt duration equals that wait so the container does
+ * not outlive the run.
+ */
+export const COORDINATE_TRANSFORM_STATE_MACHINE_TIMEOUT = cdk.Duration.minutes(225);
+export const COORDINATE_TRANSFORM_BATCH_TIMEOUT = cdk.Duration.minutes(210);
 
 export class CoordinateTransformConstruct extends Construct {
     public readonly pipelineVamsLambdaFunctionName: string;
@@ -80,7 +96,9 @@ export class CoordinateTransformConstruct extends Construct {
 
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
-                        actions: s3BucketActions,
+                        // s3:GetObjectVersion: the container reads its input file at the S3 version the run
+                        // recorded at launch.
+                        actions: [...s3BucketActions, "s3:GetObjectVersion"],
                         resources: [
                             record.bucket.bucketArn,
                             `${record.bucket.bucketArn}/${objectPrefix}*`,
@@ -166,13 +184,14 @@ export class CoordinateTransformConstruct extends Construct {
                     vpc: props.vpc,
                     pipelineSubnets: props.pipelineSubnets,
                     pipelineSecurityGroups: props.pipelineSecurityGroups,
+                    kmsKey: props.kmsKey,
                 }
             );
 
             new cdk.CfnOutput(this, "CoordTransformCodeBuildProject", {
                 value: codeBuildConstruct.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Coordinate Transform container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Coordinate Transform container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --no-paginate --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
 
@@ -198,10 +217,10 @@ export class CoordinateTransformConstruct extends Construct {
             this,
             "BatchFargatePipeline_CoordTransform",
             {
-                // Matches the 4-hour taskTimeout on the state that waits for this job. This
+                // Matches the taskTimeout on the state that waits for this job. This
                 // pipeline submits its own job under WAIT_FOR_TASK_TOKEN, so Step Functions
                 // bounds only the token wait -- without this the container outlives the run.
-                attemptDuration: cdk.Duration.hours(4),
+                attemptDuration: COORDINATE_TRANSFORM_BATCH_TIMEOUT,
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
@@ -263,6 +282,10 @@ export class CoordinateTransformConstruct extends Construct {
             props.pipelineSubnets,
             props.kmsKey
         );
+        configureLambdaBatchJobTagging(
+            executeBatchJobFunction,
+            pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.coordinateTransform)
+        );
 
         // Step Functions state machine
         const constructPipelineTask = new tasks.LambdaInvoke(this, "ConstructPipelineTask", {
@@ -279,6 +302,10 @@ export class CoordinateTransformConstruct extends Construct {
             props.pipelineSubnets,
             props.kmsKey
         );
+        // After the token wait's own bound fires, pipelineEnd ends the job executeBatchJob submitted.
+        grantBatchStateTimeoutCleanup(pipelineEndFunction, [
+            batchPipeline.batchJobQueue.jobQueueArn,
+        ]);
 
         const pipelineEndTask = new tasks.LambdaInvoke(this, "PipelineEndTask", {
             lambdaFunction: pipelineEndFunction,
@@ -320,10 +347,14 @@ export class CoordinateTransformConstruct extends Construct {
 
         // No heartbeatTimeout: the container reports only terminal success/failure on the
         // internal token (it sends no periodic heartbeats), so a heartbeat window would fail
-        // any transform outlasting it. The 4-hour taskTimeout bounds the wait instead.
+        // any transform outlasting it. The taskTimeout bounds the wait instead.
         const coordTransformBatchJob = new tasks.LambdaInvoke(this, "CoordTransformBatchJob", {
             lambdaFunction: executeBatchJobFunction,
             integrationPattern: sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN,
+            // executeBatchJob submits a Batch job on every call, so a retry after a Lambda service
+            // fault could start a second container on the same token. The fault is caught like any
+            // other error and reaches pipelineEnd.
+            retryOnServiceExceptions: false,
             payload: sfn.TaskInput.fromObject({
                 taskToken: sfn.JsonPath.taskToken,
                 "jobName.$": "$.jobName",
@@ -334,7 +365,7 @@ export class CoordinateTransformConstruct extends Construct {
                 "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
             }),
             resultPath: "$.batchResult",
-            taskTimeout: sfn.Timeout.duration(cdk.Duration.hours(4)),
+            taskTimeout: sfn.Timeout.duration(COORDINATE_TRANSFORM_BATCH_TIMEOUT),
         })
             .addCatch(handleBatchError, {
                 resultPath: "$.error",
@@ -363,10 +394,10 @@ export class CoordinateTransformConstruct extends Construct {
 
         const stateMachine = new sfn.StateMachine(this, "CoordTransformProcessing-StateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(definition),
-            // Envelopes the 4-hour batch-job taskTimeout so an overrunning transform hits that
-            // task's own timeout and reaches pipelineEnd — which releases the external task
-            // token — rather than being cut short by an execution-level States.Timeout.
-            timeout: cdk.Duration.hours(5),
+            // Envelopes the batch-job taskTimeout so an overrunning transform hits that task's own
+            // timeout and reaches pipelineEnd — which releases the external task token — rather
+            // than being cut short by an execution-level States.Timeout.
+            timeout: COORDINATE_TRANSFORM_STATE_MACHINE_TIMEOUT,
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,
@@ -497,7 +528,9 @@ export class CoordinateTransformConstruct extends Construct {
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
-                        `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                        },
                         { regex: "/^Resource::<.*Function.*.Arn>:.*$/g" },
                         { regex: "/^Action::s3:.*$/g" },
                     ],

@@ -1,10 +1,12 @@
 """Setup command for VamsCLI."""
 
+import ipaddress
 import re
 from urllib.parse import urlparse
 
 import click
 
+from ..constants import WAF_ADMIN_HINT
 from ..utils.api_client import APIClient
 from ..utils.decorators import get_profile_manager_from_context
 from ..utils.exceptions import ConfigurationError
@@ -12,22 +14,43 @@ from ..utils.json_output import output_status, output_result, output_error, outp
 from ..version import get_version
 
 
+def is_loopback_host(host: str) -> bool:
+    """Whether ``host`` names only this machine (``localhost`` or a loopback address)."""
+    value = (host or "").strip().strip("[]").lower()
+    if value == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+# Why validate_base_url refused a URL, for the messages that report it.
+BASE_URL_RULE = "an https URL (plain http is accepted only for localhost or a loopback address)"
+
+
 def validate_base_url(url: str) -> bool:
-    """Validate base URL format - accepts any HTTP/HTTPS URL."""
+    """Whether ``url`` is a deployment URL the CLI may use: https, or http for a loopback host only.
+
+    Every later request carries the bearer token to the API URL read from this one, so a plain http
+    URL to another host is refused.
+    """
     try:
         parsed = urlparse(url)
         # Must have scheme and netloc
-        if not parsed.scheme or not parsed.netloc:
+        if not parsed.scheme or not parsed.netloc or not parsed.hostname:
             return False
-
-        # Must be HTTP or HTTPS
-        return parsed.scheme.lower() in ['http', 'https']
+        scheme = parsed.scheme.lower()
+        if scheme == 'https':
+            return True
+        return scheme == 'http' and is_loopback_host(parsed.hostname)
     except Exception:
         return False
 
 
 # Default REST API deployment stage. The execute-api endpoint serves routes under a stage
-# path; a CloudFront/ALB front absorbs it, but a raw execute-api URL must include it.
+# path; a CloudFront/ALB front maps the bootstrap calls' /api/* paths onto it, but a raw
+# execute-api URL must include it.
 DEFAULT_API_STAGE = "api"
 
 
@@ -63,22 +86,27 @@ _STAGE_PROBE_TIMEOUT_SECONDS = 15
 def validate_api_gateway_reachable(api_gateway_url: str):
     """Check the stored API base URL reaches the deployed API, WITHOUT being authenticated yet.
 
-    Returns ``(ok, detail)``. ``ok`` is False only for a definitive wrong-stage answer; a network
-    failure returns True with a detail, because setup must not be blocked by a transient outage.
+    Returns ``(ok, detail)``. ``ok`` is False only for a definitive wrong-stage answer or a probe the
+    deployment's AWS WAF web ACL blocked; a network failure returns True with a detail, because setup
+    must not be blocked by a transient outage.
 
     Setup runs before login, so this cannot make an authenticated call. It does not need to: Amazon API
     Gateway reads the FIRST path segment as the stage name, and the two failure modes answer
-    differently on an authenticated route requested with no token. Measured against a live deployment:
+    differently on an authenticated route requested with no token. Measured against a live deployment,
+    except the last row, which is the deployment's WAF_FILTERED gateway response:
 
     | request                          | answer                                    |
     | -------------------------------- | ----------------------------------------- |
     | `<host>/api/secure-config`       | 401 `{"message":"Unauthorized"}`          |
     | `<host>/secure-config`           | 403 `{"message":"Forbidden"}`             |
+    | blocked by the web ACL           | 403 `{"message":"Request blocked ...","blockedBy":"waf","requestId":"..."}` |
 
     A **401** means the request reached the custom authorizer and was refused for having no token --
     which proves the stage segment is right and the route is deployed. A **403 Forbidden** means API
     Gateway rejected the request as naming a stage that does not exist, before any authorizer ran. So
-    the absence of credentials is what makes this a clean probe rather than a limitation.
+    the absence of credentials is what makes this a clean probe rather than a limitation. A **403
+    carrying `blockedBy: "waf"`** means the web ACL blocked the probe itself, so setup is refused naming
+    the request ID; the marker is checked first because its body does not say "forbidden".
 
     Checked at setup rather than per command (owner question 89, NEW-LEAD-03 option A): the
     misconfiguration is created here, and a per-command pre-flight was already declined for its
@@ -93,6 +121,20 @@ def validate_api_gateway_reachable(api_gateway_url: str):
     except Exception as e:
         # Unreachable host, TLS failure, proxy. Not a stage problem, and not worth blocking setup for.
         return True, f"could not reach {probe_url} to verify the stage ({e})"
+
+    if response.status_code == 403:
+        try:
+            body = response.json()
+        except Exception:
+            body = None
+        if isinstance(body, dict) and body.get("blockedBy") == "waf":
+            request_id = body.get("requestId")
+            rid = f", request ID {request_id}" if isinstance(request_id, str) and request_id else ""
+            return False, (
+                f"{probe_url} was blocked by the deployment's AWS WAF web ACL (HTTP 403{rid}). A "
+                f"request this simple is blocked by the source address or the request as a whole, so "
+                f"every command from this network would be blocked the same way. {WAF_ADMIN_HINT}"
+            )
 
     if response.status_code == 403 and "forbidden" in (response.text or "").lower():
         return False, (
@@ -116,8 +158,10 @@ def setup(ctx: click.Context, base_url: str, force: bool, skip_version_check: bo
     Setup VamsCLI with VAMS base URL.
     
     This command configures VamsCLI to work with your VAMS deployment.
-    It accepts any HTTP/HTTPS base URL (CloudFront, ALB, API Gateway, or custom domain),
+    It accepts an HTTPS base URL (CloudFront, ALB, API Gateway, or custom domain),
     fetches the Amplify configuration, and extracts the API Gateway URL for storage.
+    Plain HTTP is accepted only for localhost or a loopback address, for both the base
+    URL and the API URL the deployment publishes.
     
     Examples:
         # Setup with CloudFront distribution
@@ -163,9 +207,7 @@ def setup(ctx: click.Context, base_url: str, force: bool, skip_version_check: bo
     
     # Validate URL format
     if not validate_base_url(base_url):
-        error = click.BadParameter(
-            "Invalid base URL. Please provide a valid HTTP/HTTPS URL."
-        )
+        error = click.BadParameter(f"Invalid base URL. Please provide {BASE_URL_RULE}.")
         output_error(error, json_output, error_type="Invalid URL")
         raise error
     
@@ -232,7 +274,8 @@ def setup(ctx: click.Context, base_url: str, force: bool, skip_version_check: bo
         # Validate extracted API Gateway URL
         if not validate_base_url(api_gateway_url):
             raise ConfigurationError(
-                f"Invalid API Gateway URL extracted from amplify config: {api_gateway_url}"
+                f"Invalid API Gateway URL extracted from amplify config: {api_gateway_url}. "
+                f"The deployment must publish {BASE_URL_RULE}."
             )
         
         # Ensure extracted API Gateway URL doesn't end with slash

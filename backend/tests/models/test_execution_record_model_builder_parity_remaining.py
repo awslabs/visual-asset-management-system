@@ -28,7 +28,8 @@ def stored_attribute_names(model):
 
 def pipeline_execution_record_keys():
     """Every attribute build_pipeline_execution_record can write. from_pipeline_execution_id is
-    the sparse chain-GSI sort key, written only for a chained pipeline."""
+    the sparse chain-GSI sort key, written only for a chained pipeline; the run bucket's registration
+    and prefix are written only when the launch names them."""
     common = dict(
         pipeline_execution_id="P1", workflow_execution_id="E1", pipeline_database_id="db1",
         pipeline_id="pipe1", end_state_pipeline=False, s3_asset_bucket="bucket",
@@ -40,7 +41,8 @@ def pipeline_execution_record_keys():
     unchained = er.build_pipeline_execution_record(**common)
     chained = er.build_pipeline_execution_record(
         **common, from_pipeline_execution_id="P0",
-        orchestration_bus_event_prefix="vams.pipeline.P1")
+        orchestration_bus_event_prefix="vams.pipeline.P1",
+        s3_asset_bucket_id="reg-1", s3_asset_bucket_base_prefix="vams/")
     return set(unchained) | set(chained), chained
 
 
@@ -57,13 +59,16 @@ def workflow_execution_input_record_keys():
 
 
 def input_metadata_record_keys():
-    """Both scopes: an asset/file row and a metadata-source database row."""
+    """Both scopes: an asset/file row and a metadata-source database row, plus the row of a file a
+    whole-asset or folder expansion added, which alone carries `expanded`."""
     asset_row = er.build_input_metadata_record(
         "P1", "db1", "asset1", "/folder/scan.laz", {"k": "v"}, "s3/key.json",
         attributes={"a": "b"})
     database_row = er.build_input_metadata_record(
         "P1", "db1", "", "/", {"k": "v"}, "s3/key.json", scope="database")
-    return set(asset_row) | set(database_row), asset_row
+    expanded_row = er.build_input_metadata_record(
+        "P1", "db1", "asset1", "/folder/other.laz", {"k": "v"}, "s3/key.json", expanded=True)
+    return set(asset_row) | set(database_row) | set(expanded_row), asset_row
 
 
 def input_configuration_record_keys():
@@ -78,8 +83,10 @@ def input_configuration_record_keys():
 
 
 def output_file_record_keys():
+    # ingestion_status is written only for a file a large object copy job ingested.
     row = er.build_output_file_record(
-        "P1", "file", "/out/scan.glb", "bucket", "k/out/scan.glb", 1024, "model/gltf-binary", "v1")
+        "P1", "file", "/out/scan.glb", "bucket", "k/out/scan.glb", 1024, "model/gltf-binary", "v1",
+        ingestion_status="SUCCEEDED")
     return set(row), row
 
 

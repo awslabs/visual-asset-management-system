@@ -13,11 +13,21 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.apiRoutes import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
 from common.validators import validate
-from common.dynamodb import validate_pagination_info, to_update_expr
+from common.dynamodb import validate_pagination_info, to_update_expr, database_authorization_object
+from common.bucketRegistrations import (
+    BUCKET_NOT_AVAILABLE_MESSAGE,
+    bucket_authorization_object,
+    choosable_registration,
+    STATE_ACTIVE,
+    registration_source,
+    registration_state,
+)
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, commonHeaders, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse, validation_error_message
 from models.databases import GetDatabaseResponseModel, GetDatabasesRequestModel, GetDatabasesResponseModel, DeleteDatabaseResponseModel, UpdateDatabaseRequestModel, UpdateDatabaseResponseModel, BucketModel, GetBucketsRequestModel, GetBucketsResponseModel
 
@@ -52,6 +62,50 @@ UPDATABLE_DATABASE_FIELDS = (
 # The DynamoDB page size the listing scans with when the caller asks for none. validate_pagination_info
 # seeds an absent pageSize from its max-items default, so the listing's own page size is supplied to it.
 BUCKETS_DEFAULT_PAGE_SIZE = 3000
+
+# The compliance tables a database delete moves rows of (`common.compliance.databaseRetirement`),
+# resolved on first use.
+_compliance_tables = None
+
+
+def compliance_tables():
+    global _compliance_tables
+    if _compliance_tables is None:
+        from common.compliance.databaseRetirement import Tables
+        _compliance_tables = Tables(dynamodb=dynamodb)
+    return _compliance_tables
+
+
+def hand_off_compliance_move(database_id):
+    """Queue the move of the deleted database's compliance data on the compliance job queue
+    (`databaseRetirement.move_message`), where the compliance job Lambda runs it. The delete still
+    succeeds when the send fails: the database row has moved, and the record stays `moving`, so the
+    live id shows none of the deleted database's data until the move runs. The message then goes
+    to the job queue's dead-letter queue instead, where a move that keeps failing also ends, so
+    redriving it to the job queue starts it (a message sent to the dead-letter queue directly has
+    no source queue to redrive to); when that send fails too, an error naming the database is
+    logged."""
+    import os
+    from common.compliance import databaseRetirement
+    queue_url = os.environ.get('COMPLIANCE_JOB_QUEUE_URL', '')
+    dlq_url = os.environ.get('COMPLIANCE_JOB_DLQ_URL', '')
+    body = json.dumps(databaseRetirement.move_message(database_id))
+    sqs = boto3.client('sqs', config=retry_config)
+    try:
+        sqs.send_message(QueueUrl=queue_url, MessageBody=body)
+        return True
+    except Exception as e:
+        logger.exception(f"Could not queue the compliance move of deleted database {database_id}: {e}")
+    try:
+        if not dlq_url:
+            raise ValueError("no compliance job dead-letter queue is configured")
+        sqs.send_message(QueueUrl=dlq_url, MessageBody=body)
+        logger.error(f"The compliance move of deleted database {database_id} is in the compliance "
+                     "job dead-letter queue; redrive it to the compliance job queue to run it")
+    except Exception as e:
+        logger.error(f"The compliance move of deleted database {database_id} was not queued and "
+                     f"could not be put in the compliance job dead-letter queue: {e}")
+    return False
 
 #######################
 # Utility Functions
@@ -144,6 +198,8 @@ def get_database(database_id, show_deleted=False, claims_and_roles=None):
                     baseAssetsPrefix=base_assets_prefix,
                     restrictMetadataOutsideSchemas=database.get('restrictMetadataOutsideSchemas', False),
                     restrictFileUploadsToExtensions=database.get('restrictFileUploadsToExtensions', ''),
+                    complianceSchemaName=database.get('complianceSchemaName'),
+                    complianceAutoEval=database.get('complianceAutoEval'),
                 )
             
         return None
@@ -229,6 +285,8 @@ def get_databases(query_params, show_deleted=False, claims_and_roles=None):
                         baseAssetsPrefix=base_assets_prefix,
                         restrictMetadataOutsideSchemas=deserialized_document.get('restrictMetadataOutsideSchemas', False),
                         restrictFileUploadsToExtensions=deserialized_document.get('restrictFileUploadsToExtensions', ''),
+                        complianceSchemaName=deserialized_document.get('complianceSchemaName'),
+                        complianceAutoEval=deserialized_document.get('complianceAutoEval'),
                     )
                     items.append(database_model)
 
@@ -249,7 +307,12 @@ class DatabaseAccessDeniedError(VAMSGeneralErrorResponse):
     """An object-level authorization denial on a database, answered with 403 rather than 400."""
 
 
-def update_database(database_id, update_data, claims_and_roles=None):
+class BucketNotAvailableError(VAMSGeneralErrorResponse):
+    """The bucket an update moves the database to is unknown, not active or not readable to the caller.
+    Answered as database create answers it: 400 {"message": BUCKET_NOT_AVAILABLE_MESSAGE}."""
+
+
+def update_database(database_id, update_data, claims_and_roles=None, event=None):
     """Update an existing database with new data
     
     Args:
@@ -266,27 +329,40 @@ def update_database(database_id, update_data, claims_and_roles=None):
         db_response = table.get_item(Key={'databaseId': database_id})
         database = db_response.get("Item", {})
         
-        if not database:
-            raise VAMSGeneralErrorResponse("Database not found")
-        
-        # Check authorization. The empty-token and absent-claims cases deny explicitly rather than
-        # skipping the check: without an authenticated identity there is nothing to evaluate, and
-        # falling through would reach the update_item below unauthorized (backend/CLAUDE.md Rule 4).
-        database.update({"object__type": "database"})
+        # Check authorization before the database's existence is reported, on the record or, when
+        # there is none, the requested id, so a refused caller gets the same 403 either way. The
+        # empty-token and absent-claims cases deny explicitly rather than skipping the check: without
+        # an authenticated identity there is nothing to evaluate, and falling through would reach the
+        # update_item below unauthorized (backend/CLAUDE.md Rule 4).
         if not claims_and_roles or len(claims_and_roles["tokens"]) == 0:
             raise DatabaseAccessDeniedError("Access denied")
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(database, "PUT"):
+        if not casbin_enforcer.enforce(database_authorization_object(database, database_id), "PUT"):
             raise DatabaseAccessDeniedError("Access denied")
+
+        if not database:
+            raise VAMSGeneralErrorResponse("Database not found")
         
-        # If defaultBucketId is being updated, verify it exists
+        # If defaultBucketId is being updated, verify it exists. Moving a database onto a bucket also
+        # needs it to be active (a retired registration left the configuration) and the caller to be
+        # allowed to read it (Tier 2 `bucket` GET); the three refusals give one answer, as create's do,
+        # so the answer does not tell them apart. A database already on its bucket keeps it: the edit
+        # form sends the current id with every update, and refusing it would block editing the other
+        # fields.
         if 'defaultBucketId' in update_data and update_data['defaultBucketId'] is not None:
             buckets_table = dynamodb.Table(s3_asset_buckets_table)
             bucket_response = buckets_table.query(
                 KeyConditionExpression=Key('bucketId').eq(update_data['defaultBucketId'])
             )
-            if not bucket_response.get('Items') or len(bucket_response['Items']) == 0:
-                raise VAMSGeneralErrorResponse("Bucket ID not found")
+            items = bucket_response.get('Items') or []
+            moving = update_data['defaultBucketId'] != database.get('defaultBucketId')
+            if not items:
+                raise BucketNotAvailableError(BUCKET_NOT_AVAILABLE_MESSAGE)
+            if moving:
+                registration = choosable_registration(items)
+                if registration is None or not casbin_enforcer.enforce(
+                        bucket_authorization_object(registration), "GET"):
+                    raise BucketNotAvailableError(BUCKET_NOT_AVAILABLE_MESSAGE)
         
         updates = {
             field: update_data[field]
@@ -297,8 +373,7 @@ def update_database(database_id, update_data, claims_and_roles=None):
             raise VAMSGeneralErrorResponse("At least one field must be provided for update")
 
         # Write only the supplied fields, so a concurrent writer's attributes (the recount's assetCount)
-        # are not reverted and the object__type marker set for the Casbin check is never stored. The
-        # condition keeps a database deleted mid-edit from being recreated.
+        # are not reverted. The condition keeps a database deleted mid-edit from being recreated.
         logger.info(f"Updating database {database_id}")
         keys_map, values_map, expr = to_update_expr(updates)
         try:
@@ -314,10 +389,14 @@ def update_database(database_id, update_data, claims_and_roles=None):
                 logger.warning(f"Database {database_id} no longer exists, database record not updated")
                 raise VAMSGeneralErrorResponse("Database not found")
             raise
-        
+
+        if event is not None:
+            log_action(event, "databaseUpdate", database_id=database_id, changes=updates,
+                       previous={field: database.get(field) for field in updates})
+
         # Create response
-        from datetime import datetime
-        timestamp = datetime.utcnow().isoformat()
+        from common.timestamps import utc_now
+        timestamp = utc_now().isoformat()
         
         return UpdateDatabaseResponseModel(
             success=True,
@@ -350,28 +429,25 @@ def delete_database(database_id, claims_and_roles=None):
         )
         database = db_response.get("Item", {})
 
-        if not database:
-            return DeleteDatabaseResponseModel(
-                message="Record not found",
-                statusCode=404
-            )
-
-        # Authorize before the content checks, so a caller denied on the database learns
-        # nothing about what it contains
+        # Authorize before the database's existence is reported and before the content checks, on
+        # the record or, when there is none, the requested id, so a caller denied on the database
+        # gets the same 403 whether or not it exists and learns nothing about what it contains
         allowed = False
-        database.update({
-            "object__type": "database"
-        })
-        
         if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(database, "DELETE"):
+            if casbin_enforcer.enforce(database_authorization_object(database, database_id), "DELETE"):
                 allowed = True
 
         if not allowed:
             return DeleteDatabaseResponseModel(
                 message="Action not allowed",
                 statusCode=403
+            )
+
+        if not database:
+            return DeleteDatabaseResponseModel(
+                message="Record not found",
+                statusCode=404
             )
 
         # Check for active workflows, pipelines, and assets
@@ -394,11 +470,35 @@ def delete_database(database_id, claims_and_roles=None):
             )
 
         logger.info(f"Deleting database: {database_id}")
-        # The Casbin type marker is not part of the stored record
-        database.pop("object__type", None)
+        # The compliance data moves under `<databaseId>#deleted` with the row. The move starts
+        # before the row moves (its record keeps a re-created database from showing or changing
+        # the deleted one's data until it is done); a failure here fails the delete, and a failure
+        # moving the row undoes the record (`databaseRetirement.cancel`).
+        from common.compliance import databaseRetirement
+        tables = compliance_tables()
+        previous_record = databaseRetirement.get_record(tables.evaluation, database_id)
+        try:
+            databaseRetirement.begin(tables, database_id, claims_and_roles["tokens"][0])
+        except databaseRetirement.WaitIndexNotReady:
+            # Right after an update that adds the compliance wait index: nothing was changed, and
+            # the delete works once the index is active.
+            logger.warning(f"Delete of database {database_id} refused: the compliance wait index "
+                           "is still being built")
+            return DeleteDatabaseResponseModel(
+                message=databaseRetirement.WAIT_INDEX_NOT_READY_MESSAGE,
+                statusCode=databaseRetirement.WAIT_INDEX_NOT_READY_STATUS
+            )
         database['databaseId'] = database_id + "#deleted"
-        table.put_item(Item=database)
-        table.delete_item(Key={'databaseId': database_id})
+        try:
+            table.put_item(Item=database)
+            table.delete_item(Key={'databaseId': database_id})
+        except Exception:
+            # The database stays live, so its retirement record must not hide its compliance data.
+            logger.exception(f"Delete of database {database_id} failed moving its row; its "
+                             "compliance retirement record is restored")
+            databaseRetirement.cancel(tables, database_id, previous_record)
+            raise
+        hand_off_compliance_move(database_id)
         
         return DeleteDatabaseResponseModel(
             message="Database deleted",
@@ -435,6 +535,8 @@ def get_database_handler(event, path_parameters, query_parameters, claims_and_ro
         # Get database
         database = get_database(database_id, show_deleted, claims_and_roles)
         if database:
+            log_action(event, "databaseGet", database_id=database_id,
+                       request_parameters={"showDeleted": show_deleted})
             return success(body=database.dict())
         else:
             return validation_error(status_code=404, body={'message': 'Database not found'}, event=event)
@@ -456,6 +558,8 @@ def get_databases_handler(event, query_parameters, claims_and_roles):
         
         # Get databases
         databases = get_databases(query_parameters, show_deleted, claims_and_roles)
+        log_action(event, "databaseList", item_count=len(databases.Items),
+                   request_parameters={**query_parameters, "showDeleted": show_deleted})
         return success(body=databases.dict())
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
@@ -491,11 +595,14 @@ def update_database_handler(event, path_parameters, body, claims_and_roles):
             return validation_error(body={'message': validation_error_message(v)}, event=event)
         
         # Update database
-        result = update_database(database_id, request_model.dict(exclude_unset=True), claims_and_roles)
+        result = update_database(database_id, request_model.dict(exclude_unset=True), claims_and_roles,
+                                 event=event)
         return success(body=result.dict())
 
     except DatabaseAccessDeniedError:
         return authorization_error(event=event)
+    except BucketNotAvailableError:
+        return validation_error(body={'message': BUCKET_NOT_AVAILABLE_MESSAGE}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -524,6 +631,8 @@ def delete_database_handler(event, path_parameters, claims_and_roles):
 
         # Delete database
         result = delete_database(database_id, claims_and_roles)
+        if result.statusCode == 200:
+            log_action(event, "databaseDelete", database_id=database_id)
         return APIGatewayProxyResponseV2(
             isBase64Encoded=False,
             statusCode=result.statusCode,
@@ -539,20 +648,19 @@ def delete_database_handler(event, path_parameters, claims_and_roles):
 
 
 def get_buckets(query_params, claims_and_roles=None):
-    """Get all S3 bucket configurations with pagination.
+    """Get the S3 bucket registrations the caller may read, with pagination.
 
-    Authorization is Tier 1 only. `bucket` is not one of the constraint objectTypes, so no
-    per-bucket constraint can be authored and this listing applies no entity-level filter: a role
-    that holds the api route receives every registered bucket. The route grant is therefore the
-    whole gate, and the shipped permission templates and the seeded default role constraints grant
-    it to administrator roles alone. A deployment rewrites the seeded default role constraints, but
-    it does not reconcile constraints authored within it, so a role built from an earlier template
-    keeps its grant until that constraint is re-authored or the template re-imported.
-
-    `claims_and_roles` is accepted for call-shape parity with the other listings in this module;
-    there is no entity-level check for it to run.
+    Both tiers apply: the route (Tier 1, in lambda_handler) and, per row, a `bucket` GET check on the
+    registration (Tier 2). A row is returned only when the caller may read it, so a role without a
+    `bucket` constraint gets an empty list. The filter applies to each scanned page, so a page can
+    hold fewer rows than its size; NextToken still continues the scan. Each refused row writes the
+    authorization audit record.
     """
     try:
+        casbin_enforcer = None
+        if claims_and_roles and len(claims_and_roles.get("tokens") or []) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+
         # Parse query parameters
         request_model = GetBucketsRequestModel(
             maxItems=int(query_params.get('maxItems', 10000)),
@@ -581,13 +689,29 @@ def get_buckets(query_params, claims_and_roles=None):
         items = []
         for item in response.get('Items', []):
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
+            # Only an active registration is offered for a database. A retired one left the
+            # configuration (no bucket sync and no grants serve it; its row stays for the assets that
+            # name its bucketId), and a runtime one that is pending or disabled is not connected. A page
+            # can therefore hold fewer rows than its size; NextToken still continues the scan.
+            if registration_state(deserialized_document) != STATE_ACTIVE:
+                continue
+
+            # Tier 2: the row is listed only when the caller may read the registration.
+            if not (casbin_enforcer is not None and len(claims_and_roles["tokens"]) > 0
+                    and casbin_enforcer.enforce(bucket_authorization_object(deserialized_document), "GET")):
+                continue
 
             # Convert to model
             bucket_model = BucketModel(
                 bucketId=deserialized_document.get('bucketId'),
                 bucketName=deserialized_document.get('bucketName', ''),
                 baseAssetsPrefix=deserialized_document.get('baseAssetsPrefix', ''),
-                isDefault=bool(deserialized_document.get('isDefault', False))
+                isDefault=bool(deserialized_document.get('isDefault', False)),
+                bucketRegion=deserialized_document.get('bucketRegion') or None,
+                bucketAccountId=deserialized_document.get('bucketAccountId') or None,
+                isAccelerated=deserialized_document.get('isAccelerated') is True,
+                source=registration_source(deserialized_document),
+                status=registration_state(deserialized_document)
             )
             items.append(bucket_model)
 
@@ -630,10 +754,12 @@ def get_buckets_handler(event, query_parameters, claims_and_roles):
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for database service API"""
     normalize_event(event)
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
 
     try:
         # Get path and query parameters

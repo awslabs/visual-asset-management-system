@@ -132,9 +132,10 @@ def confirm_migration_target(
 
     The target comes entirely from the config file and CLI flags, and the shipped template leaves
     aws_profile and aws_region null, so boto3 falls back to whatever is in the environment. The SSM
-    prefix carries no account or Region either - it is /{configName}-{baseStackName}/resourceNames - so
-    two deployments sharing a config name and stack name resolve the SAME parameter paths and the
-    migration would read valid table names out of the wrong account without anything looking unusual.
+    prefix carries no account - it is /{configName}-{baseStackName}-{region}/resourceNames, and
+    config.ts appends the Region to baseStackName - so two deployments sharing a config name, stack
+    name and Region resolve the SAME parameter paths and the migration would read valid table names
+    out of the wrong account without anything looking unusual.
 
     Printing sts:GetCallerIdentity is the cheap half and always runs. The prompt is required only when
     the run will DELETE something: auxPreviewRelocation copies each preview object to its new key and
@@ -1284,8 +1285,10 @@ def run_workflow_executions_step(config: dict, args) -> int:
 # =============================================================================
 
 # Reserved top-level auxiliary-bucket prefixes that are NOT per-asset preview data and
-# must never be relocated (execution working folders, temp uploads, etc.).
-_AUX_RESERVED_TOP_PREFIXES = ("pipeline", "pipelines", "temp-upload", "temp-uploads")
+# must never be relocated (execution working folders, temp uploads, Download as Zip jobs from
+# v2.7.0 on, etc.).
+_AUX_RESERVED_TOP_PREFIXES = ("pipeline", "pipelines", "temp-upload", "temp-uploads",
+                              "vams.preparedDownloads")
 
 # The auxiliary preview marker segment. Old preview objects live under
 # ``{assetId}/{relativeFileKey}/preview/...``; the new layout is
@@ -2654,9 +2657,9 @@ Notes:
 
     # Echo the resolved target before touching anything. The shipped config template leaves
     # aws_profile and aws_region null, so boto3 falls back to the ambient environment, and the SSM
-    # prefix is /{configName}-{baseStackName}/resourceNames with no account or Region in it. Two
-    # deployments that share a config name and stack name therefore resolve identical parameter
-    # paths, and nothing else in this script would reveal which account it had reached.
+    # prefix is /{configName}-{baseStackName}-{region}/resourceNames with no account in it. Two
+    # deployments that share a config name, stack name and Region therefore resolve identical
+    # parameter paths, and nothing else in this script would reveal which account it had reached.
     if not confirm_migration_target(
         profile=profile,
         region=region,

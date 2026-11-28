@@ -91,7 +91,7 @@ def _identifiers(response):
 def _wire_created(m, results_by_key):
     """process_s3_record returns the (success, should_index, message) mapped to each key."""
     m.process_s3_record = MagicMock(
-        side_effect=lambda record: results_by_key[record["s3"]["object"]["key"]]
+        side_effect=lambda record, **_: results_by_key[record["s3"]["object"]["key"]]
     )
     m.publish_to_orchestration_bus = MagicMock()
 

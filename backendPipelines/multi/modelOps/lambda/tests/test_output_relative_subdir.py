@@ -481,3 +481,47 @@ class TestSameFormatConversionDoesNotWriteItsOwnSource(_Chain):
         """outputType is the only value distinguishing the three shipped templates, so it must remain
         in the document handed to the handler."""
         assert _rendered_config(self.run("/parts/housing/model.obj"))["outputType"] == ".glb"
+
+
+CUSTOM_ROOT = "projects/site-a/"
+
+
+class _CustomRootChain(_Chain):
+    """The same chain for an asset created on an existing bucket folder, whose keys carry no asset ID."""
+
+    def _manifest(self, relative_path):
+        manifest = super()._manifest(relative_path)
+        manifest["inputFiles"][0].update(key=f"{CUSTOM_ROOT}{relative_path.lstrip('/')}",
+                                         assetRootS3Key=CUSTOM_ROOT, assetRootBucket=BUCKET)
+        return manifest
+
+
+@pytest.mark.unit
+class TestTheSubfolderComesFromTheManifestPath(_CustomRootChain):
+    def test_an_asset_on_an_existing_bucket_folder_keeps_its_subfolder(self):
+        assert self.output_relative_path("/parts/housing/model.obj") == "parts/housing/model.glb"
+
+    def test_same_named_inputs_in_two_folders_stage_apart(self):
+        assert (self.output_relative_path("/left/model.obj"), self.output_relative_path("/right/model.obj")) == (
+            "left/model.glb", "right/model.glb")
+
+    def test_the_location_reaches_the_state_machine_input(self):
+        _, sfn_input = self.sfn_input("/parts/model.obj")
+        assert (sfn_input["inputRelativePath"], sfn_input["inputAssetRootS3Key"], sfn_input["inputAssetRootBucket"]) == (
+            "/parts/model.obj", CUSTOM_ROOT, BUCKET)
+
+
+@pytest.mark.unit
+class TestInputRelativeSubdir:
+    def _mod(self):
+        return _load("constructPipeline")
+
+    @pytest.mark.parametrize("event,key,expected", [
+        ({"inputRelativePath": "/a/b/m.obj", "assetId": "xidM"}, "projects/site-a/a/b/m.obj", "a/b"),
+        ({"inputRelativePath": "/a/m.obj", "assetId": "xidM"}, "pipelines/p0/J/output/E1/files/a/m.obj", "a"),
+        ({"inputRelativePath": "/m.obj", "assetId": "xidM"}, "projects/site-a/m.obj", ""),
+        ({"assetId": "xidM"}, "xidM/a/m.obj", "a"),
+        ({"assetId": "xidM"}, "projects/site-a/a/m.obj", ""),
+    ])
+    def test_the_manifest_path_wins_and_the_asset_id_is_the_fallback(self, event, key, expected):
+        assert self._mod().input_relative_subdir(event, key) == expected

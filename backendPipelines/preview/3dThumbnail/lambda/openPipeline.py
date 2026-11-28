@@ -8,6 +8,7 @@ import datetime
 import uuid
 from customLogging.logger import safeLogger
 import manifestHelper
+import computeTier
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -28,9 +29,20 @@ events_client = boto3.client(
     region_name=os.environ["AWS_REGION"],
     config=retry_config
 )
+s3_client = boto3.client('s3', config=retry_config)
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
+# Media previews: the image extensions the web shows as their own preview when the file is under
+# PREVIEW_FILE_SIZE_LIMIT_BYTES, and that limit. Both are set by CDK from the shared constants
+# (infra/lib/.../preview3dThumbnail-construct.ts) on every deployment of this function, since one
+# deployment serves the 3D and the media workflows; they are empty only outside CDK (a test).
+# An input of one of those extensions that is under the limit gets no run unless
+# DOWNSCALE_SELF_PREVIEWABLE_IMAGES is "true" (useMediaPreviews.downscaleSelfPreviewableImages).
+SELF_PREVIEWABLE_FILEEXTENSIONS = os.environ.get("SELF_PREVIEWABLE_FILEEXTENSIONS", "")
+PREVIEW_FILE_SIZE_LIMIT_BYTES = os.environ.get("PREVIEW_FILE_SIZE_LIMIT_BYTES", "")
+DOWNSCALE_SELF_PREVIEWABLE_IMAGES = os.environ.get(
+    "DOWNSCALE_SELF_PREVIEWABLE_IMAGES", "false").strip().lower() == "true"
 # Orchestration bus + state-machine log group for optional sub-process registration
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
@@ -41,8 +53,16 @@ STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
 BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
 BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
 BATCH_JOB_DEFINITION_NAME = os.environ.get("BATCH_JOB_DEFINITION_NAME", "")
-# The Batch state of this pipeline's state machine (its CDK construct id).
-BATCH_STATE_NAME = "Preview3dThumbnailBatchJob"
+# The Batch states of this pipeline's state machine (their CDK construct ids), one per compute tier.
+# Both submit the same job definition, so their containers stream under the same prefix; a run
+# registers the container log source of the one state its tier routes it to.
+STANDARD_BATCH_STATE_NAME = "Preview3dThumbnailBatchJob"
+LARGE_BATCH_STATE_NAME = "Preview3dThumbnailLargeBatchJob"
+BATCH_STATE_NAME_BY_TIER = {
+    computeTier.TIER_STANDARD: STANDARD_BATCH_STATE_NAME,
+    computeTier.TIER_LARGE: LARGE_BATCH_STATE_NAME,
+}
+LARGE_TIER_THRESHOLD_BYTES = computeTier.large_tier_threshold_bytes()
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 def abort_external_workflow(error, task_token):
@@ -53,6 +73,103 @@ def abort_external_workflow(error, task_token):
             error='Pipeline Failure: ' + error,
             cause='See AWS cloudwatch logs for error cause.'
         )
+
+
+def self_previewable_extensions():
+    """The extensions (lowercase, with the dot) the web shows as their own preview; empty when media
+    previews are off."""
+    return [ext.strip().lower() for ext in SELF_PREVIEWABLE_FILEEXTENSIONS.split(',') if ext.strip()]
+
+
+def preview_size_limit_bytes():
+    """The size an image must be strictly under to be shown as its own preview, or None when the
+    deployment sets none."""
+    try:
+        limit = int(PREVIEW_FILE_SIZE_LIMIT_BYTES)
+    except (TypeError, ValueError):
+        return None
+    return limit if limit > 0 else None
+
+
+def own_preview_size(event, extension, input_uri):
+    """The input's size in bytes when it is an image the web already shows as its own preview and no
+    preview is to be written for it, else None. That is: its extension is a self-previewable one, the
+    option that writes a smaller JPEG for such images is off, and its size (HEAD of the version the run
+    reads) is known and strictly under the preview size limit. A size that cannot be read gives None, so
+    the run starts and the container checks the size again before it writes anything."""
+    limit = preview_size_limit_bytes()
+    if DOWNSCALE_SELF_PREVIEWABLE_IMAGES or limit is None:
+        return None
+    if extension.lower() not in self_previewable_extensions():
+        return None
+    try:
+        regions = computeTier.bucket_regions(event)
+        size = computeTier.input_size_bytes(
+            computeTier.s3_client_for(s3_client, regions, input_uri), input_uri,
+            event.get("inputVersionId") or "")
+    except Exception as e:
+        logger.warning(f"Could not read the input size to decide whether it is its own preview; "
+                       f"starting the run: {e}")
+        return None
+    return size if size < limit else None
+
+
+# The result document the run records on the execution (the container writes the same one; a drift test
+# keeps the name and schema equal to media_preview.py's).
+NO_PREVIEW_RESULT_FILENAME = "preview-not-generated.json"
+NO_PREVIEW_RESULT_SCHEMA = "vams.mediaPreview.noPreview/v1"
+
+
+def self_preview_message(name):
+    return (f"No preview was generated for '{name}': the file is under 5 MiB and is already shown as "
+            f"its own preview.")
+
+
+def skip_statement(name, size):
+    """The (message, reason) recorded for a skipped image; a zero-byte file gets its own statement."""
+    if size == 0:
+        return f"No preview was generated for '{name}': the file is empty (0 bytes).", "emptyFile"
+    return self_preview_message(name), "alreadyShownAsOwnPreview"
+
+
+def write_no_preview_result(event, name, message, reason):
+    """Write the no-preview result document under the execution's results folder (the run bucket, at
+    ``outputS3AssetResultsPath``: the same bucket and prefix every pipeline's results use), where the
+    workflow's output step records it on the execution. Returns None on success, or the error code of a
+    write that failed. The run still ends successfully (the file has no preview either way), but a failure
+    is logged as an ERROR and returned so the task output names it: it is never dropped."""
+    results_uri = event.get("outputS3AssetResultsPath", "")
+    bucket, prefix = manifestHelper.parse_s3_uri(results_uri) if results_uri else (None, None)
+    if not bucket or prefix is None:
+        logger.info("No results path for this run; the no-preview message is in the task output only")
+        return None
+    key = prefix + NO_PREVIEW_RESULT_FILENAME
+    body = json.dumps({
+        "schema": NO_PREVIEW_RESULT_SCHEMA,
+        "file": name,
+        "reason": reason,
+        "message": message,
+    }).encode("utf-8")
+    try:
+        client = computeTier.s3_client_for(s3_client, computeTier.bucket_regions(event), results_uri)
+        client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
+    except Exception as e:
+        code = getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__
+        logger.error(f"Could not write the no-preview result s3://{bucket}/{key}: {code}: {e}")
+        return code
+    return None
+
+
+def complete_without_preview(task_token, message, result_error=None):
+    """Report the run successful on the workflow's task token with the shape the state machine's end
+    reports, without starting the state machine. ``result_error`` names a failed write of the result
+    document, so the task output says so."""
+    if task_token:
+        output = {'status': 'Pipeline Success', 'message': message}
+        if result_error:
+            output['resultDocumentError'] = result_error
+        sfn.send_task_success(taskToken=task_token, output=json.dumps(output))
+        logger.info("Sent external task token: success (no preview needed)")
 
 
 def batch_container_log_entry(job_definition_name, state_name):
@@ -72,8 +189,10 @@ def batch_container_log_entry(job_definition_name, state_name):
 
 
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
-                           sub_execution_arn, state_machine_arn):
-    """Best-effort: report this pipeline's sub-SFN execution + its log sources to the orchestration bus."""
+                           sub_execution_arn, state_machine_arn,
+                           batch_state_name=STANDARD_BATCH_STATE_NAME):
+    """Best-effort: report this pipeline's sub-SFN execution + its log sources to the orchestration bus.
+    `batch_state_name` is the Batch state the run is routed to, whose container log source is registered."""
     if not orchestration_bus_name or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -99,7 +218,7 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
             "sourceType": "stateMachine",
             "label": "3D thumbnail state machine",
         })
-    container_log = batch_container_log_entry(BATCH_JOB_DEFINITION_NAME, BATCH_STATE_NAME)
+    container_log = batch_container_log_entry(BATCH_JOB_DEFINITION_NAME, batch_state_name)
     if container_log:
         logs.append(container_log)
     if logs:
@@ -176,19 +295,65 @@ def lambda_handler(event, context):
             }
         }
 
+    # An image the web already shows as its own preview needs no run: end it here, successfully, so no
+    # container job starts and no object is written.
+    own_preview_size_bytes = own_preview_size(event, extension, input_s3_asset_files_uri)
+    if own_preview_size_bytes is not None:
+        name = os.path.basename(input_s3_asset_files_uri)
+        message, reason = skip_statement(name, own_preview_size_bytes)
+        logger.info(message)
+        # Record why in the execution's results before the task ends, so the output step finds it
+        result_error = write_no_preview_result(event, name, message, reason)
+        if result_error:
+            message = f"{message} The result record could not be written ({result_error})."
+        try:
+            complete_without_preview(external_sfn_task_token, message, result_error)
+        except Exception as e:
+            logger.exception(e)
+            abort_external_workflow("Internal Server Error", external_sfn_task_token)
+            return {
+                'statusCode': 500,
+                'body': {
+                    "message": "Internal Server Error",
+                }
+            }
+        return {
+            'statusCode': 200,
+            'body': {
+                "message": message,
+            }
+        }
+
     # Generate new job name
     job_name = f"PipelineJob_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]}_{uuid.uuid4().hex[:8]}"
+
+    # The compute tier the state machine routes the Batch job to
+    compute_tier = computeTier.select_compute_tier(s3_client, event, LARGE_TIER_THRESHOLD_BYTES)
 
     # StateMachine Execution Input
     sfn_input = {
         "jobName": job_name,
+        "computeTier": compute_tier,
         "inputS3AssetFilePath": input_s3_asset_files_uri,
         "outputS3AssetFilesPath": output_s3_asset_files_uri,
         "outputS3AssetPreviewPath": output_s3_asset_preview_uri,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_uri,
+        # Named here so the state machine carries it to constructPipeline; empty from an older Lambda.
+        "outputS3AssetResultsPath": event.get("outputS3AssetResultsPath", ""),
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
+        # Regions of the input and output asset buckets (empty = deployment Region); constructPipeline
+        # hands them to the container, which signs each bucket's requests for its Region.
+        "inputBucketRegion": event.get("inputBucketRegion", ""),
+        "outputBucketRegion": event.get("outputBucketRegion", ""),
+        # The S3 version of the input the run reads (empty reads the current object).
+        "inputVersionId": event.get("inputVersionId", ""),
+        # Where the input sits in its asset (manifest relativePath, assetRootS3Key, assetRootBucket);
+        # empty from an older Lambda or without a manifest.
+        "inputRelativePath": event.get("inputRelativePath", ""),
+        "inputAssetRootS3Key": event.get("inputAssetRootS3Key", ""),
+        "inputAssetRootBucket": event.get("inputAssetRootBucket", ""),
         "externalSfnTaskToken": external_sfn_task_token,
         "assetId": asset_id,
         "databaseId": database_id,
@@ -210,7 +375,8 @@ def lambda_handler(event, context):
         # Best-effort: register this sub-SFN execution + its log group
         register_sub_execution(
             ORCHESTRATION_BUS_NAME, orchestration_event_prefix,
-            sfn_response.get("executionArn", ""), STATE_MACHINE_ARN)
+            sfn_response.get("executionArn", ""), STATE_MACHINE_ARN,
+            BATCH_STATE_NAME_BY_TIER[compute_tier])
 
         # response datetime not JSON serializable
         sfn_response["startDate"] = sfn_response["startDate"].strftime('%m-%d-%Y %H:%M:%S')

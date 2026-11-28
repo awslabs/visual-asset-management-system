@@ -3,23 +3,65 @@
 
 """Pytest configuration for the preview/3dThumbnail container tests.
 
-The container's rendering dependencies (pyvista, vtk, trimesh, cadquery, ...) are not installed in
-the test environment, so they are stubbed before ``preview_pipeline`` is imported. The tests here
-cover the pure orchestration logic in ``core``."""
+The container's rendering dependencies (pyvista, vtk, trimesh, cadquery, ...) are usually not
+installed in the test environment, so each one that cannot be imported is stubbed before
+``preview_pipeline`` is imported; the orchestration tests in ``core`` run against the stubs. Inside
+the pipeline image every dependency is real, and the tests that render or encode images run there
+too -- they skip through ``requires_real`` wherever a module they need is a stub."""
 
+import importlib.util
 import os
 import sys
 from unittest.mock import MagicMock
+
+import numpy as np
+import pytest
 
 _CONTAINER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _CONTAINER_DIR not in sys.path:
     sys.path.insert(0, _CONTAINER_DIR)
 
+
+def _importable(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:  # a stubbed parent package cannot be searched for submodules
+        return False
+
+
 for _name in (
     "pyvista", "vtk", "trimesh", "imageio", "PIL", "PIL.Image", "laspy", "pye57",
     "cadquery", "DracoPy", "open3d", "pxr", "scipy",
 ):
-    sys.modules.setdefault(_name, MagicMock())
+    if _name not in sys.modules and not _importable(_name):
+        sys.modules[_name] = MagicMock()
+
+
+def is_stubbed(name):
+    """True when ``name`` is a test stub rather than the installed module."""
+    return isinstance(sys.modules.get(name), MagicMock)
+
+
+def requires_real(*names):
+    """Skip marker for a test that needs the real modules ``names`` (rendering, encoding, USD)."""
+    stubbed = [name for name in names if is_stubbed(name) or not _importable(name)]
+    return pytest.mark.skipif(bool(stubbed), reason=f"needs the real {', '.join(stubbed)} "
+                                                    f"(run inside the pipeline image)")
+
+
+def colour_shares(frame, colours, min_cosine=0.99):
+    """For each of ``colours``, the share of the RGBA frame's opaque pixels that are a shade of it: their
+    RGB points the same way as the colour (cosine at least ``min_cosine``), so lighting may darken it
+    but no other colour is mixed in. An empty frame gives 0 for every colour."""
+    opaque = frame[..., 3] == 255
+    if not opaque.any():
+        return [0.0] * len(colours)
+    rgb = frame[..., :3][opaque].astype(np.float64)
+    rgb /= np.linalg.norm(rgb, axis=1, keepdims=True) + 1e-9
+    references = np.asarray(colours, dtype=np.float64)
+    references /= np.linalg.norm(references, axis=1, keepdims=True)
+    cosines = rgb @ references.T
+    return [float((cosines[:, i] >= min_cosine).mean()) for i in range(len(colours))]
 
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 os.environ.setdefault("AWS_REGION", "us-east-1")

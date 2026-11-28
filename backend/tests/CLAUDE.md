@@ -29,6 +29,7 @@ Every worker runs the full collection, so module-level setup in `conftest.py` an
 -   Patch module globals and `sys.modules` entries with `monkeypatch` / `patch` / `patch.dict` so they are restored, and reset module-level caches (`resourceNames._cache`, authorizer caches, Casbin enforcer caches) in the fixture that fills them.
 -   Write files only under `tmp_path` or a `tempfile` directory, never at a fixed path; workers run at the same time.
 -   Do not depend on another file's tests having run first. Check with two different worker counts (`-n 2` and `-n auto`); a test that fails only in one of them is order-dependent. Fix the test, never skip it.
+-   Do not take a timestamp from the live clock at import when the code under test compares it with its own clock (a grace period, a stale cutoff, a TTL). A worker can reach a file many minutes after it imported it, so build that timestamp when the test runs (in the test, a fixture, or a helper the test calls), or give the code a fixed `now`.
 
 The collected count is the same with and without xdist (`pytest --collect-only -q | tail -1`). Pass `-p no:xdist` to force a plain serial run.
 
@@ -60,7 +61,7 @@ The root `backend/conftest.py` performs critical setup before every test:
 
 1.  **`sys.path` manipulation** -- adds `backend/`, `backend/backend/`, and `tests/mocks/` to Python path so handlers can import their normal module paths.
 2.  **Environment variables** -- seeds test values for all required env vars (table names, bucket names, `VAMS_RESOURCE_PARAM_PREFIX`, etc.). These act as break-glass overrides so `get_table_name(ResourceKeys.*)` returns the test names without an SSM call.
-3.  **Mock imports** -- replaces real modules in `sys.modules` with mocks from `tests/mocks/` (see below).
+3.  **Mock imports** -- replaces real modules in `sys.modules` with mocks from `tests/mocks/` (see below), and loads a few pure-stdlib `common` modules by path early so they are real even though `common` is mocked. `common.vectorsearch.fileClassIntent` is one: `models/vectorsearch` reads its class ids at module level, and the model test modules import that model when tests are collected.
 4.  **Autouse fixture `setup_mock_imports()`** -- runs before every test to re-establish the mock module hierarchy.
 
 ## Mocks Directory
@@ -77,6 +78,10 @@ tests/mocks/
 ```
 
 When adding a new dependency that a handler imports at module load time, add a matching mock module here if the real one requires AWS or Casbin bootstrapping.
+
+The add-on and custom lane modules are pure data and need no mock: `custom/customConstants.py`, `custom/customApiRoutes.py` and `custom/customResourceNames.py` import as the real package from `backend/backend/` on `sys.path`. `common.addonConstants` and `common.addonResourceNames` are real modules too, but `common` is a `MagicMock` in `tests/conftest.py` (not a package), so `tests/conftest.py` and the root `conftest.py` register `common.addonConstants` in `sys.modules` by path before anything loads `constants.py`, as they do for `common.apiRouteTypes` and `common.addonApiRoutes`; `tests/conftest.py` also registers `common.addonFeatures`, which both route modules import, and the audit action registry (`common.auditActionTypes`, `common.addonAuditActions`, `common.auditActions`, which imports the pure-data `custom/customAuditActions.py` by name) right after `common.apiRoutes`. Under the mock `common`, `from common import auditActions` returns a `MagicMock` attribute; import a registry module by its full name (`from common.auditActions import ...` or `importlib.import_module("common.auditActions")`). `common/addonFeatures.py` reads `ADDON_FEATURES_ENABLED` on every call, and with the variable unset, as in a test that does not set it, the route and object-type listings include every add-on entry; a test of a listing that leaves a disabled add-on out sets or deletes the variable with `monkeypatch` (`tests/handlers/auth/test_addon_listings_follow_deployment.py`). The `handlers.auth` mock carries `AUTH_METHOD_JWT` and `AUTH_METHOD_API_KEY`, which `tests/handlers/auth/test_request_to_claims_authMethod.py` pins to the real module's values. A test that needs populated lanes loads a private copy of `constants.py` with stand-in lane modules in `sys.modules` (see `tests/common/test_constants_extension_lanes.py`) and never edits the shipped lane files. Tests that pin the constraint lists pin the `CORE_*` lists, so they hold in a fork that fills the lanes. `customLogging/logger.py` and `common/logRedaction.py` import their merged key lists from `common.constants`, so `tests/conftest.py` also loads the real `constants.py` once by path and pins `LOG_SENSITIVE_KEYS` and `LOG_TEXT_SENSITIVE_KEYS` on the mock `common.constants`; a redactor imported under the mock then redacts the real keys.
+
+`common.downloadEligibility` is registered the same way in `tests/conftest.py`, after `common.s3`, which it imports. It builds no client, so the real module loads. Its callers inject every S3 client, getter and resolver. A handler test therefore patches names on the handler module (`downloadAsset.s3`, `downloadAsset.check_s3_object_exists`, …), and the handler's wrappers pass those names to the shared checks at call time. `tests/common/test_downloadEligibility.py` tests the module directly.
 
 ### A mock must be at least as wide as the thing it replaces
 
@@ -194,6 +199,17 @@ actually fire — is covered by `tests/test_pagingStub.py`. Change a check in `p
 file is the one to run first: a stub that rejects legitimate behaviour makes correct code look broken,
 which is how a real paging fix gets reverted.
 
+#### Use the shared Stubber helper in `tests/vectorStub.py`
+
+Vector-search code talks to two APIs that `moto` cannot serve: DynamoDB `SearchVectors` and Amazon Bedrock Runtime. `tests/vectorStub.py` wraps `botocore.stub.Stubber` for both — `stubbed_dynamodb(expected_calls)` and `stubbed_bedrock_runtime(expected_calls)` are context managers that yield a real botocore client with the scripted responses queued, so a test exercises request serialization against the live service model rather than a `MagicMock` that accepts anything. Write one Stubber contract test per vector operation the code performs; the helper's own checks are mutation-verified in `tests/test_vectorStub.py`, the same way `pagingStub.py` is.
+
+Two rules follow from what the fakes can and cannot do:
+
+-   **Never `create_table(VectorIndexes=…)` under moto.** moto's DynamoDB does not implement vector indexes; the call either raises on the unknown parameter or silently creates a table without the index, and the test then asserts against a shape the service would never produce. Use moto for plain DynamoDB, S3, SQS, SNS, SSM, and Step Functions plumbing and the Stubber helper for the vector and Bedrock calls.
+-   **Bedrock is fakes only.** No test invokes a model; `stubbed_bedrock_runtime` and the house `_boto_client` fake are the only two doubles, and a handler's Bedrock error path is exercised by scripting the `ClientError` code (`AccessDeniedException`, `ThrottlingException`, `ValidationException`) into the stub.
+
+The service-model floor that makes `SearchVectors` stubbable at all is pinned by `tests/common/test_vector_api_floor.py`, which fails loudly (never skips) when the installed botocore lacks the operation — so a dependency downgrade shows up as one clear failure rather than as a hundred `ParamValidationError`s.
+
 The loop FORM is additionally guarded across the whole of `backend/backend` by
 `tests/common/test_paging_key_presence_form.py`, which walks the tree rather than carrying a module
 list. It fails on a new loop whose continuation decision reads the key's VALUE, and on a file that
@@ -215,6 +231,16 @@ Two properties of that guard are load-bearing when you touch it:
     asserted per module beside that module's tests, as
     `tests/handlers/pipelines/test_pipelineService_paging.py` does for the two paginator-backed
     pipeline list reads.
+
+### Parameter Store reads: `tests/ssmParametersStub.py`
+
+`common/ssmParameters.py` (the bounded, cached single-parameter lookup) is a real module in tests: `tests/conftest.py` registers it at collection and the root `conftest.py` loads a fresh copy for every test, as it does `common/resourceNames.py`. A handler binds `get_parameter_value` when it is imported, so the helper state it reads (cache, back-off window, lazily built client) belongs to the copy that was registered then. A handler a test loads by path inside the test gets that test's fresh copy; a handler imported at collection shares one copy with every test in the process. So:
+
+-   Give a by-path handler its own copy with `serve_parameters_from(module, client)`, or patch a collection-time handler's `get_parameter_value` with `load_ssm_parameters(client).get_parameter_value` through `patch.object`/`monkeypatch`. `client` is anything with `get_parameter(Name=...)`: a `MagicMock` or `ParameterStoreStub` (named values, scripted errors, a `fault` hook, the names of every call).
+-   Drive the budget, cache and window with `FakeClock` and `install_clock(helper, clock, monkeypatch)`; a helper whose real clock meets a throttling stub sleeps up to `PARAMETER_READ_BUDGET_SECONDS`.
+-   The EDH add-on's modules are imported at collection, and may each have bound a different copy: `tests/handlers/addon/edh/edhParameterStoreTestSupport.py` fakes Parameter Store behind every copy the loaded EDH modules read through (found from the functions they bound), and the EDH conftest resets each copy's state for every test. Use its `serve_parameters`, never a per-module SSM fake, and patch a copy's state with its `patch_globals` (`monkeypatch.setitem` on the globals dict), never `monkeypatch.setattr` on a wrapper object, whose undo can delete the module's names.
+-   The OpenSearch indexers read their settings on first use: an indexer harness that calls the indexing functions directly calls `module.load_opensearch_settings()` after serving the stub.
+-   Search, the indexers and `configService.py` resolve their deploy-time values through `common/deployTimeValues.py`, which the root `conftest.py` also loads fresh for every test, after resourceNames and ssmParameters. With no `VAMS_RESOURCE_PARAM_PREFIX` the resource names do not carry those keys, so the legacy reads are what a test sees: `serve_parameters_from()` binds a by-path handler's `resolve` / `resolve_together` to a private `common/deployTimeValues.py` copy reading the same helper copy, and `load_deploy_time_values(helper)` gives a collection-time handler one to patch in. To count a cold start's calls with the chunk parameters published, serve `tests/resourceNameChunksStub.py`'s `ChunkedParameterStore` (chunks, per-key and legacy parameters in one fake client) with `serve(monkeypatch, store)` before loading the handler.
 
 ### `xfail` is the ratchet for a test written before its fix
 
@@ -253,6 +279,15 @@ call from a read-only path, a validator regex that hardcodes a partition. Nor a 
 The shortcut "the forbidden literal appears nowhere in the source, so the test is spent" is **wrong** —
 a forbid-forever guardrail also has zero occurrences, and that absence is the guard working. Full
 criterion: root `CLAUDE.md` Rule 13.
+
+### Add-on tests live with the add-on
+
+An add-on's tests sit under `tests/handlers/addon/<add-on>/`, and its own test-suite rules (harness
+modules, captured fixtures) live in that add-on's `CLAUDE.md`. An add-on that ships routes records, per
+shipped permission template, the methods each template allows on them as `ROUTE_GRANTS` in
+`tests/handlers/addon/<add-on>/addonRouteGrants.py`: `tests/handlers/auth/test_permission_templates_addon_routes.py`
+merges every such file, refuses a route two sources decide, and evaluates each decision through the real
+policy generation and Casbin evaluation.
 
 ---
 

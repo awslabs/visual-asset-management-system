@@ -84,3 +84,37 @@ describe.each([WAFScope.REGIONAL, WAFScope.CLOUDFRONT])("%s web ACL logging", (w
         expect(resourceArn).toContain("webacl");
     });
 });
+
+describe("REGIONAL web ACL logging on a CloudFront deployment", () => {
+    function redactedFields(originVerifySecretArn?: string): unknown[] {
+        const app = newTestApp();
+        const stack = new cdk.Stack(app, "waf-regional-origin-verify", {
+            env: { account: "111111111111", region: "us-west-2" },
+        });
+        new Wafv2BasicConstruct(stack, "Waf", {
+            wafScope: WAFScope.REGIONAL,
+            stackName: "vams-test",
+            env: { account: "111111111111", region: "us-west-2" },
+            originVerifySecretArn,
+        });
+        const configs = Object.values(
+            Template.fromStack(stack).findResources("AWS::WAFv2::LoggingConfiguration")
+        ) as Array<{ Properties: { RedactedFields: unknown[] } }>;
+        expect(configs).toHaveLength(1);
+        return configs[0].Properties.RedactedFields;
+    }
+
+    it("redacts the origin verification header CloudFront adds, beside Authorization", () => {
+        // Every request CloudFront forwards carries the value, and the regional ACL logs its headers.
+        expect(
+            redactedFields("arn:aws:secretsmanager:us-west-2:111111111111:secret:ov-AbCdEf")
+        ).toEqual([
+            { SingleHeader: { Name: "authorization" } },
+            { SingleHeader: { Name: "x-vams-origin-verify" } },
+        ]);
+    });
+
+    it("redacts only Authorization without the secret", () => {
+        expect(redactedFields()).toEqual([{ SingleHeader: { Name: "authorization" } }]);
+    });
+});

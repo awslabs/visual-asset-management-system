@@ -14,7 +14,11 @@ VAMS supports four pipeline execution types. Each type determines how the pipeli
 | **DeadlineCloud** | AWS Deadline Cloud job   | Async only | Render-farm and batch job submission (callback always required)     |
 
 :::warning[Execution targets are shape-validated only, and pipeline authoring is administrator-equivalent]
-VAMS validates the form of the target a pipeline names -- an AWS Lambda function ARN or function name, an Amazon SQS queue URL, an Amazon EventBridge bus ARN -- and does not check that the resource exists or that it belongs to the deployment. IAM is the boundary. The shared VAMS workflow role that the generated AWS Step Functions state machines assume allows `lambda:InvokeFunction` and `sqs:SendMessage` on functions and queues in the deployment's own account and Region whose names contain the top-level `name` configuration value (default `vams`), plus Lambda functions matching `vams-*`, and `events:PutEvents` on event buses matching the same name pattern together with the account's `default` bus. A target outside those patterns is accepted when the pipeline is saved and the execution fails at invoke time with an access-denied error. Treat creating and updating pipelines as an administrator-equivalent capability and grant those routes only to roles trusted with that reach -- see [Pipeline permissions](../concepts/pipelines-and-workflows.md#pipeline-permissions).
+VAMS validates the form of the target a pipeline names -- an AWS Lambda function ARN or function name, an Amazon SQS queue URL, an Amazon EventBridge bus ARN -- and does not check that the resource exists or that it belongs to the deployment. IAM is the boundary. The shared VAMS workflow role that the generated AWS Step Functions state machines assume allows `lambda:InvokeFunction` and `sqs:SendMessage` on functions and queues in the deployment's own account and Region whose names contain the top-level `name` configuration value (default `vams`), plus Lambda functions matching `vams-*`, and `events:PutEvents` on event buses matching the same name pattern together with the account's `default` bus. A target outside those patterns is accepted when the pipeline is saved and the execution fails at invoke time with an access-denied error. A deployment may also allow exact cross-account targets by listing them in `app.pipelines.externalPipelineBridges[].invokeTargets`; those ARNs are added to the role verbatim (see [Externally owned pipelines](#externally-owned-pipelines-bridge-pattern)). Treat creating and updating pipelines as an administrator-equivalent capability and grant those routes only to roles trusted with that reach -- see [Pipeline permissions](../concepts/pipelines-and-workflows.md#pipeline-permissions).
+:::
+
+:::tip[Job tags]
+The VAMS-deployed pipelines tag every AWS Batch job and Amazon ECS task they start with `vams:stackname` and `vams:pipeline`, ahead of tag-scoped job permissions in a later release. A custom pipeline that starts its own jobs may use the same tags. See [Job tags](overview.md#job-tags).
 :::
 
 ### Synchronous vs. asynchronous execution
@@ -316,12 +320,13 @@ Pipelines that require internet access (for example, AWS Marketplace integration
 
 The VAMS workflow generates several Amazon S3 paths that are passed to each pipeline step. Using the correct path for each output type is critical for the workflow's process-output step to function correctly.
 
-| Path variable                          | Bucket           | Purpose                                                            | Versioned |
-| -------------------------------------- | ---------------- | ------------------------------------------------------------------ | --------- |
-| `outputS3AssetFilesPath`               | Asset bucket     | File-level outputs: new files, file previews (`.previewFile.X`)    | Yes       |
-| `outputS3AssetPreviewPath`             | Asset bucket     | Asset-level preview images only (whole-asset representative image) | Yes       |
-| `outputS3AssetMetadataPath`            | Asset bucket     | Metadata files produced by the pipeline                            | Yes       |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket | Temporary working files or special non-versioned viewer data       | No        |
+| Path variable                          | Bucket                    | Purpose                                                                                    | Versioned |
+| -------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------ | --------- |
+| `outputS3AssetFilesPath`               | Asset bucket              | File-level outputs: new files, file previews (`.previewFile.X`)                            | Yes       |
+| `outputS3AssetPreviewPath`             | Asset bucket              | Asset-level preview images only (whole-asset representative image)                         | Yes       |
+| `outputS3AssetMetadataPath`            | Asset bucket              | Metadata files produced by the pipeline                                                    | Yes       |
+| `outputS3AssetResultsPath`             | Asset bucket (run prefix) | Structured result documents recorded on the execution; `execution.status.json` is reserved | n/a       |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket          | Temporary working files or special non-versioned viewer data                               | No        |
 
 :::note[Key distinction]
 `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the entire asset. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
@@ -332,6 +337,7 @@ The VAMS workflow generates several Amazon S3 paths that are passed to each pipe
 -   **`outputS3AssetFilesPath`** -- Use for all standard pipeline outputs: converted files, generated thumbnails (`.previewFile.X`), and any new files that should be tracked as part of the asset.
 -   **`outputS3AssetPreviewPath`** -- Use only for a single representative preview image of the entire asset. Do not use for file-level previews.
 -   **`outputS3AssetMetadataPath`** -- Use for metadata JSON files (for example, `asset.metadata.json`) that the process-output step reads to update asset metadata in VAMS.
+-   **`outputS3AssetResultsPath`** -- Use for structured documents that describe the run rather than the asset (a summary, a report, the reserved `execution.status.json`). Each object is recorded as one of the execution's output results (a file over about 380 KB is truncated) and nothing under it is written to the asset. See [Writing outputs](#writing-outputs).
 -   **`inputOutputS3AssetAuxiliaryFilesPath`** -- Use for temporary files during processing or for special non-versioned data that the frontend reads directly (for example, Potree octree viewer files).
 
 ## Preserving relative paths in output
@@ -342,6 +348,7 @@ An asset file's key is the asset's root key followed by the file's relative path
 `{assetRoot}{relative_path}/{filename}`, where the relative path has zero or more subdirectories. The
 root is usually `{baseAssetsPrefix}{assetId}/`. An asset created on an existing bucket folder
 (`bucketExistingKey`) keeps that folder as its root, so its keys need not contain the asset ID.
+An asset created from a single object key (a `bucketExistingKey` with no trailing `/`) holds that object at `/{file name}`, its companion folder `{key}/` and its previews; see [Files](../api/files.md#list-files).
 
 The output paths point to the run's output folders, not to the asset. The process-output step writes
 each file it finds there to the same relative path within the asset.
@@ -356,24 +363,31 @@ Wrong output:   {outputS3AssetFilesPath}pump.e57.previewFile.gif   (relative pat
 
 ### Computing the relative subdirectory
 
-The `assetId` is resolved from the manifest in the `vamsExecute` Lambda and threaded from there through
-the rest of the chain. Use it in the container to compute the relative subdirectory. The input's Amazon
-S3 key does not always contain the asset ID: an asset created on an existing bucket folder keeps that
-folder as its root, and from the second step of a workflow on, an input can be a file an earlier step
-wrote, which is keyed under the run's output folder. Allow for a key that does not contain the asset ID:
-for such a key the search below returns `""`, and the output is written at the top of the output folder.
+Take the subdirectory from the input file's manifest entry, not from its Amazon S3 key. The key does not
+always contain the asset ID: an asset created on an existing bucket folder keeps that folder as its root,
+a bucket's base prefix sits in front of the asset ID, and from the second step of a workflow on an input
+can be a file an earlier step wrote, which is keyed under the run's output folder in the run bucket.
 
-To keep the subfolder for such a key, take it from the input file's path within its asset, which is that
-file's manifest `relativePath` (with a leading `/`). In a `vamsExecute` Lambda it is
-`resolved['inputFiles'][0]['relativePath']`, which `manifestHelper.resolved_file_key(resolved)` returns
-normalized (`/` when the run has no input file).
+Each manifest input entry carries the file's asset-relative `relativePath` (with a leading `/`); its folder is the subdirectory.
+In a `vamsExecute` Lambda it is `resolved['inputFiles'][0]['relativePath']`, which `manifestHelper.resolved_file_key(resolved)` returns normalized (`/` when the run has no input file).
+A file whose key has an empty segment right after the asset's folder (`A1//x.las`) has the path `//x.las`, and its metadata record is keyed by that path, apart from the record of `/x.las`.
+Pass the `relativePath` on to the container with the rest of the definition, and search the key for the asset ID
+only for a launch that carries no `relativePath`:
 
 ```python
-# assetId comes from the pipeline definition (resolved from the manifest in vamsExecute)
-input_parts = stage_input.objectKey.split("/")
-relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
-                   if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
+# relative_path is the input's manifest relativePath ("" when the launch named none)
+relative = (relative_path or "").strip("/")
+if relative:
+    relative_subdir = relative.rsplit("/", 1)[0] if "/" in relative else ""
+else:
+    input_parts = stage_input.objectKey.split("/")
+    relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
+                       if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
 ```
+
+To read another file of the same asset, join its asset-relative path to the entry's `assetRootS3Key` in
+the bucket `assetRootBucket`, never in the entry's `bucket`: an input an earlier step rewrote is read
+from the run bucket while its asset root stays in the asset bucket.
 
 ## Threading assetId through the pipeline
 
@@ -431,7 +445,7 @@ input-file-agnostic and multi-file ready.
 | `workflowExecutionId`                  | Yes            | This execution's identifier                                                |
 | `workflowExecutionS3InputOutputBucket` | Yes            | Bucket holding the run's input manifest, configuration, and output staging |
 | `executingUserName`                    | Yes            | User who started the execution                                             |
-| `executingRequestContext`              | Yes            | Request context of the caller                                              |
+| `executingRequestContext`              | Yes            | Same value as `executingUserName` (kept for compatibility)                 |
 | `inputManifestS3Location`              | Yes            | **The manifest** -- the pipeline's real input contract (see below)         |
 | `inputConfigurationS3Location`         | Yes            | The rendered per-pipeline configuration (the resolved template body)       |
 | `TaskToken`                            | Callback only  | Present only when the pipeline sets `waitForCallback` to `"Enabled"`       |
@@ -459,10 +473,22 @@ resolved["assetId"], resolved["databaseId"]         # asset identity
 resolved["outputS3AssetFilesPath"]                  # file-level outputs
 resolved["outputS3AssetPreviewPath"]                # asset-level previews
 resolved["outputS3AssetMetadataPath"]               # metadata outputs
+resolved["outputS3AssetResultsPath"]                # structured result documents (see Writing outputs)
 resolved["inputOutputS3AssetAuxiliaryFilesPath"]    # temporary working files
+resolved["inputVersionId"]                          # S3 version of the first input file ("" for none)
 ```
 
-Two behaviors are worth knowing:
+Four behaviors are worth knowing:
+
+-   **Read the input at its recorded version.** Each manifest input file carries the S3 `versionId` the
+    run reads it at: the version selected at launch, or the one current when the run started.
+    `inputVersionId` is the first file's, and `manifestHelper.input_version_id(entry)` returns any
+    entry's; both are `""` when there is no version to send (a folder selection or an unversioned
+    bucket). An object written while the bucket's versioning was off has the version id `"null"`, which
+    Amazon S3 accepts on a read like any other. Pass a non-empty value as `VersionId` on every
+    read of the input file. A read without it returns whatever is current when your compute starts,
+    which is a different file whenever a newer version was uploaded in between. Your role needs
+    `s3:GetObjectVersion` on the asset bucket for such a read.
 
 -   **`assetId` and `databaseId` come from the manifest's first input file.** For a pipeline with
     `inputFileArity: "none"` there are no input files, so they fall back to the execution's output
@@ -471,6 +497,26 @@ Two behaviors are worth knowing:
     accessors -- `asset_metadata_for`, `file_metadata_for`, `file_attributes_for`, and
     `database_metadata_for` -- to resolve records for a specific `(databaseId, assetId, fileKey)`
     rather than indexing the envelope directly.
+-   **Each `inputFiles` entry is self-locating.** It carries the file's asset-relative `relativePath`;
+    its S3 location by bucket name (`bucket`, `key`, and `versionId` -- empty on an unversioned
+    bucket); its asset identity (`databaseId`, `assetId`, and the asset's root folder,
+    `assetRootS3Key` in the bucket `assetRootBucket`); its auxiliary-bucket
+    preview prefix (`auxPreviewPrefix`); `bucketId`, the asset bucket's registration id; and the
+    bucket's placement -- `bucketRegion`, the Region the bucket is in (`""` for the deployment
+    Region), and `bucketAccountId`, its owning account when that is not the deployment account
+    (`""` otherwise). A folder input (a `key` ending in `/`, or the whole asset) whose asset holds the
+    location of another asset inside it also carries `excludeLocations`, those stored locations, in every step's manifest: their
+    keys are the other assets' files, so a pipeline that lists the folder leaves out every key one of
+    them holds (a folder location holds every key under it; a single-file location its own key, the keys
+    under `{key}/` and its previews). Read S3 with `bucket`, through a client for `bucketRegion`
+    (`manifestHelper.s3_client_for_region`); the resolved inputs expose the first file's Region as
+    `inputBucketRegion` and the output bucket's as `outputBucketRegion`. From the second step of a
+    workflow on, an input that an earlier step rewrote is read from the run's output bucket, so its
+    `bucket` is that bucket while `assetRootBucket` stays the asset's; join the asset root with
+    `assetRootBucket`, never with `bucket`. `bucketId` is for a consumer
+    downstream of the pipeline that must resolve the registered bucket row itself -- the vector
+    indexer does, from the embedding event a pipeline publishes -- and is `""` only on an entry no
+    asset row produced.
 
 ### The metadata envelope
 
@@ -513,6 +559,113 @@ Read the envelope through the accessors rather than by indexing it:
 -   Database metadata is input only. A pipeline writes metadata back to assets and files; there is no
     database metadata output.
 
+#### Opt-in sections: per-file records for whole-asset runs, and the metadata schema
+
+Two `metadataInputs` keys add content the envelope does not otherwise carry. Both default to
+`false`; a step receives a section only when the workflow and that step's own pipeline (or chosen
+template's `overrides`) both turn it on, and with both keys off the envelope is exactly the shape
+shown above.
+
+A chosen template's `overrides.metadataInputs` replaces the pipeline's whole map, and a key the
+template's map leaves out reads at its default, not at the pipeline's value. A template whose map
+does not name `assetFileMetadata` and `metadataSchema` therefore turns both off for a step that uses
+it. A workflow response's `aggregateWorkflowPipelineMetadataInputs` is computed from the pipelines' own
+maps without template overrides (`includesTemplateOverrides: false`), so it does not show a section a
+template turns on or off.
+
+-   **`assetFileMetadata`** — for a whole-asset (`/`) or folder (`/folder/`) selection, the asset
+    group's `files` also lists one record for each current file under the selection, marked
+    `"expanded": true`, with the file's `metadata` and/or `attributes` as `fileMetadata` and
+    `fileAttributes` allow. The group gains a `fileExpansion` block that says whether the list is
+    complete:
+
+    ```json
+    "fileExpansion": {
+        "selections": ["/"],
+        "expandedFileCount": 500,
+        "omittedFileCount": 1240,
+        "omittedFileCountExact": true
+    }
+    ```
+
+    Archived files, folder markers, and generated preview files (`*.previewFile.*`) are not listed.
+    At most 500 files are expanded per selection, the first ones in key order, and the selected and
+    expanded file records of one execution together stay within its 1,000-file input limit. A cut is
+    also returned to the caller as an execute warning. `file_metadata_for` and `file_attributes_for`
+    read an expanded record like any other file record.
+
+-   **`metadataSchema`** — a top-level `metadataSchemas` list carries, per involved database, the
+    aggregated schema fields that apply there (the database's own schemas and the `GLOBAL` ones) and
+    the database's `restrictMetadataOutsideSchemas` flag:
+
+    ```json
+    "metadataSchemas": [
+        {
+            "databaseId": "engineering",
+            "restrictMetadataOutsideSchemas": true,
+            "assetMetadata": [
+                {
+                    "metadataFieldKeyName": "category",
+                    "metadataFieldValueType": "inline_controlled_list",
+                    "required": true,
+                    "controlledListKeys": ["part", "scene"],
+                    "defaultMetadataFieldValue": "part",
+                    "metadataSchemaMultiFieldConflict": false
+                }
+            ],
+            "fileMetadata": [
+                {
+                    "metadataFieldKeyName": "material",
+                    "metadataFieldValueType": "string",
+                    "required": false,
+                    "controlledListKeys": [],
+                    "defaultMetadataFieldValue": null,
+                    "metadataSchemaMultiFieldConflict": false,
+                    "fileKeyTypeRestriction": [".glb", ".usd"]
+                },
+                {
+                    "metadataFieldKeyName": "weight",
+                    "metadataFieldValueType": "number",
+                    "required": false,
+                    "controlledListKeys": [],
+                    "defaultMetadataFieldValue": null,
+                    "metadataSchemaMultiFieldConflict": false,
+                    "fileKeyTypeRestriction": []
+                },
+                {
+                    "metadataFieldKeyName": "weight",
+                    "metadataFieldValueType": "string",
+                    "required": false,
+                    "controlledListKeys": [],
+                    "defaultMetadataFieldValue": null,
+                    "metadataSchemaMultiFieldConflict": true,
+                    "fileKeyTypeRestriction": [".obj"]
+                }
+            ],
+            "fileAttributes": []
+        }
+    ]
+    ```
+
+    A file field is listed once per file-extension reach, because VAMS validates a file only against
+    the schemas whose file type restriction admits it: an entry with an empty
+    `fileKeyTypeRestriction` covers every file that no other entry of the same field lists, and an
+    entry listing extensions covers files with those extensions. To find a field's definition for a
+    file, take the entry of that field whose `fileKeyTypeRestriction` lists the file's extension, or
+    else the entry with an empty list; if neither exists, the field does not apply to that file. A
+    file with no extension, such as `README` or `rev.2/LICENSE`, takes the entry with an empty list,
+    or none, because VAMS validates it only against schemas with no file type restriction (see
+    [File type restriction matching](../user-guide/metadata-management.md#file-type-restriction-matching)).
+    In the example, `weight` is a number for a `.glb` file and a conflicting field for an `.obj` file.
+    With `restrictMetadataOutsideSchemas` on, VAMS limits a file's metadata, or its attributes, to the
+    fields this rule gives that file, and only when it gives at least one; a file that no field reaches
+    accepts any key. A field that two schemas reaching the same files define differently is reported for those
+    files with `metadataSchemaMultiFieldConflict: true` and the type VAMS falls back to (`string`,
+    optional).
+    The list carries at most 20 databases. A database whose schema the user running the workflow may
+    not read is left out, and the launch carries a warning, so treat a missing entry as "no schema
+    available" rather than "no schema defined".
+
 The entities a run captures follow from its own selection: every input file's asset, every asset the
 execution named purely as a metadata source, and every distinct database of those assets. A run with
 no input files captures the single database the execution named. Naming metadata sources is optional
@@ -532,15 +685,19 @@ Write to the resolved output locations, preserving each input file's relative pa
 The workflow's process-output step then moves the results onto the asset. Metadata write-back has its
 own file convention:
 
-| Output          | Location                      | Naming                                                     |
-| --------------- | ----------------------------- | ---------------------------------------------------------- |
-| Files           | `outputS3AssetFilesPath`      | Preserve the input's relative path                         |
-| File previews   | `outputS3AssetFilesPath`      | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg) |
-| Asset preview   | `outputS3AssetPreviewPath`    | Any allowed image name                                     |
-| File metadata   | `outputS3AssetMetadataPath`   | `{targetFilePath}.metadata.json`                           |
-| File attributes | `outputS3AssetMetadataPath`   | `{targetFilePath}.attribute.json`                          |
-| Asset metadata  | `outputS3AssetMetadataPath`   | `asset.metadata.json` (reserved basename)                  |
-| Results         | The manifest's results prefix | Any name                                                   |
+| Output          | Location                    | Naming                                                                |
+| --------------- | --------------------------- | --------------------------------------------------------------------- |
+| Files           | `outputS3AssetFilesPath`    | Preserve the input's relative path                                    |
+| File previews   | `outputS3AssetFilesPath`    | `{inputFile}.previewFile.{ext}` (png, jpg, jpeg, gif, svg, webp, bmp) |
+| Asset preview   | `outputS3AssetPreviewPath`  | Any allowed image name                                                |
+| File metadata   | `outputS3AssetMetadataPath` | `{targetFilePath}.metadata.json`                                      |
+| File attributes | `outputS3AssetMetadataPath` | `{targetFilePath}.attribute.json`                                     |
+| Asset metadata  | `outputS3AssetMetadataPath` | `asset.metadata.json` (reserved basename)                             |
+| Results         | `outputS3AssetResultsPath`  | Any name except the reserved `execution.status.json`                  |
+
+A pipeline that backs a compliance rule reports its measurements in one results file,
+`compliance-output.json`; see
+[Building a pipeline for compliance checks](../user-guide/compliance.md#building-a-pipeline-for-compliance-checks).
 
 Metadata and attribute files share one body:
 `{"metadata": [{"metadataKey": "...", "metadataValue": "..."}], "updateType": "update"}`, adding
@@ -551,16 +708,67 @@ differently-named file is ignored silently, which looks like a pipeline that sim
 metadata. `asset.metadata.json` is reserved for asset-level values: any other `*.metadata.json` is
 read as file-level, with its target path taken from the file name.
 
+:::note[Write-back and schema restrictions]
+A database's `restrictMetadataOutsideSchemas` setting applies to user and API metadata writes, not to
+pipeline write-back. A pipeline can write keys that no metadata schema declares. Once stored, those
+keys pass the restriction on later user and API edits of the same record, including value changes, so
+a pipeline that adds fields does not block later edits. A user or API write still cannot add a new key
+the schema does not declare.
+
+Write-back is not checked against schema value types or controlled lists either. A stored value the
+schema would refuse does not block later user edits of other fields, but a user who changes that value
+must give one the schema accepts.
+
+Write-back is also exempt from the limit of 500 metadata records per entity, so a pipeline can store
+more than 500 records on an asset or file. While a record holds more than 500, user and API creates and
+`update` requests on it are refused, even ones that change only existing keys. Keep the number of keys
+a pipeline writes within the limit, or have users trim the record with a `replace_all` of 500 items or
+fewer or with deletes.
+:::
+
 :::tip[A pipeline can annotate a file it produces in the same run]
 Files written to `outputS3AssetFilesPath` are ingested onto the asset **before** the metadata path is
 read, so metadata naming a newly produced file is applied to a file that already exists. Write both in
 one execution; no second pass is required.
 
-Name the metadata file after the file's final **asset-relative** path, which includes the workflow's
-output base-execution path extension -- not the absolute Amazon S3 key. Metadata naming a file whose
-ingestion failed is rejected and the execution is recorded as failed, so metadata values never
-accumulate against files that did not land.
+Name the metadata file after the relative path the pipeline wrote under `outputS3AssetFilesPath` --
+not the absolute Amazon S3 key, and without the workflow's output base-execution path extension: the
+process-output step applies that extension itself when it derives the target, so the derived target is
+the file's final **asset-relative** path. The asset-level `asset.metadata.json` is unaffected by the
+extension. Metadata naming a file whose ingestion failed is rejected and the execution is recorded as
+failed, so metadata values never accumulate against files that did not land.
 :::
+
+:::note[Reporting a failure after the outputs are written]
+A pipeline that has already written its outputs and then meets a failure it wants recorded -- a denied
+model call after the attribute file landed, for example -- writes `execution.status.json` directly under
+`outputS3AssetResultsPath` with the body `{"status": "FAILED", "error": "<code>", "cause": "<text>"}`
+(`error` up to 256 characters, `cause` up to 1,024) and returns normally: no raise, and on a task-token
+pipeline still `SendTaskSuccess`. The process-output step ingests every output as usual, then reads the
+status object and records the execution `FAILED` with `executionError` set to `<error>: <cause>`.
+`"status": "SUCCEEDED"`, or no object, leaves the outcome to the write-back result. The object is also
+recorded as an ordinary results row, so the report is readable from the execution record.
+
+A status object the step cannot use records the execution `FAILED` with a message saying the status file
+could not be read: an empty or malformed file, one that is not UTF-8 text, one over about 380 KB (it is
+not read), or valid JSON that is not an object whose `status` is exactly `SUCCEEDED` or `FAILED`. A
+crash that raises keeps the existing contract -- the task fails and staged outputs are not ingested -- so
+use the status object for failures the pipeline chooses to record.
+:::
+
+### Publishing embeddings for vector search
+
+A pipeline can contribute embeddings to [natural-language search](../concepts/vector-search.md) without touching the vector table: the SYSTEM GenAI metadata pipeline does it, and any pipeline whose role holds `events:PutEvents` on the VAMS orchestration bus can do the same. Write the embedding document to the auxiliary bucket under the execution's temporary prefix, then publish one event per file version:
+
+| Field        | Value                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Source`     | The manifest's `systemConfig.orchestrationEventPrefix`                                                                                                                                                                                                                                                                                                                                                                 |
+| `DetailType` | `vector.embedding.ready`                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Detail`     | `schemaVersion: 1`, `databaseId`, `assetId`, `filePath`, `versionId`, `contentEtag`, `bucketId`, `fileClass`, `fileExt`, `fileSize`, `contentType`, `embeddingModelId`, `embeddingDimensions`, `analysisModelId`, `sourceModalities`, `pipelineExecutionId`, `workflowExecutionId`, `generatedAt`, `documentS3Location`, `segmentKey`, `segmentKind`, `segmentLabel`, `segmentStartMs`, `segmentEndMs`, `segmentCount` |
+
+The document at `documentS3Location` carries the same fields plus `embedding` (the vector) and `sourceText`. The vector indexer reads it, writes the item, marks the file's other versions as not latest, and deletes the document; it drops a document whose `embeddingModelId` or `embeddingDimensions` differ from the deployed index, so read both from the deployment's `app.vectorSearch` configuration. Never publish the vector inside the event itself. `sourceText` is stored on the vector item exactly as published, so treat it as content at rest: the SYSTEM GenAI metadata pipeline screens the text it embeds through its Amazon Bedrock guardrail's `ApplyGuardrail` operation first and publishes the masked output (see [Amazon Bedrock guardrail](system-genai-metadata.md#amazon-bedrock-guardrail)); a custom producer that embeds file text should do the same rather than publish the raw excerpt.
+
+A pipeline may publish **several vectors for one file version** — a time window of a video, a chunk of a document — by giving each document and event a distinct `segmentKey` (at most 32 bytes; a fixed-width key that sorts in content order, such as `t` plus a 10-digit start millisecond or `c` plus a 6-digit 1-based ordinal), a `segmentKind` of `videoTime` or `textChunk`, a human-readable `segmentLabel`, `segmentStartMs` and `segmentEndMs` for `videoTime` (null otherwise), and the run's total in `segmentCount`. Publish the whole-file vector with `segmentKey` empty, `segmentKind` `none`, and the same `pipelineExecutionId` as its segments: when the indexer writes a whole-file document it deletes the same version's segment vectors that carry a **different** `pipelineExecutionId`, so an earlier run's windows or chunks do not outlive the run that replaced them. A `Detail` without the six fields is indexed as a whole-file vector (`segmentKey` empty, `segmentKind` `none`, `segmentCount` 0); a key over 32 bytes or an unknown kind is logged and dropped. Search collapses a file's vectors to one hit — see [Vector search](../concepts/vector-search.md) — and the SYSTEM GenAI metadata pipeline's [video windows](system-genai-metadata.md#video-windows) and [content chunks](system-genai-metadata.md#content-chunks) are the worked example.
 
 ## Callbacks
 
@@ -633,8 +841,11 @@ Three details make the callback reliable:
     cause still reaches Amazon CloudWatch Logs.
 -   **Make the call conditional on a token.** A direct invocation carries no `TaskToken`; the callback
     helper returns without calling AWS Step Functions rather than failing on the missing value.
--   **Keep `cause` within 256 characters.** Longer text is truncated in the execution history; the full
-    message belongs in the log entry.
+-   **Keep `error` within 256 characters and put the readable sentence in `cause`.** `error` is a short
+    code — the AWS Step Functions API caps it at 256 characters — and the execution record renders
+    `executionError` as `<error>: <cause>`, so a `cause` must not start with the code. The API accepts a
+    `cause` of up to 32,768 characters and the execution record keeps the first 16 KiB; make its first line
+    one operator-readable sentence and put the full detail in the log entry.
 
 ## Registering sub-processes and logs
 
@@ -745,9 +956,10 @@ environment values itself and needs `events:PutEvents` on the orchestration bus.
 | A compute job the pipeline submits itself | Aborting terminates the job rather than leaving it running and billing, and its status and container log stream are resolved from the job itself.                                   |
 
 `resourceType` is what keeps this open-ended: the registration path validates and stores whichever locator
-keys are reported (`executionArn`, `jobId`, `jobArn`, `taskArn`, `clusterArn`, `farmId`, `queueId`, or a
-generic `arn`). A type VAMS cannot yet stop is still recorded, and an abort reports it as left running
-instead of silently forgetting it.
+keys are reported (`executionArn`, `jobId`, `jobArn`, `taskArn`, `clusterArn`, `farmId`, `queueId`,
+`trainingJobArn`, `pipelineExecutionArn`, or a generic `arn`). A type VAMS cannot stop is still recorded with
+its `label` and `stageName`, the execution view shows it with `abortable: false`, and an abort lists it under
+`notAbortable` instead of silently forgetting it.
 
 ### What registration enables
 
@@ -770,19 +982,25 @@ details route derives it, when asked, from the registered sub-state-machine's de
 `subProcessEvents`, and `sfnHistoryEvents`.
 
 :::info[Stopping is type-aware; recording is not]
-Registration accepts any `resourceType`, but only the types VAMS has a stop API for are actually stopped
-today: a Step Functions execution (`stepFunctionsExecution`), an AWS Batch job (`batchJob`), and an AWS
-Deadline Cloud farm job (`deadlineCloudJob`). A registered Deadline Cloud job is also reported with its live
-job status in the execution details, and its session logs appear as one of the step's log sources. Any
-other type is stored and reported back as left running rather than dropped.
+Registration accepts any `resourceType`, but only the types VAMS has a stop API for are actually stopped: a
+Step Functions execution (`stepFunctionsExecution`), an AWS Batch job (`batchJob`), an AWS Deadline Cloud
+farm job (`deadlineCloudJob`), an Amazon SageMaker training job (`sageMakerTrainingJob`, located by
+`trainingJobArn`; VAMS stops it by the job name parsed from the ARN), and an Amazon SageMaker pipeline
+execution (`sageMakerPipelineExecution`, located by `pipelineExecutionArn`). The two SageMaker types are
+stopped and described in the deployment's own account and Region; a bridge that owns them elsewhere
+registers them for display and stops them itself. A registered Deadline Cloud or SageMaker job is also
+reported with its live status in the execution details, and a Deadline Cloud job's session logs appear as
+one of the step's log sources. Any other type is stored and reported back as left running rather than
+dropped: each sub-process in the execution details carries `abortable`, and the abort response lists the
+ones VAMS could not stop under `notAbortable` beside the free-text `warnings`.
 
 Stopping runs on both of the routes that end a run early. An abort names what it could not stop in the API
 response; a workflow failure stops each in-flight pipeline's sub-processes before stamping its row terminal,
 and records what was left running on that pipeline's log row.
 
 That distinction is deliberate — it means registering a resource is always worth doing. A type VAMS cannot
-stop yet becomes visible in the abort result immediately, and gains automatic stop and status handling when
-support is added, with no change to the pipeline.
+stop becomes visible in the execution view and the abort result immediately, and gains automatic stop and
+status handling when support is added, with no change to the pipeline.
 :::
 
 :::tip[AWS Batch: which integration submits the job matters]
@@ -865,7 +1083,7 @@ parameter**, named `Vams` followed by the field name with its first letter capit
 | `TaskToken`                            | `VamsTaskToken`                            |
 | `pipelineExecutionId`                  | `VamsPipelineExecutionId`                  |
 
-`executingRequestContext` is **not** forwarded -- it can exceed the 1024-character cap.
+`executingRequestContext` is **not** forwarded -- it carries the same value as `executingUserName`, which is already passed as `VamsExecutingUserName`.
 
 :::danger[The OpenJD template must declare every reserved parameter]
 `createJob` validates the submitted parameters against the registered job template. A template missing
@@ -885,6 +1103,176 @@ The job reads the manifest from `VamsInputManifestS3Location` and calls `SendTas
 `SendTaskFailure` with `VamsTaskToken`. The `DeadlineCloud` execution type is available only when the
 deployment sets `app.pipelines.deadlineCloudExecutionTypeEnabled`, and is unavailable in the AWS
 GovCloud and European Sovereign Cloud partitions.
+
+## Externally owned pipelines (bridge pattern)
+
+A pipeline whose compute, orchestration, and account are not VAMS's own — a training stack in a separate
+account, a scheduler that is not AWS Step Functions, a platform team's shared job runner — takes part in
+VAMS executions through a **bridge**: a small stack the pipeline's owner deploys that receives the VAMS
+execution body, runs the work on its own side, reports back, and registers what it started. VAMS supplies
+the integration surface the bridge needs as deployment configuration and SSM parameters; the bridge owns
+everything else. Two shapes are in use, and both end in the same contract.
+
+-   **Relay bus.** The pipeline is registered with the `EventBridge` execution type and an event bus the
+    bridge owns as its target. The shared workflow role puts the execution body on that bus; a rule on the
+    bridge side starts the owner's orchestration. This is the shape to prefer when the bridge already has an
+    event-driven entry point, because VAMS calls nothing in the bridge account but `events:PutEvents`.
+-   **Adapter function.** The pipeline is registered with the `Lambda` (asynchronous) or `SQS` execution type
+    and a function or queue the bridge owns as its target. The adapter translates the VAMS body into the
+    owner's job submission. This is the shape for an orchestrator that has no EventBridge entry point.
+
+Either way the pipeline is an ordinary VAMS pipeline: asynchronous, with `waitForCallback` enabled, bound
+to a target outside the deployment. What follows is the VAMS half of the arrangement.
+
+### Deploy-time discovery
+
+A bridge stack resolves everything it needs to know about the VAMS deployment from SSM Parameter Store at
+its own deploy time, so neither side hard-codes the other's names. The prefix is the VAMS core stack's
+`ResourceNamesSSMParamPrefixOutput` output (`/<name>-<baseStackName>-<region>/resourceNames`), and the keys are:
+
+| Parameter                                      | Value                                                                                                               |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `integration/orchestrationBusArn`              | The orchestration bus registration events are published to                                                          |
+| `integration/orchestrationEventSourcePrefix`   | The deployment's event source prefix (`<name>.<baseStackName>-<region>`)                                            |
+| `integration/workflowExecutionRoleArn`         | The shared workflow state-machine role, the principal that invokes the target and whose callbacks the bridge trusts |
+| `lambdaFunctions/importGlobalPipelineWorkflow` | The `vamsSchema` import function the bridge invokes to register its pipeline and workflow                           |
+| `s3Buckets/artefacts`                          | The artefacts bucket a `vamsSchema` bundle is uploaded to before import                                             |
+
+```typescript
+const prefix = "/<name>-<baseStackName>-<region>/resourceNames";
+const busArn = ssm.StringParameter.valueForStringParameter(
+    this,
+    `${prefix}/integration/orchestrationBusArn`
+);
+const importFn = ssm.StringParameter.valueForStringParameter(
+    this,
+    `${prefix}/lambdaFunctions/importGlobalPipelineWorkflow`
+);
+```
+
+The bridge's deployment role needs `ssm:GetParameter` on those names (and, for a cross-account bridge, a
+resource policy on the parameters or a role in the VAMS account to read them through).
+
+### The execution body and the callback
+
+The bridge receives the same body every asynchronous pipeline receives — the manifest location, the input
+and output prefixes, the `TaskToken`, and the pipeline's `systemConfig` and configuration — described in
+[The pipeline input contract](#the-pipeline-input-contract) and the [per-type envelopes](#per-type-envelopes).
+It reads the manifest with the `manifestHelper`, writes its outputs under the output prefixes, and ends the
+run with `SendTaskSuccess` or `SendTaskFailure` on the token, as in [Callbacks](#callbacks). A long-running
+job keeps the token alive with `SendTaskHeartbeat` at an interval shorter than the pipeline's
+`taskHeartbeatTimeout`; `taskTimeout` bounds the whole step. Both values come from the pipeline definition
+the bridge registers, so the bridge chooses bounds that match its own job lengths.
+
+The heartbeat is also how the bridge learns about an abort. When a VAMS execution is aborted, the parent
+state machine stops and the task token is invalidated; the next `SendTaskHeartbeat` (or callback) is
+rejected with `TaskTimedOut`. A bridge treats that rejection as the signal to stop its own job, since VAMS
+cannot reach compute it does not own (see [What VAMS can stop](#registration-and-what-vams-can-stop)).
+
+### Two roles, no keys
+
+The bridge's calls into the VAMS account are made by IAM roles the bridge owns, and VAMS's calls into the
+bridge account are made by the shared workflow role. No access key is created or exchanged in either
+direction.
+
+-   The **runner role** (the bridge's orchestration) publishes registration events to the orchestration
+    bus. It needs `events:PutEvents` in its own identity policy, and the VAMS deployment must list it under
+    `app.pipelines.externalPipelineBridges` (below) for the bus to accept the call.
+-   The **control role** (the identity the bridge uses for `SendTaskHeartbeat`, `SendTaskSuccess`, and
+    `SendTaskFailure`) lives in the VAMS account or is trusted there. Its trust policy names the runner role
+    exactly and requires an `sts:ExternalId`; the VAMS workflow role is the role whose executions hold the
+    token, so the control role needs `states:SendTask*` on that deployment's state machines.
+
+```json
+{
+    "Effect": "Allow",
+    "Principal": { "AWS": "arn:aws:iam::<BRIDGE_ACCOUNT_ID>:role/my-bridge-runner" },
+    "Action": "sts:AssumeRole",
+    "Condition": { "StringEquals": { "sts:ExternalId": "<EXTERNAL_ID>" } }
+}
+```
+
+### Registering what the bridge started
+
+A bridge registers its sub-processes and log sources exactly as a built-in pipeline does — one
+`pipeline.execution.register` event per resource on the orchestration bus, with `Source` set to the
+deployment's event source prefix followed by `.pipeline.<pipelineExecutionId>` — see
+[Registering sub-processes and logs](#registering-sub-processes-and-logs). The `resourceType` it reports is
+its own: a `slurmJob`, a `kubernetesJob`, a `sageMakerTrainingJob`. The locator keys VAMS stores include
+`trainingJobArn` and `pipelineExecutionArn` for the two SageMaker types, `jobId` and a generic `arn` for
+anything else, and `label` and `stageName` for display.
+
+The bus accepts the event only from a principal the deployment has allowed. `app.pipelines.externalPipelineBridges`
+lists each bridge's account and the role ARN pattern permitted to publish; the deployment adds one
+`events:PutEvents` statement per entry to the bus resource policy, granted to the bridge account under an
+`aws:PrincipalArn` condition on the pattern. The statement is further conditioned on `events:detail-type`
+(exactly `pipeline.execution.register`) and `events:source` (`<prefix>.execution.*.pipeline.*`), so a
+listed role may only put registration events on an execution's own source -- nothing else on the bus,
+and in particular not the deployment's `asset.file.uploaded` trigger events. A role outside the pattern,
+or an event outside those conditions, is denied at `PutEvents`.
+
+VAMS trusts a listed bridge role to register only resources it owns: the registration handler validates
+the shape of each locator (an ARN, a job id) and that the source names the pipeline execution the detail
+claims, not that the resource belongs to the bridge. A same-account `sageMakerTrainingJob` or
+`sageMakerPipelineExecution` it registers is what VAMS stops on abort, so the role pattern is the
+boundary -- list only roles whose registrations you would act on.
+
+```json
+"externalPipelineBridges": [
+    {
+        "accountId": "<BRIDGE_ACCOUNT_ID>",
+        "roleArnPattern": "arn:aws:iam::<BRIDGE_ACCOUNT_ID>:role/my-bridge-*"
+    }
+]
+```
+
+### Registration and what VAMS can stop
+
+A registered sub-process of a type VAMS has a stop API for — a Step Functions execution, an AWS Batch job, a
+Deadline Cloud job, a same-account SageMaker training job or pipeline execution — is stopped when the
+execution is aborted. A bridge's own compute is usually not one of those: VAMS records it, shows it in the
+execution view by its label and stage with `abortable: false` and the note that an abort leaves it running,
+and lists it under `notAbortable` in the abort response. Stopping it is the bridge's job, triggered by the
+rejected heartbeat. A bridge that runs a SageMaker job in the VAMS account itself may register it as
+`sageMakerTrainingJob` or `sageMakerPipelineExecution` and let VAMS stop it. The execution view and the abort response name a registered resource by its id or the final segment of its ARN; the ARN itself stays on the registration row and is used only for the stop and describe calls.
+
+### Letting the workflow reach the bridge
+
+The shared workflow role invokes only targets in the deployment's own account whose names match the
+deployment's `name` (see [Pipeline execution types](#pipeline-execution-types)). A bridge's bus, queue, or
+function is in another account, so each one the workflow may call is listed, by exact ARN, under the
+bridge's `invokeTargets`; the deployment adds those ARNs verbatim to the role. No wildcard is accepted. The
+bridge-side resource also needs its own resource policy allowing the workflow role (the
+`integration/workflowExecutionRoleArn` value) to put events, send messages, or invoke, as appropriate.
+
+```json
+"invokeTargets": [
+    "arn:aws:events:us-east-1:<BRIDGE_ACCOUNT_ID>:event-bus/my-bridge",
+    "arn:aws:lambda:us-east-1:<BRIDGE_ACCOUNT_ID>:function:my-bridge-adapter"
+]
+```
+
+### Logs the execution view can read
+
+A registered log group is readable from the execution logs API only when its name is covered by
+`app.pipelines.executionLogReadPrefixes`, the allow-list the execution service's log-read grant is built
+from. The default covers the groups the built-in pipelines write to; a bridge that logs to its own group
+under `/aws/` — `/aws/vendedlogs/Pipelines/my-bridge`, say, which the default prefix already covers, or
+`/aws/vendedlogs/my-bridge-runner`, which it does not — gets that group added to the list by the VAMS
+operator. Every entry must be under `/aws/`; `*`, `/`, and service-wide patterns such as
+`/aws/vendedlogs/*` are rejected at `cdk synth`. A group that is registered but not covered is reported as
+`denied` in the logs response rather than failing the request. A log group in the bridge's own account is
+recorded and listed but not readable from the VAMS deployment.
+
+### Registering the pipeline itself
+
+A bridge registers its pipeline and workflow the way [an external solution does](#external-pipelines-registering-outside-the-vams-cdk-solution):
+it uploads its `vamsSchema/` bundle to the artefacts bucket (`s3Buckets/artefacts`) and invokes the
+import function named by `lambdaFunctions/importGlobalPipelineWorkflow` with the bundle's `bundleS3Keys`
+(or a small `inlineBundle`), passing its own target as the resource override — `eventBridgeBusArn` for a
+relay bus, `sqsQueueUrl` or `lambdaName` for an adapter. The import is idempotent, so the bridge
+re-registers on each of its own deployments. From then on the pipeline appears in VAMS like any other, is
+referenced by workflows, and runs under the same two-tier authorization.
 
 ## Registration with the vamsSchema bundle
 
@@ -930,6 +1318,29 @@ built-in durably, either edit its `vamsSchema/` files so the bundle carries the 
 separate pipeline of your own rather than editing the built-in in place.
 :::
 
+### Marking a bundle as system
+
+A bundle can declare its pipeline and workflow **system** records by setting `"isSystem": true` in
+`pipeline.json` and in `workflow.json`. The API then holds them read-only except for their `enabled`
+switches, the `enabled` switch of the workflow's triggers, and the `configBody`, `tagSchema`, and
+`webFormJson` of the pipeline's templates, so an operator cannot make an edit the next registration
+would revert. The rules and the refusal messages are in
+[System pipelines](../concepts/pipelines-and-workflows.md#system-pipelines).
+
+-   **The value must be a JSON boolean.** Any other value, including the strings `"true"` and
+    `"false"`, fails the registration with a message naming the key. An absent or `null` key reads as
+    `false`.
+-   **The bundle is authoritative.** Every registration writes the bundle's value, so a bundle that
+    drops the key, or sets it to `false`, makes its records ordinary and editable again on its next
+    registration.
+-   **Templates and triggers carry no flag of their own.** They follow their pipeline and workflow; an
+    `isSystem` key in a template file or a trigger is an unknown key and is logged.
+-   **Only the import function can set the flag.** An API request that sends `isSystem` creates or
+    updates an ordinary record. Any principal allowed to invoke the import function can register system
+    records: in a deployment that is the registration custom resources and any external pipeline bridge
+    stack you granted `lambda:InvokeFunction` on it. Grant that permission only to deployments you
+    trust to own their records.
+
 ### pipeline.json
 
 The bundle contains no account identifiers or ARNs. The execution target is injected at deploy time
@@ -965,14 +1376,14 @@ partition. Include the block for the execution type with its resource fields lef
 
 `systemConfig` is the admin-only contract that governs how the pipeline may be run:
 
-| Field                         | Purpose                                                                                                                                 |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `inputFileArity`              | `one`, `multi`, or `none`. `none` is a results-only or generate-from-nothing pipeline.                                                  |
-| `assetScope`                  | Whether the pipeline receives a whole asset or individual files.                                                                        |
-| `metadataInputs`              | Which metadata the pipeline is given (asset metadata, file metadata, file attributes, database metadata). Every key defaults to `true`. |
-| `requireTemplate`             | Whether a configuration template must be resolved before the pipeline can run.                                                          |
-| `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                                                                    |
-| `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                                                                  |
+| Field                         | Purpose                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inputFileArity`              | `one`, `multi`, or `none`. `none` is a results-only or generate-from-nothing pipeline.                                                                                                                                                                                                                                                 |
+| `assetScope`                  | Whether the pipeline receives a whole asset or individual files.                                                                                                                                                                                                                                                                       |
+| `metadataInputs`              | Which metadata the pipeline is given (asset metadata, file metadata, file attributes, database metadata), each defaulting to `true`, plus the opt-in `assetFileMetadata` and `metadataSchema` sections, defaulting to `false` (see [Opt-in sections](#opt-in-sections-per-file-records-for-whole-asset-runs-and-the-metadata-schema)). |
+| `requireTemplate`             | Whether a configuration template must be resolved before the pipeline can run.                                                                                                                                                                                                                                                         |
+| `allowCustomTemplateOverride` | Whether a caller may supply a custom configuration body at run time.                                                                                                                                                                                                                                                                   |
+| `inputFileFilters`            | Glob patterns for the file types the pipeline accepts.                                                                                                                                                                                                                                                                                 |
 
 **Declare only what differs from the defaults.** Registration completes the block before storing it: every
 field the bundle omits is filled with its documented default, and nested maps such as `assetScope` and
@@ -1017,6 +1428,15 @@ These points determine whether a registered pipeline is actually usable:
     upstream rejected. A match-everything pattern (`*`, `**`, `*.*`, `/*`, `/**`) in an **exclude** list
     is rejected on save at every level, including triggers: exclude is applied last, so it would remove
     every file. Leave the list empty to exclude nothing.
+
+    Extension patterns do not reach a whole-asset (`/`) or folder (`/folder/`) selection, which names a
+    container rather than a file: the `*.ext` and `.ext` forms are dropped from both lists for such a
+    selection, and `assetScope` decides it instead. A pipeline that processes one file at a time
+    therefore sets `assetScope.wholeAssetAllowed` and `assetScope.folderAllowed` to `false`. The
+    built-in single-file pipelines declare `wholeAsset: false`, the registration shorthand for
+    `wholeAssetAllowed`, and their workflows do not allow folder selections. An `allow` list of
+    `*.stl` alone does not keep a whole-asset selection out, and the pipeline receives the whole
+    asset.
 
 -   **A template can raise the pipeline's input requirements.** When one pipeline supports several modes
     that consume different inputs, set the pipeline's `inputFileArity` to the **lowest** value any of its
@@ -1074,9 +1494,15 @@ is checked against, and it is authored rather than derived from the pipeline:
     selection a template would have accepted.
 
 -   **The workflow's `inputFileFilters` are applied before the pipelines'.** The selected files are
-    narrowed by the workflow first, and each pipeline is then judged against what survived. A workflow
-    whose filters exclude a type its own pipeline requires produces a workflow that can never satisfy
-    that pipeline — the API rejects such an execution, and the workflow editor warns while saving.
+    narrowed by the workflow first, and the first step is then judged against what survived. A workflow
+    whose filters exclude a type its first step requires can never satisfy that step — the API rejects
+    such an execution, and the workflow editor warns while saving. From the second step on, a step
+    receives the selected files plus every file the earlier steps wrote, narrowed by its own filters
+    when the run reaches it, so a later step may accept only the type an earlier step produces. A
+    single-file later step whose filters admit both the selected type and an earlier step's output type
+    is handed two files and fails at that step; the workflow editor warns about it while saving. When
+    two or more selected files already pass a single-file later step's filters, the API rejects the
+    execution at launch.
 
 -   **`outputTarget`** is `{ "locationType": "asset" | "none", "allowOverride": boolean }` and decides
     where a run writes. `asset` (the default) writes the run's output files and metadata to a VAMS asset.
@@ -1139,6 +1565,19 @@ override name — `lambdaName`, `sqsQueueUrl`, `eventBridgeBusArn` / `eventBridg
 `eventBridgeDetailType`, or `deadlineFarmId` / `deadlineQueueId` / `deadlineStorageProfileId`. The
 importer reads only these flat keys; a nested object is ignored and the pipeline registers with an
 empty resource identifier, so every execution of it fails at the invoke state.
+
+A deployment can register a bundle with a different execution config than the one in its
+`pipeline.json` by passing `executionConfigOverrides` to `VamsSchemaRegistration`. It takes any of
+`waitForCallback` (`"Enabled"` or `"Disabled"`), `taskTimeout` and `taskHeartbeatTimeout` (seconds; `""`
+clears the value, so the pipeline has no heartbeat and a `taskTimeout` of 24 hours) and `lambdaName` (the Lambda invoke target; Lambda execution type only), and each
+value replaces the bundle's own. Setting `waitForCallback` to `"Enabled"` is only safe when the target
+Lambda reports back with the task token it receives (`SendTaskSuccess` or `SendTaskFailure`); otherwise
+every run waits until `taskTimeout` and then fails. Leave the property out and the registration is exactly what it was.
+A malformed value, such as an unknown key or a `waitForCallback` other than `Enabled` or `Disabled`,
+fails the registration before anything is written. When a value changes the state machines a pipeline
+produces (`waitForCallback`, `taskTimeout`, `taskHeartbeatTimeout`, `lambdaName`), VAMS redeploys every
+workflow that uses the pipeline, including custom workflows. Executions already running finish on the
+definition they started with.
 
 Set `autoRegisterWithVAMS` to `true` in the pipeline's configuration to enable registration. To also
 create a file-upload trigger on the registered workflow, a pipeline uses one of two configuration
@@ -1237,6 +1676,8 @@ A tag that is neither a system tag nor declared in the template's `tagSchema` is
 
 **Execution and pipeline identity:** `{{executionId}}`, `{{workflowId}}`, `{{workflowDatabaseId}}`, `{{triggerType}}`, `{{executingUserName}}`, `{{pipelineExecutionId}}`, `{{pipelineId}}` / `{{pipelineName}}`, `{{pipelineDatabaseId}}`, `{{jobName}}`.
 
+`{{jobName}}` is a per-run name for the step: the step's generated job name joined to its `{{pipelineExecutionId}}`, at most 80 characters of letters, numbers, hyphens, and underscores. It differs on every execution and for every step of one execution, and is the same everywhere it renders within one step, so a template can use it to name a per-run resource such as an AWS Batch job or an AWS Step Functions execution. An Amazon SageMaker job name allows at most 63 characters, so build one from `{{pipelineExecutionId}}` instead.
+
 **Timestamps:** `{{jobStartTimestamp}}`, `{{jobStartTimestampUnix}}`, `{{jobStartDate}}`, `{{executionStartTimestamp}}`.
 
 **First input file** (`{{firstAssetFile...}}`): `DatabaseId`, `AssetId`, `AssetBucket`, `AssetRootS3Key`, `RelativePath`, `Key`, `VersionId`, `AuxPreviewPrefix`, `S3Uri`, `AuxPreviewS3Uri`, `FileName`, `FileNameNoExt`, `FileExtension`.
@@ -1253,7 +1694,7 @@ Each of these resolves for the subject the pipeline task is running against: the
 
 **Deadline Cloud** (`{{deadlineFarmId}}`, `{{deadlineQueueId}}`, `{{deadlineStorageProfileId}}`): recognized so a Deadline Cloud job template can reference them today, but they resolve to empty values until a future pipeline configuration supplies the pipeline's farm, queue, and storage profile.
 
-The `{{outputFileBaseExecutionPathExtension}}` value is also itself template-rendered, so an execute request — or a workflow's `systemConfig.defaultOutputFileBaseExecutionPathExtension`, which supplies it when a request does not — can produce a per-run output sub-folder such as `/{{jobName}}/`, `/{{executionId}}/`, or `/{{jobStartDate}}/`. The prefix is inserted immediately before each output file's own name, so the folder structure a container writes below its output prefix is preserved: a container writing `render/thumb.png` under a prefix of `/{{jobName}}/` produces `render/<jobName>/thumb.png` in the asset. Containers should therefore not create their own per-job folder — the workflow's prefix is what separates runs.
+The `{{outputFileBaseExecutionPathExtension}}` value is also itself template-rendered, so an execute request — or a workflow's `systemConfig.defaultOutputFileBaseExecutionPathExtension`, which supplies it when a request does not — can produce a per-run output sub-folder such as `/{{jobName}}/`, `/{{executionId}}/`, or `/{{jobStartDate}}/`. The prefix is inserted immediately before each output file's own name, so the folder structure a container writes below its output prefix is preserved: a container writing `render/thumb.png` under a prefix of `/{{jobName}}/` produces `render/<jobName>/thumb.png` in the asset. Containers should therefore not create their own per-job folder — the workflow's prefix is what separates runs. The prefix resolves once, at launch, with the first step's values, so in a later step `{{outputFileBaseExecutionPathExtension}}` carries the first step's `{{jobName}}`, not that step's own.
 
 :::note
 One dynamic tag family is planned but not yet available: `{{metadata_<key>}}`, for looking up an individual metadata field by name. Using it today is rejected with a 400 — unlike an ordinary unrecognized tag, a name under the reserved `metadata_` prefix claims a value no renderer resolves, and the prefix is reserved so a template's own tag key cannot collide with it either. User-defined tags **are** available — they are declared per template rather than on the pipeline definition, as described next.
@@ -1399,7 +1840,7 @@ event = {
         "workflowExecutionId": "3f7c1e9a2b4d48c6a1f05e8d7c9b0a12",
         "workflowExecutionS3InputOutputBucket": "bucket",
         "executingUserName": "test-user",
-        "executingRequestContext": {},
+        "executingRequestContext": "test-user",
         "inputManifestS3Location": "s3://bucket/pipelines/workflowExecutionInputs/3f7c1e9a2b4d48c6a1f05e8d7c9b0a12/pipeline1/manifest.json",
         "inputConfigurationS3Location": "s3://bucket/pipelines/workflowExecutionInputs/3f7c1e9a2b4d48c6a1f05e8d7c9b0a12/pipeline1/config.json",
         "TaskToken": "test-token",
@@ -1442,6 +1883,7 @@ Use this checklist when building a new pipeline:
 -   [ ] VPC endpoint conditions updated if pipeline uses AWS Batch, Amazon ECS, or Amazon ECR
 -   [ ] CDK Nag suppressions added with detailed justification
 -   [ ] Configuration documented in the [Configuration Reference](../deployment/configuration-reference.md)
+-   [ ] If the pipeline contributes embeddings, it publishes `vector.embedding.ready` with the documented `Detail` fields and holds `events:PutEvents` on the orchestration bus — see [Publishing embeddings for vector search](#publishing-embeddings-for-vector-search)
 
 ## Related pages
 

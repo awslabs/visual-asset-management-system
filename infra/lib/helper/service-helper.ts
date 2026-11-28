@@ -54,6 +54,20 @@ class ServiceFormatter {
             ? this.replaceValues(this.service.fipsHostname)
             : this.replaceValues(this.service.hostname);
     }
+    /**
+     * The partition's DNS suffix for service hostnames (`amazonaws.com`, `amazonaws.com.cn`,
+     * `amazonaws.eu`, ...), read from the hostname template after its `{region}` label so no partition
+     * string is hardcoded. Throws, naming the partition, when the template is malformed or the suffix
+     * is a bare public suffix (see `deriveServiceDnsSuffix`).
+     */
+    public get DnsSuffix() {
+        return deriveServiceDnsSuffix(
+            this.regionInfo.partition || "",
+            this.name,
+            this.service.hostname
+        );
+    }
+
     public get Principal() {
         return new aws_iam.ServicePrincipal(this.replaceValues(this.service.principal));
     }
@@ -61,6 +75,53 @@ class ServiceFormatter {
     public get PrincipalString() {
         return this.replaceValues(this.service.principal);
     }
+}
+
+/**
+ * Public suffixes (and shared registry suffixes) that must never become a CSP wildcard host. A
+ * `https://*.<one of these>` source would admit every host under it. The check is a floor, not a
+ * public suffix list: the real guard is that every table row ends in an AWS-controlled domain of at
+ * least two labels, which `deriveServiceDnsSuffix` enforces by shape.
+ */
+const BARE_PUBLIC_SUFFIXES = new Set([
+    "com",
+    "net",
+    "org",
+    "edu",
+    "gov",
+    "mil",
+    "eu",
+    "uk",
+    "us",
+    "cn",
+    "co.uk",
+    "gov.uk",
+    "com.cn",
+    "ic.gov",
+    "sgov.gov",
+]);
+
+/**
+ * Derives the DNS suffix from a hostname template of the shape `<service labels>.{region}.<suffix>`.
+ * Throws at synth time, naming the partition and service, when the template has no `{region}` label,
+ * has nothing before it, has an empty or placeholder-bearing suffix, a suffix with fewer than two
+ * labels, or a bare public suffix, so a bad table row can never produce `https://*.com`.
+ */
+export function deriveServiceDnsSuffix(partition: string, service: string, hostname: string) {
+    const fail = (why: string): never => {
+        throw new Error(
+            `Partition "${partition}" service ${service}: hostname template "${hostname}" ${why}`
+        );
+    };
+    const match = /^([a-z0-9-]+(?:\.[a-z0-9-]+)*)\.\{region\}\.(.+)$/.exec(hostname);
+    if (!match) return fail("does not have the shape <service>.{region}.<suffix>");
+    const suffix = match[2];
+    if (/[{}*]/.test(suffix)) return fail("has a placeholder or wildcard in its DNS suffix");
+    const labels = suffix.split(".");
+    if (labels.some((l) => !/^[a-z0-9-]+$/.test(l))) return fail("has an empty or invalid label");
+    if (labels.length < 2) return fail(`has a DNS suffix "${suffix}" with fewer than two labels`);
+    if (BARE_PUBLIC_SUFFIXES.has(suffix)) return fail(`has a bare public suffix "${suffix}"`);
+    return suffix;
 }
 
 export function Service(
@@ -143,6 +204,11 @@ export function IAMArn(name: string) {
         eventBus: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:events:${
             config.env.region
         }:${config.env.account}:event-bus/${name}`,
+
+        // A rule on the default event bus (a rule on a custom bus carries the bus name in its ARN).
+        eventRule: `arn:${region_info.RegionInfo.get(config.env.region).partition || ""}:events:${
+            config.env.region
+        }:${config.env.account}:rule/${name}`,
     };
 }
 

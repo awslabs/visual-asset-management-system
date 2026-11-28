@@ -8,12 +8,16 @@ You are scaffolding a new VAMS processing pipeline. Follow `backendPipelines/CLA
 
 ### Step 1: Gather Requirements
 
+**Which lane.** Pipelines are not add-ons: an upstream pipeline uses the core steps below. A pipeline that integrates an external solution, such as a vendor's processing service, is still added as a pipeline, gated by its own `app.pipelines.*` switch; the add-on lane (root `CLAUDE.md` "Core, add-on and custom", `documentation/docusaurus-site/docs/developer/addons-overview.md`) is for the functionality that rule classifies as an add-on, built under `infra/lib/nestedStacks/addon/`, and the add-on viewers. A fork follows fork mode.
+
+**Fork mode.** Steps 5–8 below edit core files (`pipelineBuilder-nestedStack.ts`, `vpcBuilder-nestedStack.ts`, `config.ts` and the config templates), which conflict on every upstream merge. When the pipeline is being added in a **fork** of VAMS rather than contributed upstream, prefer an approach that edits none of them: deploy the pipeline as its own stack and register it through the API (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`), or as an externally owned pipeline bridge (`app.pipelines.externalPipelineBridges` in `deployment/configuration-reference.md`), which resolves the orchestration bus, workflow role and `vamsSchema` import function from SSM at its own deploy time. The custom nested stack (`infra/lib/nestedStacks/custom/customResources.ts`) is not a pipeline seam: it does not depend on the stack that builds the `vamsSchema` import function, and a Batch/ECS/Fargate pipeline also needs the core VPC builder condition blocks (Step 7). See `documentation/docusaurus-site/docs/developer/customizing-vams.md`. The backend layout, `assetId` threading and output-path rules apply unchanged.
+
 Ask the user for:
 
 -   **Pipeline name**: A descriptive name in camelCase (e.g., `meshOptimizer`, `imageClassifier`, `pointCloudProcessor`)
 -   **Pipeline category**: One of `conversion`, `preview`, `genAi`, `multi`, `3dRecon`, `simulation` (determines folder location)
 -   **Input file types**: Which file extensions the pipeline processes (e.g., `.obj, .fbx, .stl`)
--   **Processing type**: `lambdaContainer` (for short tasks < 15min) or `batchFargate`/`batchGpu` (for long-running tasks or GPU)
+-   **Processing type**: `lambdaContainer` (for short tasks < 15min) or `batchFargate`/`batchGpu` (for long-running tasks or GPU). An agentic pipeline may additionally offer Amazon Bedrock AgentCore Runtime behind a per-deployment `runtime` switch — the GenAI CAD STEP agent (`infra/lib/nestedStacks/pipelines/genAi/cadStepAgent/`) is the precedent: one container image serves both runtimes, CodeBuild builds `linux/arm64` for AgentCore and `linux/amd64` for Fargate, the AgentCore branch is commercial-partition-only and requires `useCodeBuild`, and the VPC builder blocks are gated on the Fargate runtime alone.
 -   **Description**: What the pipeline does
 -   **GPU required**: Whether the container needs GPU access (affects `batch-gpu-pipeline` vs `batch-fargate-pipeline` construct)
 -   **Output type**: File-level outputs (new files, `.previewFile.X` thumbnails), asset-level preview, metadata, or auxiliary/viewer data — this determines which output S3 path the pipeline writes to
@@ -35,16 +39,19 @@ vamsExecute (Lambda) -> openPipeline (Lambda) -> constructPipeline (Lambda) -> [
 
 All four Lambdas live in `backendPipelines/{category}/{pipelineName}/lambda/`.
 
+**Do not hook the pipeline into the workflow core.** A feature that runs a workflow tracks it by storing the `workflowExecutionId` on its own record and reading the run status from the existing execution tracking (execution rows, read-time reconcile, the status-change rule) when its own record is read; it does not register a callback with the workflow core. Core workflow code never names or calls a specific pipeline. Clean up a feature's leftover artefacts with S3 lifecycle rules (e.g. abort incomplete multipart uploads) rather than a terminal hook. Never add the pipeline's name to `backend/backend/common/workflows/`, `backend/backend/handlers/workflows/` or `infra/lib/lambdaBuilder/workflowFunctions.ts` (`backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline").
+
 #### Pipeline S3 Output Paths (critical)
 
 Each pipeline step reads these paths from its manifest (`manifestHelper.resolve_pipeline_inputs`), not from the Step Functions body. Use the correct one (see `backendPipelines/CLAUDE.md` "Pipeline S3 Output Paths" for the full rules, including the `constructPipeline` auxiliary-path fallback and the relative-path derivation):
 
-| Path                                   | Bucket    | Use For                                                                      |
-| -------------------------------------- | --------- | ---------------------------------------------------------------------------- |
-| `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned.  |
-| `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.     |
-| `outputS3AssetMetadataPath`            | Asset     | Metadata / attribute JSON. Versioned. Naming decides the target — see below. |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.           |
+| Path                                   | Bucket    | Use For                                                                                                                                                                         |
+| -------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned.                                                                                                     |
+| `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.                                                                                                        |
+| `outputS3AssetMetadataPath`            | Asset     | Metadata / attribute JSON. Versioned. Naming decides the target — see below.                                                                                                    |
+| `outputS3AssetResultsPath`             | Asset     | Result files recorded as the execution's output results (not on the asset); `execution.status.json` is reserved for a pipeline-reported outcome (`backendPipelines/CLAUDE.md`). |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.                                                                                                              |
 
 **Metadata / attribute output naming.** The process-output step decides what a JSON file under
 `outputS3AssetMetadataPath` means from its **file name**, matched on suffix anywhere under the path:
@@ -77,15 +84,21 @@ absolute S3 key.
 
 1. The `vamsExecute` lambda **must pass through all output paths** resolved from its manifest — never hardcode empty strings. The workflow's process-output step depends on finding files at these locations.
 2. The `constructPipeline` lambda uses the appropriate output path for the container's output target, falling back to the auxiliary path only for direct/local invocations where workflow context is unavailable.
-3. **Containers must preserve the input file's relative path** when writing asset-adjacent outputs. An asset file's key is the asset's root key followed by its relative path; the root is usually `{baseAssetsPrefix}{assetId}/`, but an asset created on an existing bucket folder (`bucketExistingKey`) keeps that folder as its root, so its keys need not contain the asset ID. Outputs must keep the input's relative subdirectory so process-output can locate them.
-4. **`assetId` is a workflow state variable — thread it, never derive it from S3 path segments**: vamsExecute resolves it from the manifest (`manifestHelper.resolve_pipeline_inputs`) → constructPipeline includes it in the definition dict → container reads it from the PipelineDefinition and uses it to compute the relative subdirectory. The search must allow for a key without the asset ID (an existing-folder asset, or a file an earlier workflow step wrote under the run's output folder); for such a key it returns `""` and the output is written at the top of the output folder. To keep the subfolder, take it from the input file's manifest `relativePath` (`resolved['inputFiles'][0]['relativePath']` in vamsExecute, which `manifestHelper.resolved_file_key(resolved)` returns normalized):
+3. **Containers must preserve the input file's relative path** when writing asset-adjacent outputs. An asset file's key is the asset's root key followed by its relative path; the root is usually `{baseAssetsPrefix}{assetId}/`, but an asset created on an existing bucket folder (`bucketExistingKey`) keeps that folder as its root, so its keys need not contain the asset ID. Outputs must keep the input's relative subdirectory so process-output can locate them: take it from the folder of the first manifest input entry's `relativePath`, never from the key.
+4. **Thread where the input sits in its asset, and `assetId`, from the manifest — never derive either from S3 path segments.** vamsExecute copies the first input entry's `relativePath`, `assetRootS3Key` and `assetRootBucket` (`resolved['inputFiles'][0]`) as `inputRelativePath`, `inputAssetRootS3Key` and `inputAssetRootBucket`, and `resolved['assetId']` → openPipeline names each on the state machine input → constructPipeline puts them on the definition (a strict-dataclass image: `"inputAsset"` in the second Batch command element) → the container takes the subfolder from `relativePath`. Join `assetRootS3Key` only with `assetRootBucket`: a chained input is read from the run bucket while its asset root stays in the asset bucket. Search the key for the asset ID only for a launch without `relativePath`, guarded for a key without it. Add the pipeline to `MANIFEST_PATH_PIPELINES` in `backendPipelines/tests/test_pipeline_input_asset_location.py` (its handler files, an input `extension` its gate admits, and any `config`, `event` or `env` its handlers require; the test calls each hop with stub events) and its own suite to `PER_PIPELINE_SUITES`:
 
 ```python
-# assetId comes from the pipeline definition (threaded from workflow state)
-input_parts = stage_input.objectKey.split("/")
-relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
-                   if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
+# relative_path is the definition's inputRelativePath ("" when the launch named none)
+relative = (relative_path or "").strip("/")
+if relative:
+    relative_subdir = relative.rsplit("/", 1)[0] if "/" in relative else ""
+else:
+    input_parts = stage_input.objectKey.split("/")
+    relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
+                       if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
 ```
+
+5. **Read the input at its launch version.** vamsExecute forwards `resolved['inputVersionId']` → openPipeline puts `"inputVersionId"` on the state machine input → constructPipeline puts it on the definition (only when non-empty, so an image built before the field still parses a no-version definition) → the container passes it as `VersionId` on every read of the input file (download, HEAD/size checks, streamed GETs; `aws s3api get-object --version-id` for an AWS CLI container), and sends exactly today's call when it is `""`. A version deleted after launch fails the run naming the file and version. Grant the container role `s3:GetObjectVersion` on the asset buckets. `backendPipelines/tests/test_pipeline_input_versions.py` and `infra/test/pipelines/pipelineInputVersionGrants.test.ts` fail on a pipeline that misses either; see `backendPipelines/CLAUDE.md` "Input Version Threading".
 
 ### Step 3: Create Backend Pipeline Files
 
@@ -106,9 +119,13 @@ backendPipelines/
         pipelineEnd.py                    # Cleanup + task token callback
       container/
         Dockerfile
-        requirements.txt
+        pyproject.toml                    # uv project: the container's direct Python dependencies
+        uv.lock                           # `uv lock`; audited in CI with no workflow edit
+        requirements.txt                  # `uv export` of uv.lock; the Dockerfile pip-installs this file
         ...                               # Processing code + utils (copy utils/ from an existing pipeline)
 ```
+
+**Python dependencies use uv.** Every directory the build pip-installs from (the container, a pipeline Lambda layer, a Lambda whose code ships its own requirements) gets a `pyproject.toml` (`requires-python` at the image or runtime Python, `[tool.uv]` with `package = false`, the repository's `required-version`, `exclude-newer = "7 days"`, `environments = ["sys_platform == 'linux'"]`), a `uv.lock`, and the committed hashed export (`requirements.txt`, or `requirements.lock` where the Dockerfile installs that name), following `backend/CLAUDE.md` "Updating Python Dependencies (uv-Managed)". The `python-dependency-audit` CI job must stay green. `infra/test/ci/pythonDependencyLocks.test.ts` fails a new requirements file or pyproject without a `uv.lock`; a reasoned entry in `.github/python-lock-exemptions.json` is the only alternative, and reviewers decide it.
 
 **Copy the lambda files from a recent, similar pipeline** (e.g., `backendPipelines/conversion/coordinateTransform/` for Batch Fargate, `backendPipelines/3dRecon/splatToolbox/` for Batch GPU) and adapt them, rather than writing from scratch. When adapting, verify:
 
@@ -119,7 +136,10 @@ backendPipelines/
 -   Standard container utilities (S3 download/upload, Step Functions task token helpers, logging) are copied from a reference pipeline's container support package. **Do not name that package `utils`** if the container also vendors upstream third-party source — a top-level `utils` collides with an upstream `utils.py` on the same import name and one side's imports break. Use a distinct name (the Splat Toolbox container uses `vams_utils`).
 -   `manifestHelper.py` is vendored per pipeline and must be byte-identical across pipelines; copy it, do not re-implement it.
 -   The container Dockerfile drops to a non-root `USER` and runs `RUN chmod -R a+rX <path>` **on the line immediately after every `COPY` of source it reads** (copy the pattern from `backendPipelines/preview/3dThumbnail/container/Dockerfile`). `docker COPY` preserves the build host's umask and copies files root-owned, so a hardened build host (umask `077` STIG default on RHEL/Amazon Linux, or `027` in locked-down CI) produces root-owned `600`/`640` files the non-root user cannot read — Python raises `PermissionError: [Errno 13]` at import (not `ModuleNotFoundError`; the directory is recreated `0755`). The image builds green and fails only at container runtime. `a+rX` adds no execute bit to plain files; `COPY --chown=<user>` is NOT sufficient (owner-only read, mode stays restrictive). The Batch job definition sets no user override, so the image's `USER` is what runs. Reference: `backendPipelines/CLAUDE.md` "A Non-Root Container Normalizes Read Bits on the Source It COPYs".
--   `openPipeline` (or the lambda that submits a Batch job itself) **registers its sub-process and log sources** with one `pipeline.execution.register` event on the orchestration bus — `Source` = the payload's `orchestrationEventPrefix` (already ends in `.pipeline.<pipelineExecutionId>`), `EventBusName` = `ORCHESTRATION_BUS_NAME`, `Detail` = `{pipelineExecutionId, subExecution, logs}`. `subExecution` is `{resourceType: "stepFunctionsExecution", stateMachineArn, executionArn, label}` or, for a job the lambda submits itself, `{resourceType: "batchJob", jobId, stageName, label}` so abort terminates it and its container stream resolves through `batch:DescribeJobs`. `logs[]` is the state-machine log group (`sourceType: "stateMachine"`, `label`) plus one container entry per Batch state, emitted only when the env vars are set: `{logGroupArn: BATCH_JOB_LOG_GROUP_ARN, logGroupName: BATCH_JOB_LOG_GROUP_NAME, logStreamName: "", logStreamPrefix: f"{BATCH_JOB_DEFINITION_NAME}/default/", stageName: <Batch state name>, sourceType: "batch", label: f"{state} container"}`. `stageName` must equal the ASL state name — the CDK construct id of the Batch task — and be declared as a module-level `*_STATE_NAME = "..."` literal (the infra tests read it); a copied `BATCH_STATE_NAME` still names the reference pipeline's construct, so rename it together with the construct. An entry carrying only the four location keys (`logGroupArn`, `logGroupName`, `logStreamName`, `logStreamPrefix`) stays valid. Copy `batch_container_log_entry` / `register_sub_execution` from `backendPipelines/preview/3dThumbnail/lambda/openPipeline.py` and keep `put_events` best-effort. Reference: `backendPipelines/CLAUDE.md` "Registering Sub-Processes and Logs".
+-   The container Dockerfile **pins every dependency** so two builds of one commit ship the same code: Python packages from the hashed `uv export` of the container's `uv.lock` (`requirements.txt`, or `requirements.lock` where the Dockerfile installs that name) installed with `pip install --require-hashes --only-binary :all:`, npm tools from a committed `package-lock.json` with `npm ci`, a downloaded release tarball at a fixed version with its SHA-256 checked in the same `RUN`, and build tools in a builder stage with the runtime stage on the same digest-pinned base image. Each stage's package-install `RUN` runs `apt-get update && apt-get upgrade -y` before `apt-get install -y --no-install-recommends`. Copy the pattern from `backendPipelines/preview/3dThumbnail/container/Dockerfile`. Reference: `backendPipelines/CLAUDE.md` "Pinning a Container's Dependencies".
+-   A container that decodes images or video from an asset treats them as untrusted input: it checks the pixel count from the header against a memory-derived budget before allocating a raster, refuses a TIFF compression outside its allowlist before any decoder runs, opens video as a local file through a format allowlist with `protocol_whitelist` `file`, and generates its test fixtures in code. Reference: `backendPipelines/CLAUDE.md` "Decoding Untrusted Images and Video".
+-   `openPipeline` (or the lambda that submits a Batch job itself) **registers its sub-process and log sources** with one `pipeline.execution.register` event on the orchestration bus — `Source` = the payload's `orchestrationEventPrefix` (already ends in `.pipeline.<pipelineExecutionId>`), `EventBusName` = `ORCHESTRATION_BUS_NAME`, `Detail` = `{pipelineExecutionId, subExecution, logs}`. `subExecution` is `{resourceType: "stepFunctionsExecution", stateMachineArn, executionArn, label}` or, for a job the lambda submits itself, `{resourceType: "batchJob", jobId, stageName, label}` so abort terminates it and its container stream resolves through `batch:DescribeJobs`. `logs[]` is the state-machine log group (`sourceType: "stateMachine"`, `label`) plus one container entry per Batch state (only the state the run is routed to when several states share one job definition), emitted only when the env vars are set: `{logGroupArn: BATCH_JOB_LOG_GROUP_ARN, logGroupName: BATCH_JOB_LOG_GROUP_NAME, logStreamName: "", logStreamPrefix: f"{BATCH_JOB_DEFINITION_NAME}/default/", stageName: <Batch state name>, sourceType: "batch", label: f"{state} container"}`. `stageName` must equal the ASL state name — the CDK construct id of the Batch task — and be declared as a module-level `*_STATE_NAME = "..."` literal (the infra tests read it); a copied `BATCH_STATE_NAME` still names the reference pipeline's construct, so rename it together with the construct. An entry carrying only the four location keys (`logGroupArn`, `logGroupName`, `logStreamName`, `logStreamPrefix`) stays valid. Copy `batch_container_log_entry` / `register_sub_execution` from `backendPipelines/preview/3dThumbnail/lambda/openPipeline.py` and keep `put_events` best-effort. Reference: `backendPipelines/CLAUDE.md` "Registering Sub-Processes and Logs".
+-   **Every job the pipeline starts carries the pipeline job tags** (`vams:stackname`, `vams:pipeline`). Add the pipeline's value to `VAMS_PIPELINE_TAG_VALUES` in `infra/lib/nestedStacks/pipelines/constructs/pipelineJobTags.ts`. A Step Functions Batch state is a `TaggedBatchSubmitJob` or `StateTimeoutBatchSubmitJob` with `jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.<pipeline>)`, never a plain `tasks.BatchSubmitJob`. A lambda that submits a Batch job itself gets `configureLambdaBatchJobTagging(fn, tags)` in the construct and sets `submit_params["tags"]` from `PIPELINE_JOB_TAGS`. An ECS RunTask state tags its task definition with `tagEcsTaskDefinition` and propagates from it. `infra/test/pipelines/pipelineJobTags.test.ts` fails on a site without them. Reference: `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Every Job a Pipeline Starts Carries the Pipeline Job Tags".
 
 Full field-by-field reference: [The pipeline input contract](../../documentation/docusaurus-site/docs/pipelines/custom-pipelines.md#the-pipeline-input-contract).
 
@@ -139,6 +159,11 @@ backendPipelines/{category}/{pipelineName}/vamsSchema/
 from `resourceOverrides` per `executionConfig.executionType`. Author the block for the type with its
 resource fields empty (`"lambda": {}`, `"sqs": {}`, …). Copy the shape from
 `backendPipelines/conversion/3dBasic/vamsSchema/pipeline.json`.
+
+Set `"isSystem": true` (a JSON boolean) in `pipeline.json` and `workflow.json` only for a deployment-owned
+pipeline that VAMS itself launches: the API then refuses every change except the `enabled` switches and
+template content, and its runs are hidden from the execution lists by default. The shipped example is
+`backendPipelines/utility/zipArchive/vamsSchema/` (rules: `backendPipelines/CLAUDE.md` "System Pipelines").
 
 Verify these seven things, each of which silently produces an unusable pipeline when wrong:
 
@@ -259,17 +284,23 @@ passing the deploy-time resolved resource values:
 
 ```typescript
 new VamsSchemaRegistration(this, "MyPipelineSchema", {
-    schemaPath: path.join(
+    importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+    artefactsBucket: props.storageResources.s3.artefactsBucket,
+    vamsSchemaDir: path.join(
         __dirname,
         "../../../../../backendPipelines/{category}/{pipelineName}/vamsSchema"
     ),
     resourceOverrides: { lambdaName: myPipelineFunction.functionName },
-    importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+    idOverrides: { pipelineId: "{pipeline-id}", workflowId: "{pipeline-id}" },
+    triggerEnabled:
+        props.config.app.pipelines.useMyPipeline.autoRegisterAutoTriggerOnFileUpload === true,
 });
 ```
 
 Registration is idempotent: a redeploy overwrites the definition and clears the archived flag, so it
 never duplicates a pipeline or leaves one hidden.
+
+A pipeline shipped **with the deployment** may set `"isSystem": true` in `pipeline.json` and `workflow.json` and a category of the form `SYSTEM - <Area>`. The importer is the only writer of that flag — the API ignores it — and a system record is read-only through the API except for `enabled`, template `configBody`/`tagSchema`/`webFormJson`, and trigger `enabled`; each deployment re-asserts the shipped values. Use it only for pipelines VAMS owns; a customer-authored pipeline is never a system pipeline. Document a system pipeline in `documentation/docusaurus-site/docs/pipelines/system-pipelines.md` as well as on its own page.
 
 ### Step 5: Create CDK Infrastructure
 
@@ -355,11 +386,15 @@ Update `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`:
 
 ### Step 7: Update the VPC Builder (Batch/ECS/Fargate pipelines)
 
-**CRITICAL:** A pipeline that uses AWS Batch, ECS, or Fargate is added to condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Decide that first from what `pipelineBuilder-nestedStack.ts` passes as the pipeline's `pipelineSubnets`: `pipelineNetwork.isolatedSubnets.pipeline` or `pipelineNetwork.privateSubnets.pipeline`. Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments. The authoritative rule is "VPC Builder Updates" in `infra/lib/nestedStacks/pipelines/CLAUDE.md`.
+**CRITICAL:** A pipeline whose compute is an AWS Batch, ECS, or Fargate job goes into some of the condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in**, read from what `pipelineBuilder-nestedStack.ts` passes as `pipelineSubnets`, plus a service-endpoint gate when the container calls a service that has no endpoint yet. A Lambda-only pipeline goes in **no** block. The rule and the current flag lists are in `infra/lib/nestedStacks/pipelines/CLAUDE.md` ("VPC Builder Updates") and its mirror `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`. Search for `useSplatToolbox` (private, all three blocks), `usePreview3dThumbnail` (isolated, block 2 only) and `useGenAiVideoSopBom` (isolated, block 2 and its service gate) to find the locations.
 
-1. **Subnet creation condition** (~line 343): the `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig` into `subnetConfigurations`. **Private-subnet pipelines only.** Omit it for one and its Batch compute environment fails with `"Resource subnets are required"`. Add an isolated-subnet pipeline and CDK creates public subnets plus one NAT gateway per Availability Zone that the pipeline never routes through, because `subnetPrivateConfig` is `PRIVATE_WITH_EGRESS` and the `ec2.Vpc` sets no `natGateways`.
-2. **Pipeline-only endpoint condition** (~line 655): the `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints in the isolated subnets. **Every Batch/ECS/Fargate pipeline, either placement.** Without it, Batch jobs cannot pull container images.
-3. **ECS endpoint condition** (`needsEcsPrivate`, ~line 746): the ECS control-plane endpoint that the ECS agent on an EC2-launch-type container instance needs. **Private-subnet pipelines only.** Fargate tasks do not use it; they reach ECR, Amazon S3 and CloudWatch Logs through the block 2 endpoints.
+| Block                                                                           | Isolated-subnet pipeline | Private-subnet pipeline |
+| ------------------------------------------------------------------------------- | ------------------------ | ----------------------- |
+| 1. **Subnet creation** — pushes `subnetPublicConfig`/`subnetPrivateConfig`      | No                       | Yes                     |
+| 2. **Pipeline-only endpoints** — Batch, ECR API, ECR Docker (`"BatchEndpoint"`) | Yes                      | Yes                     |
+| 3. **ECS endpoint** — the `needsEcsPrivate` variable                            | No                       | Yes                     |
+
+Listing an isolated-subnet pipeline in block 1 creates one NAT gateway per Availability Zone that nothing routes through; omitting block 2 for any container pipeline fails the job at task start because the image cannot be pulled. When only an optional branch of the pipeline uses a container (a `useFargateRenderer`-style sub-flag), key the block condition **and** the `vpcRequiringFeatures` entry in `config.ts` on `enabled && <sub-flag>`, not on the pipeline's `enabled` alone.
 
 Add the new flag to `privateSubnetBatchFlags` or `isolatedSubnetBatchFlags` in `infra/test/security/vpcEndpointsAndAuthGrants.test.ts`, which asserts each listed flag's block membership. `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` asserts both directions at synth.
 
@@ -374,9 +409,10 @@ Add the new flag to `privateSubnetBatchFlags` or `isolatedSubnetBatchFlags` in `
 ### Step 9: Update Documentation and Steering
 
 1. **`documentation/docusaurus-site/docs/deployment/configuration-reference.md`**: add a section for the pipeline documenting every config option, following the existing pipeline-section format.
-2. **`documentation/docusaurus-site/docs/pipelines/`**: create a new pipeline page, add it to `documentation/docusaurus-site/sidebars.ts`, and add the pipeline to the `pipelines/overview.md` table and `overview/features.md`.
-3. **Root `CLAUDE.md`**: add the pipeline to the Project Overview pipeline list **and** to the directory tree (Rule 11). The tree's box-drawing glyphs assert which directory is a parent's last child, so a new sibling left out reads as an assertion that it does not exist.
-4. If the pipeline added a VPC subnet/endpoint requirement, update the "VPC Resource Usage by Feature" tables in the configuration reference.
+2. **`documentation/docusaurus-site/docs/pipelines/`**: create a new pipeline page, add it to `documentation/docusaurus-site/sidebars.ts`, add the pipeline to the `pipelines/overview.md` built-in table **and** VPC chart, and to `overview/features.md` (table row **and** the spelled-out count sentence — they must agree). A system pipeline is also listed in `pipelines/system-pipelines.md`.
+3. **License notices**: when the pipeline adds a third-party library, base image, or model, add entries to **both** the repo-root `NOTICE.md` (per-pipeline dependency table) and `documentation/docusaurus-site/docs/additional/notices.md` (per-pipeline license paragraph), recording the exact license and any required attribution string. Copyleft components (GPL/LGPL) get their own sentence stating how they are invoked.
+4. **Root `CLAUDE.md`**: add the pipeline to the Project Overview pipeline list **and** to the directory tree (Rule 11). The tree's box-drawing glyphs assert which directory is a parent's last child, so a new sibling left out reads as an assertion that it does not exist.
+5. If the pipeline added a VPC subnet/endpoint requirement, update the "VPC Resource Usage by Feature" tables in the configuration reference, and the flag lists in `infra/lib/nestedStacks/pipelines/CLAUDE.md` and `.kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md`.
 
 ### Step 10: Validate
 
@@ -399,17 +435,18 @@ After creating all files, verify:
 -   [ ] Step Functions state machine references correct Lambda ARNs
 -   [ ] Container Dockerfile builds successfully
 -   [ ] Container Dockerfile drops to a non-root `USER`, and every `COPY` of source that user reads is followed on the next line by `RUN chmod -R a+rX <path>` (`COPY --chown` alone is not sufficient)
+-   [ ] Before `USER`, the Dockerfile gives that user every folder the container writes at run time, including the working directory of each subprocess it starts (upstream tools write relative to it). A working directory that holds root-owned upstream sources gets the user's group and mode `1775` (`chgrp <group> <dir> && chmod 1775 <dir>`) rather than a `chown`; see `backendPipelines/CLAUDE.md`, "A Non-Root Container Owns Every Folder It Writes"
 -   [ ] Config flag name matches between config.json, config templates, config.ts interface, and the pipelineBuilder check
 -   [ ] Backward-compatibility defaults + validation in `getConfig()`
 -   [ ] Pipeline nested stack is imported and registered in pipelineBuilder-nestedStack.ts
 -   [ ] `pipelineVamsLambdaFunctionName` is pushed to the array for pipeline registration
--   [ ] VPC builder updated in the condition blocks for the pipeline's subnets (Batch/ECS/Fargate): the pipeline-only endpoint block always; subnet creation and `needsEcsPrivate` for a private-subnet pipeline only
--   [ ] `openPipeline.py` (or `executeBatchJob.py`) registers the sub-execution and its log sources — the state-machine entry plus one container entry per Batch state naming the group that job definition writes to (the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration) with `stageName` a module-level `*_STATE_NAME` literal — the builder spreads `...vendedBatchJobLogGroupEnvironment(containerLogGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and sets `BATCH_JOB_DEFINITION_NAME`, and the pipeline is added to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` / `containerLogRegistrationEnvEcs.test.ts` with the entries asserted in `lambda/tests/test_manifest_refactor.py`
--   [ ] Sub-process and log sources registered from `openPipeline` (state-machine entry with `sourceType`/`label`; one container entry per Batch state naming the group the job definition writes to — vended `/aws/vendedlogs/Pipelines/<Name><hash>` for Fargate, `/aws/batch/job` for GPU — with `logStreamPrefix "<jobDefinitionName>/default/"` and `stageName` = the ASL state name)
+-   [ ] VPC builder updated in the condition blocks its subnet placement requires (none for a Lambda-only pipeline; sub-flag-keyed for an optional container branch; a service-endpoint gate when the container calls a service without an endpoint)
+-   [ ] `openPipeline.py` (or `executeBatchJob.py`) registers the sub-execution and its log sources — the state-machine entry plus one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the group that job definition writes to (the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration) with `stageName` a module-level `*_STATE_NAME` literal — the builder spreads `...vendedBatchJobLogGroupEnvironment(containerLogGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and sets `BATCH_JOB_DEFINITION_NAME`, and the pipeline is added to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` / `containerLogRegistrationEnvEcs.test.ts` with the entries asserted in `lambda/tests/test_manifest_refactor.py`
+-   [ ] Sub-process and log sources registered from `openPipeline` (state-machine entry with `sourceType`/`label`; one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the group the job definition writes to — vended `/aws/vendedlogs/Pipelines/<Name><hash>` for Fargate, `/aws/batch/job` for GPU — with `logStreamPrefix "<jobDefinitionName>/default/"` and `stageName` = the ASL state name)
 -   [ ] Registering lambda env: `ORCHESTRATION_BUS_NAME`, `vendedBatchJobLogGroupEnvironment(containerLogGroup)` (Fargate) or `batchJobLogGroupEnvironment()` (GPU), `BATCH_JOB_DEFINITION_NAME`; `grantPutEventsTo`
 -   [ ] Pipeline added to `infra/test/pipelines/batchLogRegistrationEnvFargate.test.ts` / `batchLogRegistrationEnvGpu.test.ts` / `containerLogRegistrationEnvEcs.test.ts` (env present; every `*_STATE_NAME` literal is a key of the synthesized ASL `States`), and `lambda/tests/test_manifest_refactor.py` asserts the emitted `logGroupArn` passes `CLOUDWATCH_LOG_GROUP_ARN` and `logStreamPrefix` passes `LOG_STREAM_NAME`
 -   [ ] `suppressCdkNagLambda` and CDK Nag suppressions with justified reasons on all resources
--   [ ] Documentation updated: configuration-reference.md, pipelines page, overview table, features.md, sidebars.ts, root CLAUDE.md
+-   [ ] Documentation updated: configuration-reference.md, pipelines page, overview table and VPC chart, features.md (row + count), sidebars.ts, root CLAUDE.md, NOTICE.md + additional/notices.md for licensed dependencies
 
 **After deploying**, confirm registration actually landed — a malformed bundle can fail to import while
 the deployment still reports success:

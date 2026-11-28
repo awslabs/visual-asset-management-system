@@ -64,12 +64,12 @@ EXCLUDED_METADATA_RECORD_KEYS: FrozenSet[str] = frozenset(
 # Metadata field names carrying these prefixes are VAMS-internal and excluded
 # from user-facing output:
 #
-# VAMS_INTERNAL_FIELD_PREFIX: uppercase ``VAMS_`` prefix on DynamoDB-sourced
-#   asset-metadata fields. Excluded from OpenSearch field extraction (see
-#   models/indexing.py).
-# HIDDEN_FIELD_PREFIX: leading underscore. Excluded from both OpenSearch
-#   field extraction and asset export output. OpenSearch additionally
-#   reserves leading-underscore field names for system fields.
+# VAMS_INTERNAL_FIELD_PREFIX: uppercase ``VAMS_`` prefix. Excluded from the
+#   search index (asset metadata in handlers/osSemanticSearch/osAssetIndexer.py, file
+#   metadata and file attributes in handlers/osSemanticSearch/osFileIndexer.py).
+# HIDDEN_FIELD_PREFIX: leading underscore. Excluded from the same search
+#   indexing and from asset export output. OpenSearch additionally reserves
+#   leading-underscore field names for system fields.
 #
 # Unlike the record keys above, a caller may write a metadata key carrying
 # either prefix: the record is stored and every metadata GET returns it. What

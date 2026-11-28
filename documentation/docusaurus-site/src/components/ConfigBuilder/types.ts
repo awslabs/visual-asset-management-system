@@ -27,7 +27,8 @@ export type InputKind =
     | "string-array" // e.g. NVIDIA instanceTypes
     | "ip-range-list" // allowedIpRanges: string[][]
     | "presigned-url-restrictions" // assetBuckets.presignedUrlNetworkRestrictions object
-    | "external-buckets"; // assetBuckets.externalAssetBuckets tuple | null
+    | "external-buckets" // assetBuckets.externalAssetBuckets tuple | null
+    | "external-bridges"; // pipelines.externalPipelineBridges array
 
 export interface SelectOption {
     value: string;
@@ -65,7 +66,8 @@ export type SectionId =
     | "pipelines-gpu"
     | "addons"
     | "api-webui"
-    | "metadata";
+    | "metadata"
+    | "compliance";
 
 export interface Section {
     id: SectionId;
@@ -97,7 +99,7 @@ export interface RuleResult {
     rule: Rule;
 }
 
-/** A single field a derivation forced, surfaced to the user. `changes` is empty today. */
+/** A single field a derivation forced, surfaced to the user. */
 export interface DerivedChange {
     path: string;
     to: unknown;

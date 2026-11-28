@@ -31,6 +31,7 @@ import {
     buildAssetVersionsFunction,
     buildSqsUploadFileLargeFunction,
     buildAssetExportService,
+    grantLargeObjectCopyStart,
 } from "../../lambdaBuilder/assetFunctions";
 import {
     buildAddCommentLambdaFunction,
@@ -51,7 +52,7 @@ import {
     buildAssetLinksService,
     buildCreateAssetLinkFunction,
 } from "../../lambdaBuilder/assetsLinkFunctions";
-import { buildSearchFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
+import { buildSearchFunction } from "../../lambdaBuilder/osSemanticSearchFunctions";
 import { buildRoleService, buildCreateRoleFunction } from "../../lambdaBuilder/roleFunctions";
 import { buildUserRolesService } from "../../lambdaBuilder/userRoleFunctions";
 import { buildSendEmailFunction } from "../../lambdaBuilder/sendEmailFunctions";
@@ -61,9 +62,12 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { authResources } from "../auth/authBuilder-nestedStack";
 import { DynamoDbMetadataSchemaDefaultsConstruct } from "./constructs/dynamodb-metadataschema-defaults-construct";
 import * as iam from "aws-cdk-lib/aws-iam";
-import { kmsKeyPolicyStatementGenerator } from "../../helper/security";
+import { addIamNagSuppressions, kmsKeyPolicyStatementGenerator } from "../../helper/security";
 import { Service } from "../../../lib/helper/service-helper";
 import { RouteRegistry, attachFunctionToApi } from "./apiRouteRegistry";
+
+/** Deliveries of a large-file queue message before it is dead-lettered. */
+export const LARGE_FILE_QUEUE_MAX_RECEIVE_COUNT = 3;
 
 export class ApiBuilderNestedStack extends NestedStack {
     // Shared references consumed by the workflow/pipeline/execution functions in ApiBuilder2 (which
@@ -72,6 +76,14 @@ export class ApiBuilderNestedStack extends NestedStack {
     // lambdas invoke the metadata service.
     public metadataServiceFunction!: lambda.Function;
     public uploadFileFunction!: lambda.Function;
+    // Invoked by the large object copy engine (ApiBuilder2) once a large file has landed.
+    public sendEmailFunction!: lambda.Function;
+    // The API key service. Add-on Lambdas that mint a per-session key for a user invoke it with a
+    // lambdaCrossCall event rather than writing the key table themselves.
+    public apiKeyServiceFunction!: lambda.Function;
+    // The Lambdas here that list API routes for the constraint editor and the allowed-route check;
+    // the core stack tells them which add-ons are deployed (common/addonAppFeatures.ts).
+    public addonFeatureListingFunctions: lambda.Function[] = [];
 
     constructor(
         parent: Construct,
@@ -175,9 +187,8 @@ export class ApiBuilderNestedStack extends NestedStack {
         );
 
         const commentServiceRoutes = [
-            "/comments/assets/{assetId}",
-            "/comments/assets/{assetId}/assetVersionId/{assetVersionId}",
-            "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+            "/comments/database/{databaseId}/assets/{assetId}",
+            "/comments/database/{databaseId}/assets/{assetId}/{commentId}",
         ];
         for (let i = 0; i < commentServiceRoutes.length; i++) {
             attachFunctionToApi(this, commentService, {
@@ -188,8 +199,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         }
 
         attachFunctionToApi(this, commentService, {
-            routePath:
-                "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+            routePath: "/comments/database/{databaseId}/assets/{assetId}/{commentId}",
             method: apigateway.HttpMethod.DELETE,
             registry: registry,
         });
@@ -204,8 +214,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             storageResources.encryption.kmsKey
         );
         attachFunctionToApi(this, addCommentFunction, {
-            routePath:
-                "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+            routePath: "/comments/database/{databaseId}/assets/{assetId}",
             method: apigateway.HttpMethod.POST,
             registry: registry,
         });
@@ -220,8 +229,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             storageResources.encryption.kmsKey
         );
         attachFunctionToApi(this, editCommentFunction, {
-            routePath:
-                "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}",
+            routePath: "/comments/database/{databaseId}/assets/{assetId}/{commentId}",
             method: apigateway.HttpMethod.PUT,
             registry: registry,
         });
@@ -620,7 +628,10 @@ export class ApiBuilderNestedStack extends NestedStack {
             // processed reaches a DLQ after the same number of attempts wherever it entered VAMS.
             // The event source mapping uses batchSize 1, so dead-lettering isolates the one failing
             // upload rather than a batch of unrelated ones.
-            deadLetterQueue: { queue: largeFileProcessingDlq, maxReceiveCount: 3 },
+            deadLetterQueue: {
+                queue: largeFileProcessingDlq,
+                maxReceiveCount: LARGE_FILE_QUEUE_MAX_RECEIVE_COUNT,
+            },
         });
 
         const uploadFileFunction = buildUploadFileFunction(
@@ -644,6 +655,13 @@ export class ApiBuilderNestedStack extends NestedStack {
         attachFunctionToApi(this, uploadFileFunction, {
             routePath: "/uploads/{uploadId}/complete",
             method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+
+        // Status of an upload whose files over 1 GiB are ingested asynchronously.
+        attachFunctionToApi(this, uploadFileFunction, {
+            routePath: "/uploads/{uploadId}",
+            method: apigateway.HttpMethod.GET,
             registry: registry,
         });
 
@@ -680,9 +698,30 @@ export class ApiBuilderNestedStack extends NestedStack {
 
         // Grant SQS permissions to the large file processor Lambda
         largeFileProcessingQueue.grantConsumeMessages(sqsUploadFileLargeFunction);
+        // The consumer records a file's outcome on its upload record, a failure only on the last
+        // delivery before the message is dead-lettered (backend common/uploadStatus.py). A
+        // redelivery whose audit claim is already taken reads the record to tell a tracked file
+        // from an untracked one, so the role reads as well as updates.
+        sqsUploadFileLargeFunction.addEnvironment(
+            "LARGE_FILE_QUEUE_MAX_RECEIVE_COUNT",
+            String(LARGE_FILE_QUEUE_MAX_RECEIVE_COUNT)
+        );
+        sqsUploadFileLargeFunction.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+                resources: [storageResources.dynamo.assetUploadsStorageTable.tableArn],
+            })
+        );
 
         // Grant SQS send message permissions to uploadFile Lambda
         largeFileProcessingQueue.grantSendMessages(uploadFileFunction);
+
+        // Both start large object copy jobs: fileIngestion for workflow outputs over 1 GiB, the queue
+        // consumer for API uploads over the engine threshold. The engine is built in ApiBuilder2; its
+        // fixed-name ARN is computed here, so this stack takes no reference to that one.
+        grantLargeObjectCopyStart(uploadFileFunction, storageResources, config);
+        grantLargeObjectCopyStart(sqsUploadFileLargeFunction, storageResources, config);
 
         const streamAuxiliaryPreviewAssetFunction = buildStreamAuxiliaryPreviewAssetFunction(
             this,
@@ -892,6 +931,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         // lambdas need (the metadata service and the upload-file lambda) via public properties.
         this.metadataServiceFunction = metadataService;
         this.uploadFileFunction = uploadFileFunction;
+        this.sendEmailFunction = sendEmailFunction;
 
         const ingestAssetFunction = buildIngestAssetFunction(
             this,
@@ -918,6 +958,8 @@ export class ApiBuilderNestedStack extends NestedStack {
             vpc,
             subnets
         );
+        this.apiKeyServiceFunction = authFunctions.apiKeyService;
+        this.addonFeatureListingFunctions.push(authFunctions.routes);
 
         // NOTE: the auth constraints service and its routes (/auth/constraints,
         // /auth/constraints/{constraintId}, /auth/constraints/permissionObjects, and
@@ -1154,26 +1196,18 @@ export class ApiBuilderNestedStack extends NestedStack {
             true
         );
 
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: "Not providing IAM wildcard permissions to constraint tables.",
-                },
-            ],
-            true
-        );
+        addIamNagSuppressions(this, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Not providing IAM wildcard permissions to constraint tables.",
+            },
+        ]);
 
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: "Wildcard scoped to deployment-named SQS queues and EventBridge buses via config.name. External (non-VAMS) resources require user-configured resource-based policies. Pipeline resources are created at runtime, so ARNs cannot be known at deploy time.",
-                },
-            ],
-            true
-        );
+        addIamNagSuppressions(this, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Wildcard scoped to deployment-named SQS queues and EventBridge buses via config.name. External (non-VAMS) resources require user-configured resource-based policies. Pipeline resources are created at runtime, so ARNs cannot be known at deploy time.",
+            },
+        ]);
     }
 }

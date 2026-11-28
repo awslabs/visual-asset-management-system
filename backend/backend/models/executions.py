@@ -13,10 +13,16 @@ import json
 from typing import Any, Dict, List, Optional
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
+from common.validators import execution_id_pattern, iso8601_utc_pattern
 from customLogging.logger import safeLogger
+from common.workflows.systemPipelines import is_system_trigger, SYSTEM_TRIGGER_PREFIX
 
-logger = safeLogger(service_name="ExecutionModels")
+logger = safeLogger()
 
+# Stored trigger values. A stored row may also hold a system trigger value
+# (common.workflows.systemPipelines.is_system_trigger: a fixed prefix plus a safe identifier), set only
+# by a marked system-pipeline cross-call; the public execute request accepts EXECUTE_TRIGGER_TYPES below,
+# which does not include them.
 TRIGGER_TYPES = ("Manual", "File-Upload")
 
 
@@ -53,12 +59,54 @@ class WorkflowExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
     # Partition of the sparse by-group GSI, grouping executions launched together (bulk / re-run).
     # Written only when the execution belongs to a group, so ungrouped rows stay out of the index.
     executionGroupId: Optional[str] = ""
+    # Server-only system execution context (serialized JSON object), written only on a system-trigger
+    # run launched by a marked cross-call (also handed to the first step's manifest); never projected
+    # by the list or details APIs.
+    systemExecutionContext: Optional[str] = ""
+    # Copied from the launched workflow's isSystem at launch. A row written before the flag existed
+    # has no attribute and reads as a user run; the execution lists hide system runs by default.
+    isSystem: Optional[bool] = False
+    # Skip-record attributes, present only on the SKIPPED row of a fileUpload trigger launch a
+    # concurrency restriction refused (one row per blocking run and lock key; see
+    # common.workflows.executionRecords.build_skip_record_update). Rows written before skip records
+    # existed lack them, which reads as "not skipped": a count of 0 and empty strings.
+    skippedLaunchCount: Optional[int] = 0
+    lastSkippedDate: Optional[str] = ""
+    skipScope: Optional[str] = ""
+    skipReason: Optional[str] = ""
+    blockingExecutionId: Optional[str] = ""
 
     @validator("triggerType")
     def validate_trigger_type(cls, v):
-        if v not in TRIGGER_TYPES:
-            raise ValueError(f"triggerType must be one of {TRIGGER_TYPES}")
+        if v not in TRIGGER_TYPES and not is_system_trigger(v):
+            raise ValueError(f"triggerType must be one of: {', '.join(TRIGGER_TYPES)}, "
+                             f"or a {SYSTEM_TRIGGER_PREFIX}<identifier> system trigger value")
         return v
+
+
+class ExecutionSkipFileModel(BaseModel, extra='ignore'):
+    """One file a refused trigger launch named, in the details view's `skip` block (the same scrubbed
+    shape as a details inputFiles row)."""
+    databaseId: str = ""
+    assetId: str = ""
+    inputAssetFileKey: str = ""
+    versionId: str = ""
+
+
+class ExecutionSkipDetailsModel(BaseModel, extra='ignore'):
+    """The details view's optional `skip` block, sent only for a SKIPPED execution.
+
+    blockingExecutionId is the run that held the lock. It is set only when the caller passes the read
+    check on that run; otherwise it is omitted, whether the run is unreadable or gone, so the block
+    never reveals that a run the caller cannot read exists."""
+    reason: str = ""
+    scope: str = ""
+    count: int = 0
+    firstSkippedDate: str = ""
+    lastSkippedDate: str = ""
+    files: List[ExecutionSkipFileModel] = []
+    filesTruncated: bool = False
+    blockingExecutionId: Optional[str] = None
 
 
 class PipelineExecutionRecord(BaseModel, extra='ignore', allow_population_by_field_name=True):
@@ -75,6 +123,10 @@ class PipelineExecutionRecord(BaseModel, extra='ignore', allow_population_by_fie
         "", alias="pipelineDatabaseId:pipelineId")
     endStatePipeline: str = "false"
     S3AssetPipelineBucket: Optional[str] = ""
+    # The run bucket's registration (bucketId) and the area VAMS owns in it; absent on a row recorded
+    # before they were captured.
+    S3AssetPipelineBucketId: Optional[str] = ""
+    S3AssetPipelineBucketBasePrefix: Optional[str] = ""
     S3AssetPipelineBucketInputMetadataFilePrefix: Optional[str] = ""
     S3AssetPipelineBucketInputConfigurationFilePrefix: Optional[str] = ""
     S3AssetPipelineBucketOutputFilesPrefix: Optional[str] = ""
@@ -149,6 +201,9 @@ class PipelineExecutionInputMetadataRecord(
     attributes: Optional[Dict[str, Any]] = {}
     attributesTruncated: Optional[bool] = False
     sourceInputMetadataFileS3Key: Optional[str] = ""
+    # True on a file record an assetFileMetadata expansion added (context, not an input file); stored
+    # only on such a row, so a row without it reads as not expanded.
+    expanded: Optional[bool] = False
 
 
 class PipelineExecutionInputConfigurationRecord(BaseModel, extra='ignore'):
@@ -195,6 +250,8 @@ class PipelineExecutionOutputFileRecord(
     fileSize: Optional[int] = 0
     contentType: Optional[str] = ""
     s3VersionId: Optional[str] = ""
+    # Outcome of a large object copy job that ingested this file; absent on every other row.
+    ingestionStatus: Optional[str] = None
 
 
 class PipelineExecutionOutputMetadataRecord(
@@ -208,6 +265,8 @@ class PipelineExecutionOutputMetadataRecord(
     targetFilePath: str
     metadataKey: str
     metadataValue: Optional[str] = ""
+    # 'metadata' or 'attribute'; empty on a row recorded before the type was stored.
+    metadataType: Optional[str] = ""
     sourceMetadataFileRelativePath: Optional[str] = ""
 
 
@@ -239,8 +298,9 @@ class WorkflowExecutionInputRecord(
     The sort key and the by-asset GSI partition carry a ':' and so cannot be field names; they are
     declared under aliases, and dict(by_alias=True) emits the stored attribute names."""
     workflowExecutionId: str
-    # Sort key, and the by-asset GSI partition backing an asset's execution-input history. A row
-    # without the partition is absent from that listing.
+    # Sort key ('db:asset:/key', plus '#versionId' when a version was resolved), and the by-asset GSI
+    # partition backing an asset's execution-input history. A row without the partition is absent
+    # from that listing.
     databaseIdAssetIdInputAssetFileKey: Optional[str] = Field(
         "", alias="databaseId:assetId:inputAssetFileKey")
     databaseIdAssetId: Optional[str] = Field("", alias="databaseId:assetId")
@@ -253,6 +313,9 @@ class WorkflowExecutionInputRecord(
     assetRootS3Key: Optional[str] = ""
     # Concrete S3 VersionId read for this file (resolved at launch); empty for folder/whole-asset.
     versionId: Optional[str] = ""
+    # Whether the caller named versionId at launch (a re-run reads it again) or it was resolved as
+    # the current version (a re-run takes the current version). Absent on older rows: not pinned.
+    versionPinned: Optional[bool] = False
     executionStartDate: Optional[str] = ""
     workflowId: Optional[str] = ""
     workflowDatabaseId: Optional[str] = ""
@@ -294,6 +357,13 @@ class WorkflowExecutionConfigurationRecord(
     metadataSourceAssetsTruncated: Optional[bool] = False
     metadataSourceDatabases: Optional[List[str]] = []
     metadataSourceDatabasesTruncated: Optional[bool] = False
+    # The output kinds the run produced (subset of ["File","Metadata","Result"], File->Metadata->
+    # Result order). Written [] at launch and UPDATEd at completion/failure. A row written before the
+    # attribute existed resolves to [] on read (no migration), which is the default here.
+    outputTypes: Optional[List[str]] = []
+    # SKIPPED records only: the refused trigger launch's per-pipeline template parameters, which a
+    # re-run replays (the record has no pipeline rows). Absent on every other row.
+    pipelineExecutionParameters: Optional[Dict[str, Any]] = {}
 
 
 #######################
@@ -302,7 +372,11 @@ class WorkflowExecutionConfigurationRecord(
 
 # Trigger types on the execute request. The storage layer records the canonical stored values
 # "Manual"/"File-Upload" (TRIGGER_TYPES above); the request accepts the lowercase forms and the
-# handler maps them (TRIGGER_TYPE_TO_STORED).
+# handler maps them (TRIGGER_TYPE_TO_STORED). "fileUpload" is set by the upload trigger dispatcher,
+# which invokes the execute handler directly as SYSTEM_USER; the handler refuses it on any other
+# request (400). The system trigger values are deliberately absent: a request naming one is refused
+# here, whoever sends it. The workflow trigger KIND set (models.workflows.TRIGGER_TYPES) is a separate
+# vocabulary.
 EXECUTE_TRIGGER_TYPES = ("manual", "fileUpload")
 TRIGGER_TYPE_TO_STORED = {"manual": "Manual", "fileUpload": "File-Upload"}
 
@@ -533,7 +607,7 @@ class ExecuteWorkflowRequestV2Model(BaseModel, extra='ignore'):
     def validate_fields(cls, values):
         trigger = values.get("triggerType")
         if trigger not in EXECUTE_TRIGGER_TYPES:
-            raise ValueError(f"triggerType must be one of {EXECUTE_TRIGGER_TYPES}")
+            raise ValueError(f"triggerType must be one of: {', '.join(EXECUTE_TRIGGER_TYPES)}")
         # Output-target ids, when supplied, must be valid. outputAssetId uses the ASSET_ID rule
         # (filename pattern, dots/spaces allowed, up to 256 chars) — the same rule the asset handlers
         # use — NOT the strict database ID pattern, which would reject a legitimately-named output
@@ -600,6 +674,59 @@ class ListExecutionsRequestModel(BaseModel, extra='ignore'):
         return values
 
 
+# Every main-row executionStatus a list can return, in display order. SKIPPED is the record of
+# file-upload trigger launches a concurrency restriction refused.
+EXECUTION_LIST_STATUSES = ("NEW", "RUNNING", "SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", "SKIPPED")
+EXCLUDE_STATUS_UNKNOWN_MESSAGE = (
+    "excludeStatus must be one status, or a comma-separated list of statuses, from: "
+    + ", ".join(EXECUTION_LIST_STATUSES) + ".")
+EXCLUDE_STATUS_CONFLICT_MESSAGE = "excludeStatus cannot exclude the status that the status filter selects."
+
+
+class ExecutionListStatusFilterModel(BaseModel, extra='ignore'):
+    """The status query parameters of the asset and global execution lists.
+
+    `status` is the existing exact-match filter and is passed through unvalidated, as before.
+    `excludeStatus` (optional) names one status or a comma-separated list of them; every value must be
+    one of EXECUTION_LIST_STATUSES, and it may not exclude the status `status` selects. Parsed into
+    `excludedStatuses` (deduplicated, in the order given); empty when the parameter is absent."""
+    status: Optional[str] = ""
+    excludeStatus: Optional[str] = ""
+    excludedStatuses: List[str] = []
+
+    @root_validator(skip_on_failure=True)
+    def validate_exclude_status(cls, values):
+        raw = (values.get('excludeStatus') or '').strip()
+        excluded = []
+        if raw:
+            for part in raw.split(','):
+                value = part.strip()
+                if value not in EXECUTION_LIST_STATUSES:
+                    raise ValueError(EXCLUDE_STATUS_UNKNOWN_MESSAGE)
+                if value not in excluded:
+                    excluded.append(value)
+        status = (values.get('status') or '').strip()
+        if status and status in excluded:
+            raise ValueError(EXCLUDE_STATUS_CONFLICT_MESSAGE)
+        values['excludedStatuses'] = excluded
+        return values
+
+
+def parse_list_status_filter(query_params):
+    """(excluded statuses, error message) for a list request's query parameters. The message is one of
+    the two fixed texts above, never the caller's value."""
+    params = query_params or {}
+    try:
+        model = ExecutionListStatusFilterModel(
+            status=params.get('status') or '', excludeStatus=params.get('excludeStatus') or '')
+    except ValueError as error:
+        text = str(error)
+        message = (EXCLUDE_STATUS_CONFLICT_MESSAGE if EXCLUDE_STATUS_CONFLICT_MESSAGE in text
+                   else EXCLUDE_STATUS_UNKNOWN_MESSAGE)
+        return [], message
+    return list(model.excludedStatuses), ""
+
+
 class RerunExecutionRequestModel(BaseModel, extra='ignore'):
     """Re-run reconstructs the execute request from stored records; the caller may optionally reuse
     the original executionGroupId or supply a new one."""
@@ -653,7 +780,7 @@ class DetailMetadataPageRequestModel(BaseModel, extra='ignore'):
     @root_validator
     def validate_fields(cls, values):
         if values.get("collection") not in DETAIL_METADATA_COLLECTIONS:
-            raise ValueError(f"collection must be one of {DETAIL_METADATA_COLLECTIONS}")
+            raise ValueError(f"collection must be one of: {', '.join(DETAIL_METADATA_COLLECTIONS)}")
         # pipelineId narrows the read to one step's rows and is compared against the stored
         # pipelineId, so it is validated with the same ID rule every other pipeline id uses.
         if values.get("pipelineId"):
@@ -671,6 +798,93 @@ class DetailMetadataPageResponseModel(BaseModel, extra='ignore'):
     last page."""
     Items: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     collection: str
+    NextToken: Optional[str] = None
+
+
+# File collections of the execution-detail view that can be read a page at a time. Distinct from the
+# metadata collection set — files have NO inputDatabase analogue (that split is metadata-only). 'input'
+# is the workflow-level input files; 'output' the per-pipeline output files.
+DETAIL_FILE_COLLECTION_INPUT = "input"
+DETAIL_FILE_COLLECTION_OUTPUT = "output"
+DETAIL_FILE_COLLECTIONS = (
+    DETAIL_FILE_COLLECTION_INPUT,
+    DETAIL_FILE_COLLECTION_OUTPUT,
+)
+
+
+class DetailFilesPageRequestModel(BaseModel, extra='ignore'):
+    """Query parameters of the paged execution-detail FILES read. Mirrors
+    DetailMetadataPageRequestModel exactly except that collection is validated against
+    DETAIL_FILE_COLLECTIONS (input|output, no inputDatabase). pageSize is clamped to the handler's
+    page-size cap; startingToken/NextToken are the opaque base64 continuation (either name accepted,
+    matching the metadata read and the global execution list). pipelineId narrows output files to one
+    step."""
+    collection: Optional[str] = DETAIL_FILE_COLLECTION_INPUT
+    pageSize: Optional[int] = Field(None, ge=1)
+    startingToken: Optional[str] = Field(None, max_length=4096)
+    NextToken: Optional[str] = Field(None, max_length=4096)
+    pipelineId: Optional[str] = None
+
+    @validator("collection", pre=True)
+    def _default_collection(cls, v):
+        if v is None or str(v).strip() == "":
+            return DETAIL_FILE_COLLECTION_INPUT
+        return str(v).strip()
+
+    @validator("pageSize", pre=True)
+    def _blank_page_size(cls, v):
+        # Query parameters arrive as strings, and an omitted one is often sent as "" rather than
+        # dropped; that is "unspecified", not a parse failure, so it falls back to the default.
+        if v is None or str(v).strip() == "":
+            return None
+        return v
+
+    @root_validator
+    def validate_fields(cls, values):
+        if values.get("collection") not in DETAIL_FILE_COLLECTIONS:
+            raise ValueError(f"collection must be one of: {', '.join(DETAIL_FILE_COLLECTIONS)}")
+        # pipelineId narrows the read to one step's output rows, compared against the stored
+        # pipelineId, so it is validated with the same ID rule every other pipeline id uses.
+        if values.get("pipelineId"):
+            _validate_id(values.get("pipelineId"))
+        return values
+
+    def resolved_starting_token(self):
+        """The supplied continuation token under either accepted name ("" when none)."""
+        return (self.startingToken or self.NextToken or "").strip()
+
+
+class DetailFilesPageResponseModel(BaseModel, extra='ignore'):
+    """One page of a detail file collection, mirroring DetailMetadataPageResponseModel. Rows carry
+    the same scrubbed file shape the details view returns. NextToken is absent on the last page."""
+    Items: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    collection: str
+    NextToken: Optional[str] = None
+
+
+class ExecutionResultsPageRequestModel(BaseModel, extra='ignore'):
+    """Query parameters of the paged /details/results read: the opaque base64 continuation under either
+    accepted name (startingToken / NextToken), matching the files and metadata reads."""
+    startingToken: Optional[str] = Field(None, max_length=4096)
+    NextToken: Optional[str] = Field(None, max_length=4096)
+
+    def resolved_starting_token(self):
+        """The supplied continuation token under either accepted name ("" when none)."""
+        return (self.startingToken or self.NextToken or "").strip()
+
+
+class ExecutionResultsResponseModel(BaseModel, extra='ignore'):
+    """One page of the /details/results response: the run's result rows that fit the response budget,
+    concatenated in step then sort-key order, plus accounting for THIS page.
+
+    NextToken is present while rows remain; concatenating resultContent across every page yields the
+    whole result. resultContentTruncated is True when a row on this page was stored truncated or a
+    single row larger than the budget was cut. A legacy/empty run returns the empty shape (resultContent
+    "", flags/counts zero, no NextToken), never an error."""
+    resultContent: Optional[str] = ""
+    resultContentTruncated: Optional[bool] = False
+    resultRowCount: Optional[int] = 0
+    resultContentBytes: Optional[int] = 0
     NextToken: Optional[str] = None
 
 
@@ -698,3 +912,28 @@ class ResolvedPipelineConfig(BaseModel, extra='ignore'):
     templateTags: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     customTemplateOverrideUsed: bool = False
     configFormat: Optional[str] = "json"
+
+
+# Terminal statuses a `workflow.execution.completed` event announces: the status stored on the main
+# execution row by the writer that finished the run (common.workflows.executionOutputs.TERMINAL_STATUSES).
+WORKFLOW_EXECUTION_COMPLETED_STATUS_PATTERN = r'^(SUCCEEDED|FAILED|ABORTED|TIMED_OUT)$'
+
+
+class WorkflowExecutionCompletedDetailModel(BaseModel, extra='ignore'):
+    """The `detail` of a `workflow.execution.completed` orchestration-bus event, as a consumer parses
+    it. The emitters build the detail through
+    `common.workflows.executionRecords.workflow_execution_completed_event`: identifiers and ISO-8601
+    UTC timestamps only. A main row with no recorded start date yields an empty `startedAt`, so the
+    optional fields accept the empty string as absent."""
+    executionId: str = Field(min_length=32, max_length=36, regex=execution_id_pattern)
+    status: str = Field(regex=WORKFLOW_EXECUTION_COMPLETED_STATUS_PATTERN)
+    workflowDatabaseId: Optional[str] = Field(None, max_length=256)
+    workflowId: Optional[str] = Field(None, max_length=256)
+    startedAt: Optional[str] = Field(None, regex=iso8601_utc_pattern)
+    completedAt: Optional[str] = Field(None, regex=iso8601_utc_pattern)
+    executionGroupId: Optional[str] = Field(None, max_length=64)
+
+    @validator("workflowDatabaseId", "workflowId", "startedAt", "completedAt", "executionGroupId",
+               pre=True)
+    def _empty_is_absent(cls, v):
+        return None if v == "" else v

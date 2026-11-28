@@ -8,12 +8,15 @@
  * request and the token request. An IdP compares the two (and against its registered value), so
  * a deep link such as #/databases/<id>/assets/<id> must not change what is sent. `state` is an
  * opaque random value: an IdP that returns it without percent-encoding would cut a URL in it at
- * `#`. The deep link is stored separately, followed only on this origin, and used once.
+ * `#`. The deep link is stored separately, followed only on this origin, and used once. A code
+ * exchange that fails signs the browser out, which also clears the browser asset store. Auth also
+ * clears that store once per page load, signed in or not.
  */
 
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { appCache } from "../services/appCache";
+import { MISSING_USER_ID_CLAIM_KEY } from "../utils/authTokenUtils";
 import Auth from "./Auth";
 import { oauthNavigation } from "./oauthSignInState";
 
@@ -215,6 +218,29 @@ describe("Auth sign-out after a failed code exchange", () => {
         window.history.replaceState(null, "", "/");
     });
 
+    it("clears the browser asset store and records the error", async () => {
+        storeSignInAttempt();
+        window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);
+        let rejectExchange!: (error: Error) => void;
+        mockGetTokenFromCodeRedirect.mockReturnValue(
+            new Promise((_resolve, reject) => {
+                rejectExchange = reject;
+            })
+        );
+
+        renderAuth();
+
+        await waitFor(() => expect(mockGetTokenFromCodeRedirect).toHaveBeenCalledTimes(1));
+        const clearsBefore = mockClearLocalStore.mock.calls.length;
+
+        rejectExchange(new Error("bad code"));
+
+        await waitFor(() => expect(mockClearLocalStore).toHaveBeenCalledTimes(clearsBefore + 1));
+        await waitFor(() =>
+            expect(localStorage.getItem("auth_error")).toBe("Failed to get access token")
+        );
+    });
+
     it("signs out of Amplify before clearing localStorage and the asset store", async () => {
         storeSignInAttempt();
         window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);
@@ -351,6 +377,35 @@ describe("Auth external OAuth state", () => {
         expect(storedSignInValues()).toEqual([null, null, null]);
     });
 
+    it("clears an abandoned sign-in without an error and shows the sign-in page", async () => {
+        // The user went to the IdP and came back without signing in: the values are stored, but
+        // the page URL carries no code, error or state.
+        storeSignInAttempt();
+        window.history.replaceState(null, "", DEEP_LINK);
+
+        renderAuth();
+
+        expect(await screen.findByText("Log in with SSO")).toBeInTheDocument();
+        expect(storedSignInValues()).toEqual([null, null, null]);
+        expect(localStorage.getItem("auth_error")).toBeNull();
+        expect(mockGetTokenFromCodeRedirect).not.toHaveBeenCalled();
+    });
+
+    it("removes the stored values when the authorize step fails", async () => {
+        window.history.replaceState(null, "", DEEP_LINK);
+        mockGetAuthorizeUri.mockRejectedValue(new Error("discovery failed"));
+
+        renderAuth();
+        fireEvent.click(await screen.findByText("Log in with SSO"));
+
+        await waitFor(() =>
+            expect(localStorage.getItem("auth_error")).toBe(
+                "Failed to initialize authorization flow."
+            )
+        );
+        expect(storedSignInValues()).toEqual([null, null, null]);
+    });
+
     it("removes the stored values when the code exchange fails", async () => {
         storeSignInAttempt();
         window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);
@@ -363,5 +418,102 @@ describe("Auth external OAuth state", () => {
         );
         expect(goTo).not.toHaveBeenCalled();
         expect(storedSignInValues()).toEqual([null, null, null]);
+    });
+});
+
+/**
+ * With `externalOAuthIdpUserIdClaim` set, the deep link and the one-time sign-in values work as
+ * without it: a token carrying the claim lands on the deep link, and a token lacking it signs out
+ * with the sign-in attempt's values removed and the deep link not followed.
+ */
+describe("Auth external OAuth deep link with a configured user id claim", () => {
+    const OAUTH2_CONFIG_EMAIL = { ...OAUTH2_CONFIG, externalOAuthIdpUserIdClaim: "email" };
+    const tokenWith = (claims: Record<string, unknown>) => ({
+        ...TOKEN,
+        accessToken: `header.${btoa(JSON.stringify(claims))}.signature`,
+    });
+    let consoleError: jest.SpyInstance;
+    let goTo: jest.SpyInstance;
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        appCache.setItem("config", OAUTH2_CONFIG_EMAIL);
+        mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG_EMAIL });
+        mockEnsureValidSession.mockResolvedValue(false);
+        mockClearLocalStore.mockResolvedValue(undefined);
+        mockRevokeSession.mockReset().mockResolvedValue(undefined);
+        mockClearStoredSession.mockReset();
+        goTo = jest.spyOn(oauthNavigation, "goTo").mockImplementation(() => undefined);
+        // jsdom reports document.location assignments as unimplemented navigation.
+        consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+        goTo.mockRestore();
+        consoleError.mockRestore();
+        window.history.replaceState(null, "", "/");
+    });
+
+    it("lands on the deep link after a sign-in whose token carries the claim", async () => {
+        window.history.replaceState(null, "", DEEP_LINK);
+        mockGetAuthorizeUri.mockResolvedValue("https://idp.test/authorize?x=1");
+        const signIn = renderAuth();
+        fireEvent.click(await screen.findByText("Log in with SSO"));
+        await waitFor(() => expect(mockGetAuthorizeUri).toHaveBeenCalledTimes(1));
+        const sentState = mockGetAuthorizeUri.mock.calls[0][0].state;
+        signIn.unmount();
+
+        window.history.replaceState(null, "", `/?code=abc&state=${sentState}`);
+        mockGetTokenFromCodeRedirect.mockResolvedValue(
+            tokenWith({ sub: "user-1", email: "first.last@example.com" })
+        );
+
+        renderAuth();
+
+        await waitFor(() => expect(goTo).toHaveBeenCalledWith(`http://localhost${DEEP_LINK}`));
+        expect(JSON.parse(localStorage.getItem("user") ?? "{}").username).toBe(
+            "first.last@example.com"
+        );
+        expect(localStorage.getItem(MISSING_USER_ID_CLAIM_KEY)).toBeNull();
+        expect(storedSignInValues()).toEqual([null, null, null]);
+    });
+
+    it("removes the sign-in attempt's values when the token lacks the claim", async () => {
+        storeSignInAttempt();
+        window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);
+        mockGetTokenFromCodeRedirect.mockResolvedValue(tokenWith({ sub: "user-1" }));
+
+        renderAuth();
+
+        await waitFor(() => expect(localStorage.getItem(MISSING_USER_ID_CLAIM_KEY)).toBe("email"));
+        // The full sign-out wipe is stubbed here, so these were removed by the attempt's own
+        // clean-up, not as a side effect of clearing localStorage.
+        expect(storedSignInValues()).toEqual([null, null, null]);
+        expect(localStorage.getItem("oauth2_token")).toBeNull();
+        expect(goTo).not.toHaveBeenCalled();
+        expect(mockRevokeSession).toHaveBeenCalledTimes(1);
+        expect(await screen.findByText("Sign-in failed")).toBeInTheDocument();
+    });
+});
+
+describe("Auth browser asset store on page load", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        appCache.setItem("config", OAUTH2_CONFIG);
+        mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG });
+        mockEnsureValidSession.mockResolvedValue(false);
+        mockClearLocalStore.mockResolvedValue(undefined);
+        mockRevokeSession.mockReset().mockResolvedValue(undefined);
+        mockClearStoredSession.mockReset();
+    });
+
+    it("clears the store once for a signed-out visitor", async () => {
+        renderAuth();
+
+        expect(await screen.findByText("Log in with SSO")).toBeInTheDocument();
+        expect(mockClearLocalStore).toHaveBeenCalledTimes(1);
+        expect(screen.queryByTestId("app-children")).not.toBeInTheDocument();
     });
 });

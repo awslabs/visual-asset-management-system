@@ -18,23 +18,21 @@ export class ApiError extends Error {
 }
 
 /**
- * Message for a request that never produced a readable response. `fetch` rejects with a
- * TypeError ("Failed to fetch", "NetworkError when attempting to fetch resource.", "Load failed")
- * when the network fails or the browser drops the response, for example when a web ACL also
- * blocks a cross-origin request's CORS preflight.
+ * Whether an error is a request the deployment's AWS WAF web ACL blocked, rather than a permission
+ * denial.
  */
-export const NETWORK_FAILURE_MESSAGE =
-    "The request could not reach the service. It may have been blocked by a firewall or the network.";
-
-/** Whether an error is a request that never reached the service or whose response was dropped. */
-export function isNetworkFailure(error: unknown): boolean {
-    return error instanceof TypeError;
+export function isRequestBlocked(error: unknown): boolean {
+    return error instanceof ApiError && error.status === 403 && error.body?.blockedBy === "waf";
 }
+
+export { NETWORK_FAILURE_MESSAGE, isNetworkFailure } from "./networkFailure";
 
 interface ApiClientOptions {
     queryStringParameters?: Record<string, string>;
     body?: any;
     headers?: Record<string, string>;
+    /** Aborts the request in flight. */
+    signal?: AbortSignal;
 }
 
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
@@ -68,7 +66,9 @@ function flattenErrorMessage(message: any): string {
 
 /**
  * Parse error response body and extract the most useful error message.
- * API errors typically return {"message": "..."} in the response body.
+ * API errors typically return {"message": "..."} in the response body. A request the AWS WAF web
+ * ACL blocked returns {"message", "blockedBy": "waf", "requestId"}, and its message names the
+ * request ID the administrator looks up.
  */
 async function parseErrorResponse(response: Response): Promise<ApiError> {
     let body: any = null;
@@ -76,7 +76,14 @@ async function parseErrorResponse(response: Response): Promise<ApiError> {
 
     try {
         body = await response.json();
-        if (body?.message) {
+        if (
+            response.status === 403 &&
+            body?.blockedBy === "waf" &&
+            typeof body.message === "string"
+        ) {
+            const requestId = typeof body.requestId === "string" ? body.requestId : "";
+            errorMessage = requestId ? `${body.message} (request ID ${requestId})` : body.message;
+        } else if (body?.message) {
             errorMessage = flattenErrorMessage(body.message);
         } else if (typeof body === "string") {
             errorMessage = body;
@@ -138,7 +145,7 @@ class ApiClient {
         // would address another resource. No API path carries either delimiter, because query
         // parameters go in queryParams, so both are percent-encoded here. So is a '%' that does
         // not start an escape (an asset id may also end in '%'). A '%' followed by two hex digits
-        // is kept: callers pass segments they already encoded (workflow trigger types).
+        // is kept: callers pass segments they already encoded (EDH ids, workflow trigger types).
         // shortcut: a raw value holding '%' and two hex digits is sent as that escape; no id the
         // backend accepts has one ('%' only as an asset id's last character). If one ever can,
         // encode that value in its service instead.
@@ -160,9 +167,12 @@ class ApiClient {
     /**
      * Single request path for all verbs. On an auth-looking failure (a 401/403, or a
      * pre-request token fetch that threw) it asks the auth layer whether a valid token
-     * can still be produced: dead session -> forced logout; alive session -> the failure
-     * was a genuine permission denial (surface it) or a transient token issue (retry once
-     * after a successful refresh). `retried` guards against loops / double-sends.
+     * can still be produced: dead session -> forced logout; alive session -> a token fetch
+     * that threw is retried once, a 401 (the API's authorizer did not accept the token:
+     * expired, invalid or missing) forces one refresh and one re-send, and a 403 (an
+     * authorizer deny such as an IP restriction, a Casbin decision, or a request the AWS WAF
+     * web ACL blocked) is surfaced without a refresh. `retried` guards against loops /
+     * double-sends.
      */
     private async request(
         method: HttpMethod,
@@ -187,6 +197,9 @@ class ApiClient {
 
         const url = this.buildUrl(path, options?.queryStringParameters);
         const init: RequestInit = { method, headers };
+        if (options?.signal) {
+            init.signal = options.signal;
+        }
         if (method !== "GET" && options?.body !== undefined) {
             init.body = JSON.stringify(options.body);
         }
@@ -205,11 +218,13 @@ class ApiClient {
                 throw await parseErrorResponse(response);
             }
             if (response.status === 401 || response.status === 403) {
-                // A 401 is the authorizer rejecting the token, so force a refresh before
-                // judging the session: the token can be valid when the header is built and
-                // expired by the time the authorizer validates it (clock skew, slow request),
-                // in which case the locally stored expiry still reads as valid. A 403 is a
-                // Casbin decision on an accepted token, so never refresh for it.
+                // The REST authorizer answers a token it does not accept (expired, invalid or
+                // missing) with a 401, so force a refresh before judging the session and
+                // re-send once. A 403 (an authorizer deny such as an IP restriction, a Casbin
+                // decision, or a request the AWS WAF web ACL blocked) is never refreshed: a
+                // new token does not change it. Deployments older than 2.7.0 answered a
+                // rejected token with a 403 too; ensureValidSession still logs a dead session
+                // out on either status.
                 const forceRefresh = response.status === 401 && !retried;
                 const alive = await ensureValidSession(forceRefresh);
                 if (!alive) {
@@ -220,7 +235,7 @@ class ApiClient {
                     // repeat any verb: a 401 means the handler never ran.
                     return this.request(method, path, options, true);
                 }
-                // Alive: a real Casbin permission denial — fall through and surface it.
+                // Alive: a denial or a block, not an expired session — surface it.
             }
             throw await parseErrorResponse(response);
         }

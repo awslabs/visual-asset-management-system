@@ -34,6 +34,12 @@ import {
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    TaggedBatchSubmitJob,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 import { assertRecordedPinPosture } from "./dockerfilePinAudit";
 import { execFileSync } from "child_process";
 import * as fs from "fs";
@@ -319,7 +325,8 @@ export class SplatToolboxConstruct extends Construct {
         });
 
         // batch job Splat Toolbox
-        const splatToolboxBatchJob = new tasks.BatchSubmitJob(this, "SplatToolboxBatchJob", {
+        const splatToolboxBatchJob = new TaggedBatchSubmitJob(this, "SplatToolboxBatchJob", {
+            jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.splatToolbox),
             jobName: sfn.JsonPath.stringAt("$.jobName"),
             jobDefinitionArn: splatToolboxBatchPipeline.batchJobDefinition.attrJobDefinitionArn,
             jobQueueArn: splatToolboxBatchPipeline.batchJobQueue.ref,
@@ -386,6 +393,7 @@ export class SplatToolboxConstruct extends Construct {
             }
         );
 
+        suppressBatchJobTaggingNag(pipelineStateMachine);
         // Stopping the state machine cancels the .sync Batch task, which requires terminating the
         // running job; the BatchSubmitJob task grants only batch:SubmitJob. Batch job ids are
         // generated at submit time and carry no deployment-specific prefix to scope on, so the
@@ -585,7 +593,9 @@ export class SplatToolboxConstruct extends Construct {
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
-                        `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                        },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                         },
@@ -687,21 +697,6 @@ export class SplatToolboxConstruct extends Construct {
                     id: "AwsSolutions-IAM5",
                     reason: "pipelineEnd uses default policy that contains wildcard",
                     appliesTo: ["Resource::*"],
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressionsByPath(
-            Stack.of(this),
-            `/${this.toString()}/BatchPipeline_SplatToolbox/BatchServiceRole/Resource`,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for AWS Batch Service uses AWSBatchServiceRole managed policy which is required for batch operations",
-                    appliesTo: [
-                        "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSBatchServiceRole",
-                    ],
                 },
             ],
             true

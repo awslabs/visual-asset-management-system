@@ -16,6 +16,7 @@ interface FileVersionsModalProps {
     databaseId: string;
     assetId: string;
     filePath: string;
+    linkFilePath?: string; // How a file page link names the file (its path in the asset); defaults to filePath
     fileName: string;
     currentVersionId?: string; // For ViewFile context
     onVersionRevert?: () => void; // Refresh callback
@@ -81,6 +82,7 @@ export const FileVersionsModal: React.FC<FileVersionsModalProps> = ({
     databaseId,
     assetId,
     filePath,
+    linkFilePath,
     fileName,
     currentVersionId,
     onVersionRevert,
@@ -106,6 +108,7 @@ export const FileVersionsModal: React.FC<FileVersionsModalProps> = ({
                 databaseId={databaseId}
                 assetId={assetId}
                 filePath={filePath}
+                linkFilePath={linkFilePath}
                 fileName={fileName}
                 currentVersionId={currentVersionId}
                 onVersionRevert={onVersionRevert}

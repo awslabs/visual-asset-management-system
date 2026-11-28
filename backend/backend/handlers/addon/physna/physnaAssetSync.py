@@ -44,9 +44,10 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Key
 
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
-from common.s3PathPatterns import join_asset_location_key
+from common.assetLocations import derive_location, object_key_for
 from common.syncTracking import (
     SYNC_ACTION_DELETE,
     SYNC_ACTION_MODIFY,
@@ -97,6 +98,12 @@ _MAX_REPAIR_UPLOADS_PER_ASSET = 100
 
 def _record_asset_sync(database_id, asset_id, action, sync_status, error_message=None):
     """Best-effort outbound sync tracking record for an asset-level Physna sync."""
+    ctx = current_audit_context()
+    if ctx is not None:
+        failed = sync_status == SYNC_STATUS_FAILED
+        log_action(ctx.event, "physnaAssetSync", outcome="failed" if failed else "success",
+                   reason="internal" if failed else None, database_id=database_id, asset_id=asset_id,
+                   details={"operation": action, "syncStatus": sync_status})
     write_outbound_sync_record(
         SYNC_OBJECT_TYPE_ASSET,
         database_id,
@@ -223,7 +230,7 @@ def _vams_file_is_permanently_gone(
         return False
     return (
         physnaFileSync._vams_file_still_in_s3(
-            bucket_name, [join_asset_location_key(asset_base_key, relative)]
+            bucket_name, [object_key_for(asset_base_key, relative)]
         )
         is False
     )
@@ -317,7 +324,7 @@ def _upload_missing_physna_files(
             asset_id,
             relative,
             bucket_name,
-            join_asset_location_key(asset_base_key, relative),
+            object_key_for(asset_base_key, relative),
         ):
             uploads_complete = False
 
@@ -449,9 +456,7 @@ def _sync_asset_metadata_to_physna(
     bucket_name = bucket_details.get("bucketName") if bucket_details else None
     asset_base_key = None
     if bucket_name:
-        asset_base_key = asset_location.get(
-            "Key", f"{bucket_details['baseAssetsPrefix']}{asset_id}/"
-        )
+        asset_base_key = asset_location.get("Key", derive_location(bucket_details, "", asset_id))
 
     # VAMS relative paths carrying a metadata or attribute row. A file with
     # neither has no row, so this set is a lower bound on the asset's contents:
@@ -518,7 +523,7 @@ def _sync_asset_metadata_to_physna(
                 VAMS_RESERVED_FILE_VERSION_KEY
             )
             if not existing_file_version and asset_base_key and not is_archived:
-                s3_key = join_asset_location_key(asset_base_key, relative)
+                s3_key = object_key_for(asset_base_key, relative)
                 logger.info(
                     f"Physna asset for {path} is missing "
                     f"__VAMS__FileVersion; treating as stale and re-"
@@ -826,6 +831,7 @@ def _extract_ids_from_stream_record(
     return comp_db, comp_asset, False
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
     """Process every record in the SQS batch independently.
 

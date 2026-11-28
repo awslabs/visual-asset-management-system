@@ -37,7 +37,16 @@ def workflow_execution_record_keys():
         "E1", "db1", "wf1", "wfArn", "execArn", "2026-01-01T00:00:00Z", "NEW",
         "someuser", "Manual", "logGroupArn",
         last_sfn_sync_check_date="2026-01-01T00:05:00Z", execution_group_id="grp1")
-    return set(ungrouped) | set(grouped), grouped
+    # A system-pipeline run additionally stores its server-only context (systemPipelines.py).
+    system_run = er.build_workflow_execution_record(
+        "E1", "db1", "wf1", "wfArn", "execArn", "2026-01-01T00:00:00Z", "NEW",
+        "SYSTEM_USER", "System-TestFeature", "logGroupArn", system_execution_context='{"k":"v"}')
+    # The SKIPPED record of a refused trigger launch is the main row's other write path: one UpdateItem
+    # naming every attribute it sets in ExpressionAttributeNames, plus the key.
+    skip_update = er.build_skip_record_update(
+        "S1", "db1", "wf1", "wfArn", "2026-01-01T00:00:00Z", "asset", "busy", "E1")
+    skipped = set(skip_update["Key"]) | set(skip_update["ExpressionAttributeNames"].values())
+    return set(ungrouped) | set(grouped) | set(system_run) | skipped, grouped
 
 
 def workflow_configuration_record_keys():
@@ -52,7 +61,8 @@ def workflow_configuration_record_keys():
         input_metadata_database_id="db1", input_metadata_file_s3_key="k",
         execution_start_date="2026-01-01T00:00:00Z",
         metadata_source_assets=[{"databaseId": "db1", "assetId": "asset1"}],
-        metadata_source_databases=["db1"])
+        metadata_source_databases=["db1"],
+        pipeline_execution_parameters={"pipe1": {"templateId": "t1"}})
     return set(results_only) | set(asset_targeted), asset_targeted
 
 

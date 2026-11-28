@@ -33,6 +33,13 @@ for _k, _v in {
     "WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME": "t-exec-v2",
     "PIPELINE_EXECUTIONS_STORAGE_TABLE_NAME": "t-pexec",
     "PIPELINE_EXECUTION_LOGS_STORAGE_TABLE_NAME": "t-logs",
+    # Output tables + configuration table the error handler now reads to derive the failed run's
+    # outputTypes, plus the pipeline-definition table it already resolved.
+    "PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE_NAME": "t-of",
+    "PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE_NAME": "t-om",
+    "PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE_NAME": "t-or",
+    "WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME": "t-wf-cfg",
+    "PIPELINE_STORAGE_TABLE_V2_NAME": "t-pipelines",
     "WORKFLOW_EXECUTION_LOG_GROUP_ARN": "arn:aws:logs:us-east-1:1:log-group:vams-wf:*",
 }.items():
     os.environ.setdefault(_k, _v)
@@ -202,9 +209,16 @@ class TestTheErrorHandlerLambdaReachesTheGuardedWrite:
         logs_table = MagicMock()
         # The status read the handler performs before finalizing: still in flight, so it finalizes.
         main_table = MagicMock(query=MagicMock(return_value={"Items": [{"executionStatus": "RUNNING"}]}))
+        # The configuration table gets its own mock: the handler also UPDATEs outputTypes on it, and
+        # routing it to main_table would conflate that write with the guarded main-row finalize below.
+        cfg_table = MagicMock()
 
         def _table(name):
-            return logs_table if name == heh.pipeline_execution_logs_table else main_table
+            if name == heh.pipeline_execution_logs_table:
+                return logs_table
+            if name == heh.workflow_execution_configuration_table:
+                return cfg_table
+            return main_table
 
         with patch.object(heh, "_get_pipeline_rows", return_value=[]), \
              patch.object(heh, "_fetch_execution_log", return_value="full log"), \

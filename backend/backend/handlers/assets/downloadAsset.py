@@ -4,28 +4,39 @@
 import os
 import boto3
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
-from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.assetLocations import normalize_base_prefix
+from common.fileAttribution import nested_locations_of_asset
 from common.constants import STANDARD_JSON_RESPONSE
-from common.s3MetadataKeys import (
-    VAMS_STATUS_METADATA_KEY,
-    VAMS_STATUS_ARCHIVED,
-    VAMS_STATUS_DELETED,
+from common.dynamodb import asset_authorization_object
+from common.validators import validate
+# Shared download-eligibility checks (asset, key, version pin, delete marker, blocklist).
+# is_file_archived and normalize_s3_path keep their historical names in this module.
+from common.downloadEligibility import (  # noqa: F401 (is_file_archived, normalize_s3_path)
+    check_file_eligibility,
+    get_distributable_asset_context as _get_distributable_asset_context,
+    is_file_archived,
+    normalize_s3_path,
+    s3_object_exists,
 )
-from common.validators import validate, exceeds_s3_object_key_limit
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_download, log_file_download_bulk
+from customLogging.auditLogging import log_file_download, log_file_download_bulk, audited_handler
 from common.s3 import (
+    bucket_region_fields,
+    region_routing_s3_client,
     validateS3AssetExtensionsAndContentType,
     validateUnallowedFileExtensionAndContentType,
     list_all_objects,
     presigned_get_object_params,
+)
+from common.compliance.quarantineGuard import (
+    QuarantineBlockedResponse, check_quarantine_block, quarantine_refusal,
 )
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import (
@@ -36,20 +47,12 @@ from handlers.assets.assetVersions import (
     resolve_asset_version_id_from_alias
 )
 
-#Set environment variable for S3 client configuration
-#'regional' set to add region decriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
-os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional" 
-
-# Configure AWS clients. The connection pool must cover the bulk worker pool
-# or threads serialize on connections. Adaptive retries add a client-side rate
-# limiter so a burst of HeadObject calls (e.g. many concurrent whole-asset
-# downloads of the same S3 prefix) degrades to slower-but-successful instead of
-# surfacing 503 SlowDown as per-file failures.
+# Configure AWS clients. The S3 client is the Region-routing client from common.s3 (its per-Region
+# clients carry S3_ASSET_CLIENT_CONFIG: SigV4, adaptive retries, a connection pool covering the bulk
+# worker pool). Adaptive retries add a client-side rate limiter so a burst of calls degrades to
+# slower-but-successful instead of surfacing throttling as per-file failures.
 region = os.environ['AWS_REGION']
-s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'},
-                   max_pool_connections=50,
-                   retries={'max_attempts': 5, 'mode': 'adaptive'})
-s3 = boto3.client('s3', region_name=region, config=s3_config)
+s3 = region_routing_s3_client()
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 logger = safeLogger(service_name="DownloadAsset")
@@ -101,18 +104,13 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
@@ -135,66 +133,6 @@ def get_asset_details(databaseId, assetId):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
-def is_file_archived(metadata):
-    """Determine if file is archived based on S3 metadata
-    
-    Args:
-        metadata: The S3 object metadata
-        
-    Returns:
-        True if file is archived, False otherwise
-    """
-    vams_status = metadata.get('Metadata', {}).get(VAMS_STATUS_METADATA_KEY, '')
-    storage_class = metadata.get('StorageClass', 'STANDARD')
-
-    # File is archived if:
-    # 1. Has vams-status=archived or deleted metadata, OR
-    # 2. Storage class is GLACIER/DEEP_ARCHIVE
-    return (vams_status in [VAMS_STATUS_ARCHIVED, VAMS_STATUS_DELETED] or
-            storage_class in ['GLACIER', 'DEEP_ARCHIVE'])
-
-def is_delete_marker(bucket, key, version_id=None):
-    """Check if a specific version is a delete marker
-    
-    Args:
-        bucket: S3 bucket name
-        key: S3 object key
-        version_id: Optional version ID to check
-        
-    Returns:
-        True if version is a delete marker, False otherwise
-    """
-    try:
-        # If no version ID provided, check if the latest version is a delete marker
-        if not version_id:
-            response = s3.list_object_versions(
-                Bucket=bucket,
-                Prefix=key,
-                MaxKeys=1
-            )
-            
-            delete_markers = response.get('DeleteMarkers', [])
-            if delete_markers and delete_markers[0].get('IsLatest', False):
-                return True
-            return False
-            
-        # If version ID provided, check if it's a delete marker
-        response = s3.list_object_versions(
-            Bucket=bucket,
-            Prefix=key,
-            MaxKeys=100  # Increase this if needed to find the specific version
-        )
-        
-        # Check delete markers
-        for marker in response.get('DeleteMarkers', []):
-            if marker.get('VersionId') == version_id:
-                return True
-                
-        return False
-    except Exception as e:
-        logger.warning(f"Error checking delete marker: {e}")
-        return False
-
 def check_s3_object_exists(bucket, key, version_id=None):
     """Check if S3 object exists
     
@@ -206,102 +144,41 @@ def check_s3_object_exists(bucket, key, version_id=None):
     Returns:
         True if object exists, False otherwise
     """
-    try:
-        params = {'Bucket': bucket, 'Key': key}
-        if version_id:
-            params['VersionId'] = version_id
-            
-        s3.head_object(**params)
-        return True
-    except ClientError as e:
-        if e.response['Error']['Code'] == '404':
-            return False
-        logger.warning(f"Error checking if object exists: {e}")
-        raise
-        
-def validate_prefix_content_types(bucket, prefix):
-    """Validate every object under an S3 prefix against the file blocklists
+    return s3_object_exists(s3, bucket, key, version_id)
 
-    Args:
-        bucket: S3 bucket name
-        prefix: S3 key prefix covering the objects to validate
-
-    Returns:
-        True when every object under the prefix is allowed, False when any object
-        carries an unallowed extension or content type
-
-    Raises:
-        The underlying botocore error when a HeadObject fails, so a failed check
-        is never read as a pass
-    """
-    objects = list_all_objects(bucket, prefix, client=s3)
-    if not objects:
-        return True
-
-    def _check_one(key):
-        head = s3.head_object(Bucket=bucket, Key=key)
-        return validateUnallowedFileExtensionAndContentType(key, head.get('ContentType', ''))
-
-    # One HeadObject per object, fanned out over a bounded worker pool: an asset
-    # prefix holds thousands of objects and serial round trips exceed the API
-    # Gateway integration timeout. The first disallowed object fails the whole
-    # prefix and the remaining queued checks are cancelled.
-    max_workers = min(MAX_PARALLEL_S3_WORKERS, len(objects))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(_check_one, obj['Key']) for obj in objects]
-        try:
-            for future in as_completed(futures):
-                if not future.result():
-                    return False
-        finally:
-            for future in futures:
-                future.cancel()
-    return True
-
-def normalize_s3_path(base_path, relative_path):
-    """
-    Normalize S3 path to ensure there's only a single slash between components.
-    
-    Args:
-        base_path: The base path (prefix)
-        relative_path: The relative path to append
-        
-    Returns:
-        Normalized path with a single slash between components
-    """
-    # Remove trailing slashes from base_path
-    base_path = base_path.rstrip('/')
-    # Remove leading slashes from relative_path
-    relative_path = relative_path.lstrip('/')
-    # Join with a single slash
-    return f"{base_path}/{relative_path}"
 
 #######################
 # Core Download Logic
 #######################
 
-def get_distributable_asset_context(databaseId, assetId):
-    """Get the asset's bucket and base key, verifying the asset is downloadable"""
-    asset = get_asset_details(databaseId, assetId)
-    if not asset:
-        raise VAMSGeneralErrorResponse("Asset not found in database")
+def get_distributable_asset_context(databaseId, assetId, quarantine_checked_per_key=False):
+    """Get the asset's bucket and base key, verifying the asset is downloadable.
 
-    # Check if asset is distributable
-    if not asset.get('isDistributable', False):
-        raise VAMSGeneralErrorResponse("Asset not distributable")
-
-    # Get asset location
-    asset_location = asset.get('assetLocation')
-    if not asset_location:
-        raise VAMSGeneralErrorResponse("Asset location not found")
-
-    # Get bucket details from bucketId
-    bucketDetails = get_default_bucket_details(asset.get('bucketId'))
-    return bucketDetails['bucketName'], asset_location.get('Key')
+    The compliance quarantine block runs in the shared checks, after the distributable check and
+    before the location is read (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The
+    caller has already passed authorization, so a denied caller never reaches this read.
+    `quarantine_checked_per_key` leaves the block to `resolve_and_sign_file_key`, which applies it
+    to the one resolved key (a single-file download, whose key may be a preview companion); every
+    other caller is guarded here for the whole asset."""
+    return _get_distributable_asset_context(
+        databaseId, assetId,
+        get_asset=get_asset_details,
+        get_bucket_details=get_default_bucket_details,
+        check_quarantine=None if quarantine_checked_per_key else check_quarantine_block,
+    )
 
 def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key, raw_key,
-                              version_id=None, asset_version_id=None, asset_version_alias=None):
+                              version_id=None, asset_version_id=None, asset_version_alias=None,
+                              check_quarantine_for_key=False):
     """Resolve one file key against the asset and generate its presigned URL
+
+    The eligibility checks (key containment and length, asset-version pin,
+    existence, delete marker, blocklist) run in common.downloadEligibility with
+    this module's clients and helpers; signing stays here. With
+    `check_quarantine_for_key` (a single-file download) the quarantine block runs
+    there on the resolved key, before any S3 call: a preview companion at its
+    current version is served for a quarantined asset (#1495), any other key, or
+    any version pin, is refused.
 
     Returns:
         (downloadUrl, versionId) tuple
@@ -310,81 +187,24 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
         VAMSGeneralErrorResponse for per-file failures (missing, archived, disallowed
         type, key outside the asset's own prefix, resolved key over the S3 key limit)
     """
-    # The asset's own prefix, always slash-terminated. A bucket-root key is only
-    # inside this asset when it sits under '<base>/', so the base 'assets/pfx'
-    # does not cover the sibling prefix 'assets/pfxOTHER/secret.txt'.
-    asset_base_prefix = asset_base_key.rstrip('/')
-    asset_prefix = asset_base_prefix + '/'
+    def check_key_quarantine(final_key, version_pinned):
+        check_quarantine_block(databaseId, assetId, object_key=None if version_pinned else final_key)
 
-    # Determine final S3 key
-    if raw_key:
-        # Check if the key already starts with the asset base key to avoid duplication
-        if raw_key == asset_base_key or raw_key.startswith(asset_prefix):
-            # Key is the asset's own base key or already includes the base path, use it as-is
-            final_key = raw_key
-        elif not raw_key.startswith('/') and raw_key.startswith(asset_base_prefix):
-            # Bucket-root key that shares the base key's characters without sitting
-            # under the asset prefix - a different asset's or database's object.
-            # Asset-relative keys carry a leading '/' and are never in this shape.
-            raise VAMSGeneralErrorResponse("Requested file is not part of this asset")
-        else:
-            # Key is relative, combine with base path
-            final_key = normalize_s3_path(asset_base_key, raw_key)
-    else:
-        # If no key provided, use base key directly
-        final_key = asset_base_key
-
-    # The request model bounded the asset-relative key; the resolved key carries the
-    # asset prefix as well and is what S3 measures. Refuse it here so an over-long
-    # key never reaches head_object or the presigner. Raised through the same
-    # per-file channel as the other refusals, so a bulk request skips just this key.
-    if exceeds_s3_object_key_limit(final_key):
-        raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
-
-    # Resolve version ID first -- an asset-version pin (whole-set) resolves the
-    # per-file S3 version from the snapshot; otherwise version_id is either the
-    # per-file version passed in or None (latest).
-    if asset_version_alias or asset_version_id:
-        # Compute relative key by stripping asset_base_key from final_key
-        # This matches how fileKey is stored in version records (relative to asset prefix)
-        relative_file_key = final_key
-        if relative_file_key.startswith(asset_prefix):
-            relative_file_key = relative_file_key[len(asset_prefix):]
-        relative_file_key = relative_file_key.lstrip('/')
-
-        if asset_version_alias:
-            resolved_asset_version_id = resolve_asset_version_id_from_alias(databaseId, assetId, asset_version_alias)
-            version_id = resolve_file_version_from_asset_version(databaseId, assetId, resolved_asset_version_id, relative_file_key)
-        else:
-            version_id = resolve_file_version_from_asset_version(databaseId, assetId, asset_version_id, relative_file_key)
-
-    if final_key.endswith('/'):
-        # Prefix download (asset base location): validate every object under it
-        if not validate_prefix_content_types(asset_bucket, final_key):
-            raise VAMSGeneralErrorResponse("Unallowed file extension or content type in asset file")
-        if not check_s3_object_exists(asset_bucket, final_key):
-            raise VAMSGeneralErrorResponse("File not found in S3")
-    else:
-        # Single file: one HeadObject covers both the existence check and the
-        # extension/content-type validation - critical for bulk requests where
-        # per-key S3 round trips bound the whole request's latency. When a
-        # specific version is requested, head THAT version so an older version
-        # is still downloadable even if the latest version is a delete marker.
-        head_params = {'Bucket': asset_bucket, 'Key': final_key}
-        if version_id:
-            head_params['VersionId'] = version_id
-        try:
-            head = s3.head_object(**head_params)
-        except ClientError as e:
-            if e.response['Error']['Code'] in ('404', 'NoSuchKey'):
-                raise VAMSGeneralErrorResponse("File not found in S3")
-            if e.response['Error']['Code'] in ('405', 'MethodNotAllowed'):
-                # This version is a delete marker
-                raise VAMSGeneralErrorResponse("File version has been archived and cannot be downloaded", status_code=410)
-            logger.exception(f"Error checking file: {e}")
-            raise VAMSGeneralErrorResponse("Error checking file in S3")
-        if not validateUnallowedFileExtensionAndContentType(final_key, head.get('ContentType', '')):
-            raise VAMSGeneralErrorResponse("Unallowed file extension or content type in asset file")
+    final_key, version_id = check_file_eligibility(
+        databaseId, assetId, s3, asset_bucket, asset_base_key, raw_key,
+        version_id=version_id,
+        asset_version_id=asset_version_id,
+        asset_version_alias=asset_version_alias,
+        resolve_file_version=resolve_file_version_from_asset_version,
+        resolve_alias=resolve_asset_version_id_from_alias,
+        max_workers=MAX_PARALLEL_S3_WORKERS,
+        list_objects=list_all_objects,
+        is_allowed=validateUnallowedFileExtensionAndContentType,
+        object_exists=check_s3_object_exists,
+        check_key_quarantine=check_key_quarantine if check_quarantine_for_key else None,
+        nested=nested_locations_of_asset(asset_table, buckets_table, None, asset_bucket, asset_base_key,
+                                         asset_table_name=asset_storage_table_name),
+    )
 
     # Generate presigned URL
     try:
@@ -396,10 +216,11 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
         if version_id:
             params['VersionId'] = version_id
 
-        # SVG keys get the image/svg+xml type and an attachment disposition (common.s3)
+        # A download URL saves the file under its own name (an attachment disposition); SVG keys
+        # also get the image/svg+xml type (common.s3)
         url = s3.generate_presigned_url(
             'get_object',
-            Params=presigned_get_object_params(params),
+            Params=presigned_get_object_params(params, attachment=True),
             ExpiresIn=int(token_timeout)
         )
         return url, version_id
@@ -418,13 +239,15 @@ def download_asset_file(databaseId, assetId, request_model):
     Returns:
         DownloadAssetResponseModel instance
     """
-    asset_bucket, asset_base_key = get_distributable_asset_context(databaseId, assetId)
+    asset_bucket, asset_base_key = get_distributable_asset_context(
+        databaseId, assetId, quarantine_checked_per_key=True)
 
     url, version_id = resolve_and_sign_file_key(
         databaseId, assetId, asset_bucket, asset_base_key, request_model.key,
         version_id=request_model.versionId,
         asset_version_id=request_model.assetVersionId,
-        asset_version_alias=request_model.assetVersionIdAlias
+        asset_version_alias=request_model.assetVersionIdAlias,
+        check_quarantine_for_key=True
     )
 
     # Return response model
@@ -520,9 +343,18 @@ def download_asset_preview(databaseId, assetId, request_model):
     # Check if asset is distributable
     if not asset.get('isDistributable', False):
         raise VAMSGeneralErrorResponse("Asset not distributable")
-        
+
     # Get preview location
     preview_location = asset.get('previewLocation')
+
+    # Quarantine block (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The caller has
+    # already passed authorization, so a denied caller never reaches this read. The asset's preview
+    # image is still served for a quarantined asset (#1495); a preview location without an allowed
+    # preview image extension is guarded like a file.
+    check_quarantine_block(databaseId, assetId,
+                           object_key=(preview_location or {}).get('Key') or None,
+                           asset_preview=True)
+
     if not preview_location:
         raise VAMSGeneralErrorResponse("Asset preview location not found")
         
@@ -565,6 +397,8 @@ def download_asset_preview(databaseId, assetId, request_model):
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset download API"""
     claims_and_roles = request_to_claims(event)
@@ -619,21 +453,23 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             logger.error(f"Validation error: {v}")
             return validation_error(body={'message': validation_error_message(v)}, event=event)
         
-        # Check authorization
         asset = get_asset_details(database_id, asset_id)
-        if not asset:
-            return validation_error(body={'message': "Asset not found"}, event=event)
-        
-        asset["object__type"] = "asset"
 
         # Fail closed: with no authenticated identity no authorization can be
         # evaluated, so deny rather than fall through to presigned-URL generation.
         if len(claims_and_roles["tokens"]) == 0:
             return authorization_error()
 
+        # Authorize before existence and the distributable check, so a refused caller gets the
+        # same 403 for a missing asset as for an existing one (the request's ids stand in for a
+        # missing record).
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not (casbin_enforcer.enforce(asset, "GET") and casbin_enforcer.enforceAPI(event)):
+        if not (casbin_enforcer.enforceAPI(event)
+                and casbin_enforcer.enforce(asset_authorization_object(asset, database_id, asset_id), "GET")):
             return authorization_error()
+
+        if not asset:
+            return general_error(status_code=404, body={'message': "Asset not found"}, event=event)
 
         # Process download request based on type
         try:
@@ -670,6 +506,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 )
 
             return success(body=response.dict())
+        except QuarantineBlockedResponse as refusal:
+            # An expected refusal: one INFO line, no traceback (D174).
+            return quarantine_refusal(refusal, event)
         except VAMSGeneralErrorResponse as e:
             # Extract status code if provided
             status_code = getattr(e, 'status_code', 400)
@@ -681,6 +520,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except ValueError as v:
         logger.exception(f"Value error: {v}")
         return validation_error(body={'message': str(v)}, event=event)
+    except QuarantineBlockedResponse as refusal:
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         # Extract status code if provided

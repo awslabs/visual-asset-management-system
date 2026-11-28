@@ -28,6 +28,7 @@ import {
 } from "../../../../../helper/security";
 import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
+import { pipelineJobLabels, VAMS_PIPELINE_TAG_VALUES } from "../../../constructs/pipelineJobTags";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 
@@ -297,9 +298,21 @@ export function buildConsolidatedHandlerFunction(
             EKS_JOB_TTL_SECONDS_AFTER_FINISHED: String(
                 config.app.pipelines.useRapidPipeline.useEks.jobTTLSecondsAfterFinished
             ),
+            // Labels for the Job and its pods, naming the pipeline (vams/pipeline), as the other
+            // pipelines tag their AWS Batch jobs and ECS tasks.
+            PIPELINE_JOB_LABELS: JSON.stringify(
+                pipelineJobLabels(VAMS_PIPELINE_TAG_VALUES.rapidPipelineEks)
+            ),
 
             // Allowed file extensions
             ALLOWED_INPUT_FILEEXTENSIONS: ".glb,.gltf,.fbx,.obj,.stl,.ply,.usd,.usdz,.dae,.abc",
+
+            // The bucket of the run-ended markers, which PIPELINE_END writes before it deletes the job
+            // and RUN_JOB checks after it creates one, and of the run-jobs records, which
+            // CONSTRUCT_PIPELINE writes and EXECUTION_END_CLEANUP reads. The handler fixes both key
+            // prefixes, which the auxiliary bucket's lifecycle rules for this pipeline expire; the
+            // grant below covers them.
+            RUN_ENDED_MARKER_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
 
             // Test mode
             TEST_MODE: "false",

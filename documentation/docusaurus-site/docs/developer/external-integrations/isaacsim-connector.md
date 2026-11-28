@@ -10,16 +10,18 @@ This integration is in **experimental** status and may still have issues. Verify
 
 -   **Database and Asset Browsing** -- Navigate VAMS databases, assets, and files in a dockable UI panel
 -   **Asset Download and Import** -- Download individual files or full assets; USD, URDF, and MJCF files can be imported directly into the Isaac Sim stage from the file list UI. USD files can be opened as new stages or added as prim references. URDF and MJCF files are converted to USD on import using Isaac Sim's built-in asset importers.
--   **General File Download** -- Other files can be downloaded to a local temporary directory
+-   **Content Window Connection** (Isaac Sim 6.1+, opt-in) -- Browse VAMS databases, assets and files in the Isaac Sim **Content** window, as a Nucleus server, and open USD files in place so their relative references resolve without a local copy
+-   **General File Download** -- Other files can be downloaded to `~/vams_downloads`, keeping their path within the asset
 -   **Scene Export and Upload** -- Export the current Isaac Sim USD stage and upload it to VAMS as a new or existing asset
--   **Workflow Execution** -- List available processing workflows, view execution history, and trigger new workflow runs on assets
+-   **Workflow Execution** -- List available processing workflows, view execution history, and trigger new workflow runs on assets; **Run** is offered only for files the workflow and its first pipeline accept, with a template choice for a pipeline that requires one
 -   **Dual Authentication** -- Cognito username/password login and token override authentication (IDP JWT tokens and VAMS API keys)
 
 ## Prerequisites
 
--   **NVIDIA Isaac Sim 5.1+**
--   **Python 3.10+** (included with Isaac Sim)
+-   **NVIDIA Isaac Sim 5.1 or 6.2** (other Isaac Sim 6.x releases are untested); the Content window connection needs Isaac Sim 6.1 or later
+-   **Python 3.10+** for the extension (included with Isaac Sim), and **Python 3.12+** for the VAMS CLI's own environment
 -   **VAMS CLI** installed and configured
+-   For the optional Content window connection: **VAMS CLI 2.7.0 or later** (from the same VAMS release as the connector), and `grpcio` and `protobuf` in the VAMS CLI's environment (see [Content window connection (optional, Isaac Sim 6.1+)](#content-window-connection-optional-isaac-sim-61))
 
 ### VAMS CLI setup
 
@@ -44,12 +46,22 @@ vamscli database list --json-output
 
 ## Installation
 
+Kit treats each child of an extension folder as an extension named after that child, so the connector directory goes into a folder of its own under the extension's name, `vams.connector.isaacsim`. Copy it there, and run the same commands again after updating the connector; they remove the earlier copy first, since `cp -r` would otherwise place the new one inside it:
+
+```bash
+mkdir -p /path/to/kit-exts
+rm -rf /path/to/kit-exts/vams.connector.isaacsim
+cp -r /path/to/tools/ExternalIntegrations/isaacsim_vams_integration /path/to/kit-exts/vams.connector.isaacsim
+```
+
+Kit loads the copy, so the `extension.toml` settings and the certificate bundle described below go into `/path/to/kit-exts/vams.connector.isaacsim`, and are made again after each update.
+
 ### Option A: Extension search path (recommended)
 
-In Isaac Sim, go to **Window > Extensions**, click the gear icon, and add the path to the extension directory as a search path:
+In Isaac Sim, go to **Window > Extensions**, click the gear icon, and add the folder that contains `vams.connector.isaacsim` as a search path:
 
 ```
-/path/to/tools/ExternalIntegrations/isaacsim_vams_integration
+/path/to/kit-exts
 ```
 
 Then search for "VAMS" and enable `vams.connector.isaacsim`.
@@ -57,7 +69,7 @@ Then search for "VAMS" and enable `vams.connector.isaacsim`.
 ### Option B: Command line
 
 ```bash
-isaac-sim --ext-folder /path/to/tools/ExternalIntegrations/isaacsim_vams_integration --enable vams.connector.isaacsim
+isaac-sim --ext-folder /path/to/kit-exts --enable vams.connector.isaacsim
 ```
 
 ### Option C: App .kit file
@@ -67,8 +79,34 @@ isaac-sim --ext-folder /path/to/tools/ExternalIntegrations/isaacsim_vams_integra
 "vams.connector.isaacsim" = {}
 
 [settings.app.exts]
-folders = ["/path/to/tools/ExternalIntegrations/isaacsim_vams_integration"]
+folders = ["/path/to/kit-exts"]
 ```
+
+### Content window connection (optional, Isaac Sim 6.1+)
+
+To browse VAMS in the Isaac Sim **Content** window as well (see [Content window connection](#content-window-connection-isaac-sim-61)), after installing the extension:
+
+1.  Check that the VAMS CLI is 2.7.0 or later, then install `grpcio` and `protobuf` into the **VAMS CLI's** environment (not Isaac Sim's bundled Python) from the connector's hashed lock, with that environment's `pip`. The environment needs Python 3.12 or later, as the VAMS CLI does. The storage adapter sends each request with the signed-in user's own token through the VAMS CLI's API client, which an earlier VAMS CLI cannot do: with one, VAMS appears in the Content window with nothing under it, and no log names the cause. Install the VAMS CLI from the same VAMS release as the connector:
+
+    ```bash
+    # Linux and macOS
+    ~/vamscli-venv/bin/vamscli --version    # VamsCLI version 2.7.0 or later
+    ~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
+    # Windows
+    %USERPROFILE%\vamscli-venv\Scripts\vamscli --version
+    %USERPROFILE%\vamscli-venv\Scripts\pip install --require-hashes --only-binary :all: -r C:\path\to\kit-exts\vams.connector.isaacsim\locks\storage\requirements.lock
+    ```
+
+2.  Turn the connection on in `/path/to/kit-exts/vams.connector.isaacsim/config/extension.toml`:
+
+    ```toml
+    [settings]
+    exts."vams.connector.isaacsim".content_window = true
+    ```
+
+3.  Start Isaac Sim and sign in (or start it with a CLI profile that is already signed in). VAMS appears under **Omniverse Storage** > **VAMS**.
+
+The setting lives in the copy Kit loads, so set it again after each update of the connector, and run step 1 again when an update changes `locks/storage/requirements.lock`. Without the packages, or on Isaac Sim 5.1, the extension leaves the Content window alone and logs why. The EDH Workstations `isaacsim` desktop image does all three steps. The connection has been tested on Linux only.
 
 ## Ubuntu / EC2 Setup
 
@@ -78,26 +116,32 @@ When running Isaac Sim on Ubuntu (e.g., on an Amazon EC2 instance), the VAMS CLI
 
 ```bash
 python3 -m venv ~/vamscli-venv
-~/vamscli-venv/bin/pip install vamscli
+~/vamscli-venv/bin/pip install -e /path/to/vams/tools/VamsCLI
 ~/vamscli-venv/bin/vamscli setup https://your-api-gateway-url.amazonaws.com
 ```
 
-Then set the explicit CLI path in `config/extension.toml`:
+Then set the explicit CLI path in `/path/to/kit-exts/vams.connector.isaacsim/config/extension.toml`:
 
 ```toml
 [settings]
 exts."vams.connector.isaacsim".vamscli_path = "/home/ubuntu/vamscli-venv/bin/vamscli"
 ```
 
+Optionally, for the Content window connection (Isaac Sim 6.1+), install its packages into the same environment and set `content_window = true` in the same file (see [Content window connection (optional, Isaac Sim 6.1+)](#content-window-connection-optional-isaac-sim-61)):
+
+```bash
+~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
+```
+
 ### SSL certificate bundle
 
-Isaac Sim may override the `SSL_CERT_FILE` environment variable with its own certificate bundle that does not include Amazon's CA certificates, causing S3 download failures. The extension handles this automatically if an Amazon CA certificate bundle is placed in the `certs/` directory.
+Isaac Sim may override the `SSL_CERT_FILE` environment variable with its own certificate bundle that does not include Amazon's CA certificates, causing S3 download failures. The extension never passes that value to the CLI subprocess. It names the operating system's CA bundle instead, merged with an Amazon CA certificate bundle placed in the `certs/` directory when one is present. With neither, the CLI uses its own default trust store.
 
 To set up the certificate bundle:
 
 1.  Download the Amazon root CA certificates from [https://www.amazontrust.com/repository/](https://www.amazontrust.com/repository/)
 2.  Concatenate the PEM files into a single file named `amazon-ca-bundle.pem`
-3.  Place it at `isaacsim_vams_integration/certs/amazon-ca-bundle.pem`
+3.  Place it at `/path/to/kit-exts/vams.connector.isaacsim/certs/amazon-ca-bundle.pem`, in the copy Kit loads
 
 If the certificate bundle is present, the extension merges it with the system CA bundle (at `/etc/ssl/certs/ca-certificates.crt` on Ubuntu) and configures the CLI subprocess accordingly. If the file is absent, the extension uses the system's default SSL configuration.
 
@@ -116,7 +160,8 @@ connector.login("user@example.com", "password")
 CLI equivalent:
 
 ```bash
-vamscli auth login -u user@example.com -p yourpassword
+vamscli auth login -u user@example.com            # prompts for the password
+printf '%s\n' "$VAMS_PASSWORD" | vamscli auth login -u user@example.com --password-stdin   # in a script
 ```
 
 ### Token override authentication
@@ -131,7 +176,9 @@ connector.login_with_token("user@example.com", "eyJhbGciOiJSUzI1NiIs...")
 CLI equivalent:
 
 ```bash
-vamscli auth login --user-id user@example.com --token-override "vams_your-api-key"
+# The key or token is read from stdin, so it never appears in the process's arguments
+echo "$VAMS_API_KEY" | vamscli auth login --user-id user@example.com --token-override-stdin
+echo "$IDP_JWT" | vamscli auth login --user-id user@example.com --token-override-stdin
 ```
 
 ## Usage
@@ -143,16 +190,64 @@ Once enabled, the extension opens a **VAMS Connector** window with:
 1.  **Authentication** -- Enter credentials and click the appropriate login button
 2.  **Databases** -- List and select databases
 3.  **Assets** -- List assets in the selected database
-4.  **Files** -- List files in the selected asset with context-aware actions:
-    -   **USD files** (`.usd`, `.usda`, `.usdc`, `.usdz`): Click the play button to download and open as a new stage, or click **Add Ref** to add as a reference under `/World/<filename>`
-    -   **URDF files** (`.urdf`): Click the play button to download and import the robot description into the current stage
-    -   **MJCF files** (`.mjcf`, `.xml`): Click the play button to download and import the MuJoCo model into the current stage
-    -   **Other files**: Click the download button to save to a local temporary directory
-5.  **Workflows** -- List and execute available workflows
+4.  **Files** -- List files in the selected asset; select a file to show the actions for its type:
+    -   **USD files** (`.usd`, `.usda`, `.usdc`, `.usdz`): **Open Stage (replace entire scene)** downloads the file and opens it as a new stage. **Add USD Reference (add to current scene)** adds it as a reference under `/World/<name>`, the file name without its extension and with each character other than a letter, digit or underscore replaced by `_`, or under `<name>_1`, `<name>_2`, ... when that prim exists, so each add gets a prim of its own; the status line names the prim used. The reference brings in the file's default prim, or its one root prim when it has none, counting the root prims of the layers it sublayers; a file with neither is refused, the stage is left as it was, and the status line gives the reason (`Reference error: <file> has no default prim (<n> root prims), so a reference would bring in nothing. Open it with Open Stage, or set a default prim on the file.`)
+    -   **URDF files** (`.urdf`): **Import URDF (add to current scene)** downloads the robot description and imports it into the current stage, under the prim the stage's default prim names, or at the stage root when it names none, and under `<name>_0` when `<name>` is taken there (on Isaac Sim 6.x `<name>` is made from the file name as for a USD reference, followed by `<name>_1`, `<name>_2`, ...); the stage's default prim is left as it was, and the status line names the prim used (`Imported URDF as <prim>`) or reads `URDF import failed`
+    -   **MJCF files** (`.mjcf`, `.xml`): **Import MJCF (add to current scene)** downloads the MuJoCo model and imports it into the current stage under `/World/<name>`, with `<name>` made from the file name as for a USD reference, or under `<name>_1`, `<name>_2`, ... when that prim exists; the stage's default prim is left as it was, and the status line names the prim used (`Imported MJCF <file> as <prim>`). A file that is not well-formed XML is refused before the importer runs (`MJCF error: <file> is not well-formed XML: <parser message>`), as is a file that declares a document type, which MJCF does not use (`MJCF error: <file> is refused: it declares a document type at line <n>, ...`), and an import that brings in nothing from the file is removed again, together with a `/World` it created, and the status line reads `MJCF import failed: <file>`
+    -   **Any file**: **Download Only (save to disk)** saves it to `~/vams_downloads`, under its path within the asset
+5.  **Workflows** -- Lists the enabled workflows of `GLOBAL` and the selected database, and the asset's execution history, where each execution's input file is shown by its path within the asset and a value too long for its column is shortened, with the workflow ID and the file's full key in tooltips. Choosing a workflow opens its Execute view: **Run on Entire Asset** where the workflow takes a whole asset, **Run** for each file the workflow and its first pipeline accept, and a template choice for a pipeline that requires one
+
+When the extension's CLI profile is already signed in, as on a desktop whose session sign-in signed it in, the window takes that session over at startup, and **Refresh Databases** takes over a sign-in that completes after Isaac Sim started. Closing Isaac Sim leaves a session taken over this way signed in, and signs out one entered under **Authentication**. A request on a session taken over this way whose key VAMS does not accept (HTTP 401) shows the CLI's error on the status line, followed by how to recover; a request VAMS denies for a role, an entity or the network path (HTTP 403) shows the CLI's error alone, because signing in again does not change it. How to recover: on an EDH Workstations desktop whose sign-in ran (the desktop's own profile `edh-<instance-id>`, with the sign-in's log under `~/.vams/hosts/<instance-id>/`), `if this desktop was just started, its VAMS sign-in may not have completed; …`, which also names renewing the workstation's lease; anywhere else, `the session this extension took over was refused; sign in under Authentication`.
+
+A `.usd`, `.usda` or `.usdc` layer, a URDF file and a MJCF file name other files of the asset by relative path (sublayers, references, textures, meshes). Opening or importing one downloads the whole asset, laid out as it is in VAMS, into a new private temporary directory so those paths resolve; the status line reports how many of the asset's other files did not download, and a requested file that did not download with the reason the download gave, for example `Reference error: /robot.usd did not download: <error>`. A `.usdz` package carries its dependencies and is downloaded alone.
+
+**Export & Upload** writes the current stage, flattened into a single layer, to the root of the selected asset. A texture, reference or sublayer path to a file downloaded with that same asset is rewritten relative to the asset root, so the export resolves in VAMS and in a whole-asset download. A path to any other local file, including a file of another asset or one written into a download directory afterwards (such as importer output), is left as it is and resolves only on the machine that exported the stage; the status line reports how many such paths the export contains, and `export_and_upload_scene` returns the count as `unportablePaths`.
+
+The Execute view offers **Run** only for the files that pass the input-file filters of the workflow and of its first pipeline, as the template in use sets them, and **Run on Entire Asset** reports that no file passes, instead of running, when none of the asset's files does. A later pipeline's filters do not limit **Run**: that pipeline also receives the files the earlier pipelines write and VAMS checks it when the run reaches it, so a workflow whose second pipeline reads only the GLB its first pipeline converts an OBJ to offers **Run** for the OBJ. A pipeline that requires a template and names no default (no `defaultTemplateId` on the workflow's reference to it and no default template) gets a template choice; **Run** is refused until one is chosen, and the run passes it as that pipeline's `templateId`. Choosing one replaces the status line's `Choose a template for <pipeline> before running`, or an earlier choice's status, with `Template for <pipeline>: <template>`. Template tags are not collected: a run the service refuses for a required tag shows the refusal with a hint to run the workflow from the VAMS web UI. The view reads each pipeline once when it opens; a pipeline that cannot be read does not gate **Run**, and the status line says so.
 
 :::tip
 After loading a USD asset, if the viewport appears empty, add a light (**Create > Light > Dome Light**) and press **F** to frame the camera on the root prim.
 :::
+
+### Content window connection (Isaac Sim 6.1+)
+
+With the `content_window` setting on, VAMS appears in the Isaac Sim **Content** window once you are signed in, under **Omniverse Storage** > **VAMS**, as a Nucleus server does. Its tree is:
+
+```
+VAMS
+  <database>                      one folder per database you can see
+    <asset name> (<asset id>)     one folder per asset
+      <files and folders>         the asset's own tree, from its file paths
+```
+
+The **VAMS Connector** window stays for sign-in, workflows, export and upload. The connection is read-only.
+
+-   **Paths**: files have `vams://vams/<database>/<asset name> (<asset id>)/<path>` URLs, which USD layers, references and textures can name directly, including by relative path between assets (for example `@../robot (<asset id>)/robot.usda@`). Nothing is copied to a local folder first.
+-   **Folder names**: an asset folder is named `<asset name> (<asset id>)` and is at most 255 bytes of UTF-8, the folder-name limit of Linux, Windows and macOS file systems. The full asset id is always kept; a name too long to fit is cut and ends in `...`. Only the id resolves the folder, so a path written before an asset was renamed still opens it.
+-   **Access**: everything listed and read goes through the VAMS API as you, so you see what your VAMS role allows; a denied item and a missing one both answer "not found". Files download straight from their presigned VAMS URLs.
+-   **When it connects**: as soon as the extension has a sign-in, on an EDH Workstations desktop or anywhere else. A sign-in the VAMS CLI profile already holds when Isaac Sim starts (the desktop's session sign-in, or an earlier `vamscli auth login`) is taken over at startup. Without one, sign in under **Authentication** in the **VAMS Connector** window; a sign-in made outside Isaac Sim after it started (a desktop sign-in that finishes late, or `vamscli auth login` in a terminal) is found within 30 seconds, or at once with **Refresh Databases**.
+-   **How it runs**: the extension starts a storage adapter (`vams/connector/isaacsim/storage_adapter/`) with the VAMS CLI's Python, as its own process listening on `127.0.0.1` only, and registers it with the Content window. The adapter serves the Omniverse Storage API over gRPC and holds no credential: each request carries your own VAMS CLI sign-in, which the extension hands to Isaac Sim for the adapter's exact address only. The adapter exits when Isaac Sim's process ends, however it ends.
+-   **Sign-in expiry**: a Cognito sign-in whose token has expired, or expires within five minutes, is renewed with the CLI profile's refresh token when Isaac Sim asks for a sign-in, as `vamscli auth refresh` does, and the renewed tokens are saved to the profile; API keys and other override tokens are used as they are. When VAMS refuses the sign-in, Content window requests fail at once instead of waiting, and the connection reconnects by itself once the CLI profile holds a usable sign-in again, for example after signing in in the **VAMS Connector** window.
+-   **Requirements**: VAMS CLI 2.7.0 or later (`vamscli --version`), and `grpcio` and `protobuf` in the VAMS CLI's environment, installed from the connector's hashed lock `locks/storage/requirements.lock` (exported from `locks/storage/uv.lock`, which the CI dependency audit checks) with that environment's `pip`:
+
+    ```bash
+    ~/vamscli-venv/bin/pip install --require-hashes --only-binary :all: -r /path/to/kit-exts/vams.connector.isaacsim/locks/storage/requirements.lock
+    ```
+
+    Without them, or on Isaac Sim 5.1, the **VAMS Connector** window works as before and the Isaac Sim log says why the Content window entry was not added. The install steps are under [Content window connection (optional, Isaac Sim 6.1+)](#content-window-connection-optional-isaac-sim-61).
+
+-   **Turning it on**: the connection is off unless `content_window` is `true`, because the Content window keeps its connections in your `omniverse.toml` and the VAMS entry is written there while the connection is on. The entry is removed when you sign out or close Isaac Sim, and an entry left by a session that did not close cleanly is removed at the next sign-in. The EDH Workstations `isaacsim` desktop image installs the dependencies and turns it on.
+-   **Limits**: the database list is read when the connection is made, so a database created later appears after the next sign-in. A folder shows changes made elsewhere when it is opened again, not live. Folders show no modification date (the Omniverse Storage API carries no date for folders; the Content window shows 1970-01-01).
+
+### URDF and MJCF import on Isaac Sim 6.x
+
+URDF and MJCF import work on Isaac Sim 5.1 and on Isaac Sim 6.2. The connector uses whichever importer API the running Isaac Sim provides; its 6.x import follows the Isaac Sim 6.2 importer API, and Isaac Sim 6.0 and 6.1 are untested. On 6.x the importers convert a file into a USD file of their own instead of writing into the open stage: the connector has them write it to a new private temporary directory (`vams_urdf_usd_*` or `vams_mjcf_usd_*`), never next to the downloaded file, and adds that file to the current stage as a reference, under the same parent prim as on 5.1. The prims under it follow the 6.x importers' own layout. The directory is kept, since the stage refers to it, so a stage saved with the robot resolves only while it is there; **Export & Upload** flattens the robot into the export, and counts a file path the robot names in that directory among the paths that resolve only on this machine. On 6.x:
+
+-   `fix_base` is passed as fixed or mobile, never left to the file, and `fix_base=False` also removes a fixed joint to the world that the file itself declares
+-   The importers have no `import_inertia_tensor` option, and the MJCF importer has no `merge_fixed_joints`; a call that sets one to other than its default imports without it and logs a warning
+-   The MJCF importer reads only `.xml` files, so a `.mjcf` file is imported from a temporary `.xml` copy beside it, removed again afterwards
+-   A URDF file that is not well-formed XML, or that declares a document type, is refused before the importer runs, as an MJCF file is (`URDF error: <file> is refused: it declares a document type at line <n>, ...`)
+-   An import that fails leaves the stage as it was, and Isaac Sim's log carries the importer's reason (`URDF import of <file> failed: <reason>`, and likewise for MJCF); the status line reads `URDF import failed` or `MJCF import failed: <file>`
 
 ### Scripting API
 
@@ -169,7 +264,8 @@ databases = connector.list_databases()
 assets = connector.list_assets(databases[0].database_id)
 files = connector.list_files(databases[0].database_id, assets[0].asset_id)
 
-# Download
+# Download (a file that does not download raises VamsCliError naming the download's error;
+# a credential VAMS refuses raises VamsAccessDeniedError, a VamsCliError)
 connector.download_file("my-db", "my-asset", "/model.usd", "/tmp/downloads")
 result = connector.download_asset("my-db", "my-asset", "/tmp/full_asset")
 
@@ -180,31 +276,44 @@ connector.create_and_upload("my-db", "new-asset", "/local/model.usd")
 # Workflows
 workflows = connector.list_workflows()
 connector.execute_workflow("my-db", "my-asset", "wf-id", "wf-db-id")
+pipeline = connector.get_pipeline("GLOBAL", "my-pipeline")
+templates = connector.list_pipeline_templates("GLOBAL", "my-pipeline")
+connector.execute_workflow("my-db", "my-asset", "wf-id", "wf-db-id", file_key="/model.stl",
+                           pipeline_parameters={"my-pipeline": {"templateId": "my-template"}})
 
 # Isaac Sim stage operations
 connector.export_and_upload_scene("my-db", "scene_v1")
 connector.download_and_import_asset("my-db", "my-asset", "/scene.usd")
 connector.download_and_add_reference("my-db", "my-asset", "/robot.usd", "/World/Robot")
 
+# Reference a USD file already on disk
+import omni.usd
+connector.add_reference_to_stage(omni.usd.get_context().get_stage(), "/World/Robot", "/tmp/robot.usd")
+
 # URDF import (requires isaacsim.asset.importer.urdf extension)
 prim_path = connector.download_and_import_urdf("my-db", "my-asset", "/robot.urdf")
 
 # MJCF import (requires isaacsim.asset.importer.mjcf extension)
-connector.download_and_import_mjcf("my-db", "my-asset", "/ant.xml")
+prim_path = connector.download_and_import_mjcf("my-db", "my-asset", "/ant.xml")
+
+# URDF or MJCF import of a file already on disk
+prim_path = connector.import_urdf_file("/tmp/robot/robot.urdf")
+prim_path = connector.import_mjcf_file("/tmp/ant/ant.xml")
 ```
 
 :::note
-The `download_and_import_asset` and `download_and_add_reference` methods validate that the file has a USD extension (`.usd`, `.usda`, `.usdc`, `.usdz`) before attempting to open or reference it. The URDF and MJCF import methods similarly validate their expected file extensions (`.urdf` for URDF; `.mjcf` or `.xml` for MJCF). The URDF and MJCF importers are optional -- if the corresponding Isaac Sim importer extension is not enabled, the import will fail with an import error.
+The `download_and_import_asset` and `download_and_add_reference` methods validate that the file has a USD extension (`.usd`, `.usda`, `.usdc`, `.usdz`) before attempting to open or reference it. `download_and_add_reference` returns `False`, with the reason logged, for a file that did not download or has no prim a reference could bring in, and `add_reference_to_stage` raises `UnreferenceableLayerError`, a `VamsCliError` defined in `vams.connector.isaacsim.connector`, for such a file: the reference names the file's default prim, or its one root prim when it has none. A prim already at the given path keeps its references and gets this one as well. The URDF and MJCF import methods similarly validate their expected file extensions (`.urdf` for URDF; `.mjcf` or `.xml` for MJCF). They return the prim path of the import, or `None` when it fails, and leave the stage's default prim as it was: URDF goes under the prim the default prim names, or at the stage root when it names none, and MJCF under `/World`, where an import that brings in nothing from the file is removed again. On Isaac Sim 6.x they behave as described in [URDF and MJCF import on Isaac Sim 6.x](#urdf-and-mjcf-import-on-isaac-sim-6x). `import_mjcf_file`, and `import_urdf_file` on Isaac Sim 6.x, raise `MalformedXmlError`, a `VamsCliError` defined in `vams.connector.isaacsim.connector`, for a file that is not well-formed XML, or that declares a document type (neither format uses one, and one can declare entities), before the importer runs, and `download_and_import_mjcf` and `download_and_import_urdf` return `None`, with the reason logged, for such a file. The URDF and MJCF importers are optional -- if the corresponding Isaac Sim importer extension is not enabled, the import will fail with an import error.
 :::
 
 ## Configuration
 
 Extension settings can be configured in `config/extension.toml` or overridden at runtime:
 
-| Setting                                       | Default     | Description                                           |
-| :-------------------------------------------- | :---------- | :---------------------------------------------------- |
-| `exts."vams.connector.isaacsim".profile`      | `"default"` | VAMS CLI profile name                                 |
-| `exts."vams.connector.isaacsim".vamscli_path` | `""`        | Explicit path to vamscli executable (empty uses PATH) |
+| Setting                                         | Default     | Description                                                    |
+| :---------------------------------------------- | :---------- | :------------------------------------------------------------- |
+| `exts."vams.connector.isaacsim".profile`        | `"default"` | VAMS CLI profile name                                          |
+| `exts."vams.connector.isaacsim".vamscli_path`   | `""`        | Explicit path to vamscli executable (empty uses PATH)          |
+| `exts."vams.connector.isaacsim".content_window` | `false`     | Add VAMS to the Content window once signed in (Isaac Sim 6.1+) |
 
 ### Multiple VAMS deployments
 
@@ -234,17 +343,31 @@ isaacsim_vams_integration/
 │           ├── __init__.py            # Package exports
 │           ├── extension.py           # VamsConnectorExtension(omni.ext.IExt)
 │           ├── connector.py           # IsaacVAMSConnector
+│           ├── content_connection.py  # VamsContentConnection (Content window entry, sign-in callback)
+│           ├── storage_adapter/       # Omniverse Storage API adapter, run with the VAMS CLI's Python
+│           │   ├── server.py          # Discovery document, Storage gRPC services, notification consumer
+│           │   ├── naming.py          # Asset folder names: <asset name> (<asset id>), 255-byte cap
+│           │   ├── token_helper.py    # Reads the VAMS CLI profile's sign-in for the extension
+│           │   ├── proto/             # Storage API protos (NVIDIA, Apache-2.0)
+│           │   └── _proto/            # Generated modules, shipped so nothing is generated at install
 │           └── vams_cli_service.py    # VamsCliService (CLI subprocess wrapper)
+├── locks/
+│   └── storage/                       # grpcio and protobuf for the Content window connection
+│       ├── pyproject.toml
+│       ├── uv.lock
+│       └── requirements.lock          # Hashed uv export the install uses
 ├── README.md
 ├── LICENSE
 └── requirements.txt
 ```
 
-| Component   | File                  | Purpose                                                                   |
-| :---------- | :-------------------- | :------------------------------------------------------------------------ |
-| Extension   | `extension.py`        | `omni.ext.IExt` subclass with `on_startup`/`on_shutdown` lifecycle and UI |
-| Connector   | `connector.py`        | High-level API for all VAMS operations and Isaac Sim stage integration    |
-| CLI Service | `vams_cli_service.py` | Subprocess wrapper around `vamscli` with JSON output parsing              |
+| Component          | File                    | Purpose                                                                                                             |
+| :----------------- | :---------------------- | :------------------------------------------------------------------------------------------------------------------ |
+| Extension          | `extension.py`          | `omni.ext.IExt` subclass with `on_startup`/`on_shutdown` lifecycle and UI                                           |
+| Connector          | `connector.py`          | High-level API for all VAMS operations and Isaac Sim stage integration                                              |
+| CLI Service        | `vams_cli_service.py`   | Subprocess wrapper around `vamscli` with JSON output parsing                                                        |
+| Content connection | `content_connection.py` | Starts and stops the storage adapter, registers it with the Content window and answers its sign-in requests         |
+| Storage adapter    | `storage_adapter/`      | Lists databases, assets and files and redirects reads to presigned URLs, through the VAMS API as the signed-in user |
 
 UI button handlers are deferred via `omni.kit.app`'s update event stream to avoid blocking the Omniverse Kit draw pass, which can cause deadlocks or crashes when performing blocking I/O during rendering.
 

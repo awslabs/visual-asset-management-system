@@ -7,15 +7,36 @@ Scaffold a new VAMS backend API endpoint with all required files following the e
 You are scaffolding a new VAMS API endpoint. Follow root `CLAUDE.md` "Pattern 1: Adding a New API Endpoint" — the authoritative checklist. The required layers are:
 
 1. **Master route** (`backend/backend/common/apiRoutes.py`) - `ApiRoute` constant + category group
-2. **Backend handler** (Python Lambda) - Business logic with two-tier Casbin auth
+2. **Backend handler** (Python Lambda) - Business logic with two-tier Casbin auth, and an audit record of each action (`log_action`, registered in `common/auditActions.py`)
 3. **Pydantic models** - Request/response validation (Pydantic v1)
 4. **CDK Lambda builder** (TypeScript) - Infrastructure definition
-5. **API route binding** - Route registry registration (prefer `apiBuilder2-nestedStack.ts`)
+5. **API route binding** - Route registry registration (prefer `apiBuilder2-nestedStack.ts`; an add-on route registers from the add-on's own nested stack, see Fork mode "Which lane")
 6. **Frontend service** (`web/src/services/APIService.ts`) - API call method (if exposed to web UI)
 7. **CLI command** (`tools/VamsCLI/vamscli/`) - Endpoint constant + command (if applicable)
-8. **MCP server** (`tools/VamsMCP/vams_mcp/server.py`) - `@mcp.tool()` in the correct gate section, if agents should reach the endpoint (root `CLAUDE.md` Pattern 7)
+8. **MCP server** (`tools/VamsMCP/vams_mcp/server.py`) - `@mcp.tool(title=..., annotations=<tier constant>)` in the correct gate section, with an agent-facing description within the budget, if agents should reach the endpoint (root `CLAUDE.md` Pattern 7; `tools/VamsMCP/CLAUDE.md` Rules 11-14). Every new `APIClient` method also gets its entry in the coverage manifest `tools/VamsMCP/tests/api_coverage.py` (the tool that calls it, an exclusion with its reason, or a not-yet-exposed gap; Rule 15), or `tests/test_api_coverage.py` fails CI
 9. **Documentation** - `documentation/VAMS_API.yaml` AND `documentation/docusaurus-site/docs/api/{domain}.md` (both must be updated together)
 10. **Tests** - Unit tests for the handler
+
+### Fork mode
+
+**Which lane.** Upstream VAMS functionality that integrates an external solution, depends on an AWS service outside the tier-1 set, or implements a use-case lens for an industry is an add-on (root `CLAUDE.md` "Core, add-on and custom" lists the tier-1 services and the exemptions; the definition is in `documentation/docusaurus-site/docs/developer/addons-overview.md`). Decide this before scaffolding: an endpoint for such functionality never goes in the core files. An add-on endpoint uses the add-on lane: routes in `backend/backend/common/addonApiRoutes.py`, each `ApiRoute` with `addon_feature=` the switch it is deployed under (named in `backend/backend/common/addonFeatures.py`, which mirrors `ADDON_APP_FEATURES`), so the route listings leave it out on a deployment without the add-on; handlers and models in `handlers/addon/` and `models/addon/`, CDK in a nested stack under `infra/lib/nestedStacks/addon/`, the feature switch in `infra/common/addonAppFeatures.ts`, object types in `common/addonConstants.py`, each with its switch in `ADDON_CONSTRAINT_OBJECT_TYPE_FEATURES`, config under `app.addons` (the add-on's interface in its module under `infra/config/addon/`). The route registers from the add-on's nested stack with `attachFunctionToApi(this, fn, { routePath, method, registry: props.registry })`, never from the core API stacks, and a new add-on that registers routes extends `enableRouteContributingAddons()` in `infra/test/addon/support/addonTestHooks.ts`, so the route parity test synthesizes with it on. On the CLI the endpoint paths go in `vamscli/addon_constants.py` (re-exported from `constants.py`), the `APIClient` methods in a mixin under `vamscli/utils/addon/` that `AddonAPIClientMixin` (`utils/addon_api_client.py`) inherits, and the command group in `vamscli/commands/addon/` (`ADDON_COMMANDS`, an `AddonGroup` with the add-on's `feature_switch`, so `vamscli --help` lists it only for a deployment that enables the add-on); the MCP tools go in `vams_mcp/addon_tools/<addon>.py` (`ADDON_TOOL_MODULES`), each tool first calling `client.require_feature(<switch>, <message>)`. Everything specific to one add-on is in that add-on's own `CLAUDE.md` files. A fork uses the custom lane below. A core endpoint uses the core files.
+
+When the endpoint is being added in a **fork** of VAMS (the user says so, or the endpoint is net-new fork functionality rather than an upstream contribution), scaffold every layer into the fork extension points instead of the core files, so the fork merges upstream releases without conflicts. Upstream ships each of these files empty and never edits them. Root `CLAUDE.md` Pattern 1 (its **In a fork** paragraph) and `documentation/docusaurus-site/docs/developer/customizing-vams.md` are the authority:
+
+| Layer               | Core file (do NOT edit in fork mode)                                        | Fork-owned target                                                                                                                                                                                      |
+| ------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1. Master route     | `backend/backend/common/apiRoutes.py`                                       | `backend/backend/custom/customApiRoutes.py` — `ApiRoute` constant (import from `common.apiRouteTypes`) + `CUSTOM_ROUTES`                                                                               |
+| 2. Handler          | `backend/backend/handlers/{domain}/`                                        | `backend/backend/handlers/custom/{handler}.py` (`handlers.custom.{handler}.lambda_handler`)                                                                                                            |
+| 2a. Audit action    | `backend/backend/common/auditActions.py`                                    | `backend/backend/custom/customAuditActions.py` — `CUSTOM_AUDIT_ROUTE_ACTIONS` entry per route-method (or `CUSTOM_AUDIT_EXEMPT` with a reason)                                                          |
+| 3. Models           | `backend/backend/models/{domain}.py`                                        | `backend/backend/models/custom/{domain}.py`                                                                                                                                                            |
+| 4–5. Lambda + route | `infra/lib/lambdaBuilder/`, `apiBuilder2-nestedStack.ts`                    | `infra/lib/nestedStacks/custom/customResources.ts` — builder pattern + five security calls + `attachFunctionToApi(scope, fn, { routePath, method, registry: props.registry })`; never `allowAnonymous` |
+| New table / name    | `storageBuilder-nestedStack.ts`, `resourceParamKeys.ts`, `resourceNames.py` | table in `customResources.ts` (KMS per Rule 8), key in `infra/common/customResourceParamKeys.ts` + `backend/backend/custom/customResourceNames.py`, published with `publishCustomResourceName()`       |
+| 6. Frontend         | `web/src/services/APIService.ts`                                            | `web/src/custom/services/customAPIService.ts` (+ page/route/nav in `web/src/custom/`)                                                                                                                  |
+| 7. CLI              | `vamscli/constants.py`, `utils/api_client.py`, `commands/`                  | `vamscli/custom_constants.py`, `utils/custom_api_client.py` (`CustomAPIClientMixin`), `commands/custom/` + `CUSTOM_COMMANDS`                                                                           |
+| 8. MCP              | `tools/VamsMCP/vams_mcp/server.py`                                          | `tools/VamsMCP/vams_mcp/custom_tools.py` (`register_custom_tools`)                                                                                                                                     |
+| 9. Docs             | `VAMS_API.yaml`, `docs/api/{domain}.md`                                     | the fork's own documentation                                                                                                                                                                           |
+
+Recommend (do not require) `/custom/` route paths, `custom/` resource keys, `CUSTOM_*` feature switches and `custom_*` MCP tool names. Tier-2 authorization uses an existing entity type or, when the fork's entity needs object-level authorization on its own attributes, a permission object type registered in `backend/backend/custom/customConstants.py` (`CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS` + `CUSTOM_PERMISSION_CONSTRAINT_FIELDS`, names `^[A-Za-z][A-Za-z0-9]{1,63}$`); such a type grants nothing, even to admin, until the fork adds a constraint for it, so scaffold the constraint template alongside the handler; non-admin roles need an `api` constraint for the new route before they can call it. A core name is never reused: `vamscli` refuses a custom command whose name is registered, `tools/VamsCLI/tests/test_custom_api_client.py` fails on a `CustomAPIClientMixin` method that `APIClient` also defines, and synth fails on a returned `VAMS_APP_FEATURES` or `ADDON_APP_FEATURES` value. Register every custom route under the committed `infra/config/custom/customConfig.json` (the route parity test synthesizes with it), and keep secrets out of resource-name parameters and `customConfig.json` (AWS Secrets Manager, key imported by ARN). Everything else in the steps below — Pydantic v1, the fail-closed two-tier Casbin pattern, `ApiRoute.matches()` dispatch, external paging of list responses, the tests — applies unchanged.
 
 ### Step 1: Gather Requirements
 
@@ -41,6 +62,12 @@ Add the route to `backend/backend/common/apiRoutes.py` — the single source of 
 API_MY_RESOURCE = ApiRoute("/myResource/{resourceId}", (GET, PUT), "myDomain")
 
 MY_DOMAIN_ROUTES: Tuple[ApiRoute, ...] = (API_MY_RESOURCE, ...)
+
+# A worked example: the natural-language search route lives under the existing search prefix so it
+# inherits the `starts_with "/search"` permission templates, and is added to the existing group.
+API_SEARCH_NLP = ApiRoute("/search/nlp", (POST,), "search")
+
+SEARCH_ROUTES: Tuple[ApiRoute, ...] = (API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_NLP)
 ```
 
 A route missing from the group arrays is invisible to constraint authoring and the CLI. Route templates MUST match the routes attached in the CDK api builder stacks.
@@ -144,8 +171,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 -   Dispatch on `ApiRoute.matches(path)` from `common/apiRoutes.py`, never `path.endswith(...)`.
 -   Two-tier auth: `enforceAPI` (Tier 1) in `lambda_handler`, then `casbin_enforcer.enforce(event, item)` (Tier 2) in method handlers with `item['object__type']` set first.
 -   Error handling: catch `ValidationError`, `VAMSGeneralErrorResponse`, generic `Exception`
--   Response helpers: `success()`, `validation_error()`, `general_error()`, `internal_error()`, `authorization_error()`
+-   Response helpers: `success()`, `validation_error()`, `general_error()`, `internal_error()`, `authorization_error()`, `service_unavailable()` (503 when a dependency cannot answer right now; generic try-again message)
 -   Never echo request input or internal details in client error messages — log specifics, return generic messages.
+-   **Audit every action.** Register each new route-method in `backend/backend/common/auditActions.py` (add-on: `common/addonAuditActions.py`; fork: `custom/customAuditActions.py`) with `route_entries(API_MY_RESOURCE, {PUT: spec("myResourceUpdate", "<entityType>"), GET: read("myResourceGet", "<entityType>")})`, or with a reason in the lane's exempt map; `tests/common/test_audit_registry.py` fails otherwise. Decorate the entrypoint with `@audited_handler` (the registry test fails on an entrypoint without it; the decorator records a failed request's outcome) and call `log_action(event, "myResourceUpdate", database_id=..., changes={field: new value})` after the write succeeds; for a read, pass what was asked in `request_parameters`, never what was returned. A read or search with a free-text parameter (a query, a filter text, typed tags) builds `request_parameters` with `search_text_parameters(parameters, text)` from `common/auditSearchText.py`, which records the text under the redacted `searchText` key; name the query keys you record instead of passing the raw query string. See `backend/CLAUDE.md` "Audit Logging".
 
 ### Step 4: Create Pydantic Models
 
@@ -161,7 +189,7 @@ from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, va
 from customLogging.logger import safeLogger
 from common.validators import validate, trim_name, id_pattern, object_name_pattern
 
-logger = safeLogger(service_name="{Domain}Models")
+logger = safeLogger()  # shared module: logs under the calling handler's service name
 
 class CreateResourceRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a resource"""
@@ -269,7 +297,7 @@ export function buildMyFunction(
 -   Standard function signature: `(scope, lambdaCommonBaseLayer, storageResources, config, vpc, subnets)`
 -   Code path: `path.join(__dirname, '../../../backend/backend')`
 -   Handler convention: `handlers.{domain}.${name}.lambda_handler`
--   VPC conditional based on `config.app.useGlobalVpc`
+-   VPC conditional based on `config.app.useGlobalVpc`. A Lambda that must reach something inside the VPC ORs its own feature flag into that condition (`infra/CLAUDE.md` Rule 2; `searchIndexBucketSyncFunctions.ts` is the precedent); everything else follows `useForAllLambdas` alone
 -   Do NOT inject table-name environment variables — non-pipeline handlers resolve resource names from SSM Parameter Store (`globalLambdaEnvironmentsAndPermissions` supplies the prefix + SSM grants)
 -   **Required security helper calls** at the end of every function:
     1. `kmsKeyLambdaPermissionAddToResourcePolicy`
@@ -280,7 +308,7 @@ export function buildMyFunction(
 
 ### Step 6: Add API Route Binding
 
-**Prefer `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`** for new endpoints — it exists to keep both API stacks clear of the two per-template CloudFormation ceilings (500 resources, and a 1 MB template body, which `apiBuilder` fills roughly twice as fast because its Lambdas carry long inline IAM policies). Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there. Note the split does **not** relieve the API Gateway resources-per-REST-API quota: both stacks register into one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree is a whole-deployment figure. See "API Stack Ceilings" in `infra/CLAUDE.md`.
+**Prefer `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`** for new endpoints — it exists to keep both API stacks clear of the two per-template CloudFormation ceilings (500 resources, and a 1,000,000-byte template body, which fills well ahead of the resource count; see "API Stack Ceilings" in `infra/CLAUDE.md` for the current figures). Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there. Note the split does **not** relieve the API Gateway resources-per-REST-API quota: both stacks register into one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree is a whole-deployment figure. See "API Stack Ceilings" in `infra/CLAUDE.md`.
 
 1. Add import for the new builder function at the top
 2. Build the Lambda function in the constructor
@@ -316,6 +344,8 @@ attachFunctionToApi(this, myFunction, {
 
 The REST API builder renders all registered descriptors into a single OpenAPI spec and materializes them on the `SpecRestApi`. Route paths registered here MUST match the `ApiRoute` templates from Step 2.
 
+An add-on endpoint is built and attached in the add-on's own nested stack under `infra/lib/nestedStacks/addon/<addon>/` instead, with `registry: props.registry` (Fork mode "Which lane"); the two core API stacks stay unaware of it.
+
 ### Step 7: Add Frontend Service Method (if web-exposed)
 
 Add an API call method to `web/src/services/APIService.ts` following the existing apiClient call patterns in that file.
@@ -323,7 +353,10 @@ Add an API call method to `web/src/services/APIService.ts` following the existin
 ### Step 8: Add CLI Command (if applicable)
 
 1. Define the endpoint path constant in `tools/VamsCLI/vamscli/constants.py` (Rule 7: never hardcode endpoint paths in command files or API client methods)
-2. Add the command in `tools/VamsCLI/vamscli/commands/{group}.py` following `roleUserConstraints.py` patterns (Click decorators, profile support, `--json-output`, error handling)
+2. Add the `APIClient` method in `tools/VamsCLI/vamscli/utils/api_client.py`: map a `401` to `AuthenticationError` and leave a `403` to `_make_request`, which raises `RequestBlockedError`, `PermissionDeniedError`, `TokenExpiredError` or, for an unrouted path, `APIError` itself, and put `except GlobalInfrastructureError: raise` ahead of any broad handler that raises (`tests/test_api_client_global_error_guards.py` fails otherwise)
+3. Add the command in `tools/VamsCLI/vamscli/commands/{group}.py` following `roleUserConstraints.py` patterns (Click decorators, profile support, `--json-output`, error handling)
+
+For an add-on endpoint, the same three steps target the add-on lane: the path in `vamscli/addon_constants.py`, the method in the add-on's mixin under `vamscli/utils/addon/` (inherited through `AddonAPIClientMixin`), and the command in the add-on's group under `vamscli/commands/addon/` (`ADDON_COMMANDS`).
 
 ### Step 9: Propagate to the MCP Server and External Connectors
 
@@ -331,11 +364,15 @@ The MCP server and the two external connectors sit downstream of the CLI, and no
 
 **MCP server** — do this whenever a new `APIClient` method is something an agent should be able to call, or an existing one changed:
 
-1. Add an `@mcp.tool()` + `@tool_result` function in `tools/VamsMCP/vams_mcp/server.py`, placed in the correct gate section: reads at the top, writes under `if CONFIG.enable_writes:`, destructive operations under `if CONFIG.enable_destructive:`. A `def` outside its gate block or past the `if __name__` entrypoint is never executed and the module still imports cleanly.
+1. Add an `@mcp.tool(title="...", annotations=<CONST>)` + `@tool_result` function in `tools/VamsMCP/vams_mcp/server.py`, placed in the correct gate section: reads at the top, writes under `if CONFIG.enable_writes:`, destructive operations under `if CONFIG.enable_destructive:`. A `def` outside its gate block or past the `if __name__` entrypoint is never executed and the module still imports cleanly. `<CONST>` is the tier's constant from `vams_mcp/annotations.py` (`READ`, `WRITE`, `DESTRUCTIVE`, or `COMPUTE` / `DESTRUCTIVE_COMPUTE` for a tool that starts or stops billed compute). The docstring is the agent's description: line 1 says when to use the tool, then the parameters that matter, then what the result means; at most 1,200 characters, no handler rationale (that goes in a comment). Type a stable read result with a `vams_mcp/results.py` model, and never write an error that tells the agent to run a CLI (`tools/VamsMCP/CLAUDE.md` Rules 11-14).
 2. Forward every narrowing parameter the CLI command accepts — an omitted optional parameter silently pins the agent to the server default.
 3. Check pagination: `VamsClient.paginate()` is driven by the list field name the handler returns the list under, passed as `items_key` (in use today: `Items`, `items`, `versions` and `metadata`), and unwraps the legacy `message` envelope, so read the handler's response model and confirm the `items_key` matches the new response. Use `_paginate_with_page_metadata(...)` for a list endpoint that reports `warnings` or other out-of-band bound signals, or they are dropped.
 4. Add a unit test in `tools/VamsMCP/tests/` asserting the params that reach the `APIClient`, and add the tool to the `tools/VamsMCP/README.md` tool list (plus the `autoApprove` array of that README's sample host config if it is a safe read).
-5. If the server's contract with the CLI changed, roll `tools/VamsMCP/pyproject.toml`, `tools/VamsMCP/vams_mcp/__init__.py`, and `tools/VamsCLI/vamscli/version.py` together.
+5. Record the method in `tools/VamsMCP/tests/api_coverage.py` (`tools/VamsMCP/CLAUDE.md` Rule 15): under `TOOLS` with the tool that calls it, or, when agents should not get it, under `EXCLUDED` with a one-line reason (uploads and user, role and constraint administration stay CLI-only), or under `NOT_YET_EXPOSED`. `tests/test_api_coverage.py` fails on a public `APIClient` method with no entry and on any difference between `TOOLS` and the tools' calls.
+6. Place the tool in a tool set in `tools/VamsMCP/vams_mcp/toolsets.py` (`tools/VamsMCP/CLAUDE.md` Rule 17); `tests/test_toolsets.py` fails on a tool in no set and on a set past 100 tools.
+7. If the server's contract with the CLI changed, roll `tools/VamsMCP/pyproject.toml`, `tools/VamsMCP/vams_mcp/__init__.py`, and `tools/VamsCLI/vamscli/version.py` together.
+
+For an add-on endpoint, the tool goes in the add-on's module `tools/VamsMCP/vams_mcp/addon_tools/<addon>.py` (listed in `ADDON_TOOL_MODULES`) rather than `server.py`: its `register(mcp, client, config, tool_result)` keeps the same gate sections under `config.enable_writes` and `config.enable_destructive`, each tool first calls `client.require_feature(<switch>, <message>)`, and `tests/test_addon_tools.py` holds the module to that layout.
 
 **External connectors** — required whenever a CLI command name, subcommand, option/flag, or `--json-output` response shape changes. They shell out to the `vamscli` executable and parse its JSON keys, so a renamed flag fails only at connector runtime and a renamed or removed key silently yields a blank field:
 
@@ -419,7 +456,8 @@ After creating all files, verify:
 -   [ ] Import statement in the api builder stack matches the export in the lambdaBuilder file
 -   [ ] `VAMS_API.yaml` AND `docs/api/{domain}.md` both updated
 -   [ ] CLI endpoint constant in `constants.py` (if CLI-exposed)
--   [ ] MCP tool added in the correct gate section of `tools/VamsMCP/vams_mcp/server.py`, with a unit test and a `tools/VamsMCP/README.md` tool-list entry (if agent-exposed)
+-   [ ] MCP tool added in the correct gate section of `tools/VamsMCP/vams_mcp/server.py`, with a title, its tier's annotation, an agent-facing description within the budget, a unit test, a `tools/VamsMCP/README.md` tool-list entry and a tool set (if agent-exposed)
+-   [ ] Every new `APIClient` method recorded in `tools/VamsMCP/tests/api_coverage.py` (tool, exclusion with reason, or not-yet-exposed gap)
 -   [ ] MCP pagination `items_key` matches the handler's list field name
 -   [ ] Both external connectors validated if a CLI command name, flag, or `--json-output` key changed (Isaac Sim `vams_cli_service.py`, ArcGIS Pro `VamsCliService.cs` + `Models/VamsModels.cs`)
 

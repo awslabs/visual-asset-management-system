@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Database Admin",
-        "description": "Administrative access for a specific database. Can update/delete the database, full CRUD on assets (including permanent delete), create/delete pipelines/workflows/metadata schemas, execute workflows, and ingest assets. Can view and execute global pipelines and workflows. Cannot create new databases.",
+        "description": "Administrative access for a specific database. Can create, update and delete (archive) the database and view its archived record, full CRUD on assets (including permanent delete) and on the database's archived assets (view, unarchive, permanent delete), create/delete pipelines/workflows/metadata schemas, execute workflows, and ingest assets. Can view and execute global pipelines and workflows. Administers the database's compliance: its schemas (GLOBAL schemas read-only), bindings, evaluations, quarantine and exceptions, and cascade approval.",
         "version": "1.0"
     },
     "variables": [
@@ -103,6 +103,16 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/auth/api-keys"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/zipdownloads"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/compliance"
                 }
             ],
             "groupPermissions": [
@@ -122,11 +132,6 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/secure-config"
-                },
-                {
-                    "field": "route__path",
-                    "operator": "starts_with",
-                    "value": "/amplify-config"
                 },
                 {
                     "field": "route__path",
@@ -157,11 +162,6 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/database"
-                },
-                {
-                    "field": "route__path",
-                    "operator": "starts_with",
-                    "value": "/metadata"
                 },
                 {
                     "field": "route__path",
@@ -217,6 +217,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/addon/physna/viewer"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/compliance"
                 }
             ],
             "groupPermissions": [
@@ -264,19 +269,28 @@
         },
         {
             "name": "{{ROLE_NAME}}-database",
-            "description": "Allow read, update, and delete of the {{DATABASE_ID}} database entity (no create)",
+            "description": "Allow read, create, update and delete (archive) of {{DATABASE_ID}} and read of its archived record (creating it again restores it). Names both ids: an archived record must match both.",
             "objectType": "database",
-            "criteriaAnd": [
+            "criteriaAnd": [],
+            "criteriaOr": [
                 {
                     "field": "databaseId",
                     "operator": "equals",
                     "value": "{{DATABASE_ID}}"
+                },
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}#deleted"
                 }
             ],
-            "criteriaOr": [],
             "groupPermissions": [
                 {
                     "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
                     "type": "allow"
                 },
                 {
@@ -291,16 +305,21 @@
         },
         {
             "name": "{{ROLE_NAME}}-assets",
-            "description": "Allow full CRUD on assets in {{DATABASE_ID}} including permanent delete",
+            "description": "Allow full CRUD on assets in {{DATABASE_ID}} including permanent delete, and on its archived assets (view, unarchive, permanent delete). Names both ids: an archived asset must match both.",
             "objectType": "asset",
-            "criteriaAnd": [
+            "criteriaAnd": [],
+            "criteriaOr": [
                 {
                     "field": "databaseId",
                     "operator": "equals",
                     "value": "{{DATABASE_ID}}"
+                },
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}#deleted"
                 }
             ],
-            "criteriaOr": [],
             "groupPermissions": [
                 {
                     "action": "GET",
@@ -507,6 +526,166 @@
                     "type": "allow"
                 }
             ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-zip-downloads-list",
+            "description": "Allow listing the caller's own Download as Zip jobs across assets (My Download Queue)",
+            "objectType": "api",
+            "criteriaAnd": [
+                { "field": "route__path", "operator": "starts_with", "value": "/download/zip" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas",
+            "description": "Allow management of the database's compliance schemas",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas-global",
+            "description": "Allow read of GLOBAL compliance schemas (bindable, not editable)",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "GLOBAL"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-evaluations",
+            "description": "Allow compliance evaluation, quarantine and exception actions for the database. Names both ids, as the asset constraint does: the compliance records of an archived asset must match both.",
+            "objectType": "complianceEvaluation",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                },
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}#deleted"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-cascades",
+            "description": "Allow read, approval and rejection of the database's cascades. Names both ids, as the asset constraint does: the compliance records of an archived asset must match both.",
+            "objectType": "complianceCascade",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                },
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}#deleted"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-bindings",
+            "description": "Allow binding and unbinding compliance schemas in the database. Names both ids, as the asset constraint does: the compliance records of an archived asset must match both.",
+            "objectType": "complianceBinding",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                },
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}#deleted"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-buckets",
+            "description": "Allow read of every asset bucket registration. Listing buckets also needs the /buckets route; putting a database on a bucket needs read on that bucket",
+            "objectType": "bucket",
+            "criteriaAnd": [{ "field": "bucketId", "operator": "contains", "value": ".*" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
         }
     ]
 }

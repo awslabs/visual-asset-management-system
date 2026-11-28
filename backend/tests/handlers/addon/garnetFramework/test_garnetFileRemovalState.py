@@ -104,13 +104,23 @@ def _live_partition_only(database_id, asset_id):
     return ASSET if database_id == "db1" else None
 
 
+
+def _no_location_index(m):
+    """The S3 path asks the location index first; these tests run before it is ready and hold no
+    index rows, so the stamp and the first folder decide."""
+    import sys
+    from tests.common.fileAttributionFakes import AttributionAssetTable
+    return [patch.object(m, "asset_storage_table", AttributionAssetTable([])),
+            patch.object(sys.modules["common.fileAttribution"], "index_ready", lambda name: False)]
+
 def _run(history, event_name="ObjectRemoved:DeleteMarkerCreated", head_error=None,
          asset_lookup=_live_partition_only):
     """Run handle_s3_notification; return (result, entities sent, actions recorded)."""
     m = garnetDataIndexFile
     record = {"eventName": event_name,
               "s3": {"bucket": {"name": "bucket"}, "object": {"key": KEY}}}
-    with patch.object(m, "s3_client", _fake_s3(history, head_error)), \
+    no_index, not_ready = _no_location_index(m)
+    with patch.object(m, "s3_client", _fake_s3(history, head_error)), no_index, not_ready, \
             patch.object(m, "get_asset_details", side_effect=asset_lookup), \
             patch.object(m, "get_bucket_details", return_value=BUCKET), \
             patch.object(m, "get_file_metadata", return_value=({}, {})), \

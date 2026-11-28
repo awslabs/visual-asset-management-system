@@ -35,9 +35,11 @@ const TEMPLATES: TemplateName[] = ["commercial", "govcloud", "eusovereign"];
 /**
  * Queues that deliberately carry no redrive policy, each with the reason it is exempt.
  *
- * **Currently empty, and that is the state to preserve** — every SQS queue VAMS creates dead-letters.
- * The map and `exemptionFor` are kept because an exemption may one day be justified, and an escape
- * hatch that has to be built under pressure gets built without a recorded reason.
+ * **One entry, and every other SQS queue VAMS creates dead-letters.** `bucketSyncRejectedQueue` holds
+ * S3 notifications bucket sync rejected by rule. Nothing consumes it: operators read its messages,
+ * fix the cause and redrive them, so it is the end of the record's path, as a dead-letter queue is. A
+ * redrive policy of its own would move a record away after an operator had viewed it a few times. The
+ * test below pins the exemption set, so a second entry still registers.
  *
  * Keyed by logical-id PREFIX: CDK appends a hash to the construct id, so an exact match would go stale
  * the moment anything about the construct's path changes.
@@ -47,7 +49,10 @@ const TEMPLATES: TemplateName[] = ["commercial", "govcloud", "eusovereign"];
  * exemption is worse than none, because it would silently re-excuse that queue the day someone dropped
  * its redrive policy — which is the exact regression this suite exists to catch.
  */
-const NO_REDRIVE_EXPECTED: Record<string, string> = {};
+const NO_REDRIVE_EXPECTED: Record<string, string> = {
+    bucketSyncRejectedQueue:
+        "operator-read queue of S3 notifications bucket sync rejected by rule; the end of the record's path",
+};
 
 function exemptionFor(logicalId: string): string | undefined {
     for (const [prefix, reason] of Object.entries(NO_REDRIVE_EXPECTED)) {
@@ -165,11 +170,11 @@ describe.each(TEMPLATES)("%s: SQS redrive policies", (templateName) => {
         }
     });
 
-    test("no queue is exempt", () => {
+    test("the only exempt queue is the bucket-sync rejected-record queue", () => {
         // Asserted as a fact rather than left implicit. The sweep above is only as strong as this map
-        // is small, and an empty map makes the loop in the next test iterate over nothing — so without
-        // this assertion an exemption could be added and nothing would register the loss of coverage.
-        expect(Object.keys(NO_REDRIVE_EXPECTED)).toEqual([]);
+        // is small, so without this assertion an exemption could be added and nothing would register
+        // the loss of coverage.
+        expect(Object.keys(NO_REDRIVE_EXPECTED)).toEqual(["bucketSyncRejectedQueue"]);
     });
 
     test("each exempt queue is still present, so the exemption is not covering a deleted queue", () => {
@@ -249,6 +254,54 @@ describe("Deadline Cloud callback queues", () => {
 
     test("enabling Deadline Cloud adds no queue that lacks a redrive policy", () => {
         expect(queuesWithoutRedrive(synth)).toEqual([]);
+    });
+});
+
+/**
+ * The vector indexing construct, which the commercial template enables (`app.vectorSearch.enabled`).
+ *
+ * Its `vector.embedding.ready` rule targets the indexer queue with a rule-owned DLQ — the third queue in
+ * the assembly named only by an `AWS::Events::Rule` target's `DeadLetterConfig`. The queues are children
+ * of the `VectorIndexing` construct, so their logical ids carry that prefix: `VectorIndexing<ChildId>`.
+ */
+describe("vector indexing queues (commercial)", () => {
+    let synth: SynthResult;
+
+    beforeAll(() => {
+        synth = synthTemplate("commercial");
+    });
+
+    test("the embedding-ready rule DLQ IS in this synth", () => {
+        // The control: an unmutated restricted template emits none of these queues.
+        const matched = synth
+            .ofType("AWS::SQS::Queue")
+            .filter((q) => q.logicalId.startsWith("VectorIndexingVectorEmbeddingReadyRuleDLQ"));
+        expect(matched.length).toBe(1);
+    });
+
+    test("its rule-owned DLQ is recognized without carrying a RedrivePolicy of its own", () => {
+        expectRuleOwnedDlqRecognized(synth, "VectorIndexingVectorEmbeddingReadyRuleDLQ");
+    });
+
+    test("both vector source queues redrive to their own DLQ after three receives", () => {
+        for (const [source, dlq] of [
+            ["VectorIndexingVectorIndexerQueue", "VectorIndexingVectorIndexerDLQ"],
+            ["VectorIndexingSystemWorkflowLaunchQueue", "VectorIndexingSystemWorkflowLaunchDLQ"],
+        ]) {
+            const queues = synth
+                .ofType("AWS::SQS::Queue")
+                .filter((q) => q.logicalId.startsWith(source));
+            expect(queues.length).toBe(1);
+            const redrive = queues[0].properties.RedrivePolicy;
+            expect(redrive.maxReceiveCount).toBe(3);
+            const targets = synth
+                .ofType("AWS::SQS::Queue")
+                .filter((q) => q.logicalId.startsWith(dlq));
+            expect(targets.length).toBe(1);
+            expect(SynthResult.flatten(redrive.deadLetterTargetArn)).toContain(
+                targets[0].logicalId
+            );
+        }
     });
 });
 
@@ -377,6 +430,7 @@ function sqs3Suppressions(resource: Resource): NagRuleSuppression[] {
 describe.each(TEMPLATES)("%s: storage stack SQS3 suppression scope", (templateName) => {
     let storage: Resource[];
     let storageDlqIds: Set<string>;
+    let storageExemptIds: Set<string>;
 
     beforeAll(() => {
         const synth = synthTemplate(templateName);
@@ -388,6 +442,11 @@ describe.each(TEMPLATES)("%s: storage stack SQS3 suppression scope", (templateNa
                 .filter((r) => failureDestinations.has(r.logicalId))
                 .map((r) => r.logicalId)
         );
+        storageExemptIds = new Set(
+            storage
+                .filter((r) => r.type === "AWS::SQS::Queue" && exemptionFor(r.logicalId))
+                .map((r) => r.logicalId)
+        );
     });
 
     /**
@@ -397,7 +456,9 @@ describe.each(TEMPLATES)("%s: storage stack SQS3 suppression scope", (templateNa
     const isDlqQueuePolicy = (r: Resource): boolean => {
         if (r.type !== "AWS::SQS::QueuePolicy") return false;
         const queues = SynthResult.flatten(r.properties.Queues);
-        return Array.from(storageDlqIds).some((id) => queues.includes(`\${${id}}`));
+        return Array.from(storageDlqIds)
+            .concat(Array.from(storageExemptIds))
+            .some((id) => queues.includes(`\${${id}}`));
     };
 
     test("the storage stack is located and emits dead-letter queues", () => {
@@ -424,7 +485,12 @@ describe.each(TEMPLATES)("%s: storage stack SQS3 suppression scope", (templateNa
         // and so covers a storage queue added later with no redrive policy.
         const offenders = storage
             .filter((r) => sqs3Suppressions(r).length > 0)
-            .filter((r) => !storageDlqIds.has(r.logicalId) && !isDlqQueuePolicy(r))
+            .filter(
+                (r) =>
+                    !storageDlqIds.has(r.logicalId) &&
+                    !storageExemptIds.has(r.logicalId) &&
+                    !isDlqQueuePolicy(r)
+            )
             .map((r) => `${r.type}/${r.logicalId}`);
         expect(offenders).toEqual([]);
     });

@@ -23,6 +23,9 @@ import {
     externalTokenValidation,
     setExternalOauth2Token,
     externalOAuthTokenProvider,
+    syncExternalOAuthUser,
+    MISSING_USER_ID_CLAIM_KEY,
+    MissingUserIdClaimError,
 } from "../utils/authTokenUtils";
 import {
     ensureValidSession,
@@ -43,8 +46,10 @@ import {
     generateOAuthState,
     getReturnedOAuthState,
     getSameOriginReturnUrl,
+    isOAuthCallback,
     oauthNavigation,
 } from "./oauthSignInState";
+import { cacheAllowedApiRoutes } from "./allowedApiRoutesCache";
 
 import Button from "@cloudscape-design/components/button";
 import Box from "@cloudscape-design/components/box";
@@ -65,6 +70,7 @@ import {
     ALLOWED_API_ROUTES_CACHE_KEY,
 } from "../common/constants/authRoutes";
 import { normalizeFeaturesEnabled } from "../common/constants/featuresEnabled";
+import { RuntimeConfigContext } from "../context/RuntimeConfigContext";
 import { GlobalHeader } from "./../common/GlobalHeader";
 import { Header } from "./../authenticator/Header";
 import { Footer, PageFooter } from "./../authenticator/Footer";
@@ -173,9 +179,16 @@ interface Config {
     externalOAuthIdpDiscoveryEndpoint?: string;
 
     /**
-     * VAMS Features that are enabled
+     * External OAUTH IDP access-token claim whose value is the VAMS user id
+     * (`"undefined"` or absent when not set: cognito:username, then username, then sub, as the
+     * API authorizer does). Read by authTokenUtils getExternalUserIdClaim.
      */
-    featuresEnabled?: string;
+    externalOAuthIdpUserIdClaim?: string;
+
+    /**
+     * VAMS Features that are enabled (normalized to an array when secure-config is applied)
+     */
+    featuresEnabled?: string[];
 
     /**
      * VAMS Backend Stackname
@@ -188,7 +201,8 @@ interface Config {
     locationServiceApiUrl?: string;
 
     /**
-     * Content Security Policy to apply (generally for ALB deployment where CSP may not be injected)
+     * Sent by /api/amplify-config and always empty. The web app does not apply it: the Content
+     * Security Policy is set by the CloudFront response headers or the ALB listener.
      */
     contentSecurityPolicy?: string;
 
@@ -196,6 +210,31 @@ interface Config {
      * HTML banner message to be displayed at the top of all web UI pages
      */
     bannerHtmlMessage?: string;
+
+    /**
+     * External OAUTH IDP scope added when the user signs in with MFA
+     */
+    externalOAuthIdpScopeMfa?: string;
+
+    /**
+     * Label for the external OAUTH IDP login button
+     */
+    externalOAuthIdpDisplayName?: string;
+
+    /**
+     * Deployed web URL, from secure-config
+     */
+    webDeployedUrl?: string;
+
+    /**
+     * Set on the stand-in object stored when amplify-config could not be loaded
+     */
+    _configError?: boolean;
+
+    /**
+     * Message shown on the configuration error page
+     */
+    _errorMessage?: string;
 }
 
 function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
@@ -265,6 +304,8 @@ type AuthProps = { children?: React.ReactNode };
 /** Bounded retry for the secure-config fetch that carries the feature switches. */
 const SECURE_CONFIG_MAX_ATTEMPTS = 3;
 const SECURE_CONFIG_RETRY_DELAY_MILLIS = 1500;
+/** Longest the app shell waits for secure-config when no feature switches are cached. */
+const SECURE_CONFIG_HOLD_MAX_MS = 10000;
 
 //Cognito components
 const CenteredBox: React.FC<PropsWithChildren<{}>> = ({ children }) => {
@@ -363,6 +404,7 @@ const LoginHeader: React.FC = () => {
                     {
                         type: "menu-dropdown",
                         text: "Settings",
+                        disableUtilityCollapse: true,
                         iconName: "settings",
                         onItemClick: (e) => {
                             const id = e?.detail?.id;
@@ -372,11 +414,15 @@ const LoginHeader: React.FC = () => {
                         items: [
                             {
                                 id: "theme-light",
-                                text: theme === "light" ? "✓ Light Theme" : "Light Theme",
+                                text: "Light Theme",
+                                itemType: "checkbox",
+                                checked: theme === "light",
                             },
                             {
                                 id: "theme-dark",
-                                text: theme === "dark" ? "✓ Dark Theme" : "Dark Theme",
+                                text: "Dark Theme",
+                                itemType: "checkbox",
+                                checked: theme === "dark",
                             },
                         ],
                     },
@@ -437,13 +483,20 @@ const Auth: React.FC<AuthProps> = (props) => {
         return () => observer.disconnect();
     }, []);
 
-    const [config, setConfig] = useState(appCache.getItem("config"));
+    const [config, setConfig] = useState<Config | null>(appCache.getItem("config"));
     const [authError, setauthError] = useState<string | null>(() =>
         localStorage.getItem("auth_error")
     );
     const [sessionExpired, setSessionExpired] = useState<boolean>(
         () => localStorage.getItem(SESSION_EXPIRED_KEY) === "true"
     );
+    // External OAuth: the user id claim an access token lacked, shown on the sign-in page.
+    const [missingUserIdClaim, setMissingUserIdClaim] = useState<string | null>(() =>
+        localStorage.getItem(MISSING_USER_ID_CLAIM_KEY)
+    );
+    // Set once a session ended for a missing user id claim, so a validation still in flight
+    // does not mark the user signed in while the sign-out's redirect is pending.
+    const externalSessionEndedRef = useRef(false);
 
     // Always the latest config, for async callbacks that must merge over current
     // state rather than the value captured when they started.
@@ -459,6 +512,19 @@ const Auth: React.FC<AuthProps> = (props) => {
     // failed attempt actually schedules another effect run.
     const [secureConfigAttempt, setSecureConfigAttempt] = useState(0);
 
+    // Set once the secure-config fetch has applied its feature switches, has given up after its
+    // last attempt, or has run past SECURE_CONFIG_HOLD_MAX_MS. Until then a session with no
+    // cached featuresEnabled holds the app shell.
+    const [secureConfigSettled, setSecureConfigSettled] = useState(false);
+
+    // The timer that bounds that hold. Started with the first fetch that finds no cached
+    // switches, and cleared when the fetch settles.
+    const secureConfigHoldTimerRef = useRef<ReturnType<typeof setTimeout>>();
+    useEffect(() => {
+        const holdTimer = secureConfigHoldTimerRef;
+        return () => clearTimeout(holdTimer.current);
+    }, []);
+
     // Tracks whether amplify-config has been re-fetched for this page load, so the
     // runtime Amplify/OAuth configuration is refreshed from the backend on every
     // reload (parallel to secure-config) instead of being served from the stale
@@ -470,9 +536,26 @@ const Auth: React.FC<AuthProps> = (props) => {
     const [isLoggedIn, setisLoggedIn] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
 
+    // The app neither reads nor writes the browser asset store (localforage), so any records left
+    // in it are cleared once per page load, for a signed-out visitor as for a signed-in session.
+    useEffect(() => {
+        void clearLocalStore();
+    }, []);
+
     // TODO: Refactor how/when handleExternalOauthSignIn() & External OAuth Effects are called without needing to do this
     // This line in combination with the useEffect dependency allows for the useEffects to execute in the right order
     const [triggerExternalOAuth, setTriggerExternalOAuth] = useState(false);
+
+    //External OAUTH Function
+    //An access token without the configured user id claim opens no session (the API refuses it
+    //on every request): sign out, clearing what was stored, and name the claim on the sign-in page.
+    const endSessionForMissingUserIdClaim = (claim: string) => {
+        externalSessionEndedRef.current = true;
+        void signOutWithError(MISSING_USER_ID_CLAIM_KEY, claim);
+        setMissingUserIdClaim(claim);
+        setisLoggedIn(false);
+        setIsLoading(false);
+    };
 
     //Both Affect
     //Fetch && Setup Initial global configurations
@@ -506,14 +589,14 @@ const Auth: React.FC<AuthProps> = (props) => {
                 window.DISABLE_COGNITO = false;
             }
 
+            // amplify-config carries this object only for a federated Cognito deployment.
             if (
-                config.cognitoFederatedConfig === undefined ||
-                config.cognitoFederatedConfig === "undefined" ||
-                config.cognitoFederatedConfig === ""
+                config.cognitoFederatedConfig !== null &&
+                typeof config.cognitoFederatedConfig === "object"
             ) {
-                window.COGNITO_FEDERATED = false;
-            } else {
                 window.COGNITO_FEDERATED = true;
+            } else {
+                window.COGNITO_FEDERATED = false;
             }
 
             //Configure Amplify
@@ -542,6 +625,16 @@ const Auth: React.FC<AuthProps> = (props) => {
                         const merged = { ...latest, ...fetchedConfig };
                         if (JSON.stringify(merged) !== JSON.stringify(latest)) {
                             appCache.setItem("config", merged);
+                            // External OAuth: a session signed in on the cached config keeps the
+                            // user id claim the backend now names, so the web app and the API
+                            // agree on the user, or ends when its token lacks that claim.
+                            if (window.DISABLE_COGNITO) {
+                                const missingClaim = syncStoredExternalOAuthUser();
+                                if (missingClaim) {
+                                    endSessionForMissingUserIdClaim(missingClaim);
+                                    return;
+                                }
+                            }
                             setConfig(merged);
                         }
                     } else {
@@ -574,7 +667,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                         _configError: true,
                         _errorMessage:
                             "The API returned a configuration response but it is missing required fields (e.g., 'api' endpoint).",
-                    });
+                    } as Config);
                 }
             });
         }
@@ -614,17 +707,29 @@ const Auth: React.FC<AuthProps> = (props) => {
             const codeExchangePending =
                 !getExternalOAuth2Token().accessToken &&
                 !!localStorage.getItem(OAUTH_STATE_KEY) &&
-                !!localStorage.getItem(OAUTH_CODE_VERIFIER_KEY);
+                !!localStorage.getItem(OAUTH_CODE_VERIFIER_KEY) &&
+                isOAuthCallback(document.location.href);
             if (codeExchangePending) {
                 return;
             }
             setIsLoading(true);
             ensureValidSession().then((valid) => {
+                if (externalSessionEndedRef.current) {
+                    return;
+                }
                 if (valid) {
+                    // The stored token must carry the configured user id claim as well.
+                    const missingClaim = syncStoredExternalOAuthUser();
+                    if (missingClaim) {
+                        endSessionForMissingUserIdClaim(missingClaim);
+                        return;
+                    }
                     setisLoggedIn(true);
                 } else {
                     setisLoggedIn(false);
                     resetSession();
+                    // A refresh refused for a missing user id claim records it (authTokenUtils).
+                    setMissingUserIdClaim(localStorage.getItem(MISSING_USER_ID_CLAIM_KEY));
                 }
                 setIsLoading(false);
             });
@@ -696,6 +801,12 @@ const Auth: React.FC<AuthProps> = (props) => {
                 // no state or code_verifier in local storage
                 return;
             }
+            if (!isOAuthCallback(document.location.href)) {
+                // A sign-in left at the IdP (or that never reached it): drop its values and show
+                // the sign-in page, rather than reading this load as a callback that failed.
+                clearOAuthSignInState();
+                return;
+            }
             const returnTo = localStorage.getItem(OAUTH_RETURN_TO_KEY);
 
             // request access token
@@ -726,6 +837,10 @@ const Auth: React.FC<AuthProps> = (props) => {
                 .catch((error) => {
                     console.error(error);
                     clearOAuthSignInState();
+                    if (error instanceof MissingUserIdClaimError) {
+                        endSessionForMissingUserIdClaim(error.claim);
+                        return;
+                    }
                     void signOutWithError("auth_error", "Failed to get access token"); // Catching error when redirect code is missing and start new sign in process.
                 });
         }
@@ -739,6 +854,17 @@ const Auth: React.FC<AuthProps> = (props) => {
         //cached in localStorage forever until a full site-data reset).
         if (config && !config._configError && isLoggedIn && !secureConfigFetchedRef.current) {
             secureConfigFetchedRef.current = true;
+            const switchesCached =
+                configRef.current?.featuresEnabled !== undefined &&
+                configRef.current?.featuresEnabled !== null;
+            if (!switchesCached && secureConfigHoldTimerRef.current === undefined) {
+                // A slow or unanswered request ends the hold after the bound; the switches still
+                // apply if a later attempt returns them.
+                secureConfigHoldTimerRef.current = setTimeout(
+                    () => setSecureConfigSettled(true),
+                    SECURE_CONFIG_HOLD_MAX_MS
+                );
+            }
             getSecureConfig()
                 .then((value) => {
                     // A new object, not a mutation of the current one: re-setting the same
@@ -752,9 +878,11 @@ const Auth: React.FC<AuthProps> = (props) => {
                         featuresEnabled: normalizeFeaturesEnabled(value.featuresEnabled),
                         locationServiceApiUrl: value.locationServiceApiUrl,
                         webDeployedUrl: value.webDeployedUrl || "",
-                    };
+                    } as Config;
                     appCache.setItem("config", withSecureConfig);
                     setConfig(withSecureConfig);
+                    clearTimeout(secureConfigHoldTimerRef.current);
+                    setSecureConfigSettled(true);
                 })
                 .catch((error: Error) => {
                     console.error("Error getting secure-config:", error.message);
@@ -773,6 +901,8 @@ const Auth: React.FC<AuthProps> = (props) => {
                             SECURE_CONFIG_MAX_ATTEMPTS,
                             "attempts; feature-gated functionality stays disabled until the page is reloaded"
                         );
+                        clearTimeout(secureConfigHoldTimerRef.current);
+                        setSecureConfigSettled(true);
                     }
                 });
             console.log("Fetched secure config");
@@ -802,26 +932,21 @@ const Auth: React.FC<AuthProps> = (props) => {
 
     //Both Effect
     //Once logged in, fetch and cache the API routes the user is authorized to
-    //call, and periodically renew the cache while the session is active. The
-    //cached list is not consumed by the UI yet -- it will drive enabling/
-    //disabling web functionality tied to API access in a future release.
+    //call, and renew the cache while the session is active. The cached list feeds
+    //isApiRouteAllowed (common/constants/authRoutes.ts), which API Key Management
+    //(pages/auth/ApiKeys.tsx) uses to choose between admin and self-service mode and
+    //the navigation uses for links gated on an API route (requiresApiRoute). The cache
+    //key, the cached shape and the TTL must not change without updating those.
     useEffect(() => {
         if (!isLoggedIn) {
             return;
         }
 
-        const refreshAllowedApiRoutes = (force = false) => {
-            if (!force && appCache.getItemWithExpiry(ALLOWED_API_ROUTES_CACHE_KEY)) {
-                return; // Cache still fresh
-            }
+        const refreshAllowedApiRoutes = () => {
             fetchAllowedApiRoutes()
                 .then((result) => {
                     if (result[0] === true && result[1]?.routes) {
-                        appCache.setItemWithExpiry(
-                            ALLOWED_API_ROUTES_CACHE_KEY,
-                            result[1],
-                            ALLOWED_API_ROUTES_CACHE_TTL_MILLIS
-                        );
+                        cacheAllowedApiRoutes(result[1]);
                         console.log("Cached allowed API routes");
                     }
                 })
@@ -830,11 +955,13 @@ const Auth: React.FC<AuthProps> = (props) => {
                 });
         };
 
-        // Fetch on login (uses cache if still fresh), then renew periodically
+        // Fetch on every load, even with a fresh cached copy: that copy may expire long before
+        // a renewal timer started now would fire. Renewing at half the TTL keeps the cache from
+        // expiring between renewals.
         refreshAllowedApiRoutes();
         const renewInterval = setInterval(
-            () => refreshAllowedApiRoutes(true),
-            ALLOWED_API_ROUTES_CACHE_TTL_MILLIS
+            refreshAllowedApiRoutes,
+            ALLOWED_API_ROUTES_CACHE_TTL_MILLIS / 2
         );
         return () => clearInterval(renewInterval);
     }, [isLoggedIn]);
@@ -897,6 +1024,10 @@ const Auth: React.FC<AuthProps> = (props) => {
                 setTriggerExternalOAuth(true); // Access token is now valid, continue login process
                 return;
             } catch (error) {
+                if (error instanceof MissingUserIdClaimError) {
+                    endSessionForMissingUserIdClaim(error.claim);
+                    return;
+                }
                 // Failed to refresh the token (possibly invalid tokens or refresh token expired), continue on
                 console.error("refreshtoken error: ", error);
             }
@@ -935,6 +1066,7 @@ const Auth: React.FC<AuthProps> = (props) => {
 
                 document.location = authorizeUri;
             } else {
+                clearOAuthSignInState();
                 localStorage.setItem(
                     "auth_error",
                     "Failed to initialize authorization flow. Missing scope or mfa scope in config."
@@ -942,6 +1074,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                 setauthError(localStorage.getItem("auth_error"));
             }
         } catch (error) {
+            clearOAuthSignInState();
             localStorage.setItem("auth_error", "Failed to initialize authorization flow.");
             setauthError(localStorage.getItem("auth_error"));
         }
@@ -993,6 +1126,11 @@ const Auth: React.FC<AuthProps> = (props) => {
                                 <strong>Possible causes:</strong>
                                 <ul style={{ margin: "8px 0", paddingLeft: "20px" }}>
                                     <li>The backend API is not responding</li>
+                                    <li>
+                                        The API refused the request (HTTP 403): the deployment
+                                        accepts only some network addresses, or a firewall rule
+                                        blocked the request
+                                    </li>
                                     <li>Network connectivity issues</li>
                                     <li>The page was reloaded during initialization</li>
                                 </ul>
@@ -1097,7 +1235,17 @@ const Auth: React.FC<AuthProps> = (props) => {
                                 </SpaceBetween>
                             </Box>
                         </div>
-                        {sessionExpired ? (
+                        {missingUserIdClaim ? (
+                            <div className={styles.alertError}>
+                                <Alert
+                                    type="error"
+                                    statusIconAriaLabel="Error"
+                                    header="Sign-in failed"
+                                >
+                                    {`The identity provider's access token has no "${missingUserIdClaim}" claim, which this deployment uses as the user id. Contact your administrator.`}
+                                </Alert>
+                            </div>
+                        ) : sessionExpired ? (
                             <div className={styles.alertError}>
                                 <Alert
                                     type="warning"
@@ -1219,17 +1367,35 @@ const Auth: React.FC<AuthProps> = (props) => {
 
     //Show rest of app, we are all logged in.
     if (isLoggedIn && ampInit) {
+        // Pages and the viewer registry read the feature switches once, when they mount. Without
+        // cached switches (every sign-out clears them) the shell waits for secure-config to settle,
+        // at most SECURE_CONFIG_HOLD_MAX_MS, below the deployment banner.
+        const featureSwitchesCached =
+            config?.featuresEnabled !== undefined && config?.featuresEnabled !== null;
+        if (!featureSwitchesCached && !secureConfigSettled) {
+            return (
+                <>
+                    <GlobalHeader authorizationHeader={false} />
+                    <LoadingScreen />
+                </>
+            );
+        }
         return (
             <>
                 <GlobalHeader authorizationHeader={false} />
                 {/* Guards the shell itself (top navigation, router, footer). routes.tsx has a
                     second boundary around each page, so a page error stays inside the layout. */}
                 <ErrorBoundary componentName="The application">
-                    <Suspense
-                        fallback={<LoadingScreen slowNoticeAfterMs={APP_LOAD_SLOW_NOTICE_MS} />}
-                    >
-                        {props.children}
-                    </Suspense>
+                    {/* The children element is created once by index.tsx, so a config change reaches
+                        mounted consumers (the side navigation's feature-gated sections) only through
+                        this context, not through the re-render of Auth itself. */}
+                    <RuntimeConfigContext.Provider value={config}>
+                        <Suspense
+                            fallback={<LoadingScreen slowNoticeAfterMs={APP_LOAD_SLOW_NOTICE_MS} />}
+                        >
+                            {props.children}
+                        </Suspense>
+                    </RuntimeConfigContext.Provider>
                 </ErrorBoundary>
             </>
         );
@@ -1282,6 +1448,26 @@ const resetSession = () => {
     appCache.removeItem(ALLOWED_API_ROUTES_CACHE_KEY);
 };
 
+// Re-derives the stored user from the stored access token with the cached config's user id
+// claim. A changed user drops the cached login profile, which the profile effect then fetches
+// again for the new id. Returns the claim when the token lacks it, else null.
+const syncStoredExternalOAuthUser = (): string | null => {
+    try {
+        if (syncExternalOAuthUser()) {
+            appCache.removeItem("loginProfile");
+        }
+        return null;
+    } catch (error) {
+        if (error instanceof MissingUserIdClaimError) {
+            return error.claim;
+        }
+        // A stored token that cannot be decoded is left to the session validation and the API.
+        // A fixed message: a decoding error can quote the token's payload.
+        console.error("The stored access token could not be decoded.");
+        return null;
+    }
+};
+
 // Wrapper for setExternalOauth2Token that also handles timer restart and error clearing
 // This function should be used within Auth.tsx for login flows
 const setExternalOauthLoginAndRefreshTimer = (oauth2Token: OAuth2Token) => {
@@ -1292,6 +1478,7 @@ const setExternalOauthLoginAndRefreshTimer = (oauth2Token: OAuth2Token) => {
 
 function clearPreviousLoginErrors() {
     localStorage.removeItem("auth_error");
+    localStorage.removeItem(MISSING_USER_ID_CLAIM_KEY);
 }
 
 export default Auth;

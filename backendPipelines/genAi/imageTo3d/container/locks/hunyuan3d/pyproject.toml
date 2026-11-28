@@ -1,0 +1,206 @@
+[project]
+name = "imageto3d-hunyuan3d"
+version = "0.1.0"
+description = "Image to 3D, Hunyuan3D-2 image: the whole Python set the image installs, locked per image (#1726)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # --- What the Dockerfile asks for, in the order it asks. ---
+    # CUDA 12.8 torch stack. The extensions built from source after the install compile against this torch.
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    # Shared pipeline dependencies: the shared container/requirements.txt (retired in #1726) at the base commit, line for line.
+    "boto3",
+    "botocore",
+    "numpy",
+    "pillow",
+    "trimesh>=4.11,<5",
+    "manifold3d>=3.0,<4",
+    "networkx",
+    "fast-simplification",
+    "rembg",
+    "onnxruntime-gpu==1.22.0",
+    "scipy",
+    "xatlas==0.0.11",
+    # Hunyuan3D-2's own requirements.txt at HUNYUAN3D_COMMIT, line for line, except the lines the Dockerfile has always
+    # filtered out: torch and torchvision (the CUDA build above), pymeshlab (GPL group below), gradio, fastapi and
+    # uvicorn (demo only). upstream/requirements.txt.recorded records the file; the build compares it with the clone.
+    # The file names no version, so the lock fixes the ones the baseline build resolved.
+    "ninja",
+    "pybind11",
+    "diffusers",
+    "einops",
+    "opencv-python",
+    "numpy",
+    "transformers",
+    "omegaconf",
+    "tqdm",
+    "trimesh",
+    "pygltflib",
+    "xatlas",
+    "accelerate",
+    "rembg",
+    "onnxruntime",
+]
+
+# The GPL-3.0 mesh-repair rungs, installed only when the ENABLE_GPL_MESH_REPAIR build argument is true.
+# requirements-gpl.lock is their export.
+[dependency-groups]
+gpl-repair = [
+    "pymeshfix==0.18.1",
+    "pymeshlab==2025.7.post1",
+]
+# The tools every pip step runs with and the source builds need (they build with --no-build-isolation), installed
+# first from requirements-build.lock.
+build = [
+    "pip",
+    "setuptools",
+    "wheel",
+]
+
+# The Dockerfile installs the committed, hashed requirements*.lock files with `pip install --require-hashes
+# --no-deps`. They are exports of uv.lock (`uv export`, command in each header). uv is a development and CI tool
+# here and is not in the image.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+# Every package is held to the baseline version by the constraints below, so no new release can enter the lock;
+# the cutoff is the start of the baseline build (a relative "7 days" would reject baseline versions that were
+# younger than that when it was built).
+exclude-newer = "2026-11-23T17:25:00Z"
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+# The versions the image installed when it was built from development, one line per installed package. Kept equal
+# to frozen-set.txt by locks/tools/sync_constraints.py. Moving a version means re-freezing a build and
+# re-locking (locks/tools/relock.md).
+# BEGIN frozen-set constraints (locks/tools/sync_constraints.py)
+constraint-dependencies = [
+    "accelerate==1.16.0",
+    "annotated-doc==0.0.7",
+    "annotated-types==0.8.0",
+    "anyio==4.16.0",
+    "attrs==26.1.0",
+    "boto3==1.44.9",
+    "botocore==1.44.9",
+    "certifi==2026.11.20",
+    "charset-normalizer==3.5.3",
+    "click==8.5.1",
+    "coloredlogs==15.0.1",
+    "cuda-bindings==12.9.7",
+    "cuda-pathfinder==1.6.0",
+    "cuda-toolkit==12.8.1",
+    "dataclasses-json==0.6.7",
+    "Deprecated==3.0.1",
+    "diffusers==0.43.0",
+    "einops==0.8.2",
+    "fast_simplification==0.2.0",
+    "filelock==4.2.4",
+    "flatbuffers==25.12.19",
+    "fsspec==2026.9.0",
+    "h11==0.16.0",
+    "hf-xet==1.8.0",
+    "httpcore2==2.16.2",
+    "httpx2==2.16.2",
+    "huggingface_hub==2.4.0",
+    "humanfriendly==10.0",
+    "idna==3.20",
+    "ImageIO==2.38.2",
+    "importlib_metadata==10.2.0",
+    "Jinja2==3.1.6",
+    "jmespath==1.1.0",
+    "jsonschema==4.26.0",
+    "jsonschema-specifications==2025.9.1",
+    "lazy-importer==0.1.0",
+    "lazy-loader==0.6",
+    "llvmlite==0.50.0",
+    "manifold3d==3.5.5",
+    "markdown-it-py==4.3.0",
+    "MarkupSafe==3.0.3",
+    "marshmallow==3.26.2",
+    "mdurl==0.1.2",
+    "mpmath==1.3.0",
+    "mypy_extensions==1.2.0",
+    "networkx==3.7",
+    "ninja==1.13.2",
+    "numba==0.68.1",
+    "numpy==2.5.4",
+    "nvidia-cublas-cu12==12.8.4.1",
+    "nvidia-cuda-cupti-cu12==12.8.90",
+    "nvidia-cuda-nvrtc-cu12==12.8.93",
+    "nvidia-cuda-runtime-cu12==12.8.90",
+    "nvidia-cudnn-cu12==9.19.0.56",
+    "nvidia-cufft-cu12==11.3.3.83",
+    "nvidia-cufile-cu12==1.13.1.3",
+    "nvidia-curand-cu12==10.3.9.90",
+    "nvidia-cusolver-cu12==11.7.3.90",
+    "nvidia-cusparse-cu12==12.5.8.93",
+    "nvidia-cusparselt-cu12==0.7.1",
+    "nvidia-nccl-cu12==2.28.9",
+    "nvidia-nvjitlink-cu12==12.8.93",
+    "nvidia-nvshmem-cu12==3.4.5",
+    "nvidia-nvtx-cu12==12.8.90",
+    "omegaconf==2.4.0",
+    "onnxruntime==1.32.0",
+    "onnxruntime-gpu==1.22.0",
+    "opencv-python==5.1.0.95",
+    "packaging==26.3",
+    "pillow==13.0.0",
+    "pip==26.3",
+    "platformdirs==4.14.8",
+    "pooch==1.9.0",
+    "protobuf==7.36.2",
+    "psutil==7.2.2",
+    "pybind11==3.1.0",
+    "pydantic==2.14.4",
+    "pydantic_core==2.50.5",
+    "pygltflib==1.16.5",
+    "Pygments==2.21.0",
+    "PyMatting==1.1.16",
+    "pymeshfix==0.18.1",
+    "pymeshlab==2025.7.post1",
+    "python-dateutil==2.9.0.post0",
+    "PyYAML==6.0.4",
+    "referencing==0.37.0",
+    "regex==2026.11.19",
+    "rembg==2.0.87",
+    "requests==2.34.2",
+    "rich==15.0.0",
+    "rpds-py==2026.9.1",
+    "s3transfer==0.19.3",
+    "safetensors==0.8.0",
+    "scikit-image==0.26.0",
+    "scipy==1.18.1",
+    "setuptools==78.1.0",
+    "shellingham==1.5.4",
+    "six==1.17.0",
+    "sympy==1.14.0",
+    "tifffile==2026.11.16",
+    "tokenizers==0.23.3",
+    "torch==2.11.0+cu128",
+    "torchvision==0.26.0+cu128",
+    "tqdm==4.70.1",
+    "transformers==5.24.0",
+    "trimesh==4.12.2",
+    "triton==3.6.0",
+    "truststore==0.10.5",
+    "typer==0.29.2",
+    "typing-inspect==0.9.0",
+    "typing-inspection==0.4.5",
+    "typing_extensions==4.16.0",
+    "urllib3==2.8.0",
+    "wheel==0.48.0",
+    "wrapt==2.5.2",
+    "xatlas==0.0.11",
+    "zipp==4.1.2",
+]
+# END frozen-set constraints
+
+# torch and torchvision come from the CUDA 12.8 index, as the image installs them today. The index is explicit, so
+# no other package can be taken from it.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }

@@ -152,6 +152,24 @@ class TestGetConstraintObjectTypesEndpoint:
 
     @patch('backend.backend.handlers.auth.authConstraintsService.request_to_claims')
     @patch('backend.backend.handlers.auth.authConstraintsService.CasbinEnforcer')
+    def test_lists_the_audit_log_type_with_its_group_field(self, mock_casbin, mock_claims):
+        """The constraint editor reads this listing, so the audit log type needs no web change."""
+        mock_claims.return_value = dict(_CLAIMS)
+        mock_enforcer = MagicMock()
+        mock_enforcer.enforceAPI.return_value = True
+        mock_casbin.return_value = mock_enforcer
+
+        response = lambda_handler(_make_event(), {})
+
+        assert response['statusCode'] == 200
+        body = json.loads(response['body'])
+        payload = body['message'] if 'message' in body else body
+        audit_log = next(o for o in payload['objectTypes'] if o['value'] == 'auditLog')
+        assert audit_log['label'] == 'Audit Log'
+        assert audit_log['fields'] == [{'label': 'Audit Log Group', 'value': 'auditLogGroup'}]
+
+    @patch('backend.backend.handlers.auth.authConstraintsService.request_to_claims')
+    @patch('backend.backend.handlers.auth.authConstraintsService.CasbinEnforcer')
     def test_api_authorization_denied_returns_403(self, mock_casbin, mock_claims):
         mock_claims.return_value = dict(_CLAIMS)
         mock_enforcer = MagicMock()

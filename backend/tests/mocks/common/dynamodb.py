@@ -71,13 +71,51 @@ def query_has_match(table, **query_kwargs):
         query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
 
 
+# Mirrors common.dynamodb's BatchGetItem budget, imported by name alongside the helper below.
+BATCH_GET_CHUNK_SIZE = 100
+BATCH_GET_MAX_RETRIES = 3
+BATCH_GET_RETRY_BACKOFF_SECONDS = 0.05
+
+
+def batch_get_items(dynamodb_resource, table_name, keys, *,
+                    max_retries=BATCH_GET_MAX_RETRIES,
+                    backoff_seconds=BATCH_GET_RETRY_BACKOFF_SECONDS):
+    """Mock of common.dynamodb.batch_get_items — the same chunk + UnprocessedKeys loop and the same
+    (rows, unresolved_keys) return, minus the backoff sleep. Callers unpack the tuple, so a narrower
+    stand-in fails inside the handler rather than here."""
+    unique_keys = []
+    seen = set()
+    for key in keys:
+        marker = tuple(sorted(key.items()))
+        if marker not in seen:
+            seen.add(marker)
+            unique_keys.append(key)
+
+    rows = []
+    unresolved_keys = []
+    for start in range(0, len(unique_keys), BATCH_GET_CHUNK_SIZE):
+        pending = unique_keys[start:start + BATCH_GET_CHUNK_SIZE]
+        attempt = 0
+        while True:
+            response = dynamodb_resource.batch_get_item(RequestItems={table_name: {'Keys': pending}})
+            rows.extend(response.get('Responses', {}).get(table_name, []))
+            pending = response.get('UnprocessedKeys', {}).get(table_name, {}).get('Keys', [])
+            if not pending:
+                break
+            attempt += 1
+            if attempt > max_retries:
+                unresolved_keys.extend(pending)
+                break
+    return rows, unresolved_keys
+
+
 def to_update_expr(record, op="SET"):
     """Mock of common.dynamodb.to_update_expr — builds the same placeholder-based
     update expression the real helper builds, so a handler that binds this name at
     import time still produces an observable expression."""
     keys = record.keys()
-    keys_attr_names = ["#f{n}".format(n=x) for x in range(len(keys))]
-    values_attr_names = [":v{n}".format(n=x) for x in range(len(keys))]
+    keys_attr_names = ["#u{n}".format(n=x) for x in range(len(keys))]
+    values_attr_names = [":u{n}".format(n=x) for x in range(len(keys))]
     keys_map = {k: key for k, key in zip(keys_attr_names, keys)}
     values_map = {v1: record[v] for v, v1 in zip(keys, values_attr_names)}
     expr = "{op} ".format(op=op) + ", ".join(
@@ -86,12 +124,32 @@ def to_update_expr(record, op="SET"):
     return keys_map, values_map, expr
 
 
-def get_asset_object_from_id(database_id, asset_id):
+def _load_real_dynamodb():
+    """The real common/dynamodb.py, loaded by path. Its archived-asset helpers take the caller's
+    table handle and build plain dicts, so the mock re-exports them rather than a copy that can
+    drift; a handler test still sees the reads its table stub answers."""
+    import importlib.util
+    import os
+    path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'backend', 'common', 'dynamodb.py')
+    spec = importlib.util.spec_from_file_location('_real_common_dynamodb_for_mock', os.path.abspath(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_real_dynamodb = _load_real_dynamodb()
+ARCHIVED_ASSET_DATABASE_SUFFIX = _real_dynamodb.ARCHIVED_ASSET_DATABASE_SUFFIX
+get_asset_record = _real_dynamodb.get_asset_record
+asset_authorization_object = _real_dynamodb.asset_authorization_object
+
+
+def get_asset_object_from_id(database_id, asset_id, include_archived=False):
     """
     Mock implementation of the get_asset_object_from_id function for testing purposes.
     
     Args:
         asset_id: The ID of the asset to retrieve
+        include_archived: Accepted for signature parity with the real helper
         
     Returns:
         Dictionary containing the asset object with the given ID

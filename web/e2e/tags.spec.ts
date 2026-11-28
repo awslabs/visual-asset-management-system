@@ -16,26 +16,38 @@
  *
  * Data-independent (Rule 1): GLOBAL always exists, so every assertion here can use it; anything that
  * needs a real database derives it from the selector's own options and skips when there are none.
+ *
+ * Role-aware (#1634): a role that may not open Tag Management sees the app's "You do not have access
+ * to this page" panel instead, and the cases that need the page skip with that reason.
  */
 
 import { test, expect, Page } from "@playwright/test";
-import { collectPageErrors } from "./support/fixtures";
+import {
+    collectPageErrors,
+    expectSearchRendered,
+    gotoSearch,
+    NO_ACCESS_HEADING,
+    pageAllowed,
+} from "./support/fixtures";
 
 const TAGS_ROOT = "/#/auth/tags";
 const TAGS_GLOBAL = "/#/auth/tags/GLOBAL";
+const TAG_PAGE_DENIED = `This role may not open Tag Management (the app shows "${NO_ACCESS_HEADING}")`;
 
-async function gotoTagsRoot(page: Page) {
-    await page.goto(TAGS_ROOT);
+async function openTags(page: Page, route: string) {
+    await page.goto(route);
+    test.skip(!(await pageAllowed(page, /Tag Management/i)), TAG_PAGE_DENIED);
     await expect(page.getByRole("heading", { name: /Tag Management/i }).first()).toBeVisible({
         timeout: 30000,
     });
 }
 
+async function gotoTagsRoot(page: Page) {
+    await openTags(page, TAGS_ROOT);
+}
+
 async function gotoGlobalTags(page: Page) {
-    await page.goto(TAGS_GLOBAL);
-    await expect(page.getByRole("heading", { name: /Tag Management/i }).first()).toBeVisible({
-        timeout: 30000,
-    });
+    await openTags(page, TAGS_GLOBAL);
 }
 
 test.describe("first-load database selection", () => {
@@ -115,15 +127,34 @@ test.describe("scoped tag administration", () => {
     test("every listed row shows a scope badge", async ({ page }) => {
         await gotoGlobalTags(page);
 
-        const badges = page.getByText(/🌐 GLOBAL|🏢/);
-        const count = await badges.count();
-        test.skip(count === 0, "No tags or tag types in the GLOBAL scope of this environment");
+        // Only table cells. The heading ("Database: 🌐 GLOBAL") and the closed Create forms each
+        // hold a ScopeBadge match that is not a listed row; counting the whole page made this case
+        // fail (or refuse to skip) when GLOBAL had no tags or tag types (#765).
+        const badges = page
+            .locator("table")
+            .getByText(/🌐 GLOBAL|🏢/)
+            .filter({ visible: true });
+        const bothEmpty = async () =>
+            (await page.getByText("No tags to display.").isVisible()) &&
+            (await page.getByText("No tag types to display.").isVisible());
+        await expect
+            .poll(async () => (await badges.count()) > 0 || (await bothEmpty()), {
+                timeout: 20000,
+            })
+            .toBe(true);
+        test.skip(
+            (await badges.count()) === 0,
+            "No tags or tag types in the GLOBAL scope of this environment"
+        );
 
         // In the GLOBAL scope every row is global; a 🏢 badge here would mean the scope filter leaked.
+        const count = await badges.count();
         for (let i = 0; i < Math.min(count, 10); i++) {
             await expect(badges.nth(i)).toBeVisible();
         }
-        await expect(page.getByText("🏢")).toHaveCount(0);
+        await expect(page.locator("table").getByText("🏢").filter({ visible: true })).toHaveCount(
+            0
+        );
     });
 });
 
@@ -210,7 +241,7 @@ test.describe("switching scope replaces the listing", () => {
     test("a specific database shows none of the GLOBAL entries", async ({ page }) => {
         // Start in GLOBAL so the page holds global rows, then switch — the previous scope's rows must
         // not survive. The list only fetches on mount, so this is the case that regressed.
-        await page.goto(TAGS_GLOBAL);
+        await gotoGlobalTags(page);
         await expect(page.getByRole("heading", { name: /^Tag Management$/ }).first()).toBeVisible();
 
         await page
@@ -273,7 +304,11 @@ test.describe("asset tag picker labels and orders by scope", () => {
         // Derived from the environment: any asset will do, and the assertion is about the SHAPE of the
         // labels rather than particular tags. An asset resolves tags in its own database plus GLOBAL,
         // and a bare name is ambiguous because two databases may each own that name.
-        await page.goto("/#/assets");
+        // The Asset list view, which every deployment has: `/#/assets` alone opens the Search view
+        // where one is offered, and in natural-language mode (no OpenSearch) it lists no asset until
+        // a query is run (#1634).
+        await gotoSearch(page, { tab: "asset-list" });
+        await expectSearchRendered(page);
         // Every asset row links to #/databases/{db}/assets/{id}, but so does a row's own database
         // (no id) and the nav bar links to a bare #/assets/ — a `.first()` on a partial href match
         // picks one of those and the test skips itself. Match the full shape instead.
@@ -289,7 +324,7 @@ test.describe("asset tag picker labels and orders by scope", () => {
             href = hrefs.find((h) => assetHref.test(h)) || "";
             if (!href) await page.waitForTimeout(500);
         }
-        test.skip(!href, "No asset in this environment");
+        test.skip(!href, "The Asset list shows no asset to this role");
 
         await page.goto(href.startsWith("#") ? `/${href}` : `/#${href}`);
         // The asset page loads its detail pane asynchronously, so an immediate count() is 0 and the
@@ -301,8 +336,14 @@ test.describe("asset tag picker labels and orders by scope", () => {
         await expect(page.getByRole("dialog")).toBeVisible({ timeout: 30000 });
 
         await page.getByRole("button", { name: /Tags/ }).first().click();
+        // With no tags the multiselect never opens a listbox, so waiting for visibility fails before
+        // the empty-options skip. Treat a missing listbox as "no tags" (#765).
         const listbox = page.locator('[role="listbox"]:visible').first();
-        await expect(listbox).toBeVisible({ timeout: 15000 });
+        const opened = await listbox
+            .waitFor({ state: "visible", timeout: 15000 })
+            .then(() => true)
+            .catch(() => false);
+        test.skip(!opened, "No tags available to this asset");
         const lines = (await listbox.innerText())
             .split("\n")
             .map((s) => s.trim())

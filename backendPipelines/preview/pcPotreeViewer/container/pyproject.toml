@@ -1,0 +1,18 @@
+[project]
+name = "pc-potree-viewer-pipeline"
+version = "0.1.0"
+description = "Point cloud Potree viewer pipeline container images"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "boto3",
+    "botocore",
+]
+
+# Dockerfile_Potree (Python 3.11 on Alpine) and Dockerfile_PDAL (the conda image's Python 3.14) install the
+# committed, hashed requirements.lock with `pip install --require-hashes --only-binary :all:`. It is
+# exported from uv.lock (`uv export`, command in its header); uv is a development and CI tool only and is
+# not part of either image. Every package in it is a pure-Python wheel, so one export serves both Pythons.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"

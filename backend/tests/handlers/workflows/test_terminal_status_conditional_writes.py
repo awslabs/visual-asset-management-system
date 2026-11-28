@@ -63,8 +63,9 @@ class TestFinalizeMainRowIsConditional:
         """FIX-029: the same condition set_pipeline_status uses, on the main row."""
         table = MagicMock()
         dynamo = MagicMock(Table=MagicMock(return_value=table))
-        eo.finalize_main_row(dynamo, "main-tbl", EXEC_ID, "db", "wf", "SUCCEEDED",
-                             "2026-01-01T00:00:00Z")
+        written = eo.finalize_main_row(dynamo, "main-tbl", EXEC_ID, "db", "wf", "SUCCEEDED",
+                                       "2026-01-01T00:00:00Z")
+        assert written is True
         kwargs = table.update_item.call_args.kwargs
         condition = kwargs.get("ConditionExpression", "")
         values = kwargs["ExpressionAttributeValues"]
@@ -76,12 +77,14 @@ class TestFinalizeMainRowIsConditional:
         """FIX-029: losing the race is the expected outcome, not an error the caller must handle.
 
         The error handler and the abort path both call this on a failure path; raising there would
-        mask the original outcome."""
+        mask the original outcome. The lost race is reported as False, so the caller that announces
+        the terminal status on the orchestration bus knows not to."""
         table = MagicMock()
         table.update_item.side_effect = _client_error("ConditionalCheckFailedException")
         dynamo = MagicMock(Table=MagicMock(return_value=table))
-        eo.finalize_main_row(dynamo, "main-tbl", EXEC_ID, "db", "wf", "FAILED",
-                             "2026-01-01T00:00:00Z")
+        written = eo.finalize_main_row(dynamo, "main-tbl", EXEC_ID, "db", "wf", "FAILED",
+                                       "2026-01-01T00:00:00Z")
+        assert written is False
 
     def test_a_real_write_failure_still_propagates(self):
         """FIX-029 control: only ConditionalCheckFailedException may be swallowed.

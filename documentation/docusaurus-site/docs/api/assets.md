@@ -68,9 +68,12 @@ Returns a paginated list of all assets in the specified database. By default, ar
             }
         }
     ],
-    "NextToken": "eyJ..."
+    "NextToken": "eyJ...",
+    "truncated": true
 }
 ```
+
+`NextToken` and `truncated: true` are returned together when more assets remain; `maxItems` caps the assets one response returns.
 
 **Error Responses:**
 
@@ -111,9 +114,12 @@ Returns a paginated list of all assets across all databases that the user has pe
             "tags": ["architecture"]
         }
     ],
-    "NextToken": "eyJ..."
+    "NextToken": "eyJ...",
+    "truncated": true
 }
 ```
+
+`NextToken` and `truncated: true` are returned together when more assets remain; `maxItems` caps the assets one response returns.
 
 **Error Responses:**
 
@@ -141,15 +147,15 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 }
 ```
 
-| Field               | Type          | Required | Description                                                                                                                                                                          |
-| ------------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `databaseId`        | string        | Yes      | Target database identifier.                                                                                                                                                          |
-| `assetName`         | string        | Yes      | Display name for the asset (1-256 characters).                                                                                                                                       |
-| `description`       | string        | Yes      | Asset description (4-256 characters).                                                                                                                                                |
-| `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                                                                                                 |
-| `assetId`           | string        | No       | Explicit asset identifier (2-255 characters), ASCII characters only. Cannot contain forward slashes. Auto-generated if omitted.                                                      |
-| `tags`              | array[string] | No       | Tags for categorization. Each name must resolve in the asset's database or `GLOBAL`, and every required tag type that has tags must be represented. See [Tags](../concepts/tags.md). |
-| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket to associate with the new asset.                                                                                               |
+| Field               | Type          | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------- | ------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`        | string        | Yes      | Target database identifier.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `assetName`         | string        | Yes      | Display name for the asset (1-256 characters).                                                                                                                                                                                                                                                                                                                                                                              |
+| `description`       | string        | Yes      | Asset description (4-256 characters).                                                                                                                                                                                                                                                                                                                                                                                       |
+| `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                                                                                                                                                                                                                                                                                                                                        |
+| `assetId`           | string        | No       | Explicit asset identifier (2-255 characters), ASCII characters only. Cannot contain forward slashes. Cannot be `pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces`, `vams.preparedDownloads`. Auto-generated if omitted.                                                                                                                                               |
+| `tags`              | array[string] | No       | Tags for categorization. Each name must resolve in the asset's database or `GLOBAL`, and every required tag type that has tags must be represented. See [Tags](../concepts/tags.md).                                                                                                                                                                                                                                        |
+| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket for the new asset. A key ending in `/` is a folder; any other key is one object with its folder `{key}/` and previews. A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces` or `vams.preparedDownloads`) as any path segment under the bucket's base prefix is refused with 400. |
 
 **Response:**
 
@@ -162,12 +168,12 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 
 **Error Responses:**
 
-| Status | Description                                       |
-| ------ | ------------------------------------------------- |
-| `400`  | Invalid parameters or validation error.           |
-| `403`  | Not authorized to create assets in this database. |
-| `404`  | Database not found.                               |
-| `500`  | Internal server error.                            |
+| Status | Description                                                                                                                                                                                                                                                                                       |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters or validation error, including a `message` that contains `The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location.` or `The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID.` |
+| `403`  | Not authorized to create assets in this database.                                                                                                                                                                                                                                                 |
+| `404`  | Database not found.                                                                                                                                                                                                                                                                               |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                            |
 
 ---
 
@@ -183,6 +189,10 @@ The endpoint runs in two stages against the same path, distinguished by the pres
 2. **Complete** — after uploading every part to its presigned URL, send the same asset fields plus the `uploadId` and each file's part ETags.
 
 Both stages require `PUT` permission on the asset (`objectType: "asset"`) in addition to route access.
+
+When the complete stage finds no asset, it checks the upload before it creates the asset: an `uploadId` that is unknown, already completed, initialized for another asset or database, or expired is refused with `400` and nothing is created.
+
+Likewise, when the initialize stage finds no asset, it checks the file names first: a file with a blocked extension, an extension the database does not allow, or a `.previewFile.` file with a disallowed extension is refused with `400` and the asset is not created.
 
 #### Initialize request body
 
@@ -203,6 +213,8 @@ Each entry in `files` is an object:
 | `relativeKey` | string  | Yes      | Relative file path for the upload. Must begin with `{assetId}/`.                      |
 | `file_size`   | integer | No       | File size in bytes. Either `file_size` or `num_parts` must be provided.               |
 | `num_parts`   | integer | No       | Number of multipart upload parts. Either `file_size` or `num_parts` must be provided. |
+
+A file's key, including its asset location, is held to the same bound as an upload: 998 bytes of UTF-8 in a bucket registered at its root, less the bucket's base prefix otherwise. A longer key is refused with `400` at the initialize stage. That check needs the asset's bucket, so a missing asset has already been created when it runs. See [Upload File](files.md#upload-file).
 
 ```json
 {
@@ -295,13 +307,13 @@ Repeat the asset fields from the initialize request, and add:
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                               |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, or a failure creating the asset or the upload. |
-| `403`  | Not authorized to write this asset, or the upload step refused the request.                                                                                               |
-| `404`  | The upload step reported its target as not found.                                                                                                                         |
-| `429`  | Rate limit exceeded: more than 20 upload initializations by the user in one minute. The response carries a `Retry-After` header (seconds).                                |
-| `500`  | Internal server error.                                                                                                                                                    |
+| Status | Description                                                                                                                                                                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, a file the upload step refuses for its name (initialize), an upload that cannot be completed (complete; no asset is created in either case), or a failure creating the asset or the upload. |
+| `403`  | Not authorized to write this asset, or the upload step refused the request.                                                                                                                                                                                                                                            |
+| `404`  | The upload step reported its target as not found.                                                                                                                                                                                                                                                                      |
+| `429`  | Rate limit exceeded: more than 20 upload initializations by the user in one minute. The response carries a `Retry-After` header (seconds).                                                                                                                                                                             |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                 |
 
 ---
 
@@ -363,7 +375,7 @@ Retrieves detailed information about a specific asset, including version informa
 
 `PUT /database/{databaseId}/assets/{assetId}`
 
-Updates the editable fields of an existing asset. Only the provided fields are updated; omitted fields and fields sent as `null` remain unchanged, so at least one field must carry a non-null value. An empty `tags` array clears the tag list, subject to the required tag types described for `tags` below.
+Updates the editable fields of an existing asset. Only the provided fields are updated; omitted fields and fields sent as `null` remain unchanged, so at least one field must carry a non-null value. An empty `tags` array clears the tag list, subject to the required tag types described for `tags` below. A change to `assetName` or `tags` is also authorized against the asset as it will be stored: the caller needs `GET` on the stored asset and `GET` and `PUT` on the changed one, or the request answers `403` and changes nothing.
 
 **Request Parameters:**
 
@@ -404,12 +416,12 @@ Updates the editable fields of an existing asset. Only the provided fields are u
 
 **Error Responses:**
 
-| Status | Description                             |
-| ------ | --------------------------------------- |
-| `400`  | Invalid parameters or validation error. |
-| `403`  | Not authorized to update this asset.    |
-| `404`  | Asset not found.                        |
-| `500`  | Internal server error.                  |
+| Status | Description                                                              |
+| ------ | ------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or validation error.                                  |
+| `403`  | Not authorized to update this asset, or to give it the new name or tags. |
+| `404`  | Asset not found.                                                         |
+| `500`  | Internal server error.                                                   |
 
 ---
 
@@ -505,15 +517,40 @@ Restores a previously archived asset record, making it active again. The asset's
 | `403`  | Not authorized to unarchive this asset.                                                                        |
 | `500`  | Internal server error.                                                                                         |
 
+Authorization is decided before the asset's existence and archive state. An archived asset is evaluated on its stored `{databaseId}#deleted` record and a live one on its own record; an asset ID with no asset record is evaluated as an archived asset of the database would be. A caller who may not unarchive the database's archived assets therefore gets `403` for an unknown asset ID as for an archived one, and only a caller who may gets `400` "Asset not found".
+
+---
+
+### Reading an archived asset
+
+An archived asset stays readable until it is unarchived or permanently deleted. Its versions, file versions, metadata, relationships, and comments are kept under the asset's original database ID, and each read route below finds the archived asset when the request carries `showArchived=true`:
+
+| Route                                                                                           | Reads                                                                                                                             |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /database/{databaseId}/assets/{assetId}`                                                   | The asset record, with `status: archived`, `archivedAt`, `archivedBy`, and `archivedReason`.                                      |
+| `GET /database/{databaseId}/assets/{assetId}/listFiles`                                         | The file list. Archiving the asset archives every file, so the list always includes archived files, each with `isArchived: true`. |
+| `GET /database/{databaseId}/assets/{assetId}/fileInfo`                                          | One file's details.                                                                                                               |
+| `GET /database/{databaseId}/assets/{assetId}/getVersions` and `.../getVersion/{assetVersionId}` | The asset's versions.                                                                                                             |
+| `GET /database/{databaseId}/assets/{assetId}/metadata` and `.../metadata/file`                  | Asset and file metadata.                                                                                                          |
+| `GET /database/{databaseId}/assets/{assetId}/asset-links`                                       | The asset's relationships.                                                                                                        |
+| `GET /asset-links/{assetLinkId}/metadata`                                                       | The metadata of a link whose linked asset is archived.                                                                            |
+| `GET /comments/database/{databaseId}/assets/{assetId}` (with `assetVersionId` for one version)  | The asset's comments.                                                                                                             |
+
+`showArchived` accepts `true`, `false`, `1`, `0`, `yes`, and `no`; any other value is rejected with `400`. Without it, each route answers for an archived asset as it does for an asset that does not exist.
+
+An archived asset is read-only. Write routes ignore `showArchived` and refuse every change to an archived asset, its files, versions, metadata, relationships, and comments, until it is restored with [Unarchive Asset](#unarchive-asset). Authorization evaluates the stored archived record, whose `databaseId` reads `{databaseId}#deleted`. A permission constraint on `databaseId` with the `equals` operator therefore does not match an archived asset, while a wildcard, `starts_with`, or `contains` constraint can. With `showArchived=true`, authorization is decided before the asset's existence, so a caller who may not read the database's archived assets is refused for an id that does not exist exactly as for an archived one.
+
 ---
 
 ### Delete Asset
 
 `DELETE /database/{databaseId}/assets/{assetId}/deleteAsset`
 
-Permanently deletes an asset, including all associated files, metadata, versions, and every version of its auxiliary data. The temporary working files a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `assetExports/`, are not deleted.
+Permanently deletes an asset, including all associated files, metadata, versions, and every version of its auxiliary data. The temporary working files a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `vams.assetExports/`, are not deleted.
 
 Asset subscribers are notified by email when the asset is archived. A permanent delete removes the asset's subscriptions and notification topic and sends no email.
+
+The asset's Amazon S3 objects are deleted before any of its records. When Amazon S3 does not delete every object version (for example, access to the bucket is denied or the objects are locked), the request returns `400` and the asset keeps its records and its remaining files, so the delete can be retried once the cause is fixed. The files that were deleted lose their metadata, attributes, version records and auxiliary data. An asset whose bucket no longer exists is deleted.
 
 :::danger[Irreversible Operation]
 This operation permanently removes the asset and all its data. It cannot be undone. Consider using [Archive Asset](#archive-asset) for soft-deletion instead.
@@ -556,12 +593,12 @@ A body is required; `confirmPermanentDelete` must be `true`. An empty body retur
 
 **Error Responses:**
 
-| Status | Description                                                 |
-| ------ | ----------------------------------------------------------- |
-| `400`  | Missing body or `confirmPermanentDelete` not set to `true`. |
-| `403`  | Not authorized to delete this asset.                        |
-| `404`  | Asset not found.                                            |
-| `500`  | Internal server error.                                      |
+| Status | Description                                                                                                                                   |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Missing body or `confirmPermanentDelete` not set to `true`, or Amazon S3 did not delete every object version of the asset; the asset is kept. |
+| `403`  | Not authorized to delete this asset.                                                                                                          |
+| `404`  | Asset not found.                                                                                                                              |
+| `500`  | Internal server error.                                                                                                                        |
 
 ---
 
@@ -606,13 +643,14 @@ Generates presigned S3 URLs for downloading files from an asset. The URLs are ti
 }
 ```
 
-| Field                 | Type               | Required | Description                                                                                                                                                              |
-| --------------------- | ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `key`                 | string             | No       | Relative file path within the asset. If omitted, the asset's primary file is used. Mutually exclusive with `keys`.                                                       |
-| `keys`                | (string\|object)[] | No       | Files to generate URLs for in bulk (max 1,500 per request; `assetFile` only). Each entry is a path string (latest) or `{key, versionId}`. Mutually exclusive with `key`. |
-| `versionId`           | string             | No       | S3 version ID for a single `key`. Cannot be combined with `keys` (put versions on individual keys instead).                                                              |
-| `assetVersionId`      | string             | No       | VAMS asset version ID. Resolves the S3 version from the version snapshot for all requested file(s).                                                                      |
-| `assetVersionIdAlias` | string             | No       | Named version alias. Resolves to an asset version ID, then to the S3 version.                                                                                            |
+| Field                 | Type               | Required | Description                                                                                                                                                                                                               |
+| --------------------- | ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `downloadType`        | string             | Yes      | `assetFile` for the asset's files or `assetPreview` for its preview image.                                                                                                                                                |
+| `key`                 | string             | No       | The file's path in the asset with its leading `/` ([file path](files.md#concepts)). If omitted, the asset's primary file is used. Mutually exclusive with `keys`.                                                         |
+| `keys`                | (string\|object)[] | No       | Files to generate URLs for in bulk (max 1,500 per request; `assetFile` only). Each entry is a path string (latest) or `{key, versionId}`, read by the [file path](files.md#concepts) rule. Mutually exclusive with `key`. |
+| `versionId`           | string             | No       | S3 version ID for a single `key`. Cannot be combined with `keys` (put versions on individual keys instead).                                                                                                               |
+| `assetVersionId`      | string             | No       | VAMS asset version ID. Resolves the S3 version from the version snapshot for all requested file(s).                                                                                                                       |
+| `assetVersionIdAlias` | string             | No       | Named version alias. Resolves to an asset version ID, then to the S3 version.                                                                                                                                             |
 
 :::warning[Version Resolution and Exclusivity]
 Version resolution is applied per file: `assetVersionId`/`assetVersionIdAlias` pins **all** files to that asset version snapshot; otherwise a per-file `versionId` (or the single `versionId` for a single `key`) selects that S3 version; with no version specified the **latest** file version is returned. Only one of `versionId`, `assetVersionId`, or `assetVersionIdAlias` can be specified at the request level. Per-file `versionId`s in `keys` cannot be combined with `assetVersionId`/`assetVersionIdAlias`. Version parameters are not allowed for asset preview downloads, and `key`/`keys` are mutually exclusive.
@@ -660,15 +698,21 @@ Version resolution is applied per file: `assetVersionId`/`assetVersionIdAlias` p
 
 Bulk requests return one entry per requested key. File paths that do not exist or are not downloadable are skipped (reported with `success: false` and an `error` reason, plus a warning in `message`); the request fails with `400` only when no URL can be generated at all. The top-level `downloadUrl` carries the first successful URL for compatibility with single-URL consumers.
 
+Every `assetFile` URL downloads its file as an attachment: Amazon S3 answers with `Content-Disposition: attachment`, so opening the URL in a browser saves the file whatever content type or download name the file was stored with. A file URL also names the file by the last segment of its path, as `filename` (printable ASCII, with each other character as `_`) and `filename*` (RFC 8187, the exact name); the two are always sent together. A folder URL carries `attachment` alone, as does a file whose named header would exceed 640 characters once percent-encoded in the URL: every name of up to 255 ASCII letters, digits and `-._~` is named, and a name in three-byte characters, such as Chinese or Japanese, up to about 35 characters. Without a name in the header, the browser names the file from the URL path, which ends in the same name. The `assetPreview` URL is served inline. To display a file's content, use the [stream endpoint](files.md#stream-endpoints).
+
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                            |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, version parameters used with preview downloads, or asset is not distributable. |
-| `403`  | Not authorized to download this asset.                                                                                                                                                                 |
-| `404`  | Database, asset, version, or file not found.                                                                                                                                                           |
-| `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                 |
-| `500`  | Internal server error.                                                                                                                                                                                 |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, version parameters used with preview downloads, asset version or file not found, asset is not distributable, or the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). Preview images are still served for a quarantined asset: `downloadType: assetPreview`, and a single `key` naming a file's `{file}.previewFile.{ext}` preview image with an allowed image extension and no version parameter. |
+| `403`  | Not authorized to download this asset. A caller who may not download it receives `403` whether or not the asset exists.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `404`  | Asset not found (`message` "Asset not found"); answered only to a caller allowed to download the asset.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+
+:::tip[One archive instead of many URLs]
+To download files, folders, or a whole asset as a single zip, tar, or tar.gz file, create a zip download job with `POST /database/{databaseId}/assets/{assetId}/download/zip`. The archive is built in the background and can reach 5 TiB. See the [Zip Downloads API](zip-downloads.md).
+:::
 
 ---
 
@@ -724,7 +768,7 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 | `startingToken`               | string        | --      | Pagination token from a previous response.                            |
 
 :::note[Presigned URLs Follow the Asset's Distributable Flag]
-`generatePresignedUrls` applies the same controls as the [Download Asset](#download-asset) endpoint. A URL is issued only for a file of an asset whose `isDistributable` is `true`, and never for a folder or an archived file. An asset that is not distributable is still exported with its files, metadata, and relationships; each of its files carries `presignedFileDownloadUrl: null`, and its `isdistributable` field tells the client why. A file whose extension or content type is on the executable blocklist is listed but receives no download URL, as the download endpoint refuses it. Every URL the export issues is recorded in the file download audit log, one entry per file, with a `downloadType` of `export`.
+`generatePresignedUrls` applies the same controls as the [Download Asset](#download-asset) endpoint. A URL is issued only for a file of an asset whose `isDistributable` is `true`, and never for a folder or an archived file. An asset that is not distributable is still exported with its files, metadata, and relationships; each of its files carries `presignedFileDownloadUrl: null`, and its `isdistributable` field tells the client why. A file whose extension or content type is on the executable blocklist is listed but receives no download URL, as the download endpoint refuses it. Each URL downloads its file as an attachment, named as the [Download Asset](#download-asset) file URLs are. Every URL the export issues is recorded in the file download audit log, one entry per file, with a `downloadType` of `export`.
 :::
 
 **Response:**
@@ -754,6 +798,8 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 }
 ```
 
+Each file's preview path in the export is chosen the way the file listing chooses it: the newest `.previewFile.` object that is not archived, or, with `includeArchivedFiles: true`, the newest archived one when the file has no other.
+
 :::note[A Large Asset Is Returned Over Several Pages]
 `maxFiles` bounds the files one page returns across all of its assets, so a page can end before `maxAssets` assets when the budget runs out. An asset holding more files than the budget is returned over successive pages: its entry sets `files_truncated` to `true`, and `NextToken` resumes that asset's file list where the page stopped rather than moving on to the next asset.
 
@@ -766,7 +812,7 @@ A serialized payload of 100KB or less is returned inline with status `200`, as s
 ```json
 {
     "message": "Export payload exceeds the inline response size and is available at the redirect target",
-    "presignedExportPayloadUrl": "https://<auxiliary-bucket>.s3.<region>.amazonaws.com/assetExports/...",
+    "presignedExportPayloadUrl": "https://<auxiliary-bucket>.s3.<region>.amazonaws.com/vams.assetExports/...",
     "presignedExportPayloadExpiresIn": 3600
 }
 ```
@@ -778,17 +824,17 @@ Two constraints apply to the redirect target:
 -   **Send no `Authorization` header to the presigned URL.** It carries its own authorization in the query string, and Amazon S3 rejects a request presenting two authorization mechanisms. Standard clients strip the header automatically on a cross-host redirect.
 -   **Issue a `GET`, not a `POST`.** The status is `303` rather than `307` precisely so that redirect-following clients switch the method; the URL is signed for a `GET` and rejects any other verb.
 
-`presignedExportPayloadExpiresIn` reports the longest the URL can remain valid, in seconds, taken from the deployment's presigned-URL timeout. The URL stops working earlier if the Lambda role credentials that signed it expire first, so request the payload promptly.
+`presignedExportPayloadExpiresIn` reports the longest the URL can remain valid, in seconds, taken from the deployment's presigned-URL timeout. The URL stops working earlier if the Lambda role credentials that signed it expire first, so request the payload promptly. The staged object is deleted automatically 8 days after it is written, by which time no presigned URL for it still works.
 :::
 
 **Error Responses:**
 
-| Status | Description                          |
-| ------ | ------------------------------------ |
-| `400`  | Invalid parameters.                  |
-| `403`  | Not authorized to export this asset. |
-| `404`  | Asset not found.                     |
-| `500`  | Internal server error.               |
+| Status | Description                                                                                                                                                                                                                                                   |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or `generatePresignedUrls` was requested for an asset on the page that is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). |
+| `403`  | Not authorized to export this asset.                                                                                                                                                                                                                          |
+| `404`  | Asset not found.                                                                                                                                                                                                                                              |
+| `500`  | Internal server error.                                                                                                                                                                                                                                        |
 
 ---
 
@@ -875,6 +921,7 @@ The `assetSnapshot` object is open-schema: snapshot fields may grow over time, a
 
 -   [Databases API](databases.md) -- Manage the databases assets belong to
 -   [Files API](files.md) -- Upload, move, and stream an asset's files
+-   [Zip Downloads API](zip-downloads.md) -- Download files, folders, or a whole asset as one archive
 -   [Asset Versions API](asset-versions.md) -- Create, inspect, and revert asset versions
 -   [Comments API](comments.md) -- Attach review comments to an asset version
 -   [Metadata API](metadata.md) -- Manage asset and file metadata

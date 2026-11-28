@@ -4,20 +4,14 @@
  */
 
 /**
- * Locks in five properties of the GenAI pipelines that fail silently, or fail late, at runtime.
+ * Locks in three properties of the NVIDIA GenAI pipelines that fail silently, or fail late, at runtime.
  *
- *   1. metadata3dLabeling: the Blender container image directory must resolve with EXACT case.
- *      `cdk synth` reads it from disk, so a mismatched segment blocks the whole deployment on any
- *      case-sensitive filesystem while appearing to exist on Windows/macOS.
- *   2. metadata3dLabeling: ConstructPipelineTask must catch to the pipelineEnd path. pipelineEnd is
- *      the only state that resolves the parent workflow's task token, so a failure at the first
- *      state otherwise leaves that task RUNNING until its own taskTimeout.
- *   3. Cosmos/Gr00t: the HuggingFace token must never appear in the synthesized template. The
+ *   1. Cosmos/Gr00t: the HuggingFace token must never appear in the synthesized template. The
  *      secret is created empty and populated by a custom resource carrying the value in its code
  *      asset.
- *   4. Cosmos Reason/Transfer + Gr00t: the state machine timeout must ENVELOPE the Batch attempt
+ *   2. Cosmos Reason/Transfer + Gr00t: the state machine timeout must ENVELOPE the Batch attempt
  *      duration, and the role must be able to describe/terminate the `.sync` job it submitted.
- *   5. Cosmos CodeBuild: each family's opt-in is scoped to that family, so a family left on the
+ *   3. Cosmos CodeBuild: each family's opt-in is scoped to that family, so a family left on the
  *      local Docker build never receives a CodeBuild-built ECR image.
  */
 
@@ -25,6 +19,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as events from "aws-cdk-lib/aws-events";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -34,13 +29,13 @@ import * as Config from "../../config/config";
 import * as Service from "../../lib/helper/service-helper";
 import * as s3AssetBuckets from "../../lib/helper/s3AssetBuckets";
 import { storageResources } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
-import { Metadata3dLabelingConstruct } from "../../lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/metadata3dLabeling-construct";
 import { CosmosCodeBuildConstruct } from "../../lib/nestedStacks/pipelines/genAi/nvidia/cosmos/constructs/cosmosCodeBuild-construct";
 import { Cosmos3Construct } from "../../lib/nestedStacks/pipelines/genAi/nvidia/cosmos/constructs/cosmos3-construct";
 import { CosmosPredictConstruct } from "../../lib/nestedStacks/pipelines/genAi/nvidia/cosmos/constructs/cosmosPredict-construct";
 import { CosmosReasonConstruct } from "../../lib/nestedStacks/pipelines/genAi/nvidia/cosmos/constructs/cosmosReason-construct";
 import { CosmosTransferConstruct } from "../../lib/nestedStacks/pipelines/genAi/nvidia/cosmos/constructs/cosmosTransfer-construct";
 import { Gr00tFinetuneConstruct } from "../../lib/nestedStacks/pipelines/genAi/nvidia/gr00t/constructs/gr00tFinetune-construct";
+import { ImageTo3dConstruct } from "../../lib/nestedStacks/pipelines/genAi/imageTo3d/constructs/imageTo3d-construct";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
 
@@ -142,92 +137,6 @@ const roleActions = (template: Template, roleIdFragment: string): string[] =>
         .filter(([logicalId]) => logicalId.includes(roleIdFragment))
         .flatMap(([, policy]) => (policy as any).Properties.PolicyDocument.Statement)
         .flatMap(actionsOf);
-
-describe("metadata3dLabeling container image path", () => {
-    test("resolves to an exact-case directory on disk", () => {
-        // The path the construct passes is resolved relative to the shared batch-fargate construct.
-        const batchConstructDir = path.resolve(
-            __dirname,
-            "..",
-            "..",
-            "lib",
-            "nestedStacks",
-            "pipelines",
-            "constructs"
-        );
-        const source = fs.readFileSync(
-            path.resolve(
-                __dirname,
-                "..",
-                "..",
-                "lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/metadata3dLabeling-construct.ts"
-            ),
-            "utf-8"
-        );
-        const segments = /imageAssetPath:\s*path\.join\(([^)]*)\)/.exec(source);
-        expect(segments).not.toBeNull();
-        const parts = segments![1]
-            .split(",")
-            .map((s) => s.trim().replace(/^"|"$/g, ""))
-            .filter((s) => s.length > 0);
-
-        const resolved = path.resolve(batchConstructDir, path.join(...parts));
-
-        // fs.existsSync is case-INSENSITIVE on Windows, so compare each segment against the real
-        // directory listing — that is what a case-sensitive filesystem enforces at synth time.
-        let cursor = path.parse(resolved).root;
-        for (const segment of resolved.slice(cursor.length).split(path.sep)) {
-            expect(fs.readdirSync(cursor)).toContain(segment);
-            cursor = path.join(cursor, segment);
-        }
-    });
-});
-
-describe("metadata3dLabeling processing state machine", () => {
-    // The construct IS a NestedStack, so the state machine is in its own template — the parent
-    // holds only an AWS::CloudFormation::Stack placeholder and Template.fromStack does not descend.
-    let template: Template;
-
-    beforeAll(() => {
-        const h = makeHarness("Metadata3dLabelingTestStack", (c) => {
-            c.app.pipelines.useGenAiMetadata3dLabeling.enabled = true;
-            c.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterWithVAMS = false;
-        });
-        const pipeline = new Metadata3dLabelingConstruct(h.stack, "Metadata3dLabelingPipeline", {
-            config: h.config,
-            storageResources: h.storage,
-            vpc: h.vpc,
-            pipelineSubnets: h.subnets,
-            pipelineSecurityGroups: h.securityGroups,
-            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
-            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
-        });
-        template = Template.fromStack(pipeline);
-    });
-
-    test("every task catches to a handler that reaches PipelineEndTask", () => {
-        const definitions = Object.values(stateMachineDefinitions(template));
-        expect(definitions).toHaveLength(1);
-        const asl = JSON.parse(definitions[0]);
-
-        const taskStates = Object.entries(asl.States).filter(
-            ([name, state]: [string, any]) => state.Type === "Task" && name !== "PipelineEndTask"
-        ) as [string, any][];
-
-        // Each catch handler is a Pass that hands off to the state releasing the task token.
-        const catchTargets = Object.fromEntries(
-            taskStates.map(([name, state]) => [
-                name,
-                state.Catch === undefined ? undefined : asl.States[state.Catch[0].Next].Next,
-            ])
-        );
-        expect(catchTargets).toEqual({
-            ConstructPipelineTask: "PipelineEndTask",
-            BlenderRendererBatchJob: "PipelineEndTask",
-            MetadataGenerationLambdaFunctionTask: "PipelineEndTask",
-        });
-    });
-});
 
 describe.each([
     [
@@ -347,6 +256,34 @@ describe.each([
             c.app.pipelines.useNvidiaGr00t.huggingFaceToken = HF_TOKEN;
             c.app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.enabled = true;
             c.app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.autoRegisterWithVAMS = false;
+        },
+    ],
+    [
+        "ImageTo3d",
+        (h: Harness) =>
+            new ImageTo3dConstruct(h.stack, "ImageTo3dPipeline", {
+                config: h.config,
+                storageResources: h.storage,
+                vpc: h.vpc,
+                pipelineSubnets: h.subnets,
+                pipelineSecurityGroups: h.securityGroups,
+                lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+                importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+                modelCacheBucket: h.modelCacheBucket,
+                efsFileSystem: h.efsFileSystem,
+                efsSecurityGroup: h.efsSecurityGroup,
+                codeBuildImages: {
+                    stable3dgen: {
+                        repository: new ecr.Repository(h.stack, "ImageTo3dStable3dgenRepo"),
+                        imageUri: "123456789012.dkr.ecr.us-east-1.amazonaws.com/stable3dgen:latest",
+                        codeBuildProjectName: "imageto3d-stable3dgen",
+                    },
+                },
+            }),
+        (c: Config.Config) => {
+            c.app.pipelines.useImageTo3d.enabled = true;
+            c.app.pipelines.useImageTo3d.huggingFaceToken = HF_TOKEN;
+            c.app.pipelines.useImageTo3d.autoRegisterWithVAMS = false;
         },
     ],
 ])("%s GPU pipeline", (name, build, mutate) => {

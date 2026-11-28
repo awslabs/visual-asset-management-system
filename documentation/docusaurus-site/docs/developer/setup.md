@@ -6,16 +6,17 @@ This guide covers how to set up a local development environment for all VAMS com
 
 Before starting, ensure you have the following installed on your development machine.
 
-| Tool        | Minimum Version                | Purpose                                                   |
-| ----------- | ------------------------------ | --------------------------------------------------------- |
-| Python      | 3.13+                          | Backend Lambda handlers, CLI tool                         |
-| Node.js     | 22.22.3+                       | Frontend build, CDK infrastructure                        |
-| npm         | Included with Node             | Package management (never use yarn)                       |
-| Docker      | Latest                         | CDK deployment, container pipelines                       |
-| AWS CLI     | v2                             | AWS account access                                        |
-| AWS CDK CLI | Pinned in `infra/package.json` | Infrastructure deployment; run as `npx cdk` from `infra/` |
-| Git         | Latest                         | Version control                                           |
-| nvm         | Latest                         | Node version management                                   |
+| Tool        | Minimum Version                 | Purpose                                                         |
+| ----------- | ------------------------------- | --------------------------------------------------------------- |
+| Python      | 3.13+                           | Backend Lambda handlers, CLI tool                               |
+| uv          | Pinned in each `pyproject.toml` | Locking and auditing Python dependencies (not needed to deploy) |
+| Node.js     | 22.22.3+                        | Frontend build, CDK infrastructure                              |
+| npm         | Included with Node              | Package management (never use yarn)                             |
+| Docker      | Latest                          | CDK deployment, container pipelines                             |
+| AWS CLI     | v2                              | AWS account access                                              |
+| AWS CDK CLI | Pinned in `infra/package.json`  | Infrastructure deployment; run as `npx cdk` from `infra/`       |
+| Git         | Latest                          | Version control                                                 |
+| nvm         | Latest                          | Node version management                                         |
 
 :::info[Python Version Note]
 While AWS Lambda functions run on Python 3.12, local development and testing use Python 3.13+. The `backend/requirements.txt` file targets Python 3.13+ for development dependencies.
@@ -113,14 +114,14 @@ pip install -r requirements-dev.txt
 
 ### Key Dependencies
 
-| Package                 | Version | Purpose                   |
-| ----------------------- | ------- | ------------------------- |
-| `aws-lambda-powertools` | 2.36.0  | Logger, Parser, BaseModel |
-| `boto3`                 | 1.43.45 | AWS SDK                   |
-| `pydantic`              | 1.10.13 | Data validation (v1 only) |
-| `casbin`                | 1.36.0  | ABAC/RBAC authorization   |
-| `moto`                  | 5.1.0   | AWS service mocking (dev) |
-| `pytest`                | 9.0.3   | Test framework (dev)      |
+| Package                 | Version  | Purpose                   |
+| ----------------------- | -------- | ------------------------- |
+| `aws-lambda-powertools` | 2.36.0   | Logger, Parser, BaseModel |
+| `boto3`                 | 1.43.126 | AWS SDK                   |
+| `pydantic`              | 1.10.13  | Data validation (v1 only) |
+| `casbin`                | 1.36.0   | ABAC/RBAC authorization   |
+| `moto`                  | 5.2.5    | AWS service mocking (dev) |
+| `pytest`                | 9.2.0    | Test framework (dev)      |
 
 :::warning[Pydantic Version]
 VAMS uses Pydantic **v1** (1.10.x). Never install or use Pydantic v2 APIs such as `model_validator`, `model_dump`, or `ConfigDict`. These will fail at Lambda import time. See the [Backend Development](backend.md) guide for correct patterns.
@@ -128,25 +129,158 @@ VAMS uses Pydantic **v1** (1.10.x). Never install or use Pydantic v2 APIs such a
 
 ### Managing Python Dependencies
 
-The backend and Lambda layer projects manage their Python dependencies with [Poetry](https://python-poetry.org/). Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a generated artifact exported from `poetry.lock`, so it must always match the lock. The backend test environment installs `backend/requirements-dev.txt` directly. The Lambda layer bundling process does not read the committed file: it runs `poetry export` inside the build container, installs that export, and writes it over the layer directory's `requirements.txt`, so a layer ships what its `poetry.lock` resolves to. Poetry-managed projects are `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/`, and `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`.
+VAMS manages its Python dependencies with [uv](https://docs.astral.sh/uv/). Each project (the backend, a Lambda layer, a pipeline container, a package) keeps three files together in one directory:
 
-To change a dependency version, edit the constraint in `pyproject.toml` (only needed when the existing constraint excludes the target version), re-resolve the lock, and re-export the requirements file:
+| File               | What it is                                                                                     | Edited by        |
+| ------------------ | ---------------------------------------------------------------------------------------------- | ---------------- |
+| `pyproject.toml`   | The direct dependencies and their version constraints, plus the project's uv settings          | You              |
+| `uv.lock`          | Every package the constraints resolve to, direct and transitive, at an exact version           | `uv lock` only   |
+| `requirements.txt` | The pinned export of `uv.lock` that pip installs at build time (the backend also has a `-dev`) | `uv export` only |
 
-```bash
-# Re-resolve the lock without installing
-poetry update --lock <package>
+uv is a developer and CI tool only. Deploys never run it: Lambda layer bundling and the pipeline Dockerfiles install the committed `requirements.txt` with pip, so customer pip settings (a corporate index, certificates in `infra/config/docker/Dockerfile-customDependencyBuildConfig`) keep working, and a layer ships exactly what its committed export names. A layer directory without a `requirements.txt` fails the build with a message. The uv-locked projects today include `backend/`, the Lambda layers under `backend/lambdaLayers/`, the RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`) and the 3D Basic Conversion image (`backendPipelines/conversion/3dBasic/lambdaContainer/`), and an add-on's own layer project follows the same rule; `.github/python-lock-exemptions.json` lists the dependency files that do not have a lock yet.
 
-# Lambda layers and pipeline layers (single requirements.txt)
-poetry export --without-hashes -f requirements.txt -o requirements.txt
+#### Project settings
 
-# backend/ exports two files (main vs. dev)
-poetry export --only main --without-hashes -f requirements.txt -o requirements.txt
-poetry export --with dev --without-hashes -f requirements.txt -o requirements-dev.txt
+Every uv project sets these in `pyproject.toml`:
+
+```toml
+[project]
+requires-python = ">=3.12,<3.13"   # the Python the code runs on: 3.12 for Lambda layers and lambda/python:3.12 images, the base image's Python for a container; the backend test project uses ">=3.13,<4"
+dependencies = [
+    "boto3==1.43.126",              # pin direct dependencies exactly where the runtime must not move
+]
+
+[tool.uv]
+package = false                     # a dependency set, not an installable package (Lambda layers, containers)
+required-version = "==0.13.8"       # the uv version the lock was made with; the CI audit installs the same version
+exclude-newer = "7 days"            # only resolve releases at least seven days old, like npm's min-release-age
+environments = ["sys_platform == 'linux'"]   # deploy-path projects: lock only the Linux resolution (the 3D Basic image also locks macOS and Python 3.12 to 3.14, so its hashed export installs on a developer machine)
 ```
 
-Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together. Do not edit a Poetry-exported requirements file directly — the next export silently overwrites manual changes. Requirements files without a side-by-side `pyproject.toml` (for example, `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`) are hand-maintained pip files and are edited directly.
+Run the uv version the project requires, for example `uvx --from uv==0.13.8 uv lock`; another version stops with an error instead of rewriting the lock.
+
+#### Add or change a dependency
+
+1. Edit the dependency in `pyproject.toml`. To move a package within an existing constraint, skip this step.
+2. Re-resolve the lock: `uv lock` after an edit, or `uv lock --upgrade-package <package>` to move one package (one `--upgrade-package` per package). Do not run a bare `uv lock --upgrade`, which moves every package.
+3. Re-export the requirements file with the command in its header:
+
+```bash
+# Lambda layers and containers (one requirements.txt)
+uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt
+
+# backend/ exports two files (main and dev)
+uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt
+uv export --frozen --no-hashes --no-emit-project --group dev --no-annotate -o requirements-dev.txt
+
+# A container image that installs with `pip --require-hashes` keeps the hashes in its export; the
+# optional STEP input of the 3D Basic Conversion image (cascadio) is the `step` dependency group,
+# exported to its own file
+uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.txt
+uv export --frozen --no-emit-project --only-group step --no-annotate -o requirements-step.txt
+
+# Six pipeline containers install `requirements.lock` (zip archive, video SOP BOM, CAD STEP agent,
+# coordinate transform, Potree, Isaac Lab training): the same hashed export, written to that name
+uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.lock
+
+# Cosmos Transfer installs the same hashed export of its NCCL wheel as `requirements-nccl.lock`
+uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements-nccl.lock
+```
+
+4. Commit `pyproject.toml`, `uv.lock` and the exported file(s) in the same commit, and list each version change in the pull request.
+
+Never edit an exported requirements file by hand: the next export overwrites it, and the CI audit fails because the file no longer matches the lock. Requirements files with no lock (the GPU pipeline images) are hand-maintained pip files and are edited directly; each one is listed under `exemptions` in `.github/python-lock-exemptions.json` until it gets a lock. The published command-line packages have locks; their hand-written ranged files are covered in [Published packages: VamsCLI and VamsMCP](#published-packages-vamscli-and-vamsmcp).
+
+#### Published packages: VamsCLI and VamsMCP
+
+`tools/VamsCLI/` and `tools/VamsMCP/` are installable packages, so their `pyproject.toml` ranges (and VamsCLI's `setup.py` and hand-written `requirements*.txt`) are the install contract and stay ranges. Each also has a `uv.lock` that records one resolution of those ranges for development, CI and the audit; installing either package with pip never uses it, and the build backend stays setuptools. Move a locked package with `uvx --from uv==0.13.8 uv lock --upgrade-package <package>`, in both locks when both hold it (VamsMCP's lock resolves VamsCLI's dependencies too, and no test compares the two); a range change goes into `pyproject.toml`, `setup.py` and `requirements.txt` together, followed by `uv lock`.
+
+VamsCLI's `requirements.lock`, which the EDH Linux AMI recipes install with `--require-hashes`, is a hashed export of its lock (runtime dependencies plus the `build` group): `uv export --frozen --no-emit-project --no-dev --no-annotate --group build -o requirements.lock`. The audit regenerates it and fails when it is stale. VamsMCP's lock resolves `vamscli` from `../VamsCLI`, because VamsCLI is not published to PyPI. The audit also resolves every dependency group and extra of each lock (the `dev` extras of both packages included). The hand-written ranged files beside a lock are listed under `rangedInputs` in `.github/python-lock-exemptions.json`, each with a reason; the audit and `infra/test/ci/pythonDependencyLocks.test.ts` fail an entry whose file is gone, has no `uv.lock` beside it, names a package the lock does not hold, or is installed or copied by a Dockerfile, AMI recipe, workflow, script or CDK bundling command. Keep the list to the published package files.
+
+The installer scan reads text, so it has coverage gaps. It finds a listed file named in an install, `COPY` or `cp` command by its repository path, a two-component suffix of it, a path relative to the installing file, or an absolute path whose parent directory name contains the project directory name (`/opt/vams/vamscli-src/requirements.txt` for `tools/VamsCLI`). It joins backslash-continued lines, and scans Dockerfiles, makefiles and `.yml`, `.yaml`, `.sh`, `.bash`, `.ts`, `.py`, `.toml` and `.json` files outside tests and docs. It does not find a directory `COPY` followed by `-r` on a path under another name (`COPY tools/VamsCLI /src`, then `-r /src/requirements.txt`), a path assembled in code (`path.join('tools', 'VamsCLI', 'requirements.txt')`), or a bare file name in a file of another directory. Review such a change by hand; the check that every package in a listed file is in the project's lock still limits what it can install.
+
+#### Shared packages across layers
 
 `backend/` and `backend/lambdaLayers/base/` lock every package they share at the same version, because the handler Lambdas load their packages from the base layer while the backend tests install `backend/requirements-dev.txt`. Update a shared package in both projects together; `backend/tests/test_base_layer_dependency_parity.py` fails when the two locks differ.
+
+The RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`) is attached to the pipeline Lambda together with the base layer, and both extract into `/opt/python`, so a package both layers carry at different versions ends up mixed from two releases. That layer therefore declares no AWS SDK package (`boto3`, `botocore` and `s3transfer` come from the base layer) and locks every other package it shares with the base layer at the base layer's version; re-lock it in the same change that moves a shared package in the base layer. `infra/test/pipelines/eksKubernetesLayerPackages.test.ts` fails on either, and on a function that attaches the Kubernetes layer without the base layer. The same rule applies to any new layer that is attached beside the base layer.
+
+#### New layer, pipeline or package
+
+A new Lambda layer, pipeline Lambda or container, or Python package needs its own `pyproject.toml`, `uv.lock` and committed `requirements.txt` export in the directory the build installs from. Nothing else has to be registered: the CI audit finds every tracked `uv.lock`. `infra/test/ci/pythonDependencyLocks.test.ts` fails any Python dependency file the audit does not cover: a `pyproject.toml` that declares dependencies or a top-level `requirements*.txt` or `requirements*.lock` with no `uv.lock` beside it, and, anywhere, a `Pipfile`, a `setup.py` or `setup.cfg` with `install_requires`, an `*.in` file, a pip-compile `requirements*.lock` with no `uv.lock` beside it, a `constraints*.txt`, or a file in a `requirements/` folder. It also fails a `requirements*.txt` or `requirements*.lock` beside a `uv.lock` that does not start with the uv export header. When a lock is not possible yet, add the path to `.github/python-lock-exemptions.json` with a `reason` and a `plannedIn` naming the change that will add the lock; reviewers decide whether the exemption is acceptable. The test also fails an exemption whose file is gone or already locked.
+
+#### The CI dependency audit
+
+The `python-dependency-audit` job in `.github/workflows/ci.yml` runs `.github/scripts/python_dependency_audit.py`. For every directory with a tracked `uv.lock` it:
+
+1. runs `uv lock --check`, which fails when `pyproject.toml` changed without a re-lock;
+2. requires every top-level `requirements*.txt` and `requirements*.lock` in the directory to be a uv export (a file without the `uv export` header fails), regenerates each one from its header command, and fails when the result differs from the committed file;
+3. audits the exports with [pip-audit](https://pypi.org/project/pip-audit/) against the PyPI advisory database, and fails on every advisory not on the allowlist. A run that cannot reach the advisory service fails as well.
+
+Run the same checks locally from the repository root, with the pinned uv on `PATH` (for example installed with `uv self update 0.13.8`, or the standalone installer for that version):
+
+```bash
+PIP_AUDIT_VERSION=2.10.1 python3 .github/scripts/python_dependency_audit.py
+```
+
+The script regenerates stale exports in place, so `git diff` afterwards shows the fix to commit. `PIP_AUDIT_VERSION` is the version the workflow sets.
+
+pip-audit cannot read a `name @ <URL>` requirement. The audit therefore accepts one only as a wheel whose file name is the package's and whose URL starts with an allowed prefix (today the flash-attn release assets used by the GR00T image), checks it as `name==<version>` with the version read from the file name, and fails the run on any other direct URL: a git source, an archive, or a wheel on another host. After the prefix the URL must be one `v<tag>/<file>.whl`: a dot segment, percent-encoding, query or fragment fails the run. A new prebuilt wheel needs its prefix added to `ALLOWED_DIRECT_URL_PREFIXES` in `.github/scripts/python_dependency_audit.py`, with a test.
+
+pip-audit evaluates an environment marker against the Python that runs the job and drops a line whose marker is false (`typing-extensions==4.15.0 ; python_full_version < '3.13'`, or a `sys_platform == 'win32'` pin on Linux) without a finding or a warning. The audit therefore removes the marker of each pin from the copy it reads, so every pin is checked whatever platform installs it, and fails the run, naming the file, line and package, when a pin of an export is missing from pip-audit's report.
+
+The GR00T image build also checks the copy of Isaac-GR00T's own dependency lists. `backendPipelines/genAi/nvidia/gr00t/container/pyproject.toml` repeats the `dependencies` and `base` extra of Isaac-GR00T's `pyproject.toml` at the Dockerfile's `STABLE_COMMIT`, and `upstream-requirements.json` in the same directory records the lists and the commit. Right after the clone, before any install, the Dockerfile runs `check_upstream_requirements.py`, which compares the cloned file with the record and stops the build, naming the differing entries, when any entry or the order differs; it reads both with the standard library only, because the image's Python 3.10 has no `tomllib` and nothing is installed yet. A jest test holds the literal lists, the record and `pyproject.toml` equal, so a hand edit fails in CI. To move `STABLE_COMMIT`, copy the new commit's two lists into `upstream-requirements.json` and the first lines of `pyproject.toml`, update the commit in both and the literal lists in `infra/test/pipelines/pipelineImageLocks.test.ts`, run `uv lock`, and re-export `requirements.lock` and `requirements-build.lock` with the commands in their headers.
+
+Image to 3D images lock their whole installed Python set, one lock per image, under `backendPipelines/genAi/imageTo3d/container/locks/<model>/`. For six of the seven images the set comes from a build of the image made before its lock existed: `frozen-set.txt` holds that build's `pip freeze --all`, `pyproject.toml` repeats it as `constraint-dependencies` (`python locks/tools/sync_constraints.py locks/<model>` writes the block), and `uv lock` therefore resolves every package to the version the image already shipped. The Dockerfile installs `requirements-build.lock`, then `requirements.lock` (torch and torchvision from the explicit PyTorch index), then `requirements-gpl.lock` when `ENABLE_GPL_MESH_REPAIR` is `true`, each with `pip install --require-hashes --no-deps`, and builds the packages listed in `out-of-lock.json` from their pinned clones. A prebuilt wheel (the TRELLIS.2 flash-attn wheel) is a `name @ <wheel URL>` line of `requirements.lock` under the audit's allowed prefix, read by its file name; `check_installed_set.py` reads it the same way. A package built from a clone without a hash of its own (utils3d) carries a `treeSha256` in `out-of-lock.json`: the Dockerfile compares it with the SHA-256 over the clone's tracked files, in addition to the commit. Two checks run in the build. Right after the clone, `check_upstream_requirements.py` compares the upstream requirements file with the copy in `upstream/` (suffix `.recorded`) the lock was resolved from, so a moved `*_COMMIT` fails until the image is re-locked. After the last install, `check_installed_set.py` and `pip check` fail on any package that is missing, extra or at another version than the lock names. The audit reads a pin with a local version label such as `torch==2.10.0+cu128` as the public release. SAM 3D differs in three ways: its set is uv's resolution at the `exclude-newer` cutoff in its `pyproject.toml` (its development image no longer built, so there was no shipped set to freeze); its conda environment is `conda-explicit.txt`, upstream's `environments/default.yml` with a `#sha256:` checksum on every package, which micromamba verifies and the Dockerfile requires; and kaolin, which PyPI does not carry, is installed from NVIDIA's wheel checked by its SHA-256 (`wheelSha256` in `out-of-lock.json`). To move an upstream commit or a package, follow `locks/tools/relock.md`.
+
+The audit covers only the packages in a `uv.lock` and its committed exports. It does not cover:
+
+-   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project;
+-   the Potree PDAL image's conda build environment (`pdal-build.explicit.txt`, pinned by build and SHA-256 but not read by the audit), and the Jupyter packages that open3d's Linux wheels require but its macOS wheels do not declare: the coordinate transform and 3D thumbnail projects name `ipywidgets` themselves so the lock keeps what the images always carried;
+-   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos image and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images. Of the GPU images, Cosmos Transfer's NCCL wheel (`requirements-nccl.lock`, a hashed export installed on top of upstream's environment), the Isaac Lab training image and the GR00T image (`requirements.lock` and `requirements-build.lock`, with Isaac-GR00T's dependency lists copied into its `pyproject.toml`) are locked; the audit reads the GR00T image's prebuilt flash-attn wheel by its name and version. All seven Image to 3D images are locked per image (see above), apart from the SAM 3D image's kaolin wheel, which PyPI does not carry, so pip-audit cannot read it (the build checks it by its SHA-256); and Splat Toolbox is left on its own requirements file (its `container/requirements.txt` is upstream's file, overwritten at every `cdk synth`, and the only remaining entry in `.github/python-lock-exemptions.json`);
+-   packages that come with a container base image or the Lambda runtime and are not in a lock, including the Isaac Lab base image's other Python packages (the Isaac Lab training image's lock lists the packages the image adds and the base-image packages those need, at the base image's versions, and the audit reads all of them);
+-   a dependency group with no committed export, except where the project has no export at all (then the whole lock is audited).
+
+The release-time image scan remains the record for a full container image.
+
+#### Fixing or allowlisting an advisory
+
+Fix an advisory by moving the package to a fixed version (steps above). A security fix does not wait for the seven-day release-age rule. When the fixed release is younger than seven days, `exclude-newer` hides it, so take it with a per-package override in the project's `pyproject.toml`:
+
+1. Add the package under `[tool.uv]`, with a comment naming the advisory and the date to remove the override (seven days after the release):
+
+    ```toml
+    [tool.uv]
+    exclude-newer = "7 days"
+    # PYSEC-2026-0000: take the fixed examplepkg release before the 7-day window. Remove after 2026-12-01.
+    exclude-newer-package = { examplepkg = "2026-11-24T00:00:00Z" }
+    ```
+
+    The date is the newest upload time allowed for that package; use the fixed release's upload time or later. When the fixed release requires newer releases of other packages (`boto3` pins its `botocore`, for example), add those packages to the same table.
+
+2. Re-resolve with `uv lock --upgrade-package <package>` (one `--upgrade-package` per package in the override), then re-export the requirements file(s) with the command in their header.
+3. Confirm `uv lock --check` passes in the project directory, and commit `pyproject.toml`, `uv.lock` and the export(s) together.
+4. After the removal date, when the release is older than seven days, delete the override line and its comment, run `uv lock`, and check that `uv.lock` keeps the same versions.
+
+Do not pass `--exclude-newer-package` on the `uv lock` command line instead: the override is then recorded in `uv.lock` but not in `pyproject.toml`, and the next `uv lock --check`, which the CI audit runs, fails.
+
+Allowlist an advisory only when no fixed release exists, when the fixed release breaks the runtime the project pins (for example a fix that needs Pydantic v2 or a newer Python than the Lambda runtime), or when a vendor base image ships the package and the image's lock keeps the base image's version (the Isaac Lab training image, whose fixes arrive with the next base image digest). Add an entry to `.github/python-audit-allowlist.json`:
+
+```json
+{
+    "entries": [
+        {
+            "id": "PYSEC-2026-0000",
+            "package": "examplepkg",
+            "projects": ["backend"],
+            "reason": "No fixed release yet; the affected function is not called by VAMS.",
+            "reviewBy": "2027-01-31"
+        }
+    ]
+}
+```
+
+`id` is the advisory id (a PYSEC, GHSA or CVE id pip-audit prints for the finding), `package` is the package name (compared case-insensitively, with `-`, `_` and `.` treated alike), `projects` lists the project directories the entry applies to (each a directory with a tracked `uv.lock`, written as the audit prints it, for example `backendPipelines/simulation/isaacLabTraining/container`), `reason` says why the package cannot move yet, and `reviewBy` is the date by which someone re-checks it. An entry matches on the advisory id, the package and the project, not on the version, so the same advisory in a project the entry does not name still fails the build. CI fails an entry with no reason, no projects, a project without a tracked `uv.lock`, or a `reviewBy` in the past, and fails each project where the entry's id no longer matches a finding, so a project is removed from an entry once the package moves there, and the entry once it names no project.
 
 ## Infrastructure Setup
 
@@ -279,7 +413,7 @@ Do not run lint or prettier commands from individual subdirectories. The root-le
 
 Docker is required for CDK deployment because:
 
-1. **Lambda Layers** -- Poetry-based Python dependency bundling runs inside Docker containers
+1. **Lambda Layers** -- Python dependency bundling (`pip install` of each layer's committed `requirements.txt`) runs inside Docker containers
 2. **Pipeline Containers** -- Processing pipelines (3D conversion, Gaussian splatting, point cloud) build container images
 3. **Cross-platform Builds** -- Docker handles architecture differences (ARM64 vs x86_64)
 

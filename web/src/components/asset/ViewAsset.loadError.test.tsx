@@ -15,21 +15,10 @@ import * as APIService from "../../services/APIService";
 import { apiClient, ApiError } from "../../services/apiClient";
 import ViewAsset from "./ViewAsset";
 import { __resetCache } from "../../features/orchestration/permissions/useAllowedRoutes";
-
-/** What `GET /auth/routes/api/allowed` lists for a role allowed every asset page action. */
-const ADMIN_ROUTES = [
-    "/database",
-    "/database/{databaseId}",
-    "/assets",
-    "/uploads",
-    "/database/{databaseId}/assets/{assetId}",
-    "/database/{databaseId}/assets/{assetId}/archiveAsset",
-    "/database/{databaseId}/assets/{assetId}/metadata",
-].map((path) => ({ path, methods: ["GET", "POST", "PUT", "DELETE"], category: "test" }));
-const allowedRoutesResponse = (routes: typeof ADMIN_ROUTES) => [
-    true,
-    { routes, userId: "template-user" },
-];
+import {
+    ADMIN_ROUTES,
+    allowedRoutesResponse,
+} from "../../features/orchestration/permissions/templateRoleRoutes.testdata";
 import Synonyms from "../../synonyms";
 
 // The asset request itself runs through the real service layer, so these cases exercise how the
@@ -116,8 +105,32 @@ describe("asset page when the asset cannot be loaded", () => {
         expect(mockMounted).toEqual([]);
     });
 
+    it("shows a blocked request's message and request ID, not a permission denial", async () => {
+        mockGet.mockRejectedValue(
+            new ApiError(
+                "Request blocked by the deployment's AWS WAF web ACL (request ID r-1)",
+                403,
+                {
+                    message: "Request blocked by the deployment's AWS WAF web ACL",
+                    blockedBy: "waf",
+                    requestId: "r-1",
+                }
+            )
+        );
+        renderPage();
+
+        expect(
+            await screen.findByText(
+                `Failed to load ${Synonyms.asset} data. Request blocked by the deployment's AWS WAF web ACL (request ID r-1)`
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/Access denied/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/invalid response/)).not.toBeInTheDocument();
+        expect(mockMounted).toEqual([]);
+    });
+
     it("says the service could not be reached when the browser never sees a response", async () => {
-        // A request whose response the browser never sees rejects like this.
+        // A cross-origin request whose CORS preflight the web ACL blocked rejects like this.
         mockGet.mockRejectedValue(new TypeError("Failed to fetch"));
         renderPage();
 

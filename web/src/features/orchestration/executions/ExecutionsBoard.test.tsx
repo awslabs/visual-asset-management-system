@@ -8,8 +8,9 @@ import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
-import ExecutionsBoard from "./ExecutionsBoard";
+import ExecutionsBoard, { notAbortableSummary } from "./ExecutionsBoard";
 import type { Execution } from "../types";
+import { appCache } from "../../../services/appCache";
 
 // Mock the query hooks
 jest.mock("../api/queries", () => ({
@@ -419,7 +420,7 @@ describe("ExecutionsBoard", () => {
 
         await user.keyboard("{Enter}");
         expect(await screen.findByRole("menu")).toBeInTheDocument();
-        expect(screen.getByRole("menuitem", { name: "View results" })).toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "View details" })).toBeInTheDocument();
     });
 
     it("shows a placeholder in the search box", () => {
@@ -713,6 +714,8 @@ describe("ExecutionsBoard", () => {
         await waitFor(() => {
             const lastFilters = useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
             expect(lastFilters.workflowId).toBe("wf-picked");
+            // Both halves of the workflow key, even with "All workflow databases" selected.
+            expect(lastFilters.workflowDatabaseId).toBe("db-picked");
         });
 
         // Changing the database resets the workflow: the workflow list is scoped to the database, so a
@@ -741,6 +744,96 @@ describe("ExecutionsBoard", () => {
         await waitFor(() => {
             const lastFilters = useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
             expect(lastFilters.triggerType).toBe("File-Upload");
+        });
+    });
+
+    describe("the System reindex trigger filter", () => {
+        afterEach(() => appCache.removeItem("config"));
+
+        it("is offered with vector search on, and sends the stored value unchanged", async () => {
+            appCache.setItem("config", { featuresEnabled: ["VECTORSEARCH"] });
+            const { useExecutions } = require("../api/queries");
+            renderBoard([]);
+
+            const select = screen.getByLabelText("Filter by trigger") as HTMLSelectElement;
+            expect(Array.from(select.options).map((option) => option.value)).toEqual([
+                "",
+                "Manual",
+                "File-Upload",
+                "System-Reindex",
+            ]);
+
+            await userEvent.selectOptions(
+                select,
+                screen.getByRole("option", { name: "System reindex" })
+            );
+            await waitFor(() => {
+                const lastFilters =
+                    useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
+                expect(lastFilters.triggerType).toBe("System-Reindex");
+            });
+        });
+
+        it("is not offered with vector search off, where no such run can exist", () => {
+            appCache.setItem("config", { featuresEnabled: ["LOCATIONSERVICES"] });
+            renderBoard([]);
+
+            const select = screen.getByLabelText("Filter by trigger") as HTMLSelectElement;
+            expect(Array.from(select.options).map((option) => option.value)).toEqual([
+                "",
+                "Manual",
+                "File-Upload",
+            ]);
+            expect(screen.queryByRole("option", { name: "System reindex" })).toBeNull();
+        });
+    });
+
+    describe("the Zip download trigger filter", () => {
+        afterEach(() => appCache.removeItem("config"));
+
+        it("is offered with Download as Zip on, and sends the stored value unchanged", async () => {
+            appCache.setItem("config", { featuresEnabled: ["ZIPDOWNLOADS"] });
+            const { useExecutions } = require("../api/queries");
+            renderBoard([]);
+
+            const select = screen.getByLabelText("Filter by trigger") as HTMLSelectElement;
+            expect(Array.from(select.options).map((option) => option.value)).toEqual([
+                "",
+                "Manual",
+                "File-Upload",
+                "System-ZipDownload",
+            ]);
+
+            await userEvent.selectOptions(
+                select,
+                screen.getByRole("option", { name: "Zip download" })
+            );
+            await waitFor(() => {
+                const lastFilters =
+                    useExecutions.mock.calls[useExecutions.mock.calls.length - 1][1];
+                expect(lastFilters.triggerType).toBe("System-ZipDownload");
+            });
+        });
+
+        it("sits after the reindex value when both features are on", () => {
+            appCache.setItem("config", { featuresEnabled: ["VECTORSEARCH", "ZIPDOWNLOADS"] });
+            renderBoard([]);
+
+            const select = screen.getByLabelText("Filter by trigger") as HTMLSelectElement;
+            expect(Array.from(select.options).map((option) => option.value)).toEqual([
+                "",
+                "Manual",
+                "File-Upload",
+                "System-Reindex",
+                "System-ZipDownload",
+            ]);
+        });
+
+        it("is not offered with Download as Zip off, where no such run can exist", () => {
+            appCache.setItem("config", { featuresEnabled: ["VECTORSEARCH"] });
+            renderBoard([]);
+
+            expect(screen.queryByRole("option", { name: "Zip download" })).toBeNull();
         });
     });
 
@@ -897,7 +990,10 @@ describe("ExecutionsBoard", () => {
             </QueryClientProvider>
         );
 
-        expect(screen.getByText("No executions found.")).toBeInTheDocument();
+        // An empty page that still has more is not an empty history: the copy says loading more
+        // continues, rather than "No executions found." beside the Load more control.
+        expect(screen.queryByText("No executions found.")).not.toBeInTheDocument();
+        expect(screen.getByText(/load more to keep looking/)).toBeInTheDocument();
         const loadMore = screen.getByRole("button", { name: /Load more/ });
         await userEvent.click(loadMore);
         expect(fetchNextPage).toHaveBeenCalled();
@@ -1127,6 +1223,84 @@ describe("ExecutionsBoard abort feedback", () => {
         await waitFor(() => expect(mockToast.success).toHaveBeenCalled());
         expect(mockToast.warning).not.toHaveBeenCalled();
         expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("names the sub-processes VAMS cannot stop ahead of the free-text warnings", async () => {
+        // `notAbortable` is the structured half of the same answer: a registered sub-process whose
+        // type VAMS has no stop API for. It is summarised into one leading line so the operator sees
+        // what was left running by name and stage, not only as a sentence buried in `warnings`.
+        setup(
+            jest.fn().mockResolvedValue({
+                message: "Execution aborted",
+                warnings: [SUBPROCESS_WARNING],
+                notAbortable: [
+                    {
+                        resourceType: "slurmJob",
+                        label: "Mock Slurm job",
+                        stageName: "MockTrain",
+                        locator: "slurm-00001",
+                    },
+                ],
+            })
+        );
+        await clickAbort();
+        const notice = await screen.findByRole("status");
+        expect(notice).toHaveTextContent(
+            "1 sub-process was left running because VAMS cannot stop their type: Mock Slurm job (slurmJob, in MockTrain)."
+        );
+        // The summary leads; the server's own sentence still follows it.
+        expect(notice.textContent!.indexOf("1 sub-process was")).toBeLessThan(
+            notice.textContent!.indexOf("Batch job 1234")
+        );
+        await waitFor(() => expect(mockToast.warning).toHaveBeenCalled());
+        expect(mockToast.warning.mock.calls[0][1].description).toContain("Mock Slurm job");
+    });
+
+    it("names the member each sub-process belongs to after a group abort", async () => {
+        // A group abort's `notAbortable` entries carry the member `executionId`; the summary prefixes
+        // each entry with it the way the server prefixes the member's warnings.
+        const MEMBER = "a1b2c3d4e5f60718293a4b5c6d7e8f90"; // pragma: allowlist secret
+        const abortImpl = jest.fn().mockResolvedValue({
+            message: { groupId: "grp-1", results: [{ executionId: MEMBER, status: "aborted" }] },
+            warnings: [`${MEMBER}: ${SUBPROCESS_WARNING}`],
+            notAbortable: [
+                {
+                    executionId: MEMBER,
+                    resourceType: "slurmJob",
+                    label: "Mock Slurm job",
+                    stageName: "MockTrain",
+                    locator: "slurm-00001",
+                },
+            ],
+        });
+        setup(abortImpl, { ...RUNNING_ROW, executionGroupId: "grp-1" });
+        await userEvent.click(screen.getByRole("button", { name: "Execution actions" }));
+        await userEvent.click(await screen.findByText(/abort group/i));
+        const dialogButtons = await screen.findAllByRole("button", { name: "Abort" });
+        await userEvent.click(dialogButtons[dialogButtons.length - 1]);
+
+        expect(abortImpl).toHaveBeenCalledWith({ executionId: "exec-running", groupId: "grp-1" });
+        const notice = await screen.findByRole("status");
+        expect(notice).toHaveTextContent(
+            `1 sub-process was left running because VAMS cannot stop their type: ${MEMBER}: Mock Slurm job (slurmJob, in MockTrain).`
+        );
+        expect(notice).toHaveTextContent(`${MEMBER}: ${SUBPROCESS_WARNING}`);
+    });
+
+    it("prefixes a summary entry with its member only when the entry names one", () => {
+        const entry = {
+            resourceType: "slurmJob",
+            label: "Mock Slurm job",
+            stageName: "MockTrain",
+            locator: "slurm-00001",
+        };
+        expect(notAbortableSummary([entry])).toBe(
+            "1 sub-process was left running because VAMS cannot stop their type: Mock Slurm job (slurmJob, in MockTrain)."
+        );
+        expect(notAbortableSummary([{ ...entry, executionId: "e2" }, entry])).toBe(
+            "2 sub-processes were left running because VAMS cannot stop their type: " +
+                "e2: Mock Slurm job (slurmJob, in MockTrain); Mock Slurm job (slurmJob, in MockTrain)."
+        );
     });
 
     it("still reports a failed abort as an error", async () => {

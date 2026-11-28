@@ -14,11 +14,13 @@ unit-testable and free of module-level AWS/environment coupling: callers resolve
 `get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)` and hand it in.
 """
 
+from common.assetLocations import normalize_base_prefix
+from common.bucketRegistrations import is_retired
 from boto3.dynamodb.conditions import Attr
 
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="DefaultBucket")
+logger = safeLogger()
 
 
 class DefaultBucketNotFoundError(Exception):
@@ -43,30 +45,29 @@ def default_bucket_key(default_bucket, key: str) -> str:
 
     `default_bucket` is a row from resolve_default_bucket (or the prefix string itself).
     """
-    prefix = (default_bucket if isinstance(default_bucket, str)
-              else (default_bucket or {}).get("baseAssetsPrefix") or "")
-    prefix = prefix.strip("/")
+    prefix = normalize_base_prefix(default_bucket if isinstance(default_bucket, str)
+                                   else (default_bucket or {}).get("baseAssetsPrefix"))
     body = (key or "").lstrip("/")
-    return f"{prefix}/{body}" if prefix else body
+    return f"{prefix}{body}"
 
 
 def resolve_default_bucket(buckets_table) -> dict:
     """Return the default asset bucket row: {bucketId, bucketName, baseAssetsPrefix}.
 
     `buckets_table` is a boto3 DynamoDB Table resource for the S3 asset buckets table. The default
-    bucket is the row with `isDefault = True`. A bucket may be registered under multiple prefixes
-    (multiple rows share a bucketName); the root-prefix row is preferred so callers get the bucket's
-    canonical base. `baseAssetsPrefix` is the area VAMS owns within that bucket — join keys to it with
-    default_bucket_key rather than treating them as bucket-root-relative.
+    bucket is the one registration (`bucketId`) whose row has `isDefault = True`; a retired row (its
+    registration left the configuration) never counts. `baseAssetsPrefix` is the area VAMS owns within
+    that bucket — join keys to it with default_bucket_key rather than treating them as
+    bucket-root-relative.
 
     Raises DefaultBucketNotFoundError when none is flagged, DefaultBucketAmbiguousError when more
-    than one bucket is.
+    than one registration is.
     """
     items = []
     scan_kwargs = {"FilterExpression": Attr("isDefault").eq(True)}
     while True:
         response = buckets_table.scan(**scan_kwargs)
-        items.extend(response.get("Items", []))
+        items.extend(item for item in response.get("Items", []) if not is_retired(item))
         if "LastEvaluatedKey" not in response:
             break
         scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
@@ -77,29 +78,27 @@ def resolve_default_bucket(buckets_table) -> dict:
             "populated the S3 asset buckets table with a default bucket."
         )
 
-    # Prefer the bucket-root row when a default bucket is registered under multiple prefixes;
-    # bucketName keeps the order total so the winner never depends on scan order.
-    def _prefix_rank(item):
-        prefix = (item.get("baseAssetsPrefix") or "").strip("/")
-        return (0 if prefix == "" else 1, prefix, item.get("bucketName") or "")
-
-    # Several flagged buckets is unresolvable, not a tie to break: the deployment only ever marks one,
-    # so a second flag is a row for a bucket that left the configuration and no longer carries VAMS's
-    # grants. Picking either one would send every template body and all run I/O to a bucket that may
-    # reject the write, so the ambiguity surfaces instead.
-    distinct_buckets = {item.get("bucketName") for item in items}
-    if len(distinct_buckets) > 1:
+    # Several flagged registrations is unresolvable, not a tie to break: the deployment only ever
+    # marks one, so a second flag is a stale row, which may be another bucket that no longer carries
+    # VAMS's grants or another prefix of the same bucket. Picking either one would send every
+    # template body and all run I/O to a place that may reject the write or that no reader looks in,
+    # so the ambiguity surfaces instead. Registrations are counted by bucketId, never by bucket name.
+    distinct_registrations = {item.get("bucketId") for item in items}
+    if len(distinct_registrations) > 1:
         logger.error(
-            f"More than one bucket is flagged as the VAMS default ({sorted(distinct_buckets)}). Clear "
-            "the stale isDefault row(s) in the S3 asset buckets table."
+            f"More than one bucket registration is flagged as the VAMS default "
+            f"({sorted(str(bucket_id) for bucket_id in distinct_registrations)}). Clear the stale "
+            "isDefault row(s) in the S3 asset buckets table, or deploy again so the table is rewritten "
+            "from the configuration."
         )
         raise DefaultBucketAmbiguousError(
-            "More than one asset bucket is flagged as the VAMS default (isDefault=true). Clear the "
-            "stale row(s) in the S3 asset buckets table so exactly one bucket is the default."
+            "More than one asset bucket registration is flagged as the VAMS default (isDefault=true). "
+            "Clear the stale row(s) in the S3 asset buckets table so exactly one registration is the "
+            "default."
         )
 
-    ordered = sorted(items, key=_prefix_rank)
-    chosen = ordered[0]
+    # One registration has one row; the sort key keeps the choice total if a row was copied by hand.
+    chosen = sorted(items, key=lambda item: str(item.get("bucketName:baseAssetsPrefix") or ""))[0]
     return {
         "bucketId": chosen.get("bucketId"),
         "bucketName": chosen.get("bucketName"),

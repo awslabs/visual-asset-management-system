@@ -366,222 +366,526 @@ describe("the ConfigBuilder mirrors the useFips EU Sovereign warning", () => {
     });
 });
 
-const REKOGNITION_UNAVAILABLE_MESSAGE =
-    /pipelines\.useGenAiMetadata3dLabeling is not supported in .* Amazon Rekognition/;
+/**
+ * **Cross-Region Amazon S3 interface endpoints.** An external asset bucket may be in another Region
+ * of the deployment's partition. When Lambdas run in the VPC, VAMS reaches that Region through a
+ * cross-Region AWS PrivateLink interface endpoint, which AWS offers in the commercial partition only.
+ * `getConfig()` therefore rejects `app.useGlobalVpc.addCrossRegionS3Endpoints: true` together with a
+ * cross-Region bucket outside the `aws` partition, naming the flag and both Regions; with the flag
+ * `false` the operator supplies the network path and the configuration is accepted. The check is
+ * keyed on the resolved partition, not `app.govCloud.enabled`. The commercial case is the control;
+ * the no-cross-Region-bucket case proves the flag is inert until such a bucket appears, which is why
+ * the commercial template carries it `true`. The GovCloud and EU Sovereign templates ship it `false`,
+ * so adding a bucket in another Region to either template is accepted as shipped. A cross-Region
+ * DEFAULT bucket is rejected in every partition. The ConfigBuilder's hand-ported rules are asserted from the same arms.
+ */
+const CROSS_REGION_ENDPOINT_MESSAGE =
+    /app\.useGlobalVpc\.addCrossRegionS3Endpoints is true, but cross-Region AWS PrivateLink to Amazon S3 is available in the commercial partition only/;
+const CROSS_REGION_ENDPOINT_RULE_ID = "cross-region-s3-endpoints-commercial-only";
+const CROSS_REGION_DEFAULT_RULE_ID = "external-bucket-default-must-be-deployment-region";
+const CROSS_REGION_NO_ENDPOINT_WARNING_RULE_ID = "cross-region-bucket-isolated-lambdas-no-endpoint";
 
-/** Enables the GenAI labeling pipeline with a model id the Bedrock prefix rule accepts anywhere. */
-const enableGenAiLabeling = (c: any) => {
-    c.app.useGlobalVpc.enabled = true;
-    c.app.pipelines.useGenAiMetadata3dLabeling.enabled = true;
-    // A base model id with no cross-Region inference-profile prefix. The restricted templates ship
-    // the field empty, so without it the empty-id rule would answer for the arms below.
-    c.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId =
-        "anthropic.claude-3-5-sonnet-20240620-v1:0";
-};
-
-/** Adds useForAllLambdas, under which the VPC builder creates the Rekognition endpoint. */
-const enableGenAiLabelingForAllLambdas = (c: any) => {
-    enableGenAiLabeling(c);
-    c.app.useGlobalVpc.useForAllLambdas = true;
-};
-
-describe("GenAI metadata labeling needs Amazon Rekognition in the Region", () => {
-    // warningsMatching() calls run(), so a "warns" or "allows" case fails if getConfig() throws.
+describe("cross-Region S3 interface endpoint partition gate", () => {
     afterEach(() => {
         (fs.readFileSync as unknown as jest.Mock).mockReset();
     });
 
-    test("warns in the EU Sovereign Cloud and does not reject", () => {
-        const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", enableGenAiLabeling);
-        const warnings = warningsMatching(run, REKOGNITION_UNAVAILABLE_MESSAGE);
-        expect(warnings).toHaveLength(1);
-        expect(warnings[0]).toMatch(/eusc-de-east-1 \(aws-eusc\)/);
-        expect(warnings[0]).toMatch(/Set pipelines\.useGenAiMetadata3dLabeling\.enabled to false/);
-    });
+    const withCrossRegionBucket =
+        (bucketRegion: string, partition: string, extra?: (c: any) => void) => (c: any) => {
+            c.app.assetBuckets.externalAssetBuckets = [
+                {
+                    bucketArn: `arn:${partition}:s3:::remote-assets`,
+                    baseAssetsPrefix: "/",
+                    defaultSyncDatabaseId: "remote",
+                    bucketRegion,
+                },
+            ];
+            extra?.(c);
+        };
 
-    test("rejects it with useForAllLambdas, where the VPC builder adds the endpoint", () => {
-        expect(eusovereignTemplate.app.useGlobalVpc.addVpcEndpoints).toBe(true);
+    const restrictedArms: [string, string, string, () => unknown][] = [
+        ["us-gov-west-1", "aws-us-gov", "us-gov-east-1", () => govcloudTemplate],
+        ["eusc-de-east-1", "aws-eusc", "eusc-de-west-1", () => eusovereignTemplate],
+    ];
+
+    test.each(restrictedArms)(
+        "%s (%s) rejects the flag true with a bucket in %s",
+        (region, partition, bucketRegion, base) => {
+            const run = loadConfig(
+                base(),
+                region,
+                withCrossRegionBucket(bucketRegion, partition, (c) => {
+                    c.app.useGlobalVpc.addCrossRegionS3Endpoints = true;
+                })
+            );
+            expect(run).toThrow(CROSS_REGION_ENDPOINT_MESSAGE);
+        }
+    );
+
+    test.each(restrictedArms)(
+        "%s (%s) names the flag and both Regions in the error",
+        (region, partition, bucketRegion, base) => {
+            const run = loadConfig(
+                base(),
+                region,
+                withCrossRegionBucket(bucketRegion, partition, (c) => {
+                    c.app.useGlobalVpc.addCrossRegionS3Endpoints = true;
+                })
+            );
+            expect(run).toThrow(
+                new RegExp(
+                    `addCrossRegionS3Endpoints[\\s\\S]*'${bucketRegion}'[\\s\\S]*'${region}'[\\s\\S]*\\(${partition}\\)[\\s\\S]*Set app\\.useGlobalVpc\\.addCrossRegionS3Endpoints to false`
+                )
+            );
+        }
+    );
+
+    test.each(restrictedArms)(
+        "%s (%s) treats an omitted flag as true (the backward-compatible default)",
+        (region, partition, bucketRegion, base) => {
+            const run = loadConfig(
+                base(),
+                region,
+                withCrossRegionBucket(bucketRegion, partition, (c) => {
+                    delete c.app.useGlobalVpc.addCrossRegionS3Endpoints;
+                })
+            );
+            expect(run).toThrow(CROSS_REGION_ENDPOINT_MESSAGE);
+        }
+    );
+
+    test.each(restrictedArms)(
+        "%s (%s) accepts the flag false with a bucket in %s",
+        (region, partition, bucketRegion, base) => {
+            const run = loadConfig(
+                base(),
+                region,
+                withCrossRegionBucket(bucketRegion, partition, (c) => {
+                    c.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
+                })
+            );
+            expect(run).not.toThrow();
+        }
+    );
+
+    test.each(restrictedArms)(
+        "%s (%s) accepts a bucket in %s added to the shipped template as it ships",
+        (region, partition, bucketRegion, base) => {
+            // The template's own default must not be the value getConfig() refuses there.
+            expect((base() as any).app.useGlobalVpc.addCrossRegionS3Endpoints).toBe(false);
+            const run = loadConfig(base(), region, withCrossRegionBucket(bucketRegion, partition));
+            expect(run).not.toThrow();
+        }
+    );
+
+    test.each(restrictedArms)(
+        "%s (%s) accepts the shipped template, whose flag is inert without a cross-Region bucket",
+        (region, _partition, _bucketRegion, base) => {
+            const run = loadConfig(base(), region);
+            expect(run).not.toThrow(CROSS_REGION_ENDPOINT_MESSAGE);
+        }
+    );
+
+    test("the commercial partition accepts the flag true with a cross-Region bucket", () => {
+        // Control: proves the rule is scoped to restricted partitions rather than always firing.
         const run = loadConfig(
-            eusovereignTemplate,
-            "eusc-de-east-1",
-            enableGenAiLabelingForAllLambdas
+            commercialTemplate,
+            "us-west-2",
+            withCrossRegionBucket("us-east-1", "aws", (c) => {
+                c.app.useGlobalVpc.addCrossRegionS3Endpoints = true;
+            })
         );
-        expect(run).toThrow(REKOGNITION_UNAVAILABLE_MESSAGE);
+        expect(run).not.toThrow();
     });
 
-    test("the rejection names the Region, the partition and the field to change", () => {
-        const run = loadConfig(
-            eusovereignTemplate,
-            "eusc-de-east-1",
-            enableGenAiLabelingForAllLambdas
-        );
-        expect(run).toThrow(/eusc-de-east-1 \(aws-eusc\)/);
-        expect(run).toThrow(/Set pipelines\.useGenAiMetadata3dLabeling\.enabled to false/);
-    });
-
-    test("warns instead when addVpcEndpoints is false, because no endpoint is created", () => {
-        const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
-            enableGenAiLabelingForAllLambdas(c);
-            c.app.useGlobalVpc.addVpcEndpoints = false;
+    test("the commercial partition resolves an omitted flag to true", () => {
+        const run = loadConfig(commercialTemplate, "us-west-2", (c) => {
+            delete c.app.useGlobalVpc.addCrossRegionS3Endpoints;
         });
-        expect(warningsMatching(run, REKOGNITION_UNAVAILABLE_MESSAGE)).toHaveLength(1);
+        expect(run().app.useGlobalVpc.addCrossRegionS3Endpoints).toBe(true);
     });
 
-    test("warns in AWS GovCloud (US-East) and does not reject", () => {
-        const run = loadConfig(govcloudTemplate, "us-gov-east-1", enableGenAiLabeling);
-        expect(warningsMatching(run, REKOGNITION_UNAVAILABLE_MESSAGE)).toHaveLength(1);
+    test("a cross-Region default bucket is rejected in the commercial partition too", () => {
+        const run = loadConfig(
+            commercialTemplate,
+            "us-west-2",
+            withCrossRegionBucket("us-east-1", "aws", (c) => {
+                c.app.assetBuckets.externalAssetBuckets[0].isDefault = true;
+            })
+        );
+        expect(run).toThrow(
+            /is marked isDefault but is in 'us-east-1' while the deployment is in 'us-west-2'/
+        );
     });
 
-    test("rejects it in AWS GovCloud (US-East) with useForAllLambdas", () => {
-        const run = loadConfig(govcloudTemplate, "us-gov-east-1", enableGenAiLabelingForAllLambdas);
-        expect(run).toThrow(REKOGNITION_UNAVAILABLE_MESSAGE);
-    });
-
-    test("rejects it in AWS GovCloud (US-East) when the Region comes from CDK_DEFAULT_REGION", () => {
-        // The shipped GovCloud template leaves env.region null, so the Region usually comes from the
-        // CLI profile through CDK_DEFAULT_REGION. The rule reads the Region getConfig() resolves.
-        const savedRegion = process.env.CDK_DEFAULT_REGION;
-        process.env.CDK_DEFAULT_REGION = "us-gov-east-1";
+    test("warns, rather than rejects, for in-VPC Lambdas with the flag false and a cross-Region bucket", () => {
+        const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
         try {
-            const run = loadConfig(govcloudTemplate, "us-gov-west-1", (c) => {
-                enableGenAiLabelingForAllLambdas(c);
-                c.env.region = null;
-            });
-            expect(run).toThrow(REKOGNITION_UNAVAILABLE_MESSAGE);
-            expect(run).toThrow(/us-gov-east-1 \(aws-us-gov\)/);
+            const run = loadConfig(
+                commercialTemplate,
+                "us-west-2",
+                withCrossRegionBucket("us-east-1", "aws", (c) => {
+                    c.app.useGlobalVpc.enabled = true;
+                    c.app.useGlobalVpc.useForAllLambdas = true;
+                    c.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
+                    // In-VPC Lambdas cannot use a public Serverless collection (an unrelated rule).
+                    c.app.openSearch.useServerless.allowPublic = false;
+                })
+            );
+            expect(run).not.toThrow();
+            expect(
+                warn.mock.calls.some((call) =>
+                    /addCrossRegionS3Endpoints is false, but external asset buckets are configured in 'us-east-1'/.test(
+                        String(call[0])
+                    )
+                )
+            ).toBe(true);
         } finally {
-            if (savedRegion === undefined) delete process.env.CDK_DEFAULT_REGION;
-            else process.env.CDK_DEFAULT_REGION = savedRegion;
+            warn.mockRestore();
         }
     });
 
-    test("the rejection is reported ahead of the empty Bedrock model id the template ships", () => {
-        const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
-            enableGenAiLabelingForAllLambdas(c);
-            c.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId = "";
-        });
-        expect(run).toThrow(REKOGNITION_UNAVAILABLE_MESSAGE);
-    });
-
-    test("accepts the shipped EU Sovereign config, which leaves the pipeline disabled", () => {
-        expect(eusovereignTemplate.app.pipelines.useGenAiMetadata3dLabeling.enabled).toBe(false);
-        const run = loadConfig(eusovereignTemplate, "eusc-de-east-1");
-        expect(warningsMatching(run, REKOGNITION_UNAVAILABLE_MESSAGE)).toEqual([]);
-    });
-
-    test("still allows the pipeline in AWS GovCloud (US-West), where Rekognition is offered", () => {
-        // Control: proves the rule is keyed on the partition and the Region rather than on
-        // app.govCloud.enabled, which both restricted templates set. The whole call must pass, so
-        // an earlier rule cannot stand in for this one.
-        const run = loadConfig(govcloudTemplate, "us-gov-west-1", enableGenAiLabeling);
-        expect(warningsMatching(run, REKOGNITION_UNAVAILABLE_MESSAGE)).toEqual([]);
-    });
-
-    test("still allows it in AWS GovCloud (US-West) with useForAllLambdas", () => {
-        const run = loadConfig(govcloudTemplate, "us-gov-west-1", enableGenAiLabelingForAllLambdas);
-        expect(warningsMatching(run, REKOGNITION_UNAVAILABLE_MESSAGE)).toEqual([]);
-    });
-
-    test("still allows the pipeline in the commercial partition", () => {
-        const run = loadConfig(commercialTemplate, "us-east-1", enableGenAiLabeling);
-        expect(warningsMatching(run, REKOGNITION_UNAVAILABLE_MESSAGE)).toEqual([]);
-    });
-
-    test("still allows it in the commercial partition with useForAllLambdas", () => {
-        const run = loadConfig(commercialTemplate, "us-east-1", (c) => {
-            enableGenAiLabelingForAllLambdas(c);
-            // The commercial template ships a public Serverless collection, which getConfig()
-            // rejects when every Lambda runs in the VPC.
-            c.app.openSearch.useServerless.allowPublic = false;
-        });
-        expect(warningsMatching(run, REKOGNITION_UNAVAILABLE_MESSAGE)).toEqual([]);
+    test("does not warn when the flag is true", () => {
+        const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+        try {
+            loadConfig(
+                commercialTemplate,
+                "us-west-2",
+                withCrossRegionBucket("us-east-1", "aws", (c) => {
+                    c.app.useGlobalVpc.enabled = true;
+                    c.app.useGlobalVpc.useForAllLambdas = true;
+                    c.app.openSearch.useServerless.allowPublic = false;
+                })
+            )();
+            expect(
+                warn.mock.calls.some((call) =>
+                    /addCrossRegionS3Endpoints is false/.test(String(call[0]))
+                )
+            ).toBe(false);
+        } finally {
+            warn.mockRestore();
+        }
     });
 });
 
-const REKOGNITION_WARNING_RULE_ID = "genai-rekognition-unavailable-in-region";
-const REKOGNITION_ERROR_RULE_ID = "genai-rekognition-endpoint-unavailable-in-region";
+describe("ConfigBuilder mirror of the cross-Region S3 endpoint rules", () => {
+    const ruleIds = (cfg: ReturnType<typeof makeDefaultConfig>) =>
+        evaluateRules(cfg)
+            .map((rule) => rule.id)
+            .filter((id) =>
+                [
+                    CROSS_REGION_ENDPOINT_RULE_ID,
+                    CROSS_REGION_DEFAULT_RULE_ID,
+                    CROSS_REGION_NO_ENDPOINT_WARNING_RULE_ID,
+                ].includes(id)
+            );
 
-/** The Rekognition rules the ConfigBuilder reports for a preset in `region`, with a VPC enabled. */
-const rekognitionRules = (
-    profile: "commercial" | "govcloud" | "eusovereign",
-    region: string | null,
-    options: { enabled?: boolean; useForAllLambdas?: boolean; addVpcEndpoints?: boolean } = {}
-) => {
-    const cfg = makeDefaultConfig(profile);
-    cfg.env.region = region;
-    cfg.app.useGlobalVpc.enabled = true;
-    cfg.app.useGlobalVpc.useForAllLambdas = options.useForAllLambdas ?? false;
-    cfg.app.useGlobalVpc.addVpcEndpoints = options.addVpcEndpoints ?? true;
-    cfg.app.pipelines.useGenAiMetadata3dLabeling.enabled = options.enabled ?? true;
-    return evaluateRules(cfg).filter(
-        (rule) => rule.id === REKOGNITION_WARNING_RULE_ID || rule.id === REKOGNITION_ERROR_RULE_ID
+    const withBucket = (
+        cfg: ReturnType<typeof makeDefaultConfig>,
+        bucketRegion: string,
+        partition: string,
+        isDefault = false
+    ) => {
+        (cfg.app.assetBuckets as any).externalAssetBuckets = [
+            {
+                bucketArn: `arn:${partition}:s3:::remote-assets`,
+                baseAssetsPrefix: "/",
+                defaultSyncDatabaseId: "remote",
+                bucketRegion,
+                isDefault,
+            },
+        ];
+        return cfg;
+    };
+
+    test.each([
+        ["govcloud", "us-gov-west-1", "us-gov-east-1", "aws-us-gov"],
+        ["eusovereign", "eusc-de-east-1", "eusc-de-west-1", "aws-eusc"],
+    ])(
+        "%s preset reports the endpoint rule with the flag true",
+        (profile, region, bucketRegion, partition) => {
+            const cfg = makeDefaultConfig(profile as any);
+            cfg.env.region = region;
+            withBucket(cfg, bucketRegion, partition);
+            cfg.app.useGlobalVpc.addCrossRegionS3Endpoints = true;
+            expect(ruleIds(cfg)).toEqual([CROSS_REGION_ENDPOINT_RULE_ID]);
+            const rule = evaluateRules(cfg).find((r) => r.id === CROSS_REGION_ENDPOINT_RULE_ID);
+            expect(rule?.severity).toBe("error");
+        }
     );
-};
-
-/** The ids of the Rekognition rules the ConfigBuilder reports. */
-const rekognitionRuleIds = (...args: Parameters<typeof rekognitionRules>) =>
-    rekognitionRules(...args).map((rule) => rule.id);
-
-describe("ConfigBuilder mirror of the Rekognition availability rules", () => {
-    // validation.ts is ported from getConfig() by hand and configBuilderSync.test.ts does not read it,
-    // so the builder rules are asserted against the same arms as the getConfig() rules above.
-    test.each([
-        ["eusovereign", "eusc-de-east-1", [REKOGNITION_WARNING_RULE_ID]],
-        ["govcloud", "us-gov-east-1", [REKOGNITION_WARNING_RULE_ID]],
-        ["govcloud", "us-gov-west-1", []],
-        ["commercial", "us-east-1", []],
-    ] as const)("%s preset in %s reports %j", (profile, region, expected) => {
-        expect(rekognitionRuleIds(profile, region)).toEqual(expected);
-    });
 
     test.each([
-        ["eusovereign", "eusc-de-east-1", [REKOGNITION_ERROR_RULE_ID]],
-        ["govcloud", "us-gov-east-1", [REKOGNITION_ERROR_RULE_ID]],
-        ["govcloud", "us-gov-west-1", []],
-        ["commercial", "us-east-1", []],
-    ] as const)("%s preset in %s with useForAllLambdas reports %j", (profile, region, expected) => {
-        expect(rekognitionRuleIds(profile, region, { useForAllLambdas: true })).toEqual(expected);
+        ["govcloud", "us-gov-west-1", "us-gov-east-1", "aws-us-gov"],
+        ["eusovereign", "eusc-de-east-1", "eusc-de-west-1", "aws-eusc"],
+    ])(
+        "%s preset as it ships reports no endpoint rule with a cross-Region bucket",
+        (profile, region, bucketRegion, partition) => {
+            const cfg = makeDefaultConfig(profile as any);
+            cfg.env.region = region;
+            withBucket(cfg, bucketRegion, partition);
+            expect(cfg.app.useGlobalVpc.addCrossRegionS3Endpoints).toBe(false);
+            expect(ruleIds(cfg)).toEqual([]);
+        }
+    );
+
+    test("govcloud preset with in-VPC Lambdas and the flag false reports the warning", () => {
+        const cfg = makeDefaultConfig("govcloud");
+        cfg.env.region = "us-gov-west-1";
+        withBucket(cfg, "us-gov-east-1", "aws-us-gov");
+        cfg.app.useGlobalVpc.useForAllLambdas = true;
+        cfg.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
+        expect(ruleIds(cfg)).toEqual([CROSS_REGION_NO_ENDPOINT_WARNING_RULE_ID]);
+        const rule = evaluateRules(cfg).find(
+            (r) => r.id === CROSS_REGION_NO_ENDPOINT_WARNING_RULE_ID
+        );
+        expect(rule?.severity).toBe("warning");
     });
 
-    test("reports the warning, not the error, when addVpcEndpoints is false", () => {
-        expect(
-            rekognitionRuleIds("eusovereign", "eusc-de-east-1", {
-                useForAllLambdas: true,
-                addVpcEndpoints: false,
-            })
-        ).toEqual([REKOGNITION_WARNING_RULE_ID]);
+    test("commercial preset reports nothing for a cross-Region bucket with the flag true", () => {
+        const cfg = makeDefaultConfig("commercial");
+        cfg.env.region = "us-west-2";
+        withBucket(cfg, "us-east-1", "aws");
+        expect(ruleIds(cfg)).toEqual([]);
     });
 
-    test("reports the endpoint rule as an error and the other rule as a warning", () => {
-        const [endpointRule] = rekognitionRules("eusovereign", "eusc-de-east-1", {
-            useForAllLambdas: true,
-        });
-        const [warningRule] = rekognitionRules("eusovereign", "eusc-de-east-1");
-        expect(endpointRule?.severity).toBe("error");
-        expect(warningRule?.severity).toBe("warning");
+    test("commercial preset reports the default-bucket rule for a cross-Region default bucket", () => {
+        const cfg = makeDefaultConfig("commercial");
+        cfg.env.region = "us-west-2";
+        withBucket(cfg, "us-east-1", "aws", true);
+        expect(ruleIds(cfg)).toEqual([CROSS_REGION_DEFAULT_RULE_ID]);
     });
 
-    test("stays silent while the pipeline is disabled", () => {
-        expect(rekognitionRuleIds("eusovereign", "eusc-de-east-1", { enabled: false })).toEqual([]);
-        expect(
-            rekognitionRuleIds("eusovereign", "eusc-de-east-1", {
-                enabled: false,
-                useForAllLambdas: true,
-            })
-        ).toEqual([]);
+    test("stays silent without a cross-Region bucket", () => {
+        const cfg = makeDefaultConfig("govcloud");
+        cfg.env.region = "us-gov-west-1";
+        withBucket(cfg, "us-gov-west-1", "aws-us-gov");
+        expect(ruleIds(cfg)).toEqual([]);
     });
 
     test("stays silent while the Region is unset", () => {
-        expect(rekognitionRuleIds("govcloud", null)).toEqual([]);
-        expect(rekognitionRuleIds("govcloud", null, { useForAllLambdas: true })).toEqual([]);
+        const cfg = makeDefaultConfig("govcloud");
+        (cfg.env as any).region = null;
+        withBucket(cfg, "us-gov-east-1", "aws-us-gov", true);
+        expect(ruleIds(cfg)).toEqual([]);
+    });
+});
+
+/**
+ * **The Blender agent's Bedrock model.** The Image to 3D Blender agent reasons with a Bedrock model, and
+ * which models an account may invoke differs by partition and by entitlement, so the model id follows the
+ * labeling pipeline's rule: the commercial template carries one, the restricted-partition templates ship it
+ * empty, `getConfig()` rejects an enabled agent with no model id in every partition, and rejects an
+ * inference-profile prefix the partition does not offer (`validateBedrockProfilePrefix`). The model id is
+ * deployment configuration only; no template offers it per run. The ConfigBuilder's hand-ported rules are
+ * asserted from the same arms.
+ */
+const AGENT_MODEL_REQUIRED_MESSAGE =
+    /useImageTo3d\.models\.blenderagent\.bedrockModelId must be set when the Blender agent is enabled/;
+const AGENT_MODEL_PREFIX_MESSAGE =
+    /useImageTo3d\.models\.blenderagent\.bedrockModelId is "[^"]+", whose "[a-z-]+\." cross-Region inference-profile prefix exists only in the commercial partition/;
+const AGENT_MODEL_RULE_ID = "imageto3d-blenderagent-model-id";
+const AGENT_MODEL_PREFIX_RULE_ID = "imageto3d-blenderagent-model-id-prefix-partition";
+
+/** Enable the Blender agent; `modelId` replaces the template's value when given. */
+const enableBlenderAgent = (modelId?: string) => (c: any) => {
+    const imageTo3d = c.app.pipelines.useImageTo3d;
+    c.app.useGlobalVpc.enabled = true;
+    imageTo3d.enabled = true;
+    imageTo3d.huggingFaceToken = "hf_test_token";
+    imageTo3d.models.blenderagent.enabled = true;
+    if (modelId !== undefined) {
+        imageTo3d.models.blenderagent.bedrockModelId = modelId;
+    }
+};
+
+describe("the Blender agent's Bedrock model id", () => {
+    afterEach(() => {
+        (fs.readFileSync as unknown as jest.Mock).mockReset();
     });
 
-    test("[control] the builder reports a partition rule for the preset at all", () => {
-        // Without this, "reports []" is satisfied by an evaluateRules() that returns nothing.
-        const cfg = makeDefaultConfig("eusovereign");
-        cfg.app.openSearch.useServerless.enabled = true;
-        expect(evaluateRules(cfg).map((rule) => rule.id)).toContain(
-            "aoss-serverless-not-in-eusovereign"
+    test("accepts the commercial template's model id in the commercial partition", () => {
+        // The whole call must pass, so the shipped value is a deployable one.
+        const run = loadConfig(commercialTemplate, "us-west-2", enableBlenderAgent());
+        expect(run).not.toThrow();
+    });
+
+    test("ships a model id in the commercial template and none in the restricted ones", () => {
+        const agentModel = (t: any) =>
+            t.app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId;
+        expect(agentModel(commercialTemplate)).toMatch(/^global\./);
+        expect(agentModel(govcloudTemplate)).toBe("");
+        expect(agentModel(eusovereignTemplate)).toBe("");
+    });
+
+    test("rejects an enabled agent with no model id in the commercial partition", () => {
+        // No default is assigned: the operator sees the field rather than inheriting a model.
+        const run = loadConfig(commercialTemplate, "us-west-2", enableBlenderAgent(""));
+        expect(run).toThrow(AGENT_MODEL_REQUIRED_MESSAGE);
+    });
+
+    test.each([
+        [govcloudTemplate, "us-gov-west-1"],
+        [eusovereignTemplate, "eusc-de-east-1"],
+    ])(
+        "rejects an enabled agent with the restricted template's blank model id (%#)",
+        (base, region) => {
+            const run = loadConfig(base, region, enableBlenderAgent());
+            expect(run).toThrow(AGENT_MODEL_REQUIRED_MESSAGE);
+        }
+    );
+
+    test("treats the UNDEFINED placeholder as no model id", () => {
+        const run = loadConfig(govcloudTemplate, "us-gov-west-1", enableBlenderAgent("UNDEFINED"));
+        expect(run).toThrow(AGENT_MODEL_REQUIRED_MESSAGE);
+    });
+
+    test.each(["global.openai.gpt-6-astra", "eu.openai.gpt-6-astra", "jp.openai.gpt-6-astra"])(
+        "rejects the commercial-only profile %s in GovCloud",
+        (modelId) => {
+            const run = loadConfig(govcloudTemplate, "us-gov-west-1", enableBlenderAgent(modelId));
+            expect(run).toThrow(AGENT_MODEL_PREFIX_MESSAGE);
+        }
+    );
+
+    test("accepts a model id offered in the partition", () => {
+        const run = loadConfig(
+            govcloudTemplate,
+            "us-gov-west-1",
+            enableBlenderAgent("us-gov.example.model-v1")
         );
+        expect(run).not.toThrow(AGENT_MODEL_REQUIRED_MESSAGE);
+        expect(run).not.toThrow(AGENT_MODEL_PREFIX_MESSAGE);
+    });
+
+    test("stays silent while the agent is disabled", () => {
+        const run = loadConfig(govcloudTemplate, "us-gov-west-1", (c) => {
+            enableBlenderAgent()(c);
+            c.app.pipelines.useImageTo3d.models.blenderagent.enabled = false;
+        });
+        expect(run).not.toThrow(AGENT_MODEL_REQUIRED_MESSAGE);
+    });
+});
+
+describe("ConfigBuilder mirror of the Blender agent model id rules", () => {
+    /** The agent model-id rules the ConfigBuilder reports for a preset in `region`. */
+    const agentModelRuleIds = (
+        profile: "commercial" | "govcloud" | "eusovereign",
+        region: string,
+        modelId?: string,
+        enabled = true
+    ) => {
+        const cfg = makeDefaultConfig(profile);
+        cfg.env.region = region;
+        enableBlenderAgent(modelId)(cfg);
+        cfg.app.pipelines.useImageTo3d.models.blenderagent.enabled = enabled;
+        return evaluateRules(cfg)
+            .map((rule) => rule.id)
+            .filter((id) => id === AGENT_MODEL_RULE_ID || id === AGENT_MODEL_PREFIX_RULE_ID);
+    };
+
+    test.each([
+        ["commercial", "us-west-2", undefined, []],
+        ["commercial", "us-west-2", "", [AGENT_MODEL_RULE_ID]],
+        ["govcloud", "us-gov-west-1", undefined, [AGENT_MODEL_RULE_ID]],
+        ["eusovereign", "eusc-de-east-1", undefined, [AGENT_MODEL_RULE_ID]],
+        ["govcloud", "us-gov-west-1", "global.openai.gpt-6-astra", [AGENT_MODEL_PREFIX_RULE_ID]],
+        ["govcloud", "us-gov-west-1", "us-gov.example.model-v1", []],
+    ] as const)(
+        "%s preset in %s with model id %j reports %j",
+        (profile, region, modelId, expected) => {
+            expect(agentModelRuleIds(profile, region, modelId)).toEqual(expected);
+        }
+    );
+
+    test("stays silent while the agent is disabled", () => {
+        expect(agentModelRuleIds("govcloud", "us-gov-west-1", undefined, false)).toEqual([]);
+    });
+});
+
+/**
+ * GenAI CAD STEP agent internet research (issue #1703). With research on, the agent sends search
+ * queries written from a run's design prompt to third-party web search engines and fetches public web
+ * pages, so the data leaves AWS and the partition. Research is off by default everywhere, and
+ * `getConfig()` refuses it in the GovCloud and EU Sovereign partitions whether or not the pipeline is
+ * enabled. The commercial partition is the control.
+ */
+const RESEARCH_REFUSED_MESSAGE =
+    /app\.pipelines\.useGenAiCadStepAgent\.allowInternetResearch is true while deploying to the '(aws-us-gov|aws-eusc)' partition/;
+
+describe("CAD STEP agent internet research", () => {
+    const allowResearch = (c: any) => {
+        c.app.pipelines.useGenAiCadStepAgent.allowInternetResearch = true;
+    };
+
+    test.each([
+        ["commercial", commercialTemplate],
+        ["GovCloud", govcloudTemplate],
+        ["EU Sovereign", eusovereignTemplate],
+    ])("the %s template ships it off", (_name, template) => {
+        expect((template as any).app.pipelines.useGenAiCadStepAgent.allowInternetResearch).toBe(
+            false
+        );
+    });
+
+    test("a config that leaves it unset resolves to off", () => {
+        const config = loadConfig(commercialTemplate, "us-east-1", (c) => {
+            delete c.app.pipelines.useGenAiCadStepAgent.allowInternetResearch;
+        })();
+        expect(config.app.pipelines.useGenAiCadStepAgent.allowInternetResearch).toBe(false);
+    });
+
+    test.each([
+        ["GovCloud", govcloudTemplate, "us-gov-west-1"],
+        ["EU Sovereign", eusovereignTemplate, "eusc-de-east-1"],
+    ])("%s refuses it, even with the pipeline disabled", (_name, template, region) => {
+        expect(loadConfig(template, region, allowResearch)).toThrow(RESEARCH_REFUSED_MESSAGE);
+    });
+
+    test.each([
+        ["GovCloud", govcloudTemplate, "us-gov-west-1"],
+        ["EU Sovereign", eusovereignTemplate, "eusc-de-east-1"],
+    ])("%s accepts the shipped value", (_name, template, region) => {
+        expect(loadConfig(template, region)).not.toThrow();
+    });
+
+    test("the commercial partition still allows it when the operator turns it on", () => {
+        const config = loadConfig(commercialTemplate, "us-east-1", allowResearch)();
+        expect(config.app.pipelines.useGenAiCadStepAgent.allowInternetResearch).toBe(true);
+    });
+});
+
+describe("the ConfigBuilder mirrors the CAD STEP research refusal", () => {
+    const fired = (cfg: ReturnType<typeof makeDefaultConfig>) =>
+        evaluateRules(cfg).filter(
+            (rule) => rule.id === "cad-step-agent-research-off-in-restricted-partitions"
+        );
+
+    test.each(["govcloud", "eusovereign"] as const)(
+        "the %s preset ships research off and raises nothing",
+        (preset) => {
+            const cfg = makeDefaultConfig(preset);
+            if (preset === "govcloud") cfg.env.region = "us-gov-west-1";
+            expect(cfg.app.pipelines.useGenAiCadStepAgent.allowInternetResearch).toBe(false);
+            expect(fired(cfg)).toEqual([]);
+        }
+    );
+
+    test.each([
+        ["govcloud", "us-gov-west-1"],
+        ["eusovereign", "eusc-de-east-1"],
+    ] as const)("raises an error for research on in the %s preset", (preset, region) => {
+        const cfg = makeDefaultConfig(preset);
+        cfg.env.region = region;
+        cfg.app.pipelines.useGenAiCadStepAgent.allowInternetResearch = true;
+        const rules = fired(cfg);
+        expect(rules).toHaveLength(1);
+        expect(rules[0].severity).toBe("error");
+    });
+
+    test("is silent in the commercial preset with research on", () => {
+        const cfg = makeDefaultConfig("commercial");
+        cfg.env.region = "us-east-1";
+        cfg.app.pipelines.useGenAiCadStepAgent.allowInternetResearch = true;
+        expect(fired(cfg)).toEqual([]);
     });
 });

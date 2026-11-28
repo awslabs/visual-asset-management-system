@@ -26,6 +26,9 @@ events_client = boto3.client("events", config=retry_config)
 
 BATCH_JOB_QUEUE = os.environ["BATCH_JOB_QUEUE"]
 BATCH_JOB_DEFINITION = os.environ["BATCH_JOB_DEFINITION"]
+# The pipeline's job tags (vams:stackname, vams:pipeline) as a JSON object, set by its CDK construct.
+# AWS Batch puts them on the job, so a later release can scope job permissions to them.
+PIPELINE_JOB_TAGS = json.loads(os.environ.get("PIPELINE_JOB_TAGS") or "{}")
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 # AWS Batch's default container log group; the job's log source is registered only when configured.
 BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
@@ -124,6 +127,15 @@ def lambda_handler(event, context):
             ],
         },
     }
+
+    # The mode's own bound on this attempt (openPipeline's taskTimeoutSeconds); the job definition's
+    # value is the largest mode's, so it only backstops a submission that carries none.
+    attempt_seconds = event.get("taskTimeoutSeconds")
+    if attempt_seconds:
+        submit_params["timeout"] = {"attemptDurationSeconds": int(attempt_seconds)}
+
+    if PIPELINE_JOB_TAGS:
+        submit_params["tags"] = PIPELINE_JOB_TAGS
 
     logger.info(f"Submitting Batch job: {submit_params}")
     response = batch.submit_job(**submit_params)

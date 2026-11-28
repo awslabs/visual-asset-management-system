@@ -35,9 +35,14 @@
 import * as fs from "fs";
 import * as path from "path";
 import { RESOURCE_PARAM_KEYS } from "../../common/resourceParamKeys";
+import { ADDON_RESOURCE_PARAM_KEYS } from "../../common/addonResourceParamKeys";
+import { CUSTOM_RESOURCE_PARAM_KEYS } from "../../common/customResourceParamKeys";
 
 const REPO_ROOT = path.join(__dirname, "..", "../..");
 const BACKEND_MIRROR_PY = path.join(REPO_ROOT, "backend/backend/common/resourceNames.py");
+const DEPLOY_TIME_MIRROR_PY = path.join(REPO_ROOT, "backend/backend/common/deployTimeValues.py");
+const ADDON_MIRROR_PY = path.join(REPO_ROOT, "backend/backend/common/addonResourceNames.py");
+const CUSTOM_MIRROR_PY = path.join(REPO_ROOT, "backend/backend/custom/customResourceNames.py");
 const SELF = path.join(__dirname, path.basename(__filename).replace(/\.js$/, ".ts"));
 const MIGRATION_ROOT = path.join(REPO_ROOT, "infra/deploymentDataMigration");
 const MIGRATION_LOOKUP_PY = path.join(MIGRATION_ROOT, "tools/ssm_resource_lookup.py");
@@ -84,10 +89,16 @@ function canonicalKeys(): string[] {
  * ssm_resource_lookup.py instead.
  *
  *   * the whole `lambdaFunctions` category -- taken from the registry, so a new entry needs no
- *     edit here; and
- *   * the five deprecated-table keys under `dynamoTables/legacy/` whose only consumer is a
+ *     edit here;
+ *   * the whole `integration` category -- the orchestration bus ARN, event source prefix and
+ *     workflow state-machine role ARN that an externally owned pipeline bridge stack resolves at
+ *     its own deploy time; no handler reads them; and
+ *   * the seven deprecated-table keys under `dynamoTables/legacy/` whose only consumer is a
  *     migration script. Each is named through the registry object rather than as a string, so a
  *     rename fails compilation instead of drifting into a stale allow-list entry.
+ *
+ * The deploy-time categories (`openSearch`, `web`, `location`) are not in resourceNames.py either:
+ * their handler mirror is deployTimeValues.py, compared below (deployTimeKeys()).
  *
  * `legacy/tagStorage` and `legacy/tagTypeStorage` are deliberately absent from this list, so the
  * mirror is required to carry them. No handler resolves either one -- the per-database tag
@@ -99,17 +110,29 @@ function toolingOnlyKeys(): string[] {
     const legacy = RESOURCE_PARAM_KEYS.dynamoTablesLegacy;
     return [
         ...Object.values(RESOURCE_PARAM_KEYS.lambdaFunctions),
+        ...Object.values(RESOURCE_PARAM_KEYS.integration),
         legacy.assetVersionsStorageV1,
         legacy.assetFileVersionsStorageV1,
         legacy.assetLinksStorage,
         legacy.metadataStorage,
         legacy.metadataSchemaStorage,
+        legacy.commentStorageV1,
+        legacy.subscriptionsStorageV1,
     ];
 }
 
-/** Keys the mirror must carry: everything canonical that is not tooling-only. */
+/** The deploy-time categories, mirrored by deployTimeValues.py rather than resourceNames.py. */
+function deployTimeKeys(): string[] {
+    return [
+        ...Object.values(RESOURCE_PARAM_KEYS.openSearch),
+        ...Object.values(RESOURCE_PARAM_KEYS.web),
+        ...Object.values(RESOURCE_PARAM_KEYS.location),
+    ];
+}
+
+/** Keys the mirror must carry: everything canonical that is neither tooling-only nor deploy-time. */
 function expectedBackendKeys(): string[] {
-    const omitted = new Set(toolingOnlyKeys());
+    const omitted = new Set([...toolingOnlyKeys(), ...deployTimeKeys()]);
     return canonicalKeys().filter((key) => !omitted.has(key));
 }
 
@@ -170,7 +193,12 @@ describe("backend mirror matches the canonical registry", () => {
             expect(canonical.has(key)).toBe(true);
             expect(mirror.has(key)).toBe(false);
             // Bounds what may be omitted: no live table, bucket, or log group can be hidden here.
-            expect(key).toMatch(/^(lambdaFunctions\/|dynamoTables\/legacy\/)/);
+            expect(key).toMatch(/^(lambdaFunctions\/|integration\/|dynamoTables\/legacy\/)/);
+        }
+        for (const key of deployTimeKeys()) {
+            expect(canonical.has(key)).toBe(true);
+            expect(mirror.has(key)).toBe(false);
+            expect(key).toMatch(/^(openSearch\/|web\/|location\/)/);
         }
     });
 
@@ -199,6 +227,115 @@ describe("backend mirror matches the canonical registry", () => {
         );
         expect(orphaned.unknownInMirror).toEqual(["dynamoTables/syntheticOrphanTable"]);
         expect(orphaned.missingFromMirror).toEqual([]);
+    });
+});
+
+describe("deployTimeValues.py mirrors the deploy-time categories", () => {
+    const deployTimeSource = fs.readFileSync(DEPLOY_TIME_MIRROR_PY, "utf8");
+    const deployTimeMirrorKeys = parseBackendMirrorKeys(deployTimeSource);
+
+    it("declares exactly the openSearch, web and location keys, with no environment override", () => {
+        // Control: the categories are populated, so the comparison is not two empty sets.
+        expect(deployTimeKeys().length).toBeGreaterThanOrEqual(5);
+        expect(deployTimeSource).toContain("class DeployTimeKeys");
+        const { missingFromMirror, unknownInMirror } = diffKeys(
+            deployTimeMirrorKeys,
+            deployTimeKeys()
+        );
+        // Add the ResourceParamKey to backend/backend/common/deployTimeValues.py.
+        expect(missingFromMirror).toEqual([]);
+        // Remove it from deployTimeValues.py, or declare it in infra/common/resourceParamKeys.ts.
+        expect(unknownInMirror).toEqual([]);
+        // A *_SSM_PARAM variable holds a parameter name, never the value, so none is an override.
+        const declarations = Array.from(
+            deployTimeSource.matchAll(/ResourceParamKey\(\s*"([^"]+)"\s*,\s*\(([^)]*)\)\s*\)/g)
+        );
+        expect(declarations.map((m) => m[1]).sort()).toEqual([...deployTimeKeys()].sort());
+        for (const m of declarations)
+            expect({ key: m[1], overrides: m[2].trim() }).toEqual({
+                key: m[1],
+                overrides: "",
+            });
+    });
+
+    it("the deploy-time keys are not in resourceNames.py", () => {
+        expect(deployTimeKeys().filter((key) => mirrorKeys.includes(key))).toEqual([]);
+    });
+});
+
+describe("custom resource-name mirror matches customResourceParamKeys.ts", () => {
+    // The fork-owned pair (both ship empty) follows the same two-way contract as the core pair, so a
+    // fork that declares a key on one side only fails here rather than with a KeyError at handler
+    // import. Comments are stripped first so an example in prose is not read as a declaration.
+    const customSource = fs
+        .readFileSync(CUSTOM_MIRROR_PY, "utf8")
+        .replace(/"""[\s\S]*?"""/g, "")
+        .replace(/#.*$/gm, "");
+    const customMirrorKeys = parseBackendMirrorKeys(customSource);
+    const customCanonical = Object.values(CUSTOM_RESOURCE_PARAM_KEYS).flatMap((category) =>
+        Object.values(category)
+    );
+
+    it("declares exactly the keys the custom registry publishes", () => {
+        expect(fs.existsSync(CUSTOM_MIRROR_PY)).toBe(true);
+        expect(customSource).toContain("class CustomResourceKeys");
+        const { missingFromMirror, unknownInMirror } = diffKeys(customMirrorKeys, customCanonical);
+        // Add the ResourceParamKey to backend/backend/custom/customResourceNames.py.
+        expect(missingFromMirror).toEqual([]);
+        // Remove it from the custom mirror, or declare it in infra/common/customResourceParamKeys.ts.
+        expect(unknownInMirror).toEqual([]);
+    });
+
+    it("declares no custom key that is also a core key", () => {
+        const core = new Set(canonicalKeys());
+        expect(customCanonical.filter((key) => core.has(key))).toEqual([]);
+    });
+
+    it("declares no custom key that is also an add-on key", () => {
+        const addon = new Set(
+            Object.values(ADDON_RESOURCE_PARAM_KEYS).flatMap((category) => Object.values(category))
+        );
+        expect(customCanonical.filter((key) => addon.has(key))).toEqual([]);
+    });
+});
+
+describe("add-on resource-name mirror matches addonResourceParamKeys.ts", () => {
+    // The upstream add-on pair (both ship empty) follows the same two-way contract as the core and
+    // custom pairs, so an add-on key declared on one side only fails here rather than with a KeyError
+    // at handler import. Comments are stripped first so an example in prose is not read as a key.
+    const addonSource = fs
+        .readFileSync(ADDON_MIRROR_PY, "utf8")
+        .replace(/"""[\s\S]*?"""/g, "")
+        .replace(/#.*$/gm, "");
+    const addonMirrorKeys = parseBackendMirrorKeys(addonSource);
+    const addonCanonical = Object.values(ADDON_RESOURCE_PARAM_KEYS).flatMap((category) =>
+        Object.values(category)
+    );
+
+    it("declares exactly the keys the add-on registry publishes", () => {
+        expect(fs.existsSync(ADDON_MIRROR_PY)).toBe(true);
+        expect(addonSource).toContain("class AddonResourceKeys");
+        const { missingFromMirror, unknownInMirror } = diffKeys(addonMirrorKeys, addonCanonical);
+        // Add the ResourceParamKey to backend/backend/common/addonResourceNames.py.
+        expect(missingFromMirror).toEqual([]);
+        // Remove it from the add-on mirror, or declare it in infra/common/addonResourceParamKeys.ts.
+        expect(unknownInMirror).toEqual([]);
+    });
+
+    it("declares no add-on key that is also a core key", () => {
+        const core = new Set(canonicalKeys());
+        expect(addonCanonical.filter((key) => core.has(key))).toEqual([]);
+    });
+
+    it("[control] the comment stripping keeps a declared key and drops one in prose", () => {
+        const sample = [
+            '"""Example: ResourceParamKey("addon/inDocstring", ())"""',
+            "class AddonResourceKeys:",
+            '    # ResourceParamKey("addon/inComment", ())',
+            '    PROBE = ResourceParamKey("addon/declared", ("PROBE",))',
+        ].join("\n");
+        const stripped = sample.replace(/"""[\s\S]*?"""/g, "").replace(/#.*$/gm, "");
+        expect(parseBackendMirrorKeys(stripped)).toEqual(["addon/declared"]);
     });
 });
 

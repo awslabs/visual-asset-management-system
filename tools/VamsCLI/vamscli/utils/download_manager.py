@@ -27,6 +27,78 @@ class DownloadFileInfo(NamedTuple):
     last_modified: Optional[float] = None  # Epoch seconds; applied to the local file mtime
 
 
+# The reason a file is reported failed when its asset-relative path would put it outside the directory
+# the download writes to.
+DOWNLOAD_PATH_OUTSIDE_TARGET_REASON = "Not downloaded: the file path does not stay inside the download directory"
+
+
+def confined_local_path(root: Path, relative_path: str) -> Optional[Path]:
+    """``root`` joined with an asset-relative file path, or None when the file would not land under it.
+
+    Leading slashes are removed, as an asset key starts with one. The path is refused when nothing is
+    left, when a segment is ``..``, or when the joined path does not resolve to a location inside the
+    resolved ``root`` (an absolute or drive path, or a symlink leading out of it), or cannot be
+    resolved at all (a NUL character). The joined path is returned unresolved, so the location reported
+    is the one the caller named.
+    """
+    text = (relative_path or "").lstrip("/")
+    if not text or ".." in text.replace("\\", "/").split("/"):
+        return None
+    candidate = Path(root) / text
+    try:
+        inside = Path(root).resolve() in candidate.resolve().parents
+    except (ValueError, OSError):
+        return None
+    return candidate if inside else None
+
+
+# The reason a file is reported failed when another file of the same download is saved at its local path,
+# followed by that file's path in the asset.
+DOWNLOAD_PATH_TAKEN_REASON = "Not downloaded: another file of this download is saved at the same local path"
+
+
+def _has_empty_segment(relative_path: str) -> bool:
+    """Whether an asset-relative path has an empty segment once one leading ``/`` is read as the marker."""
+    path = relative_path if relative_path.startswith("/") else "/" + relative_path
+    return "//" in path
+
+
+def confined_local_paths(root: Path, entries: List[tuple]) -> List[tuple]:
+    """The local path of each file of one download, or None with the reason it is not written.
+
+    ``entries`` are ``(relative_path, target)`` pairs in listing order: the file's asset-relative path and
+    the path under ``root`` it is saved at (the relative path itself, or a flattened or reorganized one).
+    Each target goes through ``confined_local_path``; one outside ``root`` gets
+    ``DOWNLOAD_PATH_OUTSIDE_TARGET_REASON``. Two files never share a local path, so neither replaces the other
+    on disk: a local folder cannot have an empty name, so ``/x`` and ``//x`` (the key with an empty segment
+    after the asset's folder, #1977) both map to ``<root>/x``, and a flattened download maps every file of
+    one name to one path. Per local path the file is kept whose path has no empty segment, else the first
+    listed; every other one gets ``DOWNLOAD_PATH_TAKEN_REASON`` naming the file kept. Paths are compared
+    with ``os.path.normcase``, so a case-insensitive file system does not merge two files either.
+    Returns ``(local_path, None)`` or ``(None, reason)`` per entry, in order.
+    """
+    paths = [confined_local_path(root, target) for _, target in entries]
+    owners: Dict[str, int] = {}
+    for index, ((relative_path, _), path) in enumerate(zip(entries, paths)):
+        if path is None:
+            continue
+        claim = os.path.normcase(os.path.abspath(path))
+        owner = owners.get(claim)
+        if owner is None or (_has_empty_segment(entries[owner][0]) and not _has_empty_segment(relative_path)):
+            owners[claim] = index
+    results = []
+    for index, ((relative_path, _), path) in enumerate(zip(entries, paths)):
+        if path is None:
+            results.append((None, DOWNLOAD_PATH_OUTSIDE_TARGET_REASON))
+            continue
+        owner = owners[os.path.normcase(os.path.abspath(path))]
+        if owner == index:
+            results.append((path, None))
+        else:
+            results.append((None, f"{DOWNLOAD_PATH_TAKEN_REASON} ({entries[owner][0]})"))
+    return results
+
+
 def parse_remote_timestamp(timestamp: Optional[str]) -> Optional[float]:
     """Parse an ISO-8601 timestamp from the API into epoch seconds."""
     if not timestamp:
@@ -258,7 +330,16 @@ class DownloadManager:
         """Async context manager entry."""
         connector = aiohttp.TCPConnector(limit=self.max_parallel * 2)
         timeout = aiohttp.ClientTimeout(total=self.timeout)
-        self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+        # Each file is saved byte for byte as Amazon S3 stores it, as `aws s3 cp` saves it: a body
+        # stored with a Content-Encoding (a gzip-compressed glTF, for example) is not decoded, so
+        # the bytes written match the response's Content-Length and the size VAMS lists for the
+        # file. `identity` asks every hop not to add an encoding the session would leave in place.
+        self.session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout,
+            auto_decompress=False,
+            headers={'Accept-Encoding': 'identity'},
+        )
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -306,13 +387,14 @@ class DownloadManager:
                     "error": result.get("error", "Unknown error")
                 })
         
+        bytes_written = _bytes_written(successful_files)
         return {
             "overall_success": len(failed_files) == 0,
             "total_files": len(files),
             "successful_files": len(successful_files),
             "failed_files": len(failed_files),
-            "total_size": progress.total_size,
-            "total_size_formatted": format_file_size(progress.total_size),
+            "total_size": bytes_written,
+            "total_size_formatted": format_file_size(bytes_written),
             "download_duration": progress.elapsed_time,
             "average_speed": progress.download_speed,
             "average_speed_formatted": format_file_size(int(progress.download_speed)) + "/s",
@@ -465,13 +547,14 @@ class DownloadManager:
                 else:
                     failed_files.append({"relative_key": fi.relative_key, "local_path": str(fi.local_path), "error": result.get("error", "Unknown error")})
 
+        bytes_written = _bytes_written(successful_files)
         return {
             "overall_success": len(failed_files) == 0,
             "total_files": len(all_files),
             "successful_files": len(successful_files),
             "failed_files": len(failed_files),
-            "total_size": progress.total_size,
-            "total_size_formatted": format_file_size(progress.total_size),
+            "total_size": bytes_written,
+            "total_size_formatted": format_file_size(bytes_written),
             "download_duration": progress.elapsed_time,
             "average_speed": progress.download_speed,
             "average_speed_formatted": format_file_size(int(progress.download_speed)) + "/s",
@@ -510,6 +593,16 @@ class DownloadManager:
                             return {"success": False, "error": str(e)}
             finally:
                 progress.active_downloads -= 1
+
+
+def _bytes_written(successful_files: List[Dict[str, Any]]) -> int:
+    """Sum the bytes written to disk by the downloads that completed.
+
+    A result's ``total_size`` reports this rather than the planned size: the planned size is the sum of
+    the sizes the caller passed in, which is 0 for a file whose size the listing did not supply (a
+    single-file or preview download), and it also counts files that then failed.
+    """
+    return sum(f.get("size") or 0 for f in successful_files)
 
 
 def format_file_size(size_bytes: int) -> str:

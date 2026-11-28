@@ -1,6 +1,8 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import ast
+import copy
 import boto3
 from botocore.config import Config
 import os
@@ -11,11 +13,13 @@ import json
 from boto3.dynamodb.types import TypeDeserializer
 from casbin import FastEnforcer
 from casbin import model
+from casbin.effect import Effector, effect_to_bool
 from casbin.persist.adapters import string_adapter
+from casbin.util import util as casbin_util
 from simpleeval import AttributeDoesNotExist
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_authorization, log_authorization_api
-from handlers.auth import request_to_claims
+from handlers.auth import request_to_claims, CLAIMS_CHECK_FAILED
 from datetime import datetime, timedelta
 from common.constants import (
     PERMISSION_CONSTRAINT_FIELDS,
@@ -71,6 +75,12 @@ _PLAIN_OBJECT_TYPE_NAME = re.compile(r"[A-Za-z0-9_]+")
 #
 ARCHIVED_DATABASE_ID_SUFFIX = "#deleted"
 
+# The operators CasbinEnforcerService._generate_criteria_object_rules emits a clause for. A criterion
+# with any other operator is left out of its policy line.
+_RULE_OPERATORS = (
+    "equals", "contains", "does_not_contain", "starts_with", "ends_with", "is_one_of", "is_not_one_of",
+)
+
 # Tracks users and their policy_text (which could span multiple roles)
 #
 casbin_user_policy_map = {} if CASBIN_NO_DICTIONARY_LOCKING else locked_dict.LockedDict()
@@ -103,8 +113,9 @@ class ExpressionCachingEnforcer(FastEnforcer):
     expression text it receives -- the matcher with that line's ``obj_rule`` already substituted,
     so a policy line whose rule text changes is a different key and compiles afresh. Only the
     COMPILED EXPRESSION is cached, never a decision: every ``enforce()`` still evaluates every
-    policy line against the request. The cache is bounded by the number of distinct policy lines
-    the instance holds.
+    policy line it walks against the request (``ObjectTypeRoutingEnforcer`` below decides which
+    lines those are). The cache is bounded by the number of distinct policy lines the instance
+    holds.
 
     The cache MUST stay on the instance. ``enforce_ex`` rebinds ``functions["g"]`` on every call
     to a closure over THIS enforcer's role manager (L402-L409), and the compiled expression keeps
@@ -160,6 +171,217 @@ class ExpressionCachingEnforcer(FastEnforcer):
         return expression
 
 
+# The pattern of an object-type gate on a literal type name: '^<name>\Z' with a name of letters,
+# digits and underscores only, none of which is regex syntax, so `re.match` on it holds exactly when
+# the request's object__type equals <name>.
+_LITERAL_OBJECT_TYPE_GATE = re.compile(r"\^([A-Za-z0-9_]+)\\Z")
+
+
+def _is_name(node, name):
+    return isinstance(node, ast.Name) and node.id == name
+
+
+def _literal_gate_object_type(tree):
+    """The object type a compiled matcher expression is gated on, or None when it has no such gate.
+
+    ``tree`` is the expression ``enforce_ex`` evaluates for one policy line. Returns ``T`` only for
+    the shape ``g(r_sub, p_sub) and (<rule>) and ...`` whose ``<rule>`` is, or is an ``and`` that
+    opens with, ``regexMatch(r_obj.object__type, '^T\\Z')`` on a literal ``T``. simpleeval evaluates
+    an ``and`` left to right and stops at the first falsy operand, so for a request whose
+    object__type is a string other than ``T`` that expression evaluates the role lookup and at most
+    the gate, and returns ``False``.
+    """
+    if not (isinstance(tree, ast.BoolOp) and isinstance(tree.op, ast.And) and len(tree.values) >= 2):
+        return None
+    role_check, rule = tree.values[0], tree.values[1]
+    if not (isinstance(role_check, ast.Call) and _is_name(role_check.func, "g") and not role_check.keywords
+            and len(role_check.args) == 2 and _is_name(role_check.args[0], "r_sub")
+            and _is_name(role_check.args[1], "p_sub")):
+        return None
+    if isinstance(rule, ast.BoolOp) and isinstance(rule.op, ast.And):
+        rule = rule.values[0]
+    if not (isinstance(rule, ast.Call) and _is_name(rule.func, "regexMatch") and not rule.keywords
+            and len(rule.args) == 2):
+        return None
+    subject, pattern = rule.args
+    if not (isinstance(subject, ast.Attribute) and subject.attr == "object__type"
+            and _is_name(subject.value, "r_obj")):
+        return None
+    if not (isinstance(pattern, ast.Constant) and type(pattern.value) is str):
+        return None
+    match = _LITERAL_OBJECT_TYPE_GATE.fullmatch(pattern.value)
+    return match.group(1) if match else None
+
+
+class _PolicyRoutes:
+    """The policy lines to walk per request object type, built from one loaded policy list."""
+
+    def __init__(self, source, by_type, shared, request_size, subject_index, object_index):
+        self.source = source
+        self.source_length = len(source)
+        self.by_type = by_type
+        self.shared = shared
+        self.request_size = request_size
+        self.subject_index = subject_index
+        self.object_index = object_index
+
+
+class ObjectTypeRoutingEnforcer(ExpressionCachingEnforcer):
+    """An ``ExpressionCachingEnforcer`` that walks, for each request, only the policy lines that can
+    match the request's object type.
+
+    Every line ``_create_policy_text_helper`` emits opens its rule with the object-type gate
+    ``regexMatch(r.obj.object__type, '^<type>\\Z')``. For a request of another type such a line
+    evaluates the role lookup ``g(r.sub, p.sub)`` and at most that gate, neither of which raises,
+    and comes out ``False``: it adds only ``INDETERMINATE`` to the effect set. pycasbin's effectors
+    decide from the ALLOW and DENY effects alone, and ``enforce_ex`` stops the walk only on a line
+    that produced one, so leaving such lines out -- the others kept in their original order -- does
+    not change the decision, the line that ends the walk, or the line that raises.
+
+    When the policy loads, the matcher expression of each line is built as ``enforce_ex`` builds it
+    (``util.escape_assertion`` and ``util.replace_eval``, then pycasbin's own ``_get_expression``
+    rewrite and parse) and its syntax tree is read by ``_literal_gate_object_type``. A line with a
+    gate on a literal type name is listed for that type only. Every other line is SHARED and listed,
+    in its original position, for every type and for the types no line names: a line whose type
+    name carries regex syntax (and may match several types), the deny-all line, a line whose rule
+    does not parse or whose field count is wrong. A deny line is therefore never dropped for a type
+    it can match, and a request whose type no line names walks only the shared lines -- none in a
+    generated policy -- and gets the effector's verdict on a walk in which no line matched, which
+    under the VAMS policy effect is a deny.
+
+    A request is routed only in the shape the service sends it -- a ``str`` subject and a plain
+    ``dict`` object with a ``str`` ``object__type`` -- and only while the policy is the one the
+    routes were built from; anything else walks every line. A policy list that was replaced or
+    changed length, or that was edited through a policy method (``_POLICY_EDITS``) since it loaded,
+    is walked in full until the next ``load_policy()``. Routing hands ``enforce_ex`` the routed
+    list for the duration of one call, under the instance lock that already serializes
+    ``enforce_ex``, and restores the full list afterwards. The role manager, matcher, effector and
+    expression cache are the instance's own and are shared by every route, so each distinct line is
+    still compiled once.
+    """
+
+    def __init__(self, model=None, adapter=None, enable_log=False, cache_key_order=None):
+        # Assigned before the parent constructor, whose load_policy() builds the routes.
+        self._policy_routes = None
+        super().__init__(model=model, adapter=adapter, enable_log=enable_log, cache_key_order=cache_key_order)
+
+    def load_policy(self):
+        with self._enforce_lock:
+            self._policy_routes = None
+            super().load_policy()
+            self._policy_routes = self._build_policy_routes()
+
+    def enforce_ex(self, *rvals):
+        with self._enforce_lock:
+            route = self._route(rvals)
+            if route is None:
+                return super().enforce_ex(*rvals)
+            policy_assertion, routed_policy = route
+            if not routed_policy:
+                # No line can match this object type: the full walk adds only INDETERMINATE.
+                return effect_to_bool(self.eft.final_effect({Effector.INDETERMINATE})), []
+            full_policy = policy_assertion.policy
+            policy_assertion.policy = routed_policy
+            try:
+                return super().enforce_ex(*rvals)
+            finally:
+                policy_assertion.policy = full_policy
+
+    def _route(self, rvals):
+        """``(policy assertion, lines to walk)`` for this request, or None to walk every line."""
+        routes = self._policy_routes
+        if routes is None or not self.enabled or len(rvals) != routes.request_size:
+            return None
+        policy_assertion = (self.model["p"] or {}).get("p")
+        if (policy_assertion is None or policy_assertion.policy is not routes.source
+                or len(routes.source) != routes.source_length):
+            return None
+        subject, obj = rvals[routes.subject_index], rvals[routes.object_index]
+        if type(subject) is not str or type(obj) is not dict:
+            return None
+        object_type = obj.get("object__type")
+        if type(object_type) is not str:
+            return None
+        return policy_assertion, routes.by_type.get(object_type, routes.shared)
+
+    def object_type_has_lines(self, object_type):
+        """Whether a request whose object__type is ``object_type`` walks any policy line: a line
+        gated on that type, or a shared line (which may match it). Read from the routes; None when
+        they do not describe the loaded policy, as ``_route`` would walk every line then. Decides
+        nothing."""
+        with self._enforce_lock:
+            routes = self._policy_routes
+            if routes is None or not isinstance(object_type, str):
+                return None
+            policy_assertion = (self.model["p"] or {}).get("p")
+            if (policy_assertion is None or policy_assertion.policy is not routes.source
+                    or len(routes.source) != routes.source_length):
+                return None
+            return bool(routes.by_type.get(object_type, routes.shared))
+
+    def _build_policy_routes(self):
+        try:
+            matcher = self.model["m"]["m"].value
+            policy_assertion = self.model["p"]["p"]
+            request_tokens = self.model["r"]["r"].tokens
+        except (KeyError, TypeError):
+            return None
+        rule_names = casbin_util.get_eval_value(matcher)
+        if (len(rule_names) != 1 or "g" not in self.rm_map
+                or "r_sub" not in request_tokens or "r_obj" not in request_tokens):
+            return None
+
+        policy = policy_assertion.policy
+        line_types = [self._line_object_type(matcher, rule_names, policy_assertion.tokens, line) for line in policy]
+        named_types = {line_type for line_type in line_types if line_type is not None}
+        if not named_types:
+            return None
+        by_type = {
+            object_type: [line for line, line_type in zip(policy, line_types)
+                          if line_type is None or line_type == object_type]
+            for object_type in named_types
+        }
+        shared = [line for line, line_type in zip(policy, line_types) if line_type is None]
+        return _PolicyRoutes(policy, by_type, shared, len(request_tokens),
+                             request_tokens.index("r_sub"), request_tokens.index("r_obj"))
+
+    @staticmethod
+    def _line_object_type(matcher, rule_names, policy_tokens, line):
+        """The literal object type one policy line is gated on, or None when it must be shared."""
+        if len(line) != len(policy_tokens):
+            return None
+        parameters = dict(zip(policy_tokens, line))
+        try:
+            rules = [casbin_util.escape_assertion(parameters[name]) for name in rule_names]
+            expression = FastEnforcer._get_expression(casbin_util.replace_eval(matcher, rules))
+        except Exception:
+            return None
+        return _literal_gate_object_type(getattr(expression, "ast_parsed_value", None))
+
+
+# The pycasbin methods every policy edit goes through. An edit can keep the policy list and its
+# length (``update_policy`` replaces a line in place), so each one drops the routes and the policy
+# is walked in full until the next ``load_policy()``.
+_POLICY_EDITS = (
+    "_add_policy", "_add_policies", "_update_policy", "_update_policies", "_update_filtered_policies",
+    "_remove_policy", "_remove_policies", "_remove_filtered_policy",
+    "_remove_filtered_policy_returns_effects", "clear_policy",
+)
+
+
+def _drops_policy_routes(name):
+    def edit(self, *args, **kwargs):
+        self._policy_routes = None
+        return getattr(super(ObjectTypeRoutingEnforcer, self), name)(*args, **kwargs)
+    edit.__name__ = name
+    return edit
+
+
+for _edit_name in _POLICY_EDITS:
+    if hasattr(ExpressionCachingEnforcer, _edit_name):
+        setattr(ObjectTypeRoutingEnforcer, _edit_name, _drops_policy_routes(_edit_name))
+
+
 # Determine if MFA is enabled from claims
 def is_mfa_enabled(claims_and_roles):
     mfaEnabled = False
@@ -179,6 +401,13 @@ class CasbinEnforcer:
         self.claims_and_roles = claims_and_roles  # Store for audit logging
         user_id = claims_and_roles["tokens"][0]
         mfaEnabled = is_mfa_enabled(claims_and_roles)
+
+        # The custom claims check raised for this request (request_to_claims): decide it on a
+        # deny-all service of its own, which refuses every Tier 1 and Tier 2 check and is never
+        # cached for the user, so the user's later requests are decided on their own policy.
+        if claims_and_roles.get(CLAIMS_CHECK_FAILED):
+            self.service_object = CasbinEnforcerService(user_id, mfaEnabled, policy_text=POLICY_TEXT_DENY_ALL)
+            return
         
         if user_id in casbin_user_enforcer_map:
             # Previously cached user-specific enforcers - validate cache freshness
@@ -223,6 +452,30 @@ class CasbinEnforcer:
         
         return result
 
+    def policy_object_fields(self, fields):
+        """Which of `fields` of the checked object any of the caller's policy lines reads
+        (`CasbinEnforcerService.policy_object_fields`); all of them (the conservative answer) when
+        it cannot be told."""
+        service = self.service_object
+        if service is None:
+            return frozenset(fields)
+        return service.policy_object_fields(fields)
+
+    def policy_has_object_type(self, object_type):
+        """Whether any of the caller's policy lines, allow or deny, can apply to an object of
+        `object_type` (`CasbinEnforcerService.policy_has_object_type`); True (the conservative
+        answer) when it cannot be told."""
+        service = self.service_object
+        if service is None:
+            return True
+        return service.policy_has_object_type(object_type)
+
+    def effective_object_policies(self, object_type, action):
+        """The caller's policy lines for ``action`` on ``object_type`` as data, or None
+        (CasbinEnforcerService.effective_object_policies). Search turns them into index filters; the
+        per-object enforce() check stays authoritative."""
+        return self.service_object.effective_object_policies(object_type, action)
+
     def enforceAPI(self, lambdaEvent, apiMethodOverrideValue = ''):
         """Enforce API authorization with audit logging"""
         claims_and_roles = request_to_claims(lambdaEvent)
@@ -250,7 +503,10 @@ class CasbinEnforcer:
                 "route__path": lambdaEvent['requestContext']['http']['path'] #"/" + event['requestContext']['http']['path'].split("/")[1]
             }
 
-            result = self.service_object.enforce(request_object, http_method)
+            # A failed custom claims check on this event's claims denies the route too, whichever
+            # claims the enforcer was built from.
+            result = (self.service_object.enforce(request_object, http_method)
+                      and not claims_and_roles.get(CLAIMS_CHECK_FAILED))
             
             # AUDIT LOG: Log API authorization result with full request_object
             try:
@@ -268,8 +524,10 @@ class CasbinEnforcer:
             return False
 
 class CasbinEnforcerService:
-    def __init__(self, user_id, mfa_enabled):
-        # Handle user policy-specific caching and updates (globally)
+    def __init__(self, user_id, mfa_enabled, policy_text=None):
+        # Handle user policy-specific caching and updates (globally). A caller that passes
+        # policy_text (the deny-all text for a failed claims check) gets an enforcer built from it,
+        # with no read of the user's roles and nothing written to the policy cache.
         #
         global casbin_user_policy_map
 
@@ -279,6 +537,11 @@ class CasbinEnforcerService:
         self._mfaEnabled = mfa_enabled
         self._dateTime_Cached = datetime.now()
         self._enforcer = None
+        # The policy as structured lines (see effective_object_policies), and the policy text the
+        # enforcer was actually built from. The lines are served only while the two agree.
+        self._pending_structured_policy = None
+        self._structured_policy = None
+        self._enforcer_policy_text = None
 
         try:
             self._user_roles_table_name = get_table_name(ResourceKeys.USER_ROLES_STORAGE_TABLE)
@@ -291,13 +554,13 @@ class CasbinEnforcerService:
         self._model_text = PERMISSION_CONSTRAINT_POLICY
         # Routines below have exception handling already covered
         #
-        policy_text = None
-        if self._user_id in casbin_user_policy_map:
-            # Use previously cached user-specific policies?
-            #
-            policy_text = casbin_user_policy_map[self._user_id]
-        else:
-            policy_text = self._create_policy_text()
+        if policy_text is None:
+            if self._user_id in casbin_user_policy_map:
+                # Use previously cached user-specific policies?
+                #
+                policy_text = casbin_user_policy_map[self._user_id]
+            else:
+                policy_text = self._create_policy_text()
         self._create_casbin_enforcer(policy_text)
 
     def _read_policies_batch_optimized(self, role_names):
@@ -529,8 +792,14 @@ class CasbinEnforcerService:
                 escaped.append("\\U%08x" % code)
         return "".join(escaped)
 
-    def _generate_criteria_object_rules(self, policyCriteria, object_type=None):
-        obj_rule = []
+    def _usable_criteria(self, policyCriteria, object_type=None):
+        """The criteria a policy line is built from: those on a known field in the object type's
+        field matrix with an operator the rule generator emits a clause for, in stored order.
+
+        The single filter both the policy text (_generate_criteria_object_rules) and the structured
+        lines search translates into index filters (effective_object_policies) are built from.
+        """
+        usable = []
         valid_fields = get_constraint_fields_for_object_type(object_type) if object_type else None
         for criterion in policyCriteria:
             # Skip deprecated or unknown fields that are not in PERMISSION_CONSTRAINT_FIELDS
@@ -544,6 +813,16 @@ class CasbinEnforcerService:
                 logger.info(f"Skipping out-of-matrix field for objectType {object_type}: {criterion['field']}")
                 continue
 
+            # An operator the generator does not know emits no clause.
+            if criterion['operator'] not in _RULE_OPERATORS:
+                continue
+
+            usable.append(criterion)
+        return usable
+
+    def _generate_criteria_object_rules(self, policyCriteria, object_type=None):
+        obj_rule = []
+        for criterion in self._usable_criteria(policyCriteria, object_type):
             field = criterion['field']
             operator = criterion['operator']
 
@@ -577,8 +856,8 @@ class CasbinEnforcerService:
             # it belongs only where under-matching is the hazard. Applying '(?s)' to `equals` would
             # widen an allow rule instead of tightening it.
             #
-            # Clauses stay None for an operator this generator does not know, so an unrecognized
-            # operator is skipped rather than emitting a rule.
+            # _usable_criteria admits only the operators handled below, so clauses is always set;
+            # the None check is a guard should the two lists ever drift apart.
             clauses = None
             negated = False
             if operator == "equals":
@@ -695,12 +974,17 @@ class CasbinEnforcerService:
             policy_text = POLICY_TEXT_DENY_ALL
             logger.info("Failed to determine policy_text after multiple attempts. Denying all access.")
         else:
+            structured = getattr(self, "_pending_structured_policy", None)
+            if structured is not None and structured.get("policy_text") == policy_text:
+                self._structured_policy = structured
             if not policy_text:
                 # No role grants and no permissions: every check denies. Recorded as an
                 # explicit deny-all so it caches like any other result.
                 #
                 logger.info("No effective role assignments for this user. Denying all access.")
                 policy_text = POLICY_TEXT_DENY_ALL
+                if getattr(self, "_structured_policy", None) is not None:
+                    self._structured_policy = {**self._structured_policy, "policy_text": policy_text}
             # Cache the user-specific policies for future calls (also done on enforce() calls)
             #
             casbin_user_policy_map[self._user_id] = policy_text
@@ -795,6 +1079,12 @@ class CasbinEnforcerService:
         policy_text = ""
         new_line = "\n"
 
+        # The same policy as structured lines, for effective_object_policies. Recorded on the
+        # service only once the text it mirrors is the text the enforcer is built from.
+        role_subjects = [f"""'role::{user_role["roleName"]}'""" for user_role in user_roles_from_table]
+        structured_lines = []
+        self._pending_structured_policy = None
+
         # Append roles
         for user_role in user_roles_from_table:
             policy_text = (
@@ -824,13 +1114,17 @@ class CasbinEnforcerService:
                 #Generate object rules
                 obj_rule_And = []
                 obj_rule_Or = []
+                usable_And = []
+                usable_Or = []
                 if "criteriaAnd" in policy:
+                    usable_And = self._usable_criteria(policy["criteriaAnd"], object_type=policy.get("objectType"))
                     obj_rule_And = self._generate_criteria_object_rules(
-                        policy["criteriaAnd"], object_type=policy.get("objectType")
+                        usable_And, object_type=policy.get("objectType")
                     )
                 if "criteriaOr" in policy:
+                    usable_Or = self._usable_criteria(policy["criteriaOr"], object_type=policy.get("objectType"))
                     obj_rule_Or = self._generate_criteria_object_rules(
-                        policy["criteriaOr"], object_type=policy.get("objectType")
+                        usable_Or, object_type=policy.get("objectType")
                     )
 
                 # Combine AND and OR criteria into a single rule expression:
@@ -855,6 +1149,10 @@ class CasbinEnforcerService:
                             f"{policy_text}{new_line if len(policy_text) > 0 else ''}"
                             f"""p, 'role::{group_permission["groupId"]}', {combined_obj_rule}, {group_permission["permission"]}, {group_permission["permissionType"] or 'allow'}"""
                         )
+                        structured_lines.append(self._structured_line(
+                            f"""'role::{group_permission["groupId"]}'""", policy, usable_And, usable_Or,
+                            group_permission["permission"], group_permission["permissionType"],
+                        ))
 
                 if "userPermissions" in policy:
                     for user_permission in policy["userPermissions"]:
@@ -862,12 +1160,34 @@ class CasbinEnforcerService:
                             f"{policy_text}{new_line if len(policy_text) > 0 else ''}"
                             f"""p, user::{user_permission["userId"]}, {combined_obj_rule}, {user_permission["permission"]}, {user_permission["permissionType"] or 'allow'}"""
                         )
+                        structured_lines.append(self._structured_line(
+                            f"""user::{user_permission["userId"]}""", policy, usable_And, usable_Or,
+                            user_permission["permission"], user_permission["permissionType"],
+                        ))
         
         #logger.info(f"Generated policy_text with {len(policy_text)} characters")
         if len(policy_text) < 100:
             logger.warning(f"Policy text seems too short: {len(policy_text)} characters")
-        
+
+        self._pending_structured_policy = {
+            "policy_text": policy_text,
+            "subjects": [f"user::{self._user_id}"] + role_subjects,
+            "lines": structured_lines,
+        }
         return policy_text
+
+    @staticmethod
+    def _structured_line(subject, policy, criteria_and, criteria_or, permission, permission_type):
+        """One emitted policy line as data: the fields the policy text writes, with each value as the
+        policy reader yields it (whitespace-trimmed tokens), and the usable criteria it was built from."""
+        return {
+            "subject": str(subject).strip(),
+            "objectType": policy.get("objectType"),
+            "criteriaAnd": copy.deepcopy(criteria_and),
+            "criteriaOr": copy.deepcopy(criteria_or),
+            "action": str(permission).strip(),
+            "effect": str(permission_type or 'allow').strip(),
+        }
 
     # Creates a Casbin enforcer object from the policy_text.
     # Note: if the policy_text is invalid, then this method will attempt to create a Casbin enforcer object with a
@@ -875,8 +1195,10 @@ class CasbinEnforcerService:
     # (None) and automatically deny all requests.
     #
     def _create_casbin_enforcer(self, policy_text):
+        self._enforcer_policy_text = None
         try:
             self._enforcer = self._create_casbin_enforcer_helper(policy_text)
+            self._enforcer_policy_text = policy_text
         except Exception as e:
             logger.info("Casbin Enforcer policy_text is invalid. Denying all access.")
             logger.exception(e)
@@ -897,11 +1219,63 @@ class CasbinEnforcerService:
         # full checked object to the function log. API-level decisions and data-level denials are
         # recorded through log_authorization_api / log_authorization.
         #
-        # ExpressionCachingEnforcer compiles each policy line's matcher once per enforcer instance
-        # (see its docstring). The instance is owned by this service, so the compiled expressions
-        # are per user and go away with the service on TTL / MFA invalidation.
-        _enforcer = ExpressionCachingEnforcer(model=new_model, adapter=new_string_adapter, enable_log=False)
+        # ObjectTypeRoutingEnforcer walks only the policy lines that can match the request's object
+        # type and compiles each policy line's matcher once per enforcer instance (see the
+        # docstrings of it and ExpressionCachingEnforcer). The instance is owned by this service, so
+        # the routes and compiled expressions are per user and go away with the service on TTL /
+        # MFA invalidation.
+        _enforcer = ObjectTypeRoutingEnforcer(model=new_model, adapter=new_string_adapter, enable_log=False)
         return _enforcer
+
+    def policy_object_fields(self, fields):
+        """Which of `fields` of the checked object any of this user's policy lines reads: a rule
+        criterion on field F is written as `r.obj.F` in the line (`_generate_criteria_object_
+        rules`), whatever its object type. A caller deciding many objects of one type asks it: a
+        decision depends on no field outside the answer, so objects that agree on those fields
+        (and on the ones every decision reads, such as the database id) get the same answer.
+
+        Conservative: all of `fields` when there is no enforcer or its lines cannot be read, and a
+        value that happens to contain `r.obj.F` counts as reading F."""
+        names = [field for field in fields if isinstance(field, str) and field]
+        if not names:
+            return frozenset()
+        if self._enforcer is None:
+            return frozenset(names)
+        try:
+            rules = self._enforcer.get_policy()
+        except Exception as e:
+            logger.exception(f"Failed reading the policy lines: {e}")
+            return frozenset(names)
+        text = "\n".join(str(part) for rule in rules for part in rule)
+        return frozenset(name for name in names
+                         if re.search(r"r\.obj\." + re.escape(name) + r"\b", text))
+
+    def policy_has_object_type(self, object_type):
+        """Whether any of this user's policy lines, allow or deny, can apply to an object of
+        `object_type`: a line gated on that type, or a line shared by every type (one whose type
+        name is a pattern, or that cannot be read), as the routing enforcer walks them
+        (`ObjectTypeRoutingEnforcer.object_type_has_lines`). A caller deciding objects of one type
+        asks it once per request; it decides nothing itself.
+
+        Conservative: True when there is no enforcer or the routes cannot be read and the policy
+        has any line at all; False only for a policy with no line."""
+        if self._enforcer is None:
+            return True
+        answer = None
+        has_lines = getattr(self._enforcer, "object_type_has_lines", None)
+        if callable(has_lines):
+            try:
+                answer = has_lines(object_type)
+            except Exception as e:
+                logger.exception(f"Failed reading the policy routes: {e}")
+                answer = None
+        if isinstance(answer, bool):
+            return answer
+        try:
+            return bool(self._enforcer.get_policy())
+        except Exception as e:
+            logger.exception(f"Failed reading the policy lines: {e}")
+            return True
 
     def _scrub_object_fields(self, obj):
         """Keep only the fields valid for the object's object__type (no-op for unknown types)."""
@@ -933,6 +1307,46 @@ class CasbinEnforcerService:
                 database_id = database_id[: -len(ARCHIVED_DATABASE_ID_SUFFIX)]
             return {**obj, "databaseId": database_id}
         return obj
+
+    def effective_object_policies(self, object_type, action):
+        """The policy lines that can decide ``action`` on an object of ``object_type`` for this user,
+        as data, or None when they cannot be given.
+
+        Each entry is ``{"effect": "allow"|"deny", "criteriaAnd": [...], "criteriaOr": [...]}``,
+        with the usable criteria the line's rule was generated from, in policy order. A line is
+        included when the matcher can select it for this user and request: its subject is the user
+        or one of the user's role groupings, its action is ``action``, and its object-type check is
+        ``object_type`` written as a plain type name. A line whose stored type is not a plain name
+        carries no usable criterion for it (the field matrix of such a type is empty) and so is never
+        emitted. A line whose effect is neither allow nor deny contributes nothing to the decision and
+        is left out.
+
+        None -- callers must then rely on enforce() alone -- when the enforcer was not built from the
+        policy these lines describe: the policy came from the shared policy-text cache, the policy
+        build failed and the enforcer denies all, or the policy text failed to load.
+        """
+        structured = getattr(self, "_structured_policy", None)
+        enforcer_policy_text = getattr(self, "_enforcer_policy_text", None)
+        if (getattr(self, "_enforcer", None) is None or structured is None
+                or enforcer_policy_text is None
+                or structured.get("policy_text") != enforcer_policy_text):
+            return None
+        subjects = set(structured["subjects"])
+        lines = []
+        for line in structured["lines"]:
+            if line["subject"] not in subjects or line["action"] != action:
+                continue
+            if line["effect"] not in ("allow", "deny"):
+                continue
+            if not (isinstance(line["objectType"], str) and line["objectType"] == object_type
+                    and _PLAIN_OBJECT_TYPE_NAME.fullmatch(object_type)):
+                continue
+            lines.append({
+                "effect": line["effect"],
+                "criteriaAnd": copy.deepcopy(line["criteriaAnd"]),
+                "criteriaOr": copy.deepcopy(line["criteriaOr"]),
+            })
+        return lines
 
     def enforce(self, obj, act):
         """

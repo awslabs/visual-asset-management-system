@@ -5,7 +5,12 @@
 
 import { signOut } from "aws-amplify/auth";
 import localforage from "localforage";
-import { ensureSessionValid, getCurrentTokenExpiryMs } from "./authTokenUtils";
+import { clearPresignedUrlCache } from "../visualizerPlugin/core/presignedUrlCache";
+import {
+    ensureSessionValid,
+    getCurrentTokenExpiryMs,
+    MISSING_USER_ID_CLAIM_KEY,
+} from "./authTokenUtils";
 
 /** localStorage keys read by Auth.tsx to drive the login-screen message and route restore. */
 export const SESSION_EXPIRED_KEY = "session_expired";
@@ -34,21 +39,39 @@ export const navigation = {
 };
 
 let inFlight: Promise<boolean> | null = null;
+// Whether the in-flight call refreshes the tokens rather than only checking them.
+let inFlightForced = false;
 let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 let loggingOut = false;
 
 /**
  * Validate/refresh the session, coalescing concurrent callers onto one underlying
  * call so parallel API requests don't trigger N refreshes / N redirects.
+ *
+ * A refresh asked for while a plain check is in flight (a 401 during a focus check) runs once that
+ * check has found the session alive, so the caller gets new tokens instead of the check's answer
+ * for the tokens the API just rejected. Later callers join that refresh.
  */
 export function ensureValidSession(forceRefresh = false): Promise<boolean> {
-    if (inFlight) {
+    if (inFlight && (inFlightForced || !forceRefresh)) {
         return inFlight;
     }
-    inFlight = ensureSessionValid(forceRefresh).finally(() => {
-        inFlight = null;
+    const previous = inFlight;
+    const call: Promise<boolean> = (
+        previous
+            ? previous
+                  .catch(() => false)
+                  .then((alive) => (alive ? ensureSessionValid(true) : false))
+            : ensureSessionValid(forceRefresh)
+    ).finally(() => {
+        if (inFlight === call) {
+            inFlight = null;
+            inFlightForced = false;
+        }
     });
-    return inFlight;
+    inFlight = call;
+    inFlightForced = forceRefresh;
+    return call;
 }
 
 export function getAccessTokenExpiry(): Promise<number | null> {
@@ -71,6 +94,7 @@ export function clearExpiryTimer(): void {
 /** @internal Test-only: reset module state between tests. */
 export function __resetForTests(): void {
     inFlight = null;
+    inFlightForced = false;
     clearExpiryTimer();
     loggingOut = false;
 }
@@ -118,8 +142,9 @@ export function registerFocusRevalidation(): () => void {
 }
 
 /**
- * Empty the browser's localforage (IndexedDB) store for a sign-out. Waits at most
- * LOCAL_STORE_CLEAR_TIMEOUT_MS, and a failure is ignored, so sign-out always proceeds.
+ * Empty the browser's localforage (IndexedDB) store. Auth runs it once per page load, and every
+ * sign-out runs it. Waits at most LOCAL_STORE_CLEAR_TIMEOUT_MS, and a failure is ignored, so a
+ * sign-out always proceeds.
  */
 export async function clearLocalStore(): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -166,6 +191,8 @@ export async function revokeSession(): Promise<void> {
  * Run it after revokeSession().
  */
 export function clearStoredSession(): void {
+    // Presigned file URLs the viewers cached belong to the signed-out user.
+    clearPresignedUrlCache();
     const kept = PRESERVED_PREFERENCE_KEYS.map((key) => [key, localStorage.getItem(key)] as const);
     localStorage.clear();
     for (const [key, value] of kept) {
@@ -180,6 +207,10 @@ export function clearStoredSession(): void {
  * revokes the refresh token when it still can), clear localStorage (keeping display preferences),
  * record the expired flag + the route to return to, empty the localforage store, then redirect to
  * the login screen. Idempotent — first caller wins.
+ *
+ * A session ended because a refreshed external OAuth token lacked the configured user id
+ * claim (MISSING_USER_ID_CLAIM_KEY, written by authTokenUtils) keeps that claim instead of
+ * the expired flag, so the login screen names it.
  */
 export async function logoutExpired(returnTo: string = window.location.hash): Promise<void> {
     if (loggingOut) {
@@ -188,9 +219,15 @@ export async function logoutExpired(returnTo: string = window.location.hash): Pr
     loggingOut = true;
     clearExpiryTimer();
 
+    // Read before anything is cleared: the clear below removes it with the rest of the session.
+    const missingUserIdClaim = localStorage.getItem(MISSING_USER_ID_CLAIM_KEY);
     await revokeSession();
     clearStoredSession();
-    localStorage.setItem(SESSION_EXPIRED_KEY, "true");
+    if (missingUserIdClaim) {
+        localStorage.setItem(MISSING_USER_ID_CLAIM_KEY, missingUserIdClaim);
+    } else {
+        localStorage.setItem(SESSION_EXPIRED_KEY, "true");
+    }
     if (returnTo) {
         localStorage.setItem(SESSION_RETURN_TO_KEY, returnTo);
     }

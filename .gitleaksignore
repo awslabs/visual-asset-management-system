@@ -58,3 +58,17 @@ b5711a0eafcfeba9c56a476f3927354b0c685cb6:web/src/features/orchestration/api/exec
 720c63afa41f3b3898ca8a588d0090b3d8720575:web/src/features/orchestration/api/executions.test.ts:generic-api-key:126
 720c63afa41f3b3898ca8a588d0090b3d8720575:web/src/features/orchestration/api/executions.test.ts:generic-api-key:131
 7b519c6bacc7f221dafc965815afbfa7dba730f0:documentation/docusaurus-site/docs/api/authentication.md:generic-api-key:77
+# Image to 3D (#814): vamsSchema template tagKey identifiers (e.g. SAM3D_SOLID_INTERIOR,
+# TRELLIS2_SHAPE_CFG_STRENGTH) flagged as generic-api-key by gitleaks. Path-based fingerprints
+# (not commit-pinned) so they survive rebases. Not secrets.
+backendPipelines/genAi/imageTo3d/vamsSchema/templates/image-to-3d-hunyuan3d-geometry-photo.json:generic-api-key:113
+backendPipelines/genAi/imageTo3d/vamsSchema/templates/image-to-3d-hunyuan3d-geometry-photo.json:generic-api-key:70
+backendPipelines/genAi/imageTo3d/vamsSchema/templates/image-to-3d-hunyuan3d-multiview.json:generic-api-key:107
+backendPipelines/genAi/imageTo3d/vamsSchema/templates/image-to-3d-hunyuan3d-multiview.json:generic-api-key:64
+backendPipelines/genAi/imageTo3d/vamsSchema/templates/image-to-3d-hunyuan3d.json:generic-api-key:113
+backendPipelines/genAi/imageTo3d/vamsSchema/templates/image-to-3d-hunyuan3d.json:generic-api-key:70
+backendPipelines/genAi/imageTo3d/vamsSchema/templates/image-to-3d-sam3d-print-ready.json:generic-api-key:70
+backendPipelines/genAi/imageTo3d/vamsSchema/templates/image-to-3d-sam3d-then-refine.json:generic-api-key:70
+backendPipelines/genAi/imageTo3d/vamsSchema/templates/image-to-3d-sam3d.json:generic-api-key:70
+backendPipelines/genAi/imageTo3d/vamsSchema/templates/image-to-3d-trellis2.json:generic-api-key:103
+backendPipelines/genAi/imageTo3d/vamsSchema/templates/image-to-3d-trellis2.json:generic-api-key:119

@@ -1,19 +1,19 @@
 {
     "templateId": "isaaclab-evaluation-cartpole",
     "templateName": "Evaluate (Cartpole)",
-    "description": "Evaluate a trained RL policy with Isaac Lab (Isaac-Cartpole-Direct-v0, 100 envs, 50 episodes).",
+    "description": "Evaluate a trained RL policy with Isaac Lab (Isaac-Cartpole-Direct, 100 envs, 50 episodes).",
     "configFormat": "json",
-    "configBody": "{\"trainingConfig\":{\"mode\":\"evaluate\",\"task\":\"{{TASK}}\",\"numEnvs\":{{NUM_ENVS}},\"numEpisodes\":{{NUM_EPISODES}},\"stepsPerEpisode\":{{STEPS_PER_EPISODE}},\"recordVideo\":{{RECORD_VIDEO}},\"rlLibrary\":\"{{RL_LIBRARY}}\",\"checkpointPath\":\"{{CHECKPOINT_PATH}}\"}}",
+    "configBody": "{\"trainingConfig\":{\"mode\":\"evaluate\",\"task\":\"{{TASK}}\",\"numEnvs\":{{NUM_ENVS}},\"numEpisodes\":{{NUM_EPISODES}},\"stepsPerEpisode\":{{STEPS_PER_EPISODE}},\"recordVideo\":{{RECORD_VIDEO}},\"rlLibrary\":\"{{RL_LIBRARY}}\",\"physics\":\"{{PHYSICS}}\",\"checkpointPath\":\"{{CHECKPOINT_PATH}}\"}}",
     "allowCustomEdit": true,
-    "inputInstructions": "Run this against an asset holding a trained policy (.pt). The \"Isaac Lab task\" field must match the task the policy was trained on, and \"RL library\" must match the library that trained it. \"Parallel environments\", \"Episodes\" and \"Steps per episode\" size the rollout. Set \"Record rollout video\" to write a video of the rollout to the asset. Leave \"Checkpoint path\" blank to use the .pt file found on the asset, or set it to a path within the asset to select one.",
+    "inputInstructions": "Run this against an asset holding a trained policy (.pt or .pth). The \"Isaac Lab task\" field must match the task the policy was trained on, \"RL library\" must match the library that trained it, and \"Physics engine\" should match the engine that trained it (a checkpoint from an earlier VAMS release was trained on isaacsim_physx). \"Parallel environments\", \"Episodes\" and \"Steps per episode\" size the rollout. Set \"Record rollout video\" to write a video of the rollout to the asset. Leave \"Checkpoint path\" blank to use the checkpoint of the chosen library found on the asset, or set it to a path within the asset to select one.",
     "tagSchema": [
         {
             "tagKey": "TASK",
             "type": "string",
             "required": false,
-            "default": "Isaac-Cartpole-Direct-v0",
+            "default": "Isaac-Cartpole-Direct",
             "label": "Isaac Lab task",
-            "description": "The Isaac Lab task id to evaluate, for example Isaac-Cartpole-Direct-v0. It must match the task the policy was trained on."
+            "description": "The Isaac Lab task id to evaluate, for example Isaac-Cartpole-Direct. It must match the task the policy was trained on."
         },
         {
             "tagKey": "NUM_ENVS",
@@ -55,6 +55,15 @@
             "enumValues": ["rsl_rl", "rl_games", "skrl"],
             "label": "RL library",
             "description": "The reinforcement-learning library whose Isaac Lab evaluation script runs. It must match the library that trained the policy, because a checkpoint is loadable only by the library that wrote it."
+        },
+        {
+            "tagKey": "PHYSICS",
+            "type": "enum",
+            "required": false,
+            "default": "newton_mjwarp",
+            "enumValues": ["newton_mjwarp", "isaacsim_physx"],
+            "label": "Physics engine",
+            "description": "The physics engine for the run: newton_mjwarp (Newton, the default) or isaacsim_physx (PhysX on Isaac Sim, the engine earlier VAMS releases used). Results differ between engines, so evaluate a policy on the engine that trained it, or treat the evaluation as a transfer test; a checkpoint trained on the other engine is noted in the run log. Not every task offers both; a task that does not offer the chosen engine fails at the start and names the options."
         },
         {
             "tagKey": "CHECKPOINT_PATH",

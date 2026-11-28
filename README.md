@@ -43,8 +43,8 @@ _Use cases include:_
 ### Key capabilities
 
 -   **Centralized storage** — Manage 3D models, point clouds, CAD files, and media in Amazon S3 with versioning and access control
--   **Interactive visualization** — View assets in the browser with 20 built-in viewer plugins (Three.js, Potree, Cesium, USD, Gaussian Splat, and more)
--   **Automated processing** — Transform assets using configurable pipelines backed by AWS Lambda, Amazon SQS, or Amazon EventBridge
+-   **Interactive visualization** — View assets in the browser with 25 built-in viewer plugins (Three.js, Potree, Cesium, USD, Gaussian Splat, and more)
+-   **Automated processing** — Transform assets using configurable pipelines backed by AWS Lambda, Amazon SQS, Amazon EventBridge, or AWS Deadline Cloud, including preview thumbnails for 3D files, images, TGA/TIFF and video
 -   **Intelligent search** — Full-text and metadata search powered by Amazon OpenSearch with map-based geographic views
 -   **Fine-grained permissions** — Attribute-based and role-based access control (ABAC/RBAC) at both API and data entity levels
 -   **Multi-region deployment** — Deploy to AWS commercial regions, AWS GovCloud (US), or the AWS European Sovereign Cloud
@@ -63,13 +63,13 @@ _Use cases include:_
 
 ![Architecture](./documentation/diagrams/Commercial-GovCloud-VAMS_Architecture.png)
 
-VAMS deploys as a serverless architecture using AWS CDK with 14 nested CloudFormation stacks. Core services include Amazon API Gateway, AWS Lambda, Amazon DynamoDB, Amazon S3, Amazon OpenSearch, and Amazon Cognito.
+VAMS deploys as a serverless architecture using AWS CDK with 15 core nested CloudFormation stacks. Core services include Amazon API Gateway, AWS Lambda, Amazon DynamoDB, Amazon S3, Amazon OpenSearch, and Amazon Cognito.
 
 ## Quick start
 
 ### Prerequisites
 
--   Python 3.12+, Docker (or a Docker-compatible CLI such as [Finch](https://aws.github.io/finch/) or [Podman](https://podman.io/)), Node.js 22+, npm 11.10.0+, AWS CLI
+-   Python 3.12+, Docker (or a Docker-compatible CLI such as [Finch](https://aws.github.io/finch/) or [Podman](https://podman.io/)), Node.js 22+, npm 11 (11.10.0 or later; npm 12 is not supported), AWS CLI
 -   The AWS CDK CLI is pinned in `infra/package.json` and installed with the `infra/` dependencies; the commands below run it as `npx cdk`
 
 ### Deploy
@@ -97,7 +97,8 @@ npx cdk bootstrap aws://ACCOUNT_ID/us-east-1
 #    See documentation/docusaurus-site/docs/deployment/configuration-reference.md
 
 # 5. Deploy
-npx cdk deploy --all --require-approval never
+#    -c configFile names the configuration file in infra/config/ to deploy (default: config.json)
+npx cdk deploy --all --require-approval never -c configFile=config.json
 ```
 
 After deployment, find your URL in the CDK output and check your email for temporary credentials.
@@ -139,13 +140,13 @@ Then open `http://localhost:3000/visual-asset-management-system/` in your browse
 | -------------------- | ------------------------------ | ------------------------ | ------------------------- |
 | **Best for**         | Interactive use, visualization | Automation, scripting    | Custom integrations       |
 | **Asset management** | Visual interface               | Programmatic control     | Full programmatic control |
-| **3D viewing**       | 20 interactive viewers         | N/A                      | N/A                       |
+| **3D viewing**       | 25 interactive viewers         | N/A                      | N/A                       |
 | **Automation**       | Manual                         | Full automation          | Complete control          |
 | **CI/CD**            | Not suitable                   | Designed for integration | Full flexibility          |
 
 ## Partner integrations
 
-**Open source:** Online 3D Viewer, CesiumJS, Potree, BabylonJS, PlayCanvas, Needle Engine, Three.js, Trimesh, CadQuery, Blender, 3D Reconstruction Toolkit, Garnet Framework, NVIDIA Isaac Lab / Cosmos / Gr00t
+**Open source:** Online 3D Viewer, CesiumJS, Potree, BabylonJS, PlayCanvas, Needle Engine, Three.js, Trimesh, CadQuery, Strands Agents, Blender, 3D Reconstruction Toolkit, Garnet Framework, NVIDIA Isaac Lab / Cosmos / Gr00t, EDH (GPU DCV workstations)
 
 **Licensed:** [RapidPipeline](https://rapidpipeline.com/), [VNTANA](https://www.vntana.com/), [Veerum](https://veerum.com/), [Physna](https://physna.com/)
 
@@ -173,6 +174,8 @@ VAMS follows the [AWS Shared Responsibility Model](https://aws.amazon.com/compli
 ## Costs
 
 Costs depend on deployment configuration, data volume, and usage patterns. A minimal deployment starts at approximately $10-15/month. See the [Cost Estimation guide](https://awslabs.github.io/visual-asset-management-system/overview/costs) for detailed breakdowns.
+
+Natural-language (vector) search, on in the commercial template, has no hourly charge of its own: each new file version costs about $0.01-0.05 to analyze and embed, and each query about $0.0001 (US East (N. Virginia) estimates). Its optional Fargate renderer requires a VPC, whose interface endpoints add about $175/month. See [Natural-language (vector) search costs](https://awslabs.github.io/visual-asset-management-system/overview/costs#natural-language-vector-search).
 
 ## Contributing
 

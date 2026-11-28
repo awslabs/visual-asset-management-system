@@ -9,15 +9,16 @@ import * as crypto from "crypto";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as Config from "../../config/config";
-import { Construct } from "constructs";
+import { Construct, IConstruct } from "constructs";
 import { Service, IAMArn } from "../helper/service-helper";
-import { NagSuppressions } from "cdk-nag";
-import { Stack, Token } from "aws-cdk-lib";
+import { NagPackSuppression, NagSuppressions } from "cdk-nag";
+import { CfnResource, Stack, Token } from "aws-cdk-lib";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import * as s3AssetBuckets from "./s3AssetBuckets";
 import { readFileSync, rmSync } from "fs";
 import { join } from "path";
 import { INDEX_HTML_INLINE_SCRIPT_HASHES } from "./cspInlineScriptHashes";
+import { addonCspSources } from "../nestedStacks/addon/addonCsp";
 
 /**
  * Interface for additional CSP configuration
@@ -219,6 +220,15 @@ export function globalLambdaEnvironmentsAndPermissions(
             ],
         })
     );
+    // The resource-name chunk parameters (<prefix>Chunks/<i>, resourceNameChunks.ts), a sibling
+    // path the statement above does not cover: read with GetParameters only.
+    lambdaFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["ssm:GetParameters"],
+            resources: [IAMArn(`${resourceParamPathNoSlash}Chunks/*`).ssm],
+        })
+    );
 
     // Apply stack-level CDK Nag suppression for the SSM parameter grant. Stack suppressions
     // are evaluated at check time against every finding in the stack, so they cover synthesis-
@@ -231,15 +241,23 @@ export function globalLambdaEnvironmentsAndPermissions(
         NagSuppressions.addStackSuppressions(lambdaStack, [
             {
                 id: "AwsSolutions-IAM5",
-                reason: "Wildcard is scoped to the deployment-specific SSM resource-name parameter prefix (/{name}-{baseStackName}/resourceNames/*) that Lambda functions read at cold start to resolve DynamoDB table, S3 bucket, and CloudWatch log group names.",
+                reason: "Wildcard is scoped to the deployment-specific SSM resource-name parameter prefix (/{name}-{baseStackName}/resourceNames/*) and its chunk parameters (/{name}-{baseStackName}/resourceNamesChunks/*), which Lambda functions read at cold start to resolve DynamoDB table, S3 bucket, and CloudWatch log group names.",
                 appliesTo: [
                     {
-                        regex: "/^Resource::arn:.*:ssm:.*:parameter\\/.*\\/resourceNames(\\/\\*)?$/g",
+                        regex: "/^Resource::arn:.*:ssm:.*:parameter\\/.*\\/resourceNames(\\/\\*|Chunks\\/\\*)?$/g",
                     },
                 ],
             },
         ]);
     }
+
+    // Whether read actions (gets, lists, searches) write audit records (app.auditLogging.recordReads).
+    // customLogging/auditLogging.py records reads unless the value is "false", so a function
+    // without the variable keeps recording them.
+    lambdaFunction.addEnvironment(
+        "AUDIT_RECORD_READS",
+        config.app.auditLogging?.recordReads === false ? "false" : "true"
+    );
 
     // Optional default role granted to authenticated users with no assigned role
     // (used by the Casbin enforcer). Empty string disables the behavior.
@@ -247,6 +265,29 @@ export function globalLambdaEnvironmentsAndPermissions(
         "DEFAULT_ROLE_NAME",
         config.app.authProvider.authorizerOptions?.defaultUserRoleName || ""
     );
+
+    // Whether the handler Lambdas run inside the VPC. In the VPC an asset bucket in another Region
+    // is reached through an Amazon S3 interface endpoint, which does not serve CopyObject between
+    // Regions, so the handlers stream such copies instead (common/s3.py copy_s3_object).
+    lambdaFunction.addEnvironment(
+        "VAMS_LAMBDAS_IN_VPC",
+        config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+            ? "true"
+            : "false"
+    );
+
+    // The optional REST API custom domain (app.api.apiGatewayRest.customDomain). Through it, a
+    // proxy event's `path` keeps the base path its mapping routes to the stage (`/api/database`,
+    // where execute-api delivers `/database`). common/auth/apiEvent.py removes that base path for
+    // an event whose requestContext.domainName is this host, so handlers and the authorizer see
+    // the stage-relative path on every host. The base path is the stage name
+    // (rest-api-gateway-construct BasePathMapping). Set only when the domain is enabled, so a
+    // deployment without it synthesizes unchanged.
+    const customDomainHost = Config.apiCustomDomainHost(config);
+    if (customDomainHost) {
+        lambdaFunction.addEnvironment("API_CUSTOM_DOMAIN_NAME", customDomainHost);
+        lambdaFunction.addEnvironment("API_CUSTOM_DOMAIN_BASE_PATH", Config.API_GATEWAY_STAGE_NAME);
+    }
 }
 
 /**
@@ -266,6 +307,21 @@ export function setupSecurityAndLoggingEnvironmentAndPermissions(
     storageResources.dynamo.userRolesStorageTable.grantReadData(lambdaFunction);
     storageResources.dynamo.rolesStorageTable.grantReadData(lambdaFunction);
 
+    grantAuditLogWritePermissions(lambdaFunction, storageResources);
+}
+
+/**
+ * The audit log write grant alone: `logs:CreateLogStream` and `logs:PutLogEvents` on the streams of
+ * the nine VAMS audit log groups, with the stack-level cdk-nag suppression for the `:*` stream
+ * wildcard. For a function that writes audit records but makes no authorization decision, so it
+ * needs none of the authorization tables `setupSecurityAndLoggingEnvironmentAndPermissions` grants
+ * (the deploy-time compliance schema seed). Use it with `globalLambdaEnvironmentsAndPermissions`,
+ * which sets the resource-name prefix the audit writer resolves the log group names from.
+ */
+export function grantAuditLogWritePermissions(
+    lambdaFunction: lambda.Function,
+    storageResources: storageResources
+): void {
     // Grant CloudWatch Logs permissions for audit logging
     lambdaFunction.addToRolePolicy(
         new iam.PolicyStatement({
@@ -519,14 +575,22 @@ export function generateContentSecurityPolicy(
     // Load additional CSP configuration
     const additionalCSPConfig = loadCSPAdditionalConfig();
 
+    // Presigned URLs reach asset buckets in any Region (an external bucket can sit outside the
+    // deployment Region), and the Region is a label inside the S3 host, so no single regional host
+    // covers them. A CSP wildcard matches only the leading label, so the source is the partition's
+    // service DNS suffix. It also admits virtual-hosted and S3 Transfer Acceleration hosts. The
+    // trade-off is documented in docs/architecture/security.md.
+    const awsServiceHosts = `https://*.${Service("S3", false).DnsSuffix}`;
+
     // Base CSP sources
-    let connectSrc = [
-        "'self'",
-        "blob:",
-        "data:",
-        `https://${apiUrl}`,
-        `https://${Service("S3", false).Endpoint}/`,
-    ];
+    let connectSrc = ["'self'", "blob:", "data:", `https://${apiUrl}`, awsServiceHosts];
+
+    // The REST API custom domain, which amplify-config hands the clients when it is enabled. The
+    // execute-api host above stays allowed for a browser still holding the earlier base URL.
+    const customDomainHost = Config.apiCustomDomainHost(config);
+    if (customDomainHost) {
+        connectSrc.push(`https://${customDomainHost}`);
+    }
 
     // Inline scripts in index.html are allowed by SHA-256 hash rather than by
     // `'unsafe-inline'`, so an injected inline script is still blocked. The
@@ -542,10 +606,12 @@ export function generateContentSecurityPolicy(
     //
     // The list covers web/index.html only. This policy is a response header on
     // the whole distribution, so it governs every HTML document served from
-    // web/public as well; an inline block in one of those (the SuperSplat
-    // viewer's upstream service-worker registration) has no hash here and does
-    // not run. A served document that needs its own inline script needs its own
-    // hashes, taken from that document.
+    // web/public as well. The inline block in the SuperSplat viewer's
+    // index.html unregisters every service worker on the origin, including the
+    // root /coi-serviceworker.js that web/index.html registers for cross-origin
+    // isolation, so it must stay blocked: never add its hash here. A served
+    // document that needs its own inline script needs its own hashes, taken
+    // from that document.
     //
     // `'wasm-unsafe-eval'` permits WebAssembly compilation for the WASM-based
     // viewer plugins. It is not an inline-script keyword, so it neither relies
@@ -561,9 +627,9 @@ export function generateContentSecurityPolicy(
 
     let workerSrc = ["'self'", "blob:", "data:"];
 
-    let imgSrc = ["'self'", "blob:", "data:", `https://${Service("S3", false).Endpoint}/`];
+    let imgSrc = ["'self'", "blob:", "data:", awsServiceHosts];
 
-    let mediaSrc = ["'self'", "blob:", "data:", `https://${Service("S3", false).Endpoint}/`];
+    let mediaSrc = ["'self'", "blob:", "data:", awsServiceHosts];
 
     let fontSrc = ["'self'"];
     let styleSrc = ["'self'", "'unsafe-inline'"];
@@ -576,8 +642,8 @@ export function generateContentSecurityPolicy(
     // on img-src and media-src above: the HTML viewer frames an asset file by its
     // presigned S3 URL, and without the origin the frame is blocked and the panel
     // renders empty. A viewer that frames a third-party document needs that
-    // document's origin added, as the Physna add-on branch below does.
-    let frameSrc = ["'self'", "blob:", `https://${Service("S3", false).Endpoint}/`];
+    // document's origin added, as the add-on sources below do.
+    let frameSrc = ["'self'", "blob:", awsServiceHosts];
 
     //Add cognito
     if (config.app.authProvider.useCognito.enabled) {
@@ -600,35 +666,10 @@ export function generateContentSecurityPolicy(
         connectSrc.push(`https://maps.${Service("GEO", false).Endpoint}/`);
     }
 
-    // When the Physna add-on is enabled the viewer plugin embeds Physna's
-    // hosted viewer URL directly in an `<iframe src>`. Allow that origin
-    // in `frame-src` so the iframe isn't blocked by CSP, and in
-    // `connect-src` so any auxiliary fetches the VAMS frontend makes
-    // against Physna also pass. We add only the origin portion (not the
-    // full config URL, which may include a path) because CSP source
-    // expressions match on scheme + host + port.
-    if (
-        config.app.addons?.usePhysnaSync?.enabled &&
-        config.app.addons.usePhysnaSync.apiBaseEndpoint
-    ) {
-        try {
-            const physnaUrl = new URL(config.app.addons.usePhysnaSync.apiBaseEndpoint);
-            const origin = `${physnaUrl.protocol}//${physnaUrl.host}`;
-            connectSrc.push(origin);
-            frameSrc.push(origin);
-        } catch {
-            // Config validation in getConfig() already rejects invalid URLs,
-            // so this is defensive — never raise during CSP generation.
-        }
-
-        // The add-on relaxes no script-src source. The viewer's `<iframe src>`
-        // is Physna's own HTTPS origin, so that document loads under Physna's
-        // CSP and its inline scripts are outside this policy's reach — the
-        // frame-src and connect-src origins above are all it needs from here.
-        // `'unsafe-inline'` would have no effect on it, and none on a VAMS page
-        // either: a source list that carries a hash source never allows all
-        // inline script, so browsers ignore the keyword wherever it appears.
-    }
+    // Sources the enabled add-ons need (lib/nestedStacks/addon/addonCsp.ts)
+    const addonSources = addonCspSources(config);
+    connectSrc.push(...addonSources.connectSrc);
+    frameSrc.push(...addonSources.frameSrc);
 
     // Merge additional CSP sources if configuration is loaded
     if (additionalCSPConfig) {
@@ -673,9 +714,9 @@ export function generateContentSecurityPolicy(
  * Policies" — which tell a reviewer nothing they could not read off the finding itself.
  *
  * They are CONSTANTS, and each value is deliberately ONE SHORT SENTENCE, because a reason is not free:
- * cdk-nag stamps it onto the metadata of every resource the suppression covers, and the shared grant
- * suppressions are applied with `applyToChildren` over whole stacks, so the text is multiplied by the
- * resource count. Replacing one catch-all entry with six verbose ones once moved the apiBuilder template
+ * cdk-nag stamps it onto the metadata of every resource the suppression covers, and the shared Lambda
+ * and grant suppressions cover every Lambda role and policy in a stack, so the text is multiplied by
+ * the resource count. Replacing one catch-all entry with six verbose ones once moved the apiBuilder template
  * from ~0.40 MB to ~0.57 MB against a 1 MB per-template ceiling. The reasoning therefore lives in these
  * doc comments, which cost no template bytes, and only the one-sentence conclusion is emitted.
  */
@@ -711,15 +752,108 @@ export const NAG_REASON_ECS_TASK_EXECUTION_MANAGED =
     "Grants the ECR pull and Logs write the ECS agent needs to start a task; X-Ray is segment-write only.";
 
 /**
- * Applies the standard CDK Nag suppressions required by every VAMS Lambda function,
- * scoped to the individual function (and its execution role) rather than the whole stack.
+ * The resource types cdk-nag's AwsSolutions-IAM4 and AwsSolutions-IAM5 rules evaluate
+ * (cdk-nag `IAMNoManagedPolicies` and `IAMNoWildcardPermissions`). A suppression of either rule on
+ * any other resource is never read.
+ */
+const NAG_IAM_RULE_RESOURCE_TYPES: Record<
+    string,
+    ReadonlyArray<abstract new (...args: any[]) => CfnResource>
+> = {
+    "AwsSolutions-IAM4": [iam.CfnRole, iam.CfnUser, iam.CfnGroup],
+    "AwsSolutions-IAM5": [
+        iam.CfnRole,
+        iam.CfnUser,
+        iam.CfnGroup,
+        iam.CfnPolicy,
+        iam.CfnManagedPolicy,
+    ],
+};
+
+/**
+ * Whether cdk-nag reads a suppression of `ruleId` on `resource`: false only for an IAM4 or IAM5
+ * suppression on a resource type the rule does not evaluate. Any other rule id is kept (true).
+ */
+export function nagRuleReadsResource(ruleId: string, resource: CfnResource): boolean {
+    const types = NAG_IAM_RULE_RESOURCE_TYPES[ruleId];
+    return !types || types.some((type) => resource instanceof type);
+}
+
+/**
+ * Adds AwsSolutions-IAM4 / AwsSolutions-IAM5 suppressions to the resources under `scope` (the scope
+ * itself included) that the rule evaluates, instead of to every resource under it.
  *
- * Previously these three suppressions were applied once at the CoreVAMSStack level with
- * `applyToChildren=true`. Because cdk-nag recurses across nested-stack boundaries, that
- * stamped the suppression metadata onto every resource in every nested stack (S3 buckets,
- * DynamoDB tables, API routes, etc.), bloating the synthesized CloudFormation templates as
- * resources were added. Scoping the suppressions to each Lambda keeps the metadata on only
- * the resources that actually need it, which is the recommended cdk-nag practice.
+ * `NagSuppressions.addResourceSuppressions(scope, ..., true)` writes the suppression into the
+ * template metadata of every CloudFormation resource under the scope: the function, its security
+ * group, its permissions and event source mappings, and for a stack every bucket, queue and log
+ * group in it. cdk-nag reads an IAM4 suppression only on a role, user or group, and an IAM5
+ * suppression only on those and on a policy or managed policy, so the copies on any other resource
+ * cost template bytes and suppress nothing. The nested API stacks' templates are bounded at
+ * 1,000,000 bytes by CloudFormation. An IAM5 suppression is also left off a role that has
+ * no inline policies when its default policy is suppressed in the same call
+ * (`iam5IsReadOnDefaultPolicy`). Like `addResourceSuppressions`, this reaches the resources
+ * that exist when it is called; overflow policies split off later get their role's suppressions from
+ * `OverflowPolicyNagSuppressionAspect`.
+ *
+ * @param scope The construct whose resources are suppressed (a function, a state machine, a stack)
+ * @param suppressions IAM4 or IAM5 suppressions only; any other rule id throws
+ */
+export function addIamNagSuppressions(scope: IConstruct, suppressions: NagPackSuppression[]): void {
+    const resources = new Set<CfnResource>();
+    for (const node of scope.node.findAll()) {
+        const resource = node.node.defaultChild ?? node;
+        if (resource instanceof CfnResource) {
+            resources.add(resource);
+        }
+    }
+    for (const suppression of suppressions) {
+        const types = NAG_IAM_RULE_RESOURCE_TYPES[suppression.id];
+        if (!types) {
+            throw new Error(
+                `addIamNagSuppressions: ${suppression.id} is not an IAM rule; suppress it with NagSuppressions`
+            );
+        }
+        const targets = [...resources].filter(
+            (resource) =>
+                nagRuleReadsResource(suppression.id, resource) &&
+                !(
+                    suppression.id === "AwsSolutions-IAM5" &&
+                    iam5IsReadOnDefaultPolicy(resource, resources)
+                )
+        );
+        if (targets.length > 0) {
+            NagSuppressions.addResourceSuppressions(targets, [suppression]);
+        }
+    }
+}
+
+/**
+ * Whether `resource` is a role with no inline policies whose default policy is in `targets`.
+ *
+ * AwsSolutions-IAM5 reads a role's inline `Policies` only, which CDK renders when it creates the role.
+ * Such a role's statements live in its default policy, which gets the same suppression, and
+ * `OverflowPolicyNagSuppressionAspect` copies it from there onto any overflow policy, so the copy on
+ * the role suppresses nothing.
+ */
+function iam5IsReadOnDefaultPolicy(resource: CfnResource, targets: Set<CfnResource>): boolean {
+    if (!(resource instanceof iam.CfnRole) || resource.policies !== undefined) {
+        return false;
+    }
+    const defaultPolicy =
+        resource.node.scope?.node.tryFindChild("DefaultPolicy")?.node.defaultChild;
+    return defaultPolicy instanceof iam.CfnPolicy && targets.has(defaultPolicy);
+}
+
+/**
+ * Applies the standard CDK Nag suppressions required by every VAMS Lambda function,
+ * scoped to the function's own execution role and policies rather than the whole stack.
+ *
+ * A stack-level `applyToChildren=true` suppression would stamp the metadata onto every
+ * resource in every nested stack (cdk-nag recurses across nested-stack boundaries), so these
+ * are applied per function. They are written only on the IAM resources under the function (its
+ * service role, default policy and any policy it holds when this is called), the only ones the
+ * two rules read (`addIamNagSuppressions`); the function resource, its security group,
+ * permissions and event source mappings carry none.
  *
  * Suppresses:
  * - AwsSolutions-IAM5: wildcard KMS actions (kms:*) for VAMS-generated keys
@@ -729,39 +863,35 @@ export const NAG_REASON_ECS_TASK_EXECUTION_MANAGED =
  * @param lambdaFunction The Lambda function to suppress findings for
  */
 export function suppressCdkNagLambda(lambdaFunction: lambda.IFunction) {
-    NagSuppressions.addResourceSuppressions(
-        lambdaFunction,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason: "Allow permissions for KMS unencryption/re-encryption for keys generated within VAMS. Policy statements additions on imported keys are No-Op statements and must be set externally to the deployment.",
-                appliesTo: [
-                    {
-                        regex: "/^Action::kms:(.*)\\*$/g",
-                    },
-                ],
-            },
-            {
-                id: "AwsSolutions-IAM4",
-                reason: NAG_REASON_LAMBDA_VPC_ACCESS,
-                appliesTo: [
-                    {
-                        regex: "/.*AWSLambdaVPCAccessExecutionRole$/g",
-                    },
-                ],
-            },
-            {
-                id: "AwsSolutions-IAM4",
-                reason: NAG_REASON_LAMBDA_BASIC_EXECUTION,
-                appliesTo: [
-                    {
-                        regex: "/.*AWSLambdaBasicExecutionRole$/g",
-                    },
-                ],
-            },
-        ],
-        true
-    );
+    addIamNagSuppressions(lambdaFunction, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason: "Allow permissions for KMS unencryption/re-encryption for keys generated within VAMS. Policy statements additions on imported keys are No-Op statements and must be set externally to the deployment.",
+            appliesTo: [
+                {
+                    regex: "/^Action::kms:(.*)\\*$/g",
+                },
+            ],
+        },
+        {
+            id: "AwsSolutions-IAM4",
+            reason: NAG_REASON_LAMBDA_VPC_ACCESS,
+            appliesTo: [
+                {
+                    regex: "/.*AWSLambdaVPCAccessExecutionRole$/g",
+                },
+            ],
+        },
+        {
+            id: "AwsSolutions-IAM4",
+            reason: NAG_REASON_LAMBDA_BASIC_EXECUTION,
+            appliesTo: [
+                {
+                    regex: "/.*AWSLambdaBasicExecutionRole$/g",
+                },
+            ],
+        },
+    ]);
 }
 
 /**
@@ -811,51 +941,47 @@ export function suppressCdkNagLambdaFrameworkResources(scope: Construct) {
             return;
         }
 
-        NagSuppressions.addResourceSuppressions(
-            node,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: "Allow permissions for KMS unencryption/re-encryption for keys generated within VAMS. Policy statements additions on imported keys are No-Op statements and must be set externally to the deployment.",
-                    appliesTo: [
-                        {
-                            regex: "/^Action::kms:(.*)\\*$/g",
-                        },
-                    ],
-                },
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: "CDK framework roles (BucketDeployment uploader, custom-resource providers) require wildcard S3 object access on the CDK staging + destination buckets to stage assets, and a function-qualifier ':*' wildcard to invoke their target Lambda. Scope is the framework resource's own generated policy.",
-                    appliesTo: [
-                        {
-                            regex: "/^Action::s3:(.*)\\*$/g",
-                        },
-                        {
-                            regex: "/^Resource::.*\\*$/g",
-                        },
-                    ],
-                },
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: NAG_REASON_LAMBDA_VPC_ACCESS,
-                    appliesTo: [
-                        {
-                            regex: "/.*AWSLambdaVPCAccessExecutionRole$/g",
-                        },
-                    ],
-                },
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: NAG_REASON_LAMBDA_BASIC_EXECUTION,
-                    appliesTo: [
-                        {
-                            regex: "/.*AWSLambdaBasicExecutionRole$/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
+        addIamNagSuppressions(node, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Allow permissions for KMS unencryption/re-encryption for keys generated within VAMS. Policy statements additions on imported keys are No-Op statements and must be set externally to the deployment.",
+                appliesTo: [
+                    {
+                        regex: "/^Action::kms:(.*)\\*$/g",
+                    },
+                ],
+            },
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "CDK framework roles (BucketDeployment uploader, custom-resource providers) require wildcard S3 object access on the CDK staging + destination buckets to stage assets, and a function-qualifier ':*' wildcard to invoke their target Lambda. Scope is the framework resource's own generated policy.",
+                appliesTo: [
+                    {
+                        regex: "/^Action::s3:(.*)\\*$/g",
+                    },
+                    {
+                        regex: "/^Resource::.*\\*$/g",
+                    },
+                ],
+            },
+            {
+                id: "AwsSolutions-IAM4",
+                reason: NAG_REASON_LAMBDA_VPC_ACCESS,
+                appliesTo: [
+                    {
+                        regex: "/.*AWSLambdaVPCAccessExecutionRole$/g",
+                    },
+                ],
+            },
+            {
+                id: "AwsSolutions-IAM4",
+                reason: NAG_REASON_LAMBDA_BASIC_EXECUTION,
+                appliesTo: [
+                    {
+                        regex: "/.*AWSLambdaBasicExecutionRole$/g",
+                    },
+                ],
+            },
+        ]);
     });
 }
 
@@ -871,20 +997,16 @@ export function suppressCdkNagLambdaFrameworkResources(scope: Construct) {
  * later should surface at synth, not inherit this one.
  */
 export function suppressCdkNagDynamoStreamListWildcard(lambdaFunction: lambda.IFunction) {
-    NagSuppressions.addResourceSuppressions(
-        lambdaFunction,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason:
-                    "Table.grantStreamRead() adds dynamodb:ListStreams, which enumerates the account's " +
-                    "streams and supports no resource-level permissions, so Resource must be '*'. The " +
-                    "stream read actions in the same grant are scoped to the table's own stream ARN.",
-                appliesTo: [{ regex: "/^Resource::\\*$/g" }],
-            },
-        ],
-        true
-    );
+    addIamNagSuppressions(lambdaFunction, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+                "Table.grantStreamRead() adds dynamodb:ListStreams, which enumerates the account's " +
+                "streams and supports no resource-level permissions, so Resource must be '*'. The " +
+                "stream read actions in the same grant are scoped to the table's own stream ARN.",
+            appliesTo: [{ regex: "/^Resource::\\*$/g" }],
+        },
+    ]);
 }
 
 /**
@@ -896,20 +1018,16 @@ export function suppressCdkNagDynamoStreamListWildcard(lambdaFunction: lambda.IF
  * accompany it are granted on the repository ARN.
  */
 export function suppressCdkNagEcrAuthTokenWildcard(scope: Construct) {
-    NagSuppressions.addResourceSuppressions(
-        scope,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason:
-                    "ecr:GetAuthorizationToken acts on the account's registry, not on a repository, and " +
-                    "supports no resource-level permissions, so Resource must be '*'. The pull actions " +
-                    "granted alongside it are scoped to the repository ARN.",
-                appliesTo: [{ regex: "/^Resource::\\*$/g" }],
-            },
-        ],
-        true
-    );
+    addIamNagSuppressions(scope, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+                "ecr:GetAuthorizationToken acts on the account's registry, not on a repository, and " +
+                "supports no resource-level permissions, so Resource must be '*'. The pull actions " +
+                "granted alongside it are scoped to the repository ARN.",
+            appliesTo: [{ regex: "/^Resource::\\*$/g" }],
+        },
+    ]);
 }
 
 /**
@@ -931,73 +1049,76 @@ export function suppressCdkNagEcrAuthTokenWildcard(scope: Construct) {
  * Functions execution ARNs, 14 DynamoDB index ARNs.
  */
 export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
-    NagSuppressions.addResourceSuppressions(
-        scope,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason: "This lambda needs access to the data in this bucket and should have full access to control its assets.",
-                appliesTo: [
-                    {
-                        regex: "/Action::s3:.*/g",
-                    },
-                ],
-            },
-            {
-                id: "AwsSolutions-IAM5",
-                reason:
-                    "Object ARN of one named bucket: a bucket grant covers its objects, and Amazon S3 " +
-                    "expresses that only as the bucket ARN plus a key wildcard.",
-                appliesTo: [
-                    {
-                        // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                        regex: "/^Resource::<.*Bucket.*\\.Arn>/\\*$/g",
-                    },
-                ],
-            },
-            {
-                id: "AwsSolutions-IAM5",
-                reason:
-                    "Index ARNs of one named table: a table grant covers its global secondary indexes, " +
-                    "and a GSI query is denied without them.",
-                appliesTo: [
-                    {
-                        regex: "/^Resource::<.*Table.*\\.Arn>/index/\\*$/g",
-                    },
-                ],
-            },
-            {
-                id: "AwsSolutions-IAM5",
-                reason:
-                    "Qualifier ARNs of one named function: grantInvoke covers its versions and aliases, " +
-                    "which reaches no other function.",
-                appliesTo: [
-                    {
-                        regex: "/^Resource::<.*\\.Arn>:\\*$/g",
-                    },
-                ],
-            },
-            {
-                id: "AwsSolutions-IAM5",
-                reason:
-                    "Per-asset topic AssetTopic<assetId>, created at runtime. Account and Region are " +
-                    "pinned; the wildcard is over the asset id only.",
-                appliesTo: [{ regex: "/^Resource::arn:.*:sns:.*:AssetTopic\\*$/g" }],
-            },
-            {
-                id: "AwsSolutions-IAM5",
-                reason:
-                    "Task-token callback: the execution holding the token is created per run, so its " +
-                    "ARN is unknown at synthesis. Scoped to this account and Region.",
-                appliesTo: [
-                    {
-                        regex: "/^Resource::arn:.*:states:.*:\\*$/g",
-                    },
-                ],
-            },
-        ],
-        true
-    );
+    addIamNagSuppressions(scope, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason: "This lambda needs access to the data in this bucket and should have full access to control its assets.",
+            appliesTo: [
+                {
+                    regex: "/Action::s3:.*/g",
+                },
+            ],
+        },
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+                "Object ARN of one named bucket: a bucket grant covers its objects, and Amazon S3 " +
+                "expresses that only as the bucket ARN plus a key wildcard.",
+            appliesTo: [
+                {
+                    // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
+                    regex: "/^Resource::<.*Bucket.*\\.Arn>/\\*$/g",
+                },
+                {
+                    // The same grant on an imported external asset bucket, whose ARN is a
+                    // configured literal rather than a stack reference. The bucket name
+                    // excludes `*` and `?`, so a wildcard bucket ARN is still reported as a
+                    // finding: this entry covers only a grant on one named bucket.
+                    regex: "/^Resource::arn:[a-z-]+:s3:::[^/\\*?]+/\\*$/g",
+                },
+            ],
+        },
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+                "Index ARNs of one named table: a table grant covers its global secondary indexes, " +
+                "and a GSI query is denied without them.",
+            appliesTo: [
+                {
+                    regex: "/^Resource::<.*Table.*\\.Arn>/index/\\*$/g",
+                },
+            ],
+        },
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+                "Qualifier ARNs of one named function: grantInvoke covers its versions and aliases, " +
+                "which reaches no other function.",
+            appliesTo: [
+                {
+                    regex: "/^Resource::<.*\\.Arn>:\\*$/g",
+                },
+            ],
+        },
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+                "Per-asset topic AssetTopic<assetId>, created at runtime. Account and Region are " +
+                "pinned; the wildcard is over the asset id only.",
+            appliesTo: [{ regex: "/^Resource::arn:.*:sns:.*:AssetTopic\\*$/g" }],
+        },
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+                "Task-token callback: the execution holding the token is created per run, so its " +
+                "ARN is unknown at synthesis. Scoped to this account and Region.",
+            appliesTo: [
+                {
+                    regex: "/^Resource::arn:.*:states:.*:\\*$/g",
+                },
+            ],
+        },
+    ]);
 }
 
 /**

@@ -13,6 +13,23 @@ import * as cr from "aws-cdk-lib/custom-resources";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
 
+/**
+ * Deployment-time overrides of the registered pipeline's executionConfig. Each field replaces the
+ * bundle's own value, so a deployment can register an existing bundle with a different execution
+ * config without shipping a second bundle. Omit the property (or every field) to register the bundle
+ * exactly as it is.
+ */
+export interface ExecutionConfigOverrides {
+    /** Replaces executionConfig.waitForCallback. */
+    waitForCallback?: "Enabled" | "Disabled";
+    /** Replaces executionConfig.taskTimeout (seconds; "" clears it, so the 24-hour default applies). */
+    taskTimeout?: string | number;
+    /** Replaces executionConfig.taskHeartbeatTimeout (seconds; "" clears it). */
+    taskHeartbeatTimeout?: string | number;
+    /** Replaces the Lambda invoke target (executionConfig.lambda.resourceId; Lambda execution type). */
+    lambdaName?: string;
+}
+
 export interface VamsSchemaRegistrationProps {
     /**
      * Name of the V2 import custom-resource lambda (ApiBuilder2.importGlobalPipelineWorkflowV2FunctionName).
@@ -44,6 +61,13 @@ export interface VamsSchemaRegistrationProps {
      * deployment opts in. Omit to leave the schema value intact.
      */
     triggerEnabled?: boolean;
+    /**
+     * Deploy-time override of the pipeline's executionConfig (waitForCallback, taskTimeout,
+     * taskHeartbeatTimeout, Lambda name). Absent leaves the registration request exactly as it was.
+     * Changing it re-runs the registration, and the pipeline service then redeploys every workflow
+     * that references the pipeline.
+     */
+    executionConfigOverrides?: ExecutionConfigOverrides;
 }
 
 /**
@@ -136,8 +160,10 @@ export class VamsSchemaRegistration extends Construct {
             dir,
             props.resourceOverrides,
             props.idOverrides,
-            props.triggerEnabled
+            props.triggerEnabled,
+            props.executionConfigOverrides
         );
+        const executionConfigOverrides = this.definedOverrides(props.executionConfigOverrides);
 
         const resource = new cdk.CustomResource(this, "Registration", {
             serviceToken: provider.serviceToken,
@@ -150,6 +176,11 @@ export class VamsSchemaRegistration extends Construct {
                 // in schemaHash so a toggle re-runs the CR.
                 ...(props.triggerEnabled !== undefined
                     ? { triggerEnabled: props.triggerEnabled ? "true" : "false" }
+                    : {}),
+                // Only emitted when at least one field is set, so a registration without overrides
+                // keeps exactly the properties (and request) it had before.
+                ...(executionConfigOverrides
+                    ? { executionConfigOverrides: JSON.stringify(executionConfigOverrides) }
                     : {}),
                 schemaHash,
             },
@@ -166,12 +197,23 @@ export class VamsSchemaRegistration extends Construct {
         // markers), applied once on the core stack.
     }
 
+    /** The override fields that are set, or undefined when none is (so absent == no property). */
+    private definedOverrides(
+        overrides?: ExecutionConfigOverrides
+    ): { [key: string]: string } | undefined {
+        const defined = Object.entries(overrides || {})
+            .filter(([, v]) => v !== undefined && v !== null)
+            .map(([k, v]) => [k, String(v)]);
+        return defined.length > 0 ? Object.fromEntries(defined) : undefined;
+    }
+
     /** SHA-256 over every schema file's contents + the injected overrides, so any change re-runs the CR. */
     private hashSchema(
         dir: string,
         resourceOverrides?: { [key: string]: string },
         idOverrides?: { [key: string]: string },
-        triggerEnabled?: boolean
+        triggerEnabled?: boolean,
+        executionConfigOverrides?: ExecutionConfigOverrides
     ): string {
         const hash = crypto.createHash("sha256");
         // The file's path relative to the bundle dir, so an identical bundle hashes the same from any
@@ -221,6 +263,19 @@ export class VamsSchemaRegistration extends Construct {
         hash.update(JSON.stringify(stableOverrides(resourceOverrides)));
         hash.update(JSON.stringify(stableOverrides(idOverrides)));
         hash.update(JSON.stringify(triggerEnabled ?? null));
+        // Mixed in only when set, so a registration without overrides keeps today's hash and no
+        // deployed registration re-runs because of this property. A token (a deploy-time Lambda
+        // name) is replaced by a stable marker for the same reason as the resource overrides above.
+        const overrides = this.definedOverrides(executionConfigOverrides);
+        if (overrides) {
+            hash.update(
+                JSON.stringify(
+                    Object.entries(overrides)
+                        .sort(([a], [b]) => a.localeCompare(b))
+                        .map(([k, v]) => [k, cdk.Token.isUnresolved(v) ? "<deploy-time>" : v])
+                )
+            );
+        }
         return hash.digest("hex");
     }
 }

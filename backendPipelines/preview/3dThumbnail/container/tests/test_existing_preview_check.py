@@ -45,6 +45,26 @@ class TestCheckExistingPreview:
         with patch.object(core.s3, "list_objects_with_prefix", MagicMock(return_value=[])):
             assert core._check_existing_preview(_stage_input(), "pump.e57", False) is None
 
+    @pytest.mark.parametrize("listed, found", [
+        (["xid/test/model.glb.previewFile.png/x.png"], None),
+        (["xid/test/model.glb.previewFile."], None),
+        (["xid/test/model.glb.previewFile.png/x.png", "xid/test/model.glb.previewFile.png"],
+         "xid/test/model.glb.previewFile.png"),
+    ])
+    def test_a_key_under_a_folder_named_like_the_preview_is_not_one(self, listed, found):
+        stage_input = StageInput(bucketName="asset-bucket", objectKey="xid/test/model.glb",
+                                 fileExtension=".glb")
+        with patch.object(core.s3, "list_objects_with_prefix", MagicMock(return_value=listed)):
+            assert core._check_existing_preview(stage_input, "model.glb", False) == found
+
+    def test_local_test_a_folder_named_like_the_preview_is_not_one(self, tmp_path):
+        input_file = tmp_path / "model.glb"
+        input_file.write_bytes(b"")
+        (tmp_path / "model.glb.previewFile.png").mkdir()
+        (tmp_path / "model.glb.previewFile.png" / "x.png").write_bytes(b"")
+        stage_input = StageInput(bucketName="", objectKey=str(input_file), fileExtension=".glb")
+        assert core._check_existing_preview(stage_input, "model.glb", True) is None
+
     def test_local_test_lists_the_input_files_local_directory(self, tmp_path):
         input_file = tmp_path / "pump.e57"
         input_file.write_bytes(b"")
@@ -75,7 +95,8 @@ class TestSkipOnExistingPreview:
             temporaryFiles=output.__dict__,
         )
 
-    def test_existing_preview_completes_without_regenerating(self):
+    def test_existing_preview_completes_without_regenerating(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)  # the stage creates its working directories in the cwd
         with patch.object(core, "_check_existing_preview",
                           MagicMock(return_value="xid/pump.e57.previewFile.gif")), \
                 patch.object(core.s3, "download", MagicMock()) as download:

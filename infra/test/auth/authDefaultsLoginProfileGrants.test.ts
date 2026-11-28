@@ -12,8 +12,9 @@
  *
  * The role must likewise reach `POST /database/{databaseId}/assets/{assetId}/download`, through which
  * the file viewers and the download action request a file. The route is a read carried in a POST
- * body, so the role's GET constraint does not reach it, and the grant is narrowed to paths that start
- * with `/database/` and end with `/download` so that no write route under `/database` matches it.
+ * body, so the role's GET constraint does not reach it, and the grant is one `equals` pattern for that
+ * route (`/database/[^/]+/assets/[^/]+/download`) so that no write route under `/database` matches it,
+ * whatever its path parameters are. The asset export grant is built the same way.
  *
  * This applies to existing deployments as much as to new ones. `deployment/update-the-solution.md`
  * records that every default constraint - each one whose id begins `initial_admin_` or
@@ -208,12 +209,11 @@ describe("seeded basicReadOnly api constraints", () => {
 });
 
 describe("seeded basicReadOnly file download grant", () => {
-    it("grants POST on exactly the download route, and nothing wider", () => {
+    it("grants POST on the file download route alone", () => {
         const constraint = byId("allow_download_api");
         expect(constraint.permissions).toEqual([{ permission: "POST", permissionType: "allow" }]);
-        // One full-path match: a starts_with /database/ + ends_with /download pair would also match
-        // POST routes whose last segment is a path parameter set to "download" (revertFileVersion,
-        // revertAssetVersion).
+        // One pattern for the one route: a suffix match would also reach a write route whose last
+        // path parameter is set to "download" (revertAssetVersion, revertFileVersion).
         expect(constraint.routeCriteriaAnd).toEqual([
             { operator: "equals", value: "/database/[^/]+/assets/[^/]+/download" },
         ]);
@@ -235,5 +235,43 @@ describe("seeded basicReadOnly file download grant", () => {
         expect(deny.routeCriteriaAnd).toEqual([
             { operator: "starts_with", value: "/workflows/executions/" },
         ]);
+    });
+});
+
+describe("seeded basicReadOnly asset export grant", () => {
+    it("grants POST on the asset export route alone", () => {
+        // POST /database/{databaseId}/assets/{assetId}/export is a read carried in a POST body (the
+        // export options), so the role's GET constraint does not reach it.
+        const constraint = byId("allow_export_api");
+        expect(constraint.permissions).toEqual([{ permission: "POST", permissionType: "allow" }]);
+        // One pattern for the one route: a suffix match would also reach a write route whose last
+        // path parameter is set to "export" (revertAssetVersion, revertFileVersion).
+        expect(constraint.routeCriteriaAnd).toEqual([
+            { operator: "equals", value: "/database/[^/]+/assets/[^/]+/export" },
+        ]);
+        expect(constraint.routeValuesOr).toEqual([]);
+    });
+
+    it("is followed only by later core items, so adding it moved no earlier core custom resource", () => {
+        // The seed custom resource ids are index-based; the add-on items follow the core items, and
+        // each core item is appended after the one added before it.
+        const ids = constraints.map((c) => c.id);
+        expect(ids.slice(-2)).toEqual(["allow_export_api", "allow_all_buckets"]);
+    });
+});
+
+describe("seeded basicReadOnly bucket read (#1978)", () => {
+    it("is the last core constraint and reads every registration", () => {
+        const ids = constraints.map((c) => c.id);
+        expect(ids[ids.length - 1]).toEqual("allow_all_buckets");
+        const bucketRead = SOURCE.slice(
+            SOURCE.indexOf("initial_${roleNameIDClean}_allow_all_buckets")
+        );
+        expect(bucketRead).toMatch(/field: \{\s*S: "bucketId"/);
+        expect(bucketRead).toMatch(/permission: \{\s*S: "GET"/);
+        expect(bucketRead).toMatch(/objectType: \{\s*S: "bucket"/);
+        expect(bucketRead.slice(0, bucketRead.indexOf('S: "bucket"'))).not.toMatch(
+            /S: "(PUT|POST|DELETE)"/
+        );
     });
 });

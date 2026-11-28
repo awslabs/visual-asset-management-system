@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { archiveFile } from "../../services/FileOperationsService";
 import {
     Alert,
@@ -23,13 +23,22 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { useLocation, useNavigate, useParams } from "react-router";
 
 import FileMetadata from "../metadata/FileMetadata";
-import { fetchAsset, fetchFileInfo } from "../../services/APIService";
+import { fetchAssetWithStatus, fetchFileInfo } from "../../services/APIService";
 import { FileVersionsTable } from "../filemanager/components/FileVersionsTable";
 // File format constants no longer needed - handled by plugin system
 import DynamicViewer from "../../visualizerPlugin/components/DynamicViewer";
+import { ViewerMode } from "../../visualizerPlugin/core/PluginRegistry";
+import { seedCompareFromSingleFile } from "../../visualizerPlugin/core/compareShape";
+import { availableModesForFiles } from "../../visualizerPlugin/core/viewableExtensions";
+import { useViewerRegistryReady } from "../../visualizerPlugin/core/useViewerRegistryReady";
 
 import Synonyms from "../../synonyms";
 import { usePageTitle } from "../../hooks/usePageTitle";
+import {
+    buildSingleViewerEntry,
+    OLDER_VERSION_PREVIEW_NOTICE,
+    previewIsOfLatestVersionOnly,
+} from "./singleViewerEntry";
 import "./ViewFile.css";
 
 // TypeScript interfaces
@@ -87,6 +96,89 @@ interface Asset {
 }
 
 // File format detection now handled by plugin system - no longer needed
+
+/** Why the file opened by its direct path could not be shown, as the page words it. */
+interface FileLoadError {
+    header: string;
+    message: string;
+    /** Whether trying again may load the file: it is not known to be missing, refused or archived. */
+    retryable: boolean;
+}
+
+const FILE_NOT_FOUND: FileLoadError = {
+    header: "File Not Found",
+    message: "The file you're looking for doesn't exist or has been moved.",
+    retryable: false,
+};
+
+/**
+ * Words a failed file lookup from the `[false, message, status?]` that fetchFileInfo returns. A
+ * missing asset is a 404 and a missing file a 400 that says it was not found; a 403 is a permission
+ * denial. A request the AWS WAF web ACL blocked, or whose response never arrived, carries no
+ * status and its own message (the request ID, or that the service could not be reached), and may
+ * load when tried again, as may any other failure.
+ */
+function fileLoadFailure(message?: unknown, status?: number): FileLoadError {
+    const text = typeof message === "string" ? message : "";
+    if (status === 404 || (status === 400 && /not found/i.test(text))) {
+        return FILE_NOT_FOUND;
+    }
+    if (status === 403) {
+        return {
+            header: "Access Denied",
+            message: "Your role does not allow you to view this file.",
+            retryable: false,
+        };
+    }
+    return {
+        header: "File Unavailable",
+        message: text
+            ? `Failed to load the file. ${text}`
+            : "An error occurred while loading the file.",
+        retryable: true,
+    };
+}
+
+/** Why the asset's details could not be loaded beside a file that did load, as the page words it. */
+interface AssetLoadError {
+    header: string;
+    message: string;
+    /** Whether trying again may load the details: the asset is not known to be missing or refused. */
+    retryable: boolean;
+}
+
+/**
+ * Words a failed asset lookup from the `[false, message, status?]` that fetchAssetWithStatus
+ * returns. The file can still load: the asset and file routes are authorized on their own, and an
+ * asset can be deleted after its file was read. The asset API checks access before existence, so
+ * a 403 is a refusal and a 404 an asset that is gone. A request the AWS WAF web ACL blocked, or
+ * whose response never arrived, carries no status and its own message, and may load when tried
+ * again, as may any other failure.
+ */
+function assetLoadFailure(message?: unknown, status?: number): AssetLoadError {
+    const text = typeof message === "string" ? message : "";
+    if (status === 404) {
+        return {
+            header: `${Synonyms.Asset} Not Found`,
+            message: `This ${Synonyms.asset} was not found. It may have been deleted.`,
+            retryable: false,
+        };
+    }
+    if (status === 403) {
+        return {
+            header: `${Synonyms.Asset} Access Denied`,
+            message: `Your role does not allow you to view this ${Synonyms.asset}'s details.`,
+            retryable: false,
+        };
+    }
+    return {
+        header: `${Synonyms.Asset} Details Unavailable`,
+        message: text
+            ? `Failed to load the ${Synonyms.asset}'s details. ${text}`
+            : `An error occurred while loading the ${Synonyms.asset}'s details.`,
+        retryable: true,
+    };
+}
 
 // React Router keeps this route's element mounted when only :databaseId or :assetId change, so a link
 // to another asset's file would re-render the previous asset's page with its loaded file still in
@@ -160,14 +252,17 @@ function ViewFileForAsset() {
 
     // State for direct path loading
     const [isLoadingDirectPath, setIsLoadingDirectPath] = useState(isDirectPathAccess);
-    const [directPathError, setDirectPathError] = useState<string | null>(null);
+    const [directPathError, setDirectPathError] = useState<FileLoadError | null>(null);
+    // Counts Retry presses, so the direct-path load runs again for the same URL.
+    const [directPathAttempt, setDirectPathAttempt] = useState(0);
     const [loadedFileInfo, setLoadedFileInfo] = useState<FileInfo | null>(null);
     // The direct-path requests that loadedFileInfo answers: the one it was loaded for and, when that
     // named no version, the same path with the version that was picked, until the URL names that
     // version. Until one equals directPathRequest, the loaded file is the one the URL named before.
     const [loadedFileRequests, setLoadedFileRequests] = useState<string[]>([]);
-    // State for on-demand version loading when state is passed without versionId
-    const [isLoadingVersionInfo, setIsLoadingVersionInfo] = useState(false);
+    // The navigation-state file whose version lookup has started. Each open of such a file asks
+    // once: a failed or empty answer is not retried, and the effect running again does not repeat it.
+    const versionLookupKey = useRef<string | null>(null);
 
     // Determine if we're in multi-file mode
     const isMultiFileMode = state?.files && state.files.length > 1;
@@ -195,8 +290,11 @@ function ViewFileForAsset() {
               primaryType: state?.primaryType,
               previewFile: state?.previewFile,
           }
-        : state?.key && !state?.versionId && loadedFileInfo?.versionId
-        ? // State has key but no versionId, and we've fetched version info - use loadedFileInfo
+        : state?.key &&
+          !state?.versionId &&
+          loadedFileInfo?.versionId &&
+          loadedFileInfo.key === state.key
+        ? // State has key but no versionId, and we've fetched version info for that file - use loadedFileInfo
           loadedFileInfo
         : state?.key
         ? {
@@ -236,6 +334,8 @@ function ViewFileForAsset() {
     const [reload, setReload] = useState(true);
     const [viewType, setViewType] = useState<string | null>(null);
     const [asset, setAsset] = useState<Asset>({});
+    // Set when the last asset lookup failed; the file itself may still have loaded.
+    const [assetLoadError, setAssetLoadError] = useState<AssetLoadError | null>(null);
     // The file and preview streaming APIs refuse a non-distributable asset, so the visualizer and its
     // view selector are left out entirely and the page shows only versions and metadata. This page is
     // normally reached from the file manager, which hides its own entry points for such an asset; a
@@ -243,17 +343,159 @@ function ViewFileForAsset() {
     // distributable, as the API treats it; the empty record held before the fetch resolves (no
     // assetId) still renders the viewer.
     const isNotDistributable = !!asset?.assetId && asset.isDistributable !== true;
+    // After a failed asset lookup the page cannot tell whether the asset is distributable, so the
+    // visualizer and its view selectors are held back as for a non-distributable asset until a
+    // lookup succeeds.
+    const visualizerHeldBack = isNotDistributable || !!assetLoadError;
+    // The breadcrumb and title name the asset; without its details they fall back to its ID.
+    const assetLabel = asset?.assetName || (assetLoadError ? assetId : undefined);
 
     usePageTitle(
         databaseId,
-        asset?.assetName,
+        assetLabel,
         isMultiFileMode ? `${currentFiles.length} Files` : singleFileInfo?.filename
     );
 
-    const [viewerOptions, setViewerOptions] = useState<ViewerOption[]>([]);
+    // Set once the asset's details have been read (the visualizer and its view selector wait for them).
+    const [assetDetailsLoaded, setAssetDetailsLoaded] = useState(false);
+    // The view choices follow the file the page holds, not the moment the asset details arrived: the
+    // file can be read before or after them, and a link to another version of the file carries the
+    // preview file only when the page that navigated knew it.
+    const defaultViewType = isMultiFileMode ? "files" : "file";
+    const viewerOptions = useMemo<ViewerOption[]>(() => {
+        if (!assetDetailsLoaded) return [];
+        if (isMultiFileMode) return [{ text: "Files", id: "files" }];
+        const options: ViewerOption[] = [];
+        if (singleFileInfo?.previewFile) options.push({ text: "Preview", id: "preview" });
+        options.push({ text: "File", id: "file" });
+        return options;
+    }, [assetDetailsLoaded, isMultiFileMode, singleFileInfo?.previewFile]);
+    // A choice the options no longer offer (the file changed to one without a preview) falls back to
+    // the default; a choice the user made and the options still offer is never changed.
+    useEffect(() => {
+        if (viewerOptions.length > 0 && viewType && !viewerOptions.some((o) => o.id === viewType)) {
+            setViewType(defaultViewType);
+        }
+    }, [viewerOptions, viewType, defaultViewType]);
     const [viewerMode, setViewerMode] = useState("collapse");
     const [showDeletePreviewModal, setShowDeletePreviewModal] = useState(false);
     const [isPreviewDeleting, setIsPreviewDeleting] = useState(false);
+
+    // Visualize ↔ Compare for the single file on this page. Compare is offered only when a differ
+    // diffs two versions of this file's type (registry admission, never an extension list) and the
+    // File tab is showing; it opens the differ on [this version, latest] — the same seed the version
+    // lists' per-row Compare uses — and the differ's per-side picker takes it from there.
+    const [fileViewMode, setFileViewMode] = useState<ViewerMode>("visualize");
+    const viewerRegistryReady = useViewerRegistryReady();
+
+    // The single-file entry exactly as the visualize path hands it to the viewer (see
+    // buildSingleViewerEntry: the preview tab swaps in the preview key and drops the source file's
+    // S3 version id).
+    const singleViewerEntry = useMemo(
+        () =>
+            !isMultiFileMode && singleFileInfo
+                ? buildSingleViewerEntry(singleFileInfo, viewType, effectiveAssetVersionId)
+                : null,
+        // `singleFileInfo` is rebuilt every render, so the memo keys on its fields instead.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [
+            isMultiFileMode,
+            singleFileInfo?.key,
+            singleFileInfo?.versionId,
+            singleFileInfo?.previewFile,
+            singleFileInfo?.filename,
+            singleFileInfo?.isDirectory,
+            singleFileInfo?.isArchived,
+            singleFileInfo?.primaryType,
+            singleFileInfo?.size,
+            singleFileInfo?.dateCreatedCurrentVersion,
+            effectiveAssetVersionId,
+            viewType,
+        ]
+    );
+    // The file's latest version, so the Preview tab can say when its preview belongs to a different
+    // (the latest) version than the one being viewed. The direct-path load already reads the file's
+    // versions, so its answer is reused; only a page opened from the file manager's state (no direct
+    // load) asks once, and only while the Preview tab is showing.
+    const [loadedLatest, setLoadedLatest] = useState<{ key: string; versionId: string } | null>(
+        null
+    );
+    const [lookedUpLatest, setLookedUpLatest] = useState<{
+        key: string;
+        versionId?: string;
+    } | null>(null);
+    const previewKeyForLookup = !isMultiFileMode ? singleFileInfo?.key : undefined;
+    const knownLatestVersionId =
+        loadedLatest && loadedLatest.key === previewKeyForLookup
+            ? loadedLatest.versionId
+            : lookedUpLatest && lookedUpLatest.key === previewKeyForLookup
+            ? lookedUpLatest.versionId
+            : undefined;
+    const lookupSettled =
+        !!knownLatestVersionId || (!!lookedUpLatest && lookedUpLatest.key === previewKeyForLookup);
+    const lookupLatestVersion =
+        viewType === "preview" &&
+        !!previewKeyForLookup &&
+        !!singleFileInfo?.previewFile &&
+        !!singleFileInfo?.versionId &&
+        !effectiveAssetVersionId &&
+        !knownLatestVersionId &&
+        !lookupSettled &&
+        !isLoadingDirectPath;
+    useEffect(() => {
+        if (!lookupLatestVersion || !databaseId || !assetId || !previewKeyForLookup) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const [success, response] = await fetchFileInfo({
+                    databaseId,
+                    assetId,
+                    fileKey: previewKeyForLookup,
+                    includeVersions: true,
+                });
+                if (cancelled) return;
+                if (!success) {
+                    setLookedUpLatest({ key: previewKeyForLookup });
+                    return;
+                }
+                const info = typeof response === "string" ? JSON.parse(response) : response;
+                const latest = info?.versions?.find((v: any) => v.isLatest);
+                setLookedUpLatest({
+                    key: previewKeyForLookup,
+                    versionId: latest?.versionId || info?.versionId || undefined,
+                });
+            } catch (error) {
+                console.error("Could not read the latest file version:", error);
+                if (!cancelled) setLookedUpLatest({ key: previewKeyForLookup });
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [lookupLatestVersion, previewKeyForLookup, databaseId, assetId]);
+    const showOlderVersionPreviewNotice =
+        !isMultiFileMode &&
+        !!singleFileInfo &&
+        previewIsOfLatestVersionOnly(singleFileInfo, viewType, effectiveAssetVersionId, {
+            latestVersionId: knownLatestVersionId,
+            settled: lookupSettled,
+            versionInUrl: !!urlVersion,
+        });
+    const canCompareSingleFile =
+        viewerRegistryReady &&
+        viewType === "file" &&
+        !!singleViewerEntry &&
+        !singleViewerEntry.isDirectory &&
+        availableModesForFiles([singleViewerEntry]).compare;
+    const effectiveFileViewMode: ViewerMode = canCompareSingleFile ? fileViewMode : "visualize";
+    const multiFiles = state?.files;
+    const viewerFiles = useMemo(() => {
+        if (isMultiFileMode || viewType === "files") return multiFiles ?? [];
+        if (!singleViewerEntry) return [];
+        return effectiveFileViewMode === "compare"
+            ? seedCompareFromSingleFile(singleViewerEntry)
+            : [singleViewerEntry];
+    }, [isMultiFileMode, viewType, multiFiles, singleViewerEntry, effectiveFileViewMode]);
 
     const changeViewerMode = (mode: string) => {
         if (mode === "fullscreen" && viewerMode === "fullscreen") {
@@ -318,6 +560,26 @@ function ViewFileForAsset() {
         setViewType(event.detail.selectedId);
     };
 
+    // A file of an archived asset is looked up without showArchived, so the API answers that it is
+    // not found. When the asset read says the asset is archived, the page says so instead.
+    const shownPathError: FileLoadError | null =
+        directPathError === FILE_NOT_FOUND && asset?.status === "archived"
+            ? {
+                  header: `${Synonyms.Asset} Archived`,
+                  message: `This file's ${Synonyms.asset} is archived. Unarchive the ${Synonyms.asset} to view its files.`,
+                  retryable: false,
+              }
+            : directPathError;
+
+    // The file alert's Retry. The press itself shows the loading state, as the asset warning's Retry
+    // does, so the alert and its button are gone before the second click of a double-click arrives.
+    // The effect below sets it too, but React applies an effect's update in a later task, which can
+    // run after the second click, and each press would then start its own lookup.
+    const retryDirectPathLoad = () => {
+        setIsLoadingDirectPath(true);
+        setDirectPathAttempt((attempt) => attempt + 1);
+    };
+
     // Handle direct path access - fetch file info from URL
     useEffect(() => {
         // A response for a URL the page has since left is dropped, so it cannot replace the file
@@ -351,7 +613,7 @@ function ViewFileForAsset() {
                 console.log("Requested version:", urlVersion || "latest");
 
                 // Fetch file info
-                const [success, fileInfoResponse] = await fetchFileInfo({
+                const [success, fileInfoResponse, status] = await fetchFileInfo({
                     databaseId,
                     assetId,
                     fileKey: urlFilePath,
@@ -362,11 +624,7 @@ function ViewFileForAsset() {
                 }
 
                 if (!success) {
-                    setDirectPathError(
-                        typeof fileInfoResponse === "string"
-                            ? fileInfoResponse
-                            : "The file you're looking for doesn't exist or has been moved."
-                    );
+                    setDirectPathError(fileLoadFailure(fileInfoResponse, status));
                     setIsLoadingDirectPath(false);
                     return;
                 }
@@ -385,18 +643,21 @@ function ViewFileForAsset() {
 
                 // Check if file exists
                 if (!fileInfo || !fileInfo.key) {
-                    setDirectPathError(
-                        "The file you're looking for doesn't exist or has been moved."
-                    );
+                    setDirectPathError(FILE_NOT_FOUND);
                     setIsLoadingDirectPath(false);
                     return;
                 }
 
-                // Check if file is archived
+                // An archived file in a live asset (its latest version is a delete marker). A file
+                // in an archived asset never gets here: without showArchived its lookup is a 404.
+                // The File Manager lists archived files when "Show archived files" is on and offers
+                // Unarchive File for them.
                 if (fileInfo.isArchived) {
-                    setDirectPathError(
-                        `This file is part of an archived ${Synonyms.asset} and cannot be viewed.`
-                    );
+                    setDirectPathError({
+                        header: "File Archived",
+                        message: `This file is archived and cannot be viewed. It can be unarchived from the ${Synonyms.asset}'s File Manager after turning on "Show archived files".`,
+                        retryable: false,
+                    });
                     setIsLoadingDirectPath(false);
                     return;
                 }
@@ -433,6 +694,15 @@ function ViewFileForAsset() {
                     previewFile: fileInfo.previewFile,
                 };
 
+                const latestEntry = Array.isArray(fileInfo.versions)
+                    ? fileInfo.versions.find((v: any) => v.isLatest)
+                    : undefined;
+                setLoadedLatest(
+                    latestEntry?.versionId
+                        ? { key: fileInfo.key, versionId: latestEntry.versionId }
+                        : null
+                );
+
                 console.log("Loaded file info:", loadedFile);
                 setLoadedFileInfo(loadedFile);
                 setLoadedFileRequests(
@@ -445,20 +715,9 @@ function ViewFileForAsset() {
                     return;
                 }
                 console.error("Error loading file from direct path:", error);
-
-                // Check for specific error types. The apiClient throws an ApiError
-                // carrying the HTTP status in `.status` and the backend message in `.message`.
-                if (error?.status === 403) {
-                    setDirectPathError("You don't have permission to access this file.");
-                } else if (error?.status === 404) {
-                    setDirectPathError(
-                        "The file you're looking for doesn't exist or has been moved."
-                    );
-                } else {
-                    setDirectPathError(
-                        error?.message || "An error occurred while loading the file."
-                    );
-                }
+                // fetchFileInfo answers a rejected request with its status rather than throwing, so
+                // this is a fault in reading its answer, which a second attempt may get past.
+                setDirectPathError(fileLoadFailure());
                 setIsLoadingDirectPath(false);
             }
         };
@@ -476,37 +735,49 @@ function ViewFileForAsset() {
         directPathRequest,
         loadedFileInfo,
         loadedFileRequests,
+        directPathAttempt,
     ]);
 
     // Fetch version info when state is passed but versionId is missing
     useEffect(() => {
-        const loadVersionInfo = async () => {
-            // Only run if:
-            // 1. We have state with a key (navigated from file manager)
-            // 2. But no versionId (file manager hadn't loaded full data yet)
-            // 3. Not in multi-file mode
-            // 4. Not already loading
-            if (
-                !state?.key ||
-                state?.versionId ||
-                effectiveAssetVersionId ||
-                isMultiFileMode ||
-                isLoadingVersionInfo ||
-                isLoadingDirectPath
-            ) {
-                return;
-            }
+        // The file to look up: one the navigation state names (navigated from the file manager)
+        // without a versionId (the file manager hadn't loaded full data yet), in single-file mode.
+        const lookupKey =
+            state?.key && !state.versionId && !effectiveAssetVersionId && !isMultiFileMode
+                ? state.key
+                : null;
+        if (!lookupKey) {
+            // The page no longer holds such a file, so the next one opened is looked up afresh.
+            versionLookupKey.current = null;
+            return;
+        }
+        if (
+            isLoadingDirectPath ||
+            !databaseId ||
+            !assetId ||
+            versionLookupKey.current === lookupKey
+        ) {
+            return;
+        }
+        versionLookupKey.current = lookupKey;
+        // An answer that arrives after the page has moved to another file is dropped, so it cannot
+        // replace the file the page shows now.
+        let cancelled = false;
+        let settled = false;
 
-            console.log("State passed without versionId, fetching version info for:", state.key);
-            setIsLoadingVersionInfo(true);
+        const loadVersionInfo = async () => {
+            console.log("State passed without versionId, fetching version info for:", lookupKey);
 
             try {
                 const [success, fileInfoResponse] = await fetchFileInfo({
-                    databaseId: databaseId!,
-                    assetId: assetId!,
-                    fileKey: state.key,
+                    databaseId,
+                    assetId,
+                    fileKey: lookupKey,
                     includeVersions: true,
                 });
+                if (cancelled) {
+                    return;
+                }
 
                 if (success && fileInfoResponse) {
                     let fileInfo: any;
@@ -532,11 +803,19 @@ function ViewFileForAsset() {
 
                     if (latestVersionId) {
                         console.log("Found latest version:", latestVersionId);
+                        const latestEntry = Array.isArray(fileInfo.versions)
+                            ? fileInfo.versions.find((v: any) => v.isLatest)
+                            : undefined;
+                        setLoadedLatest(
+                            latestEntry?.versionId
+                                ? { key: lookupKey, versionId: latestEntry.versionId }
+                                : null
+                        );
                         // Update loadedFileInfo with the version info
                         // This will be used by singleFileInfo since state doesn't have versionId
                         setLoadedFileInfo({
                             filename: state.filename || fileInfo.fileName || "",
-                            key: state.key,
+                            key: lookupKey,
                             isDirectory: state.isDirectory || false,
                             versionId: latestVersionId,
                             size: state.size || fileInfo.size,
@@ -549,18 +828,30 @@ function ViewFileForAsset() {
                     }
                 }
             } catch (error) {
-                console.error("Error fetching version info:", error);
+                if (!cancelled) {
+                    console.error("Error fetching version info:", error);
+                }
             } finally {
-                setIsLoadingVersionInfo(false);
+                settled = true;
             }
         };
 
         loadVersionInfo();
+        return () => {
+            cancelled = true;
+            // A lookup cut off before it answered runs again if the page still holds the same file
+            // (React runs each effect twice in development).
+            if (!settled && versionLookupKey.current === lookupKey) {
+                versionLookupKey.current = null;
+            }
+        };
+        // `state` is read only for the file the lookup is keyed on; its other fields fill in the answer.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
         state?.key,
         state?.versionId,
+        effectiveAssetVersionId,
         isMultiFileMode,
-        isLoadingVersionInfo,
         isLoadingDirectPath,
         databaseId,
         assetId,
@@ -570,38 +861,28 @@ function ViewFileForAsset() {
         const getData = async () => {
             if (databaseId && assetId) {
                 console.log("Fetching asset details for:", assetId);
-                const item = await fetchAsset({
+                const [, item, status] = await fetchAssetWithStatus({
                     databaseId: databaseId,
                     assetId: assetId,
                     showArchived: true,
                 });
-                if (item !== false) {
+                // A failed lookup answers with its message in place of the asset, so only a record
+                // is kept as the asset (as the asset page does). On failure the page keeps the file
+                // it loaded and says why the asset's details are missing; the last answer wins, so
+                // a record from an earlier lookup is dropped too.
+                if (item && typeof item === "object") {
                     console.log("Asset details fetched:", item);
+                    setAssetLoadError(null);
                     setAsset(item);
 
-                    let defaultViewType: string;
-                    const newViewerOptions: ViewerOption[] = [];
-
-                    if (isMultiFileMode) {
-                        // Multi-file mode: simplified to just show Files tab
-                        defaultViewType = "files";
-                        newViewerOptions.push({ text: "Files", id: "files" });
-                    } else {
-                        // Single file mode: show Preview and File tabs
-                        defaultViewType = "file"; // Always default to file view
-
-                        // Add Preview tab if the file has a preview file
-                        if (singleFileInfo?.previewFile) {
-                            console.log("Using preview file:", singleFileInfo.previewFile);
-                            newViewerOptions.push({ text: "Preview", id: "preview" });
-                        }
-
-                        // Always add File tab for the actual file
-                        newViewerOptions.push({ text: "File", id: "file" });
-                    }
-
-                    setViewerOptions(newViewerOptions);
-                    setViewType(defaultViewType);
+                    setAssetDetailsLoaded(true);
+                    setViewType(isMultiFileMode ? "files" : "file");
+                    setReload(false);
+                } else {
+                    console.log("Asset details could not be loaded:", item);
+                    setAsset({});
+                    setAssetLoadError(assetLoadFailure(item, status));
+                    // The warning's Retry sets reload again, which runs this lookup once more.
                     setReload(false);
                 }
             }
@@ -634,18 +915,10 @@ function ViewFileForAsset() {
             return;
         }
 
-        // Get the relative path from the file key
-        // The key format is typically: assetId/relativePath
-        // We need to extract just the relativePath part
-        const keyParts = singleFileInfo.key.split("/");
-        // Remove the first part (assetId) if it matches
-        let relativePath = singleFileInfo.key;
-        if (keyParts.length > 1 && keyParts[0] === assetId) {
-            relativePath = keyParts.slice(1).join("/");
-        }
-
-        // Encode the path for URL
-        const encodedPath = encodeURIComponent(relativePath);
+        // The URL keeps the file part it names the file by (its path in the asset, or its key); only the
+        // version changes. A URL without one names the file by its key. No path is derived from the key
+        // here: the API reads either form (#1943)
+        const encodedPath = encodeURIComponent(urlFilePath || singleFileInfo.key);
 
         // Build the new URL with version query parameter
         const newUrl = `/databases/${databaseId}/assets/${encodeURIComponent(
@@ -667,8 +940,9 @@ function ViewFileForAsset() {
         ) {
             const currentVersion = getVersionFromQuery();
             if (currentVersion !== singleFileInfo.versionId) {
-                // Update URL without adding to history (replace)
-                navigate(newUrl, { replace: true });
+                // Update URL without adding to history (replace). The navigation state is kept, so
+                // the file the page already holds is not looked up again by its direct path.
+                navigate(newUrl, { replace: true, state: location.state });
             }
         }
     }, [
@@ -685,6 +959,8 @@ function ViewFileForAsset() {
         navigate,
         location.pathname,
         location.search,
+        urlFilePath,
+        location.state,
     ]);
 
     // Generate breadcrumb text
@@ -742,13 +1018,23 @@ function ViewFileForAsset() {
                         </Box>
                     )}
 
-                    {/* Show error state for direct path access */}
-                    {!isLoadingDirectPath && directPathError && (
+                    {/* Show error state for direct path access. The header names the cause, and a
+                        failure that may pass (no response, a blocked or failed request) offers Retry. */}
+                    {!isLoadingDirectPath && shownPathError && (
                         <Box padding={{ top: "s", horizontal: "l" }}>
                             <Container>
                                 <Box padding="m">
-                                    <Alert type="error" header="File Not Found">
-                                        {directPathError}
+                                    <Alert
+                                        type="error"
+                                        statusIconAriaLabel="Error"
+                                        header={shownPathError.header}
+                                        action={
+                                            shownPathError.retryable ? (
+                                                <Button onClick={retryDirectPathLoad}>Retry</Button>
+                                            ) : undefined
+                                        }
+                                    >
+                                        {shownPathError.message}
                                         <br />
                                         <br />
                                         <Link
@@ -780,7 +1066,7 @@ function ViewFileForAsset() {
                                             href: "#/databases/" + databaseId + "/assets/",
                                         },
                                         {
-                                            text: asset?.assetName || "",
+                                            text: assetLabel || "",
                                             href:
                                                 "#/databases/" +
                                                 databaseId +
@@ -825,9 +1111,28 @@ function ViewFileForAsset() {
                                                 display: "flex",
                                                 alignItems: "center",
                                                 justifyContent: "flex-end",
+                                                gap: "12px",
+                                                flexWrap: "wrap",
                                             }}
                                         >
-                                            {viewerOptions.length > 0 && !isNotDistributable && (
+                                            {canCompareSingleFile && !visualizerHeldBack && (
+                                                <div data-testid="file-viewer-mode-toggle">
+                                                    <SegmentedControl
+                                                        label="Viewer mode"
+                                                        selectedId={effectiveFileViewMode}
+                                                        onChange={({ detail }) =>
+                                                            setFileViewMode(
+                                                                detail.selectedId as ViewerMode
+                                                            )
+                                                        }
+                                                        options={[
+                                                            { id: "visualize", text: "Visualize" },
+                                                            { id: "compare", text: "Compare" },
+                                                        ]}
+                                                    />
+                                                </div>
+                                            )}
+                                            {viewerOptions.length > 0 && !visualizerHeldBack && (
                                                 <SegmentedControl
                                                     label="Visualizer Control"
                                                     options={viewerOptions}
@@ -848,83 +1153,102 @@ function ViewFileForAsset() {
                                     )}
                                 </div>
 
+                                {/* The file loaded but its asset's details did not. A failure that
+                                    may pass (no response, a blocked or failed request) offers Retry,
+                                    which shows as loading while the lookup runs again. */}
+                                {assetLoadError && (
+                                    <Alert
+                                        type="warning"
+                                        statusIconAriaLabel="Warning"
+                                        header={assetLoadError.header}
+                                        action={
+                                            assetLoadError.retryable ? (
+                                                <Button
+                                                    loading={reload}
+                                                    onClick={() => setReload(true)}
+                                                >
+                                                    Retry
+                                                </Button>
+                                            ) : undefined
+                                        }
+                                    >
+                                        {assetLoadError.message}
+                                    </Alert>
+                                )}
+
                                 {/* Main content area — vertical stack, no splitter */}
                                 {(!isMultiFileMode ? !singleFileInfo?.isDirectory : true) &&
                                 !hasArchivedFiles ? (
                                     <SpaceBetween direction="vertical" size="xs">
-                                        {/* Viewer — omitted for a non-distributable asset */}
-                                        {isNotDistributable ? (
+                                        {/* Viewer — omitted for a non-distributable asset, or one whose
+                                            details could not be loaded */}
+                                        {visualizerHeldBack ? (
                                             <Container>
                                                 <Box
                                                     padding="m"
                                                     textAlign="center"
                                                     color="text-status-inactive"
                                                 >
-                                                    {`Visualizer is not available because this ${Synonyms.asset} is not marked as distributable.`}
+                                                    {isNotDistributable
+                                                        ? `Visualizer is not available because this ${Synonyms.asset} is not marked as distributable.`
+                                                        : `Visualizer is not available because this ${Synonyms.asset}'s details could not be loaded.`}
                                                 </Box>
                                             </Container>
                                         ) : (
-                                            <div
-                                                style={{
-                                                    height: "65vh",
-                                                    maxHeight: "700px",
-                                                    minHeight: "100px",
-                                                    position: "relative",
-                                                    overflow: "hidden",
-                                                }}
-                                            >
+                                            <>
+                                                {showOlderVersionPreviewNotice && (
+                                                    <Alert
+                                                        type="info"
+                                                        statusIconAriaLabel="Info"
+                                                        data-testid="older-version-preview-notice"
+                                                    >
+                                                        {OLDER_VERSION_PREVIEW_NOTICE}
+                                                    </Alert>
+                                                )}
                                                 <div
-                                                    id="view-edit-asset-right-column"
-                                                    className={viewerMode}
                                                     style={{
-                                                        height: "100%",
-                                                        width: "100%",
-                                                        position: "absolute",
-                                                        top: 0,
-                                                        left: 0,
+                                                        height: "65vh",
+                                                        maxHeight: "700px",
+                                                        minHeight: "100px",
+                                                        position: "relative",
                                                         overflow: "hidden",
                                                     }}
                                                 >
-                                                    <DynamicViewer
-                                                        key={`${viewType}-${assetId}-${
-                                                            singleFileInfo?.key || "no-file"
-                                                        }-${
-                                                            effectiveAssetVersionId ||
-                                                            singleFileInfo?.versionId ||
-                                                            "no-version"
-                                                        }`}
-                                                        files={
-                                                            isMultiFileMode || viewType === "files"
-                                                                ? currentFiles
-                                                                : singleFileInfo
-                                                                ? [
-                                                                      {
-                                                                          ...singleFileInfo,
-                                                                          versionId:
-                                                                              effectiveAssetVersionId
-                                                                                  ? undefined
-                                                                                  : singleFileInfo.versionId,
-                                                                          key:
-                                                                              viewType === "preview"
-                                                                                  ? singleFileInfo.previewFile ||
-                                                                                    singleFileInfo.key
-                                                                                  : singleFileInfo.key,
-                                                                      },
-                                                                  ]
-                                                                : []
-                                                        }
-                                                        assetId={assetId!}
-                                                        databaseId={databaseId!}
-                                                        assetVersionId={effectiveAssetVersionId}
-                                                        viewerMode={viewerMode}
-                                                        onViewerModeChange={changeViewerMode}
-                                                        showViewerSelector={true}
-                                                        isPreviewMode={viewType === "preview"}
-                                                        onDeletePreview={undefined}
-                                                        sizingMode="container"
-                                                    />
+                                                    <div
+                                                        id="view-edit-asset-right-column"
+                                                        className={viewerMode}
+                                                        style={{
+                                                            height: "100%",
+                                                            width: "100%",
+                                                            position: "absolute",
+                                                            top: 0,
+                                                            left: 0,
+                                                            overflow: "hidden",
+                                                        }}
+                                                    >
+                                                        <DynamicViewer
+                                                            key={`${viewType}-${effectiveFileViewMode}-${assetId}-${
+                                                                singleFileInfo?.key || "no-file"
+                                                            }-${
+                                                                effectiveAssetVersionId ||
+                                                                singleFileInfo?.versionId ||
+                                                                "no-version"
+                                                            }`}
+                                                            files={viewerFiles}
+                                                            mode={effectiveFileViewMode}
+                                                            assetId={assetId!}
+                                                            databaseId={databaseId!}
+                                                            assetVersionId={effectiveAssetVersionId}
+                                                            viewerMode={viewerMode}
+                                                            onViewerModeChange={changeViewerMode}
+                                                            showViewerSelector={true}
+                                                            isPreviewMode={viewType === "preview"}
+                                                            onDeletePreview={undefined}
+                                                            sizingMode="container"
+                                                        />
+                                                    </div>
                                                 </div>
-                                            </div>
+                                            </>
                                         )}
 
                                         {/* File list (multi-file mode only) */}
@@ -1005,12 +1329,14 @@ function ViewFileForAsset() {
                                                     databaseId={databaseId!}
                                                     assetId={assetId!}
                                                     filePath={singleFileInfo.key}
+                                                    linkFilePath={urlFilePath || undefined}
                                                     fileName={singleFileInfo.filename}
                                                     currentVersionId={singleFileInfo.versionId}
                                                     onVersionRevert={handleVersionRevert}
                                                     displayMode="container"
                                                     visible={true}
                                                     assetVersionId={effectiveAssetVersionId}
+                                                    previewFile={singleFileInfo.previewFile}
                                                 />
                                             )}
                                     </SpaceBetween>

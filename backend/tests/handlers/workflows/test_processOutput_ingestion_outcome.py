@@ -112,7 +112,9 @@ class TestPartialIngestionIsAFailure:
                             {"relativeKey": "bad.glb", "success": False, "error": "rejected"}],
         })
         assert kw["execution_status"] == "FAILED"
-        assert kw["execution_error"] == "The asset file write-back failed."
+        # The generic summary heads the error, followed by the file that was not written.
+        assert kw["execution_error"] == (
+            "The asset file write-back failed. Writing output file 'bad.glb' into the asset failed.")
 
     def test_only_the_files_that_landed_get_output_rows(self):
         kw = self._run({
@@ -377,4 +379,5 @@ class TestOutputObjectsAreHeadedOnce:
     def test_the_s3_client_carries_a_retry_config(self):
         # A transient 5xx on one of thousands of calls must be retried, not fail the whole run.
         assert po.s3c.meta.config.retries["mode"] == "adaptive"
-        assert po.s3c.meta.config.max_pool_connections == po.MAX_PARALLEL_S3_WORKERS
+        # The shared client pool covers the widest handler worker pool, so at least this one's.
+        assert po.s3c.meta.config.max_pool_connections >= po.MAX_PARALLEL_S3_WORKERS

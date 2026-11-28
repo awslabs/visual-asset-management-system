@@ -7,12 +7,16 @@ URLs are stored by this server; everything is read from the vamscli profile.
 
 Adds MCP-friendly helpers: auto-pagination for list endpoints, a raw request
 escape hatch for endpoints without a dedicated client method (e.g. listing
-assets in a database), and search-result trimming.
+assets in a database), search-result trimming, and the profile's feature-switch
+snapshot for tools that are feature-gated.
 """
 
 from __future__ import annotations
 
 import sys
+import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -41,17 +45,84 @@ _ensure_vamscli_importable()
 from vamscli.constants import (  # noqa: E402,F401
     API_ASSETS,
     API_DATABASE_ASSETS,
+    COMPLIANCE_AUDIT_DEFAULT_LIMIT,
     FEATURE_NOOPENSEARCH,
+    MAX_COMPLIANCE_AUDIT_PAGE_SIZE,
+    MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE,
+    MAX_COMPLIANCE_LIST_PAGE_SIZE,
+    MAX_COMPLIANCE_LISTING_PAGE_SIZE,
     SUBSCRIPTION_ENTITY_ASSET,
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
 )
 from vamscli.utils.api_client import APIClient  # noqa: E402
 from vamscli.utils.request_paths import route_path  # noqa: E402,F401
 from vamscli.utils.exceptions import SearchDisabledError  # noqa: E402,F401
+from vamscli.utils.exceptions import (  # noqa: E402,F401
+    AuthenticationError,
+    OverrideTokenError,
+    TokenExpiredError,
+)
+from vamscli.version import CLI_VERSION  # noqa: E402,F401
+from vamscli.constants import DEFAULT_TIMEOUT  # noqa: E402
 from vamscli.utils.features import is_feature_enabled  # noqa: E402
 from vamscli.utils.profile import ProfileManager  # noqa: E402
 
+from . import request_context  # noqa: E402
 from .config import Config, ConfigError  # noqa: E402
+
+
+class FeatureDisabledError(Exception):
+    """The deployment has not enabled the feature a tool requires."""
+
+
+def login_step_for(config: Config) -> str:
+    """The sign-in command the USER runs for this server's profile (``--profile`` before the command)."""
+    prefix = f"vamscli --profile {config.profile} " if config.profile else "vamscli "
+    return f"`{prefix}auth login -u <user>`"
+
+
+def describe_profile(config: Config) -> Dict[str, Any]:
+    """What the vamscli profile this server uses holds, read from disk and without any request.
+
+    Used by the ``vams_status`` tool, which must answer even when no client could be built. Returns
+    the profile name, its API URL, the signed-in user id, whether the stored access token's expiry
+    has passed (the client refreshes it on the next call when the refresh token still works), and the
+    feature switches the last ``vamscli auth login`` saw. Never returns a token.
+    """
+    try:
+        name = config.profile or ProfileManager().get_active_profile()
+    except Exception:  # noqa: BLE001 - a status read must not fail
+        name = config.profile or "default"
+    manager = ProfileManager(name)
+    status: Dict[str, Any] = {"profile": name, "apiUrl": None, "userId": None}
+    try:
+        status["apiUrl"] = manager.load_config().get("api_gateway_url")
+    except Exception:  # noqa: BLE001 - not set up
+        pass
+    auth = manager.load_auth_profile() or {}
+    if auth:
+        status["userId"] = auth.get("user_id")
+        expires_at = auth.get("expires_at")
+        if isinstance(expires_at, (int, float)):
+            status["tokenExpired"] = time.time() >= expires_at
+    try:
+        status["featureSwitches"] = list(manager.get_feature_switches())
+    except Exception:  # noqa: BLE001
+        status["featureSwitches"] = []
+    return status
+
+
+def sign_in_marker(config: Config) -> Any:
+    """The stored sign-in's expiry, which every new sign-in or renewal rewrites; None without one.
+
+    The server compares it with the value seen when VAMS refused a call, so a sign-in the user made
+    since then is not reported as refused.
+    """
+    try:
+        name = config.profile or ProfileManager().get_active_profile()
+        return (ProfileManager(name).load_auth_profile() or {}).get("expires_at")
+    except Exception:  # noqa: BLE001 - a status read must not fail
+        return None
 
 
 class VamsClient:
@@ -70,19 +141,25 @@ class VamsClient:
 
         # Discover the API Gateway URL from the profile (raises a clear,
         # actionable error if the user hasn't run `vamscli setup`).
+        setup_step = f"`{cli_prefix}setup <api-gateway-url>`"
+        login_step = f"`{cli_prefix}auth login -u <user>`"
         try:
             profile_config = self._profile.load_config()
         except Exception as exc:  # ProfileNotFoundError / ConfigurationError
             raise ConfigError(
                 f"vamscli profile '{profile_name}' is not set up: {exc} "
-                f"Run `{cli_prefix}setup <api-gateway-url>` first."
+                f"Run {setup_step} first.",
+                reason=f"the VAMS profile '{profile_name}' is not set up on this machine",
+                user_step=f"{setup_step} and then {login_step}",
             )
 
         api_url = profile_config.get("api_gateway_url")
         if not api_url:
             raise ConfigError(
                 f"vamscli profile '{profile_name}' has no api_gateway_url. "
-                f"Re-run `{cli_prefix}setup <api-gateway-url>`."
+                f"Re-run {setup_step}.",
+                reason=f"the VAMS profile '{profile_name}' has no VAMS API URL",
+                user_step=f"{setup_step} and then {login_step}",
             )
 
         # Require an existing login. The APIClient will refresh tokens as needed;
@@ -90,15 +167,47 @@ class VamsClient:
         if self._profile.load_auth_profile() is None:
             raise ConfigError(
                 f"Not authenticated for vamscli profile '{profile_name}'. "
-                f"Run `{cli_prefix}auth login -u <user>` first."
+                f"Run {login_step} first.",
+                reason=f"nobody is signed in on the VAMS profile '{profile_name}'",
+                user_step=login_step,
             )
+        self.login_step = login_step
 
         self.api_url = api_url
         self.api = APIClient(api_url, self._profile)
 
+    # --- Feature switches -------------------------------------------------
+
+    def has_feature(self, feature_name: str) -> bool:
+        """Whether the feature-switch snapshot the profile stored at its last ``vamscli auth login``
+        (or ``set-override``) carries ``feature_name``."""
+        return self._profile.has_feature_switch(feature_name)
+
+    def require_feature(self, feature_name: str, message: str) -> None:
+        """Raise ``FeatureDisabledError(message)`` unless the snapshot carries ``feature_name``.
+
+        The MCP counterpart of vamscli's ``requires_feature`` gate, and the first statement of a
+        feature-gated tool: a deployment without the feature is answered with ``message`` (the CLI's
+        own sentence) before any request. Without it the request meets API Gateway's 403 for a route
+        that was never created, which the client reports only as a request no deployed route matches.
+        """
+        if not self.has_feature(feature_name):
+            raise FeatureDisabledError(message)
+
     def search_enabled(self) -> bool:
         """False on a deployment without OpenSearch (the profile's NOOPENSEARCH feature switch)."""
         return not is_feature_enabled(FEATURE_NOOPENSEARCH, self._profile)
+
+    def feature_switches(self) -> Dict[str, Any]:
+        """The profile's feature-switch snapshot as ``vamscli features list`` reports it: ``enabled``
+        (sorted), ``total`` and ``fetched_at``, plus ``has_feature_switches``. Read from disk only."""
+        info = self._profile.get_feature_switches_info()
+        return {
+            "has_feature_switches": bool(info.get("has_feature_switches")),
+            "enabled": sorted(info.get("enabled") or []),
+            "total": info.get("count", 0),
+            "fetched_at": info.get("fetched_at"),
+        }
 
     # --- Raw request escape hatch ----------------------------------------
 
@@ -166,6 +275,7 @@ class VamsClient:
         items: List[Any] = []
         next_token: Optional[str] = starting_token
         pages = 0
+        out_of_time = False
 
         while True:
             pages += 1
@@ -182,6 +292,12 @@ class VamsClient:
             next_token = payload.get("NextToken")
             if not next_token or len(items) >= limit or pages >= self.config.max_pages:
                 break
+            # A remote tool call has a time budget (request_context.time_budget). Another page is not
+            # started once little of it is left, so the call answers inside the client's limit with a
+            # token to resume from. Over stdio no budget applies and this never fires.
+            if request_context.budget_low():
+                out_of_time = True
+                break
 
         kept = items[:limit]
         result: Dict[str, Any] = {"Items": kept, "count": len(kept), "pages": pages}
@@ -194,7 +310,9 @@ class VamsClient:
             result["truncated"] = True
             # With no max_items the only limit is the one derived from max_pages, so a walk the page
             # bound stopped after full pages must not be reported as a limit the caller requested.
-            if next_token and pages >= self.config.max_pages and (max_items is None or len(kept) < limit):
+            if out_of_time:
+                reason = f"stopped after {pages} page(s), the time budget of one call on this server"
+            elif next_token and pages >= self.config.max_pages and (max_items is None or len(kept) < limit):
                 reason = (
                     f"stopped after {pages} page(s), the max_pages work bound on this server "
                     f"(VAMS_MAX_PAGES={self.config.max_pages})"
@@ -221,15 +339,31 @@ class VamsClient:
 
     @staticmethod
     def trim_search_results(raw: Dict[str, Any], max_hits: int = 50) -> Dict[str, Any]:
-        """Reduce a raw OpenSearch response to a compact, agent-friendly shape."""
+        """Reduce a raw OpenSearch response to a compact, agent-friendly shape.
+
+        ``total`` stays the numeric ``hits.total.value``. ``total_is_lower_bound`` is True when the
+        API reports ``hits.total.relation == "gte"`` (the true total is at least ``total``), and
+        ``total_display`` is the total as text with a trailing '+' in that case (e.g. "120+").
+        ``POST /search/nlp`` reports every total that is not zero that way (approximate matching);
+        keyword search does when some permission rules can only be counted as a minimum.
+        """
         hits_container = raw.get("hits", {}) if isinstance(raw, dict) else {}
         total = hits_container.get("total", {})
         total_value = total.get("value") if isinstance(total, dict) else total
+        total_is_lower_bound = isinstance(total, dict) and total.get("relation") == "gte"
+        if total_value is None:
+            total_display = None
+        else:
+            total_display = f"{total_value}+" if total_is_lower_bound else f"{total_value}"
         hits = hits_container.get("hits", []) or []
 
         compact = []
         for hit in hits[:max_hits]:
             source = hit.get("_source", {}) if isinstance(hit, dict) else {}
+            # Vector-search hits carry their ranking extras beside _source, not inside it; folding
+            # them under one key keeps every consumer's `source` reading valid.
+            if isinstance(hit, dict) and "_vector" in hit:
+                source = {**source, "_vector": hit["_vector"]}
             compact.append(
                 {
                     "id": hit.get("_id"),
@@ -240,6 +374,154 @@ class VamsClient:
 
         return {
             "total": total_value,
+            "total_is_lower_bound": total_is_lower_bound,
+            "total_display": total_display,
             "returned": len(compact),
             "results": compact,
+            # A keyword answer's warnings (truncated:time: the search's time bound stopped the permission
+            # checks before the page was full, #1590), only when it sent any.
+            **({"warnings": list(raw["warnings"])} if isinstance(raw, dict) and raw.get("warnings") else {}),
         }
+
+
+# =========================================================================
+# REMOTE MODE: one client per request, from that request's own token
+# =========================================================================
+
+
+class FeatureSwitchCache:
+    """The deployment's feature switches, read through the API and kept for ``ttl`` seconds.
+
+    A remote server has no profile snapshot, so the switches come from the secure-config route,
+    called with the token of whichever request needs them first. They describe the deployment, not
+    the user, so one copy serves every request. Thread-safe.
+    """
+
+    def __init__(self, ttl: float = 300.0) -> None:
+        self.ttl = ttl
+        self._lock = threading.Lock()
+        self._enabled: Optional[List[str]] = None
+        self._fetched_at: Optional[float] = None
+        self._fetched_at_iso: Optional[str] = None
+
+    def peek(self) -> Optional[Dict[str, Any]]:
+        """The cached switches without any request, or None when none were read yet."""
+        with self._lock:
+            if self._enabled is None:
+                return None
+            return {"enabled": list(self._enabled), "fetched_at": self._fetched_at_iso}
+
+    def enabled(self, api: Any) -> List[str]:
+        with self._lock:
+            if self._enabled is not None and self._fetched_at is not None and time.monotonic() - self._fetched_at < self.ttl:
+                return list(self._enabled)
+        # Read outside the lock: a slow API must not hold every other request up.
+        raw = (api.get_secure_config() or {}).get("featuresEnabled", "") or ""
+        enabled = sorted({part.strip() for part in str(raw).split(",") if part.strip()})
+        with self._lock:
+            self._enabled = enabled
+            self._fetched_at = time.monotonic()
+            self._fetched_at_iso = datetime.now(timezone.utc).isoformat()
+        return list(enabled)
+
+
+class TokenVamsClient(VamsClient):
+    """A VamsClient for one remote request, authenticating with that request's own bearer token.
+
+    It reads and writes no vamscli profile: the APIClient holds the token in memory
+    (``APIClient(bearer_token=...)``), never refreshes it, and reports its rejection at once. Feature
+    switches come from the shared ``FeatureSwitchCache`` instead of a profile snapshot.
+    """
+
+    def __init__(self, config: Config, api_url: str, token: str, features: FeatureSwitchCache) -> None:
+        # VamsClient.__init__ resolves a profile, which a remote request must never do.
+        self.config = config
+        self.profile_name = None
+        self._profile = None
+        self.login_step = None
+        self.api_url = api_url
+        self.api = APIClient(api_url, bearer_token=token)
+        # The CLI's read timeout (minutes) is longer than a remote tool call may take, so one request
+        # is bounded by the call's budget instead.
+        self.api.request_timeout = (DEFAULT_TIMEOUT, max(1, config.tool_timeout))
+        self._features = features
+
+    def has_feature(self, feature_name: str) -> bool:
+        return feature_name in self._features.enabled(self.api)
+
+    def search_enabled(self) -> bool:
+        return not self.has_feature(FEATURE_NOOPENSEARCH)
+
+    def feature_switches(self) -> Dict[str, Any]:
+        enabled = self._features.enabled(self.api)
+        snapshot = self._features.peek() or {}
+        return {
+            "has_feature_switches": True,
+            "enabled": enabled,
+            "total": len(enabled),
+            "fetched_at": snapshot.get("fetched_at"),
+        }
+
+
+class RequestScopedClient:
+    """Stands where the stdio server's single client stands, and resolves to the current request's.
+
+    Every tool reads ``CLIENT.<attribute>``; in remote mode ``CLIENT`` is this object, and each
+    attribute is taken from the ``TokenVamsClient`` of the request being served (built from that
+    request's verified token on first use). Outside a request there is no client: ``current()`` is
+    None and any other attribute raises ``NotSignedIn``.
+
+    ``has_feature`` outside a request (at server start, when add-on tools are registered) answers
+    True: a remote server has no snapshot to read, so the operator's tool sets decide which add-on
+    tools exist, and each add-on tool's pre-flight checks the deployment's switch per request.
+    """
+
+    def __init__(self, config: Config, api_url: str, features: Optional[FeatureSwitchCache] = None) -> None:
+        self.config = config
+        self.api_url = api_url
+        self.features = features or FeatureSwitchCache()
+
+    def current(self) -> Optional[TokenVamsClient]:
+        identity = request_context.current_identity()
+        if identity is None:
+            return None
+        if identity.client is None:
+            identity.client = TokenVamsClient(self.config, self.api_url, identity.token, self.features)
+        return identity.client
+
+    def has_feature(self, feature_name: str) -> bool:
+        client = self.current()
+        return True if client is None else client.has_feature(feature_name)
+
+    def __getattr__(self, name: str) -> Any:
+        client = self.current()
+        if client is None:
+            raise NotSignedIn("no signed-in request is being served")
+        return getattr(client, name)
+
+
+class NotSignedIn(Exception):
+    """A remote tool ran outside a verified request (the HTTP gate admits none such)."""
+
+
+def silence_cli_request_log() -> None:
+    """Stop the CLI writing its request log, for a server that acts for many users.
+
+    vamscli writes every request's URL and (redacted) body to one rotating file under the CLI's
+    config directory. A remote server serves many users in one process, so that file would mix their
+    requests. ``vamscli.utils.logging.get_logger()`` builds the file handler only while its module
+    logger is unset; setting it here to a logger with no file handler means nothing is written,
+    without changing the CLI. ``tests/test_remote_mode.py`` (``test_the_cli_request_log_is_silenced_in_remote_mode``)
+    pins that contract.
+    """
+    import logging as _logging
+
+    import vamscli.utils.logging as cli_logging
+
+    quiet = _logging.getLogger("vamscli")
+    for handler in list(quiet.handlers):
+        quiet.removeHandler(handler)
+    quiet.addHandler(_logging.NullHandler())
+    quiet.propagate = False
+    quiet.setLevel(_logging.CRITICAL + 1)
+    cli_logging._logger = quiet

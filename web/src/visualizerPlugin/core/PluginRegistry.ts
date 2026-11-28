@@ -4,12 +4,45 @@
  */
 
 import { ViewerPluginConfig, ViewerConfig, ViewerPluginProps } from "./types";
-import viewerConfig from "../config/viewerConfig.json";
-import { supportsAllExtensions } from "./extensionMatching";
-import { VIEWER_COMPONENTS, DEPENDENCY_MANAGERS } from "../viewers/manifest";
+import { CompareContext } from "./compareShape";
+import { extensionToken, filenameExtension } from "./extensionMatching";
+import {
+    admitsCompareSelection,
+    admitsVisualizeSelection,
+    availableViewerModes,
+    ViewerModeAvailability,
+} from "./viewerSelection";
+import {
+    ALL_DEPENDENCY_MANAGERS,
+    ALL_VIEWER_COMPONENTS,
+    ALL_VIEWER_CONFIGS,
+} from "./viewerSources";
 import { appCache } from "../../services/appCache";
 import { StylesheetManager } from "./StylesheetManager";
 import React from "react";
+
+// Compare classification lives in ./compareShape and the per-viewer admission predicates for both
+// selection paths in ./viewerSelection (pure, unit-testable); re-exported here so existing callers
+// keep importing them from the registry.
+export {
+    deriveCompareShape,
+    deriveCrossAsset,
+    deriveCompareContext,
+    admitsCompareShape,
+    seedCompareFromSingleFile,
+} from "./compareShape";
+export type { CompareShape, CompareContext } from "./compareShape";
+export {
+    admitsCompareSelection,
+    admitsVisualizeSelection,
+    isCompareOnlyViewer,
+    hasVisualizeViewer,
+    hasCompareViewer,
+    availableViewerModes,
+    compareContextForSelection,
+    LONE_FILE_COMPARE_CONTEXT,
+} from "./viewerSelection";
+export type { ViewerModeAvailability } from "./viewerSelection";
 
 export interface ViewerPlugin {
     config: ViewerPluginConfig;
@@ -22,6 +55,10 @@ export interface ViewerPluginMetadata {
     config: ViewerPluginConfig;
     isLoaded: boolean;
 }
+
+/** Which surface is asking for viewers. "visualize" is the default single/multi-file render path;
+ *  "compare" surfaces only compare-capable viewers. */
+export type ViewerMode = "visualize" | "compare";
 
 export class PluginRegistry {
     private static instance: PluginRegistry;
@@ -50,7 +87,7 @@ export class PluginRegistry {
     private async loadViewerComponent(
         componentPath: string
     ): Promise<React.ComponentType<ViewerPluginProps>> {
-        const relativePath = VIEWER_COMPONENTS[componentPath as keyof typeof VIEWER_COMPONENTS];
+        const relativePath = ALL_VIEWER_COMPONENTS[componentPath];
 
         if (!relativePath) {
             throw new Error(
@@ -84,8 +121,7 @@ export class PluginRegistry {
 
     // Dynamic dependency manager loader using manifest constants
     private async loadDependencyManager(dependencyPath: string): Promise<any> {
-        const relativePath =
-            DEPENDENCY_MANAGERS[dependencyPath as keyof typeof DEPENDENCY_MANAGERS];
+        const relativePath = ALL_DEPENDENCY_MANAGERS[dependencyPath];
 
         if (!relativePath) {
             console.warn(
@@ -116,8 +152,8 @@ export class PluginRegistry {
         if (this.initialized) return;
 
         try {
-            // Load configuration
-            this.config = viewerConfig as ViewerConfig;
+            // Load configuration: core, add-on and custom viewers (./viewerSources)
+            this.config = { viewers: ALL_VIEWER_CONFIGS };
 
             // Register plugin metadata only (no component loading)
             for (const viewerConfig of this.config.viewers) {
@@ -317,7 +353,9 @@ export class PluginRegistry {
     getCompatibleViewers(
         fileExtensions: string[],
         isMultiFile: boolean,
-        isPreview = false
+        isPreview = false,
+        mode: ViewerMode = "visualize",
+        compareContext?: CompareContext
     ): ViewerPluginMetadata[] {
         if (!this.initialized) {
             console.warn("PluginRegistry not initialized. Call initialize() first.");
@@ -331,7 +369,22 @@ export class PluginRegistry {
                 .sort((a, b) => a.config.priority - b.config.priority);
         }
 
-        // For non-preview mode, return all compatible viewer metadata EXCEPT preview viewers
+        // Compare mode: surface only viewers that opt in via compareMode.enabled and admit the
+        // current selection (file count window + same-key-versions vs distinct-keys gating). The
+        // visualize path below is untouched.
+        if (mode === "compare") {
+            return Array.from(this.pluginMetadata.values())
+                .filter((metadata) => {
+                    if (metadata.config.isPreviewViewer) {
+                        return false;
+                    }
+                    return admitsCompareSelection(metadata.config, fileExtensions, compareContext);
+                })
+                .sort((a, b) => a.config.priority - b.config.priority);
+        }
+
+        // For non-preview mode, return all compatible viewer metadata EXCEPT preview viewers and
+        // compare-only viewers (see admitsVisualizeSelection).
         return Array.from(this.pluginMetadata.values())
             .filter((metadata) => {
                 // Skip preview viewer for non-preview files
@@ -339,28 +392,33 @@ export class PluginRegistry {
                     return false;
                 }
 
-                return this.canHandle(metadata.config, fileExtensions, isMultiFile);
+                return admitsVisualizeSelection(metadata.config, fileExtensions, isMultiFile);
             })
             .sort((a, b) => a.config.priority - b.config.priority);
     }
 
-    private canHandle(
-        config: ViewerPluginConfig,
-        fileExtensions: string[],
-        isMultiFile: boolean
-    ): boolean {
-        // Check if viewer supports multi-file when needed
-        const multiFileSupport = !isMultiFile || config.supportsMultiFile;
-        if (!multiFileSupport) {
-            return false;
-        }
-
-        // Every selected file must be renderable by this viewer — see supportsAllExtensions.
-        return supportsAllExtensions(config.supportedExtensions, fileExtensions);
-    }
-
     getViewer(id: string): ViewerPlugin | undefined {
         return this.plugins.get(id);
+    }
+
+    /**
+     * Which of the two host surfaces can open a selection, over the REGISTERED (enabled, feature-
+     * gated) viewers. This is what a Visualize/Compare toggle and the "View/Compare Selected"
+     * actions consult; it never offers a mode for which `getCompatibleViewers` would return nothing.
+     * A lone file is judged for compare as two versions of itself (see `availableViewerModes`), so
+     * a single text file offers both modes and the host seeds the pair.
+     * Reports both modes unavailable until `initialize()` has run.
+     */
+    getAvailableModes(
+        fileExtensions: string[],
+        isMultiFile: boolean,
+        compareContext?: CompareContext
+    ): ViewerModeAvailability {
+        if (!this.initialized) {
+            return { visualize: false, compare: false };
+        }
+        const configs = Array.from(this.pluginMetadata.values()).map((m) => m.config);
+        return availableViewerModes(configs, fileExtensions, isMultiFile, compareContext);
     }
 
     getViewerMetadata(id: string): ViewerPluginMetadata | undefined {
@@ -512,29 +570,34 @@ export class PluginRegistry {
     }
 }
 
-// Utility function to get file extension from filename
+/**
+ * Lowercase extension of a filename, or "" when it has none. Leading dots do not start an extension
+ * (`.gitignore` has none, `.eslintrc.json` has `.json`) and a trailing dot leaves none: the shared
+ * rule in `filenameExtension`.
+ */
 export function getFileExtension(filename: string): string {
-    const lastDotIndex = filename.lastIndexOf(".");
-    if (lastDotIndex === -1) return "";
-    return filename.substring(lastDotIndex).toLowerCase();
+    return filenameExtension(filename).toLowerCase();
 }
 
-// Utility function to get all unique file extensions from multiple files
+/**
+ * The unique matching tokens of a selection: each file's lowercase extension, or `NO_EXTENSION` for
+ * a file that has none, so a viewer that lists that token (the text viewers) can match an
+ * extensionless file. Directories are skipped.
+ */
 export function getFileExtensions(
     files: Array<{ filename: string; isDirectory: boolean }>
 ): string[] {
     if (files.length === 0) return [];
 
-    // Filter out directories and get unique extensions
-    const actualFiles = files.filter((f) => !f.isDirectory);
     const extensions = new Set<string>();
-
-    actualFiles.forEach((file) => {
-        const ext = getFileExtension(file.filename);
-        if (ext) {
-            extensions.add(ext);
-        }
-    });
+    files
+        .filter((f) => !f.isDirectory)
+        .forEach((file) => {
+            const matchToken = extensionToken(file.filename);
+            if (matchToken) {
+                extensions.add(matchToken);
+            }
+        });
 
     return Array.from(extensions);
 }

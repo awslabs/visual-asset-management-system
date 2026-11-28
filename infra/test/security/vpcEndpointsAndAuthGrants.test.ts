@@ -88,6 +88,69 @@ describe("Deadline Cloud VPC interface endpoint gating", () => {
     });
 });
 
+describe("Bedrock Runtime and Transcribe VPC interface endpoint gating", () => {
+    // The video SOP/BOM Batch container calls Amazon Bedrock Runtime and Amazon Transcribe from the
+    // isolated subnets, which have no NAT, so both endpoints key on that pipeline's flag alone. The
+    // SYSTEM GenAI metadata pipeline's Bedrock callers are Lambdas that are in the VPC only under
+    // useForAllLambdas, so its half of the Bedrock gate keeps that condition. Vector search is off in
+    // every case so the search Lambda's placement does not contribute to the gate.
+    const servicesFor = (mutate: (c: Config.Config) => void): string[] => {
+        const config = createMockConfig();
+        config.app.vectorSearch.enabled = false;
+        mutate(config);
+        return synthVpcEndpointServices(config);
+    };
+    // Service names are JSON-stringified, so the closing quote pins the exact suffix: `.transcribe"`
+    // does not match `transcribestreaming`, `.bedrock-runtime"` does not match `bedrock-runtime-fips`.
+    const count = (services: string[], suffix: string): number =>
+        services.filter((s) => s.includes(`.${suffix}"`)).length;
+
+    test("both are created for the video SOP/BOM pipeline with lambdas outside the VPC", () => {
+        const services = servicesFor((c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = true;
+            c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+            c.app.useGlobalVpc.useForAllLambdas = false;
+        });
+        expect(count(services, "transcribe")).toBe(1);
+        expect(count(services, "bedrock-runtime")).toBe(1);
+        expect(count(services, "rekognition")).toBe(0);
+    });
+
+    test("[control] the SYSTEM GenAI pipeline with in-VPC lambdas keeps Bedrock", () => {
+        // The positive control for the Lambda path: the widened gate must still create what the
+        // Lambda-gated gate created, and the Transcribe endpoint must not ride along.
+        const services = servicesFor((c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = false;
+            c.app.pipelines.useSystemGenAiMetadata.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+        });
+        expect(count(services, "bedrock-runtime")).toBe(1);
+        expect(count(services, "transcribe")).toBe(0);
+    });
+
+    test("the widened gate does not create Bedrock for the SYSTEM GenAI pipeline alone", () => {
+        // Pins that the OR did not loosen the Lambda half: with lambdas outside the VPC the analysis
+        // Lambdas reach Bedrock over the public endpoint and an interface endpoint has no consumer.
+        const services = servicesFor((c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = false;
+            c.app.pipelines.useSystemGenAiMetadata.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = false;
+        });
+        expect(count(services, "bedrock-runtime")).toBe(0);
+        expect(count(services, "transcribe")).toBe(0);
+    });
+
+    test("neither is created when both pipelines are disabled", () => {
+        const services = servicesFor((c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = false;
+            c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+        });
+        expect(count(services, "bedrock-runtime")).toBe(0);
+        expect(count(services, "transcribe")).toBe(0);
+    });
+});
+
 describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
     // The three condition blocks are subnet creation, the Batch/ECR endpoint block, and the ECS
     // endpoint block. Which of them a Batch/ECS/Fargate pipeline flag appears in is set out below.
@@ -117,9 +180,15 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
 
     const isolatedSubnetBatchFlags = [
         "useConversionCoordinateTransform",
+        "useCogConversion",
         "usePreviewPcPotreeViewer",
         "usePreview3dThumbnail",
-        "useGenAiMetadata3dLabeling",
+        "useSystemGenAiMetadata.useFargateRenderer",
+        "useGenAiVideoSopBom",
+        // The zipArchive system pipeline of Download as Zip.
+        "useZipDownloads",
+        // The 3D Basic Conversion AWS Batch tier (batchTier.enabled): the Lambda function is unchanged.
+        "useConversion3dBasic.batchTier",
     ];
 
     // The three blocks, keyed by an anchor unique to each.
@@ -167,6 +236,24 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
             "needsEcsIsolated = props.config.app.pipelines.useIsaacLabTraining"
         );
     });
+
+    // The GenAI CAD STEP agent's placement follows its runtime: on `fargate` its Batch compute is in
+    // the private subnets (all three blocks), on `agentcore` the container runs outside the VPC and only
+    // its Lambdas are in the isolated subnets (no block). So the flag is in each block only together
+    // with the fargate runtime, and the AgentCore data-plane endpoint is gated on the other runtime.
+    test("useGenAiCadStepAgent appears in all three blocks, each time only with the fargate runtime", () => {
+        const fargateGate =
+            /useGenAiCadStepAgent\?\.enabled &&\s+props\.config\.app\.pipelines\.useGenAiCadStepAgent\.runtime === "fargate"/;
+        for (const block of Object.values(blocks)) {
+            expect(block).toMatch(fargateGate);
+            expect(block.match(/useGenAiCadStepAgent\?\.enabled/g)).toHaveLength(1);
+        }
+        const agentCore = source.indexOf('"BedrockAgentCoreEndpoint"');
+        expect(agentCore).toBeGreaterThan(0);
+        expect(source.slice(source.lastIndexOf("if (", agentCore), agentCore)).toMatch(
+            /useForAllLambdas &&\s+props\.config\.app\.pipelines\.useGenAiCadStepAgent\?\.enabled &&\s+props\.config\.app\.pipelines\.useGenAiCadStepAgent\.runtime === "agentcore"/
+        );
+    });
 });
 
 describe("core stack nested-stack dependencies", () => {
@@ -185,8 +272,10 @@ describe("core stack nested-stack dependencies", () => {
         "authBuilderNestedStack",
         "apiBuilderNestedStack",
         "apiBuilder2NestedStack",
+        "apiBuilder3NestedStack",
         "searchBuilderNestedStack",
         "addonBuilderNestedStack",
+        "customBuilderNestedStack",
     ])("%s depends on resourceNamesNestedStack", (stackVar) => {
         // Matched on the current spelling: Stack#addDependency is deprecated in favour of
         // addStackDependency, and asserting the old name would fail a correct migration.
@@ -207,6 +296,14 @@ describe("core stack nested-stack dependencies", () => {
     test("pipelineBuilderNestedStack depends on apiBuilder2NestedStack", () => {
         expect(source).toContain(
             "pipelineBuilderNestedStack.addStackDependency(apiBuilder2NestedStack)"
+        );
+    });
+
+    // The system-workflow launcher built in SearchBuilder invokes the execute-workflow Lambda built in
+    // ApiBuilder2 by name; ApiBuilder2 consumes nothing from Search, so the arrow is acyclic.
+    test("searchBuilderNestedStack depends on apiBuilder2NestedStack", () => {
+        expect(activeSource).toContain(
+            "searchBuilderNestedStack.addStackDependency(apiBuilder2NestedStack)"
         );
     });
 });
@@ -285,5 +382,37 @@ describe("setupSecurityAndLoggingEnvironmentAndPermissions", () => {
         expect(refs).not.toContain(
             JSON.stringify(stack.resolve(resources.dynamo.authEntitiesStorageTable.tableArn))
         );
+    });
+});
+
+describe("Bedrock Runtime endpoint condition", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "..", "../lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts"),
+        "utf8"
+    );
+    const bedrockAt = source.indexOf('"BedrockEndpoint"');
+    const conditionBlock = source.slice(source.lastIndexOf("if (", bedrockAt), bedrockAt);
+    // The two predicate constants directly above the `if`.
+    const predicateBlock = source.slice(
+        source.lastIndexOf("const bedrockFromAllLambdas", bedrockAt),
+        bedrockAt
+    );
+
+    test("is gated on the system pipeline or vector search with every Lambda in the VPC, or on the search placement", () => {
+        expect(bedrockAt).toBeGreaterThan(-1);
+        expect(conditionBlock).toContain("bedrockFromAllLambdas || bedrockFromSearch");
+        expect(predicateBlock).toContain("useForAllLambdas");
+        expect(predicateBlock).toContain("useSystemGenAiMetadata.enabled");
+        // An attributes-only pipeline (GenAI layer off) with vector search off calls no Bedrock API.
+        expect(predicateBlock).toContain("useSystemGenAiMetadata.useGenAiAnalysis !== false");
+        expect(predicateBlock).toContain("vectorSearch.enabled");
+        expect(predicateBlock).toContain("searchLambdasInVpc(props.config)");
+        // In the isolated subnets, where the pipeline and search Lambdas sit.
+        expect(source.slice(bedrockAt, bedrockAt + 400)).toContain("this.isolatedSubnets");
+    });
+
+    test("no Rekognition endpoint is created", () => {
+        expect(source).not.toContain("RekognitionEndpoint");
+        expect(source).not.toContain("REKOGNITION");
     });
 });

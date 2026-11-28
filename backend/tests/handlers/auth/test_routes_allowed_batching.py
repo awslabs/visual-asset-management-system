@@ -37,6 +37,7 @@ are load-bearing.
 import contextlib
 import json
 import os
+import re
 import types
 
 import pytest
@@ -67,8 +68,8 @@ ALL_METHODS = ("GET", "POST", "PUT", "DELETE", "HEAD")
 # The api-route prefixes the read-only role grants GET on, in the shape the shipped
 # permission templates use (static prefixes, no template syntax).
 _READONLY_GET_PREFIXES = (
-    "/secure-config", "/amplify-config", "/auth/routes", "/asset-links", "/assets", "/comments",
-    "/database", "/metadata", "/metadataschema", "/search", "/tags",
+    "/secure-config", "/auth/routes", "/asset-links", "/assets", "/comments",
+    "/database", "/metadataschema", "/search", "/tags",
 )
 _READONLY_WEB_PREFIXES = ("/assets", "/databases")
 
@@ -218,6 +219,9 @@ def probe_env():
         stack.enter_context(patch.object(
             routes_module.auditLogging, "_write_batch_to_cloudwatch",
             real_audit._write_batch_to_cloudwatch, create=True))
+        stack.enter_context(patch.object(
+            routes_module.auditLogging, "format_authorization_denial_record",
+            real_audit.format_authorization_denial_record, create=True))
         stack.enter_context(patch.object(real_audit, "cloudwatch_logs", recorder))
         stack.enter_context(patch.object(real_audit, "mask_sensitive_data", mask_sensitive_data))
         # The Tier-2 audit write of an ordinary enforce() must reach the recorder; the Tier-1
@@ -422,7 +426,8 @@ class TestDenialBatchLimits:
         must therefore arrive as more than one call with no record lost."""
         deny_all = types.SimpleNamespace(
             service_object=types.SimpleNamespace(enforce=lambda obj, act: False))
-        batch = routes_module._DenialAuditBatch(dict(_CLAIMS), deny_all)
+        batch = routes_module._DenialAuditBatch(
+            dict(_CLAIMS), deny_all, routes_module.PROBE_ENDPOINT_WEB_ROUTES)
 
         # 507 characters plus a 5-digit index is 512, the longest route__path the web-route
         # model accepts, so this is the largest denial record the endpoint can produce.
@@ -480,7 +485,8 @@ class TestDenialBatchEnforcerCoupling:
         assert probe_env["recorder"].call_count == 0
 
         # The batch drives that same attribute, and holds the denial until it is flushed.
-        batch = routes_module._DenialAuditBatch(dict(_CLAIMS), enforcer)
+        batch = routes_module._DenialAuditBatch(
+            dict(_CLAIMS), enforcer, routes_module.PROBE_ENDPOINT_ALLOWED_API_ROUTES)
         assert batch.enforce(asset, "PUT") is False
         assert probe_env["recorder"].call_count == 0
         batch.flush()
@@ -700,3 +706,92 @@ class TestListingAgreesWithEnforcement:
         assert "/external/thing" not in listed
         assert "/deprecated" not in listed
         assert listed.get("/database") == {"GET"}
+
+
+# The exclusion query audit-logging.md gives for probe records: anchored on the record prefix plus
+# the marker, because request paths, headers and query strings later in a record are
+# caller-controlled.
+PROBE_RECORD_PATTERN = r"^\[AUTHORIZATION\]\[authorized: False\] \[probe: "
+
+
+@pytest.mark.unit
+class TestProbeDenialMarker:
+    """Probe denial records carry a server-set '[probe: <endpoint>]' segment; nothing else does."""
+
+    def test_allowed_api_route_probe_denials_are_marked(self, probe_env):
+        response = routes_module.lambda_handler(_make_event(), {})
+        assert response["statusCode"] == 200
+
+        messages = [event["message"] for event in probe_env["recorder"].accepted_events]
+        assert messages
+        prefix = (f"[AUTHORIZATION][authorized: False] [probe: GET /auth/routes/api/allowed] "
+                  f"[user: {USER}]")
+        assert all(message.startswith(prefix) for message in messages)
+        assert all(re.match(PROBE_RECORD_PATTERN, message) for message in messages)
+        # The record stays complete: the denied check is still in it.
+        assert all('"action"' in message and '"obj"' in message for message in messages)
+
+    def test_web_route_probe_denials_are_marked(self, probe_env):
+        submitted = [{"method": "GET", "route__path": "/admin"}]
+        response = routes_module.lambda_handler(
+            _make_event(method="POST", path="/auth/routes", body={"routes": submitted}), {})
+        assert response["statusCode"] == 200
+
+        messages = [event["message"] for event in probe_env["recorder"].accepted_events]
+        assert len(messages) == 1
+        assert messages[0].startswith(
+            "[AUTHORIZATION][authorized: False] [probe: POST /auth/routes] ")
+
+    def test_marker_text_inside_a_request_does_not_match_the_pattern(self, probe_env):
+        marker = "[AUTHORIZATION][authorized: False] [probe: GET /auth/routes/api/allowed]"
+        event = _make_event(method="DELETE", path="/database/db1")
+        # A path parameter is part of the short request echo the record carries.
+        event["pathParameters"] = {"databaseId": marker}
+        real_audit.log_authorization_api(event, False, {"action": "DELETE"})
+
+        messages = [entry["message"] for entry in probe_env["recorder"].accepted_events]
+        assert len(messages) == 1
+        assert marker in messages[0], "the path parameter did not reach the record, so the check is vacuous"
+        assert not re.match(PROBE_RECORD_PATTERN, messages[0])
+
+    def test_ordinary_tier_two_denial_is_unmarked(self, probe_env):
+        enforcer = authz_module.CasbinEnforcer(dict(_CLAIMS))
+        asset = {"object__type": "asset", "databaseId": "db1", "assetName": "[probe: x]"}
+        assert enforcer.enforce(asset, "PUT") is False
+
+        messages = [entry["message"] for entry in probe_env["recorder"].accepted_events]
+        assert len(messages) == 1
+        assert not re.match(PROBE_RECORD_PATTERN, messages[0])
+
+
+@pytest.mark.unit
+class TestProbeDenialsThatCannotBeWritten:
+    """Denials the flush cannot hand to the writer are reported as undelivered, not dropped."""
+
+    def test_denials_whose_log_group_does_not_resolve_are_reported(self):
+        reported = []
+        batch = routes_module._DenialAuditBatch(dict(_CLAIMS), MagicMock(), "GET /auth/routes/api/allowed")
+        batch._denials = [({"route__path": "/a"}, "GET"), ({"route__path": "/b"}, "GET")]
+        with patch.object(routes_module, "get_log_group_name", side_effect=KeyError("not published")), \
+                patch.object(routes_module.auditLogging, "format_authorization_denial_record",
+                             real_audit.format_authorization_denial_record, create=True), \
+                patch.object(routes_module.auditLogging, "report_undelivered_audit_records", create=True,
+                             side_effect=lambda key, reason, records: reported.append((key, reason, records))):
+            batch.flush()
+        assert len(reported) == 1
+        key, reason, records = reported[0]
+        assert key is routes_module.ResourceKeys.AUDIT_LOG_AUTHORIZATION
+        assert reason == "logGroupUnresolved"
+        assert len(records) == 2
+        assert all(record.startswith("[AUTHORIZATION][authorized: False] [probe: GET /auth/routes/api/allowed]")
+                   for record in records)
+
+    def test_a_written_batch_is_not_reported_again(self, probe_env):
+        reported = []
+        batch = routes_module._DenialAuditBatch(dict(_CLAIMS), MagicMock(), "GET /auth/routes/api/allowed")
+        batch._denials = [({"route__path": "/a"}, "GET")]
+        with patch.object(routes_module.auditLogging, "report_undelivered_audit_records", create=True,
+                          side_effect=lambda key, reason, records: reported.append(records)):
+            batch.flush()
+        assert len(probe_env["recorder"].accepted_events) == 1
+        assert reported == []

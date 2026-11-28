@@ -146,7 +146,7 @@ export async function loadIfcModel(
     });
 
     // load(data, coordinate, name, config?) — confirmed signature for
-    // @thatopen/components 3.4.x. coordinate=false keeps original coordinates.
+    // @thatopen/components 3.4.x and 3.6.0. coordinate=false keeps original coordinates.
     const model = await ifcLoader.load(bytes, false, modelId, {
         processData: {
             progressCallback: (p: number) => onProgress?.(Math.round(p * 100)),

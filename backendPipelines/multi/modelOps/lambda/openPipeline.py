@@ -134,6 +134,9 @@ def lambda_handler(event, context):
     # constructPipeline uses it to locate the file's subdirectory within the asset.
     asset_id = event.get('assetId', '')
 
+    # The S3 version the run reads its input at, recorded at launch; "" reads the current object.
+    input_version_id = event.get('inputVersionId', '')
+
     # Get any given additional outer/external task token to report back to (when using this pipeline as part of another state machine)
     if ('sfnExternalTaskToken' in event):
         external_sfn_task_token = event['sfnExternalTaskToken']
@@ -192,7 +195,13 @@ def lambda_handler(event, context):
         "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token,
         "outputFileType": output_file_type,
-        "assetId": asset_id
+        "assetId": asset_id,
+        "inputVersionId": input_version_id,
+        # Where the input sits in its asset (manifest relativePath, assetRootS3Key, assetRootBucket);
+        # empty from an older Lambda or without a manifest.
+        "inputRelativePath": event.get("inputRelativePath", ""),
+        "inputAssetRootS3Key": event.get("inputAssetRootS3Key", ""),
+        "inputAssetRootBucket": event.get("inputAssetRootBucket", ""),
     }
 
     try:

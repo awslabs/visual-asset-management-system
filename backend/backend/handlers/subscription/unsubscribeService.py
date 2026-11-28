@@ -7,15 +7,18 @@ import json
 
 from botocore.exceptions import ClientError
 from botocore.config import Config
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.types import TypeSerializer
 from common.resourceNames import get_table_name, ResourceKeys
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate, normalize_userid_array
 from handlers.authz import CasbinEnforcer
-from common.dynamodb import get_asset_object_from_id, query_all_items
+from common.dynamodb import get_asset_object_from_id, asset_authorization_object
+from common.commentSubscriptionKeys import subscription_audit_id, subscription_key
+from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 
 claims_and_roles = {}
 logger = safeLogger(service="UnsubscriptionService")
@@ -35,54 +38,29 @@ except Exception as e:
     raise e
 
 
-def get_asset(asset_id):
-    """Resolve the databaseId and SNS topic of the asset carrying an assetId.
+def get_asset(database_id, asset_id):
+    """The SNS topic of the live asset (database_id, asset_id), as {"databaseId", "snsTopic"?}.
 
-    assetIdGSI is partitioned on assetId, so this is a keyed read of that index paged to
-    exhaustion. A single scan with a FilterExpression applies its filter only to the page
-    it already read, so it answers None for an asset that exists once the table outgrows
-    one page.
-
-    Returns None when the assetId resolves to no live asset, and when it resolves to more
-    than one: assetIds are unique within a database only, so an ambiguous match cannot be
-    attributed to a single database's record.
-    """
+    Returns None when the database holds no live asset with this id (an archived asset, whether its
+    row has moved to the "#deleted" partition or only carries the status, is not live)."""
     asset_table = dynamodb.Table(asset_table_name)
-    items = query_all_items(
-        asset_table,
-        IndexName='assetIdGSI',
-        KeyConditionExpression=Key('assetId').eq(asset_id)
-    )
-
-    # Archiving rewrites a record under a "{databaseId}#deleted" partition, so an archived
-    # row is not the live asset and must not stand in for it
-    live_items = [
-        item for item in items
-        if not str(item.get('databaseId', '')).endswith('#deleted')
-        and item.get('status') != 'archived'
-    ]
-
-    if len(live_items) != 1:
-        logger.error(
-            f"assetId {asset_id} matches {len(live_items)} live assets; "
-            f"archived or duplicate matches: {len(items)}")
+    item = asset_table.get_item(Key={'databaseId': database_id, 'assetId': asset_id}).get('Item')
+    if not item or item.get('status') == 'archived':
+        logger.error(f"No live asset {asset_id} in database {database_id}")
         return None
-
-    item = live_items[0]
-    asset_obj = {"databaseId": item.get('databaseId')}
+    asset_obj = {"databaseId": database_id}
     if item.get('snsTopic'):
         asset_obj["snsTopic"] = item.get('snsTopic')
     return asset_obj
 
 
-def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
+def delete_sns_subscriptions(database_id, asset_id, subscribers, delete_sns=False):
     asset_table = dynamodb.Table(asset_table_name)
-    asset_obj = get_asset(asset_id)
+    asset_obj = get_asset(database_id, asset_id)
 
-    # An asset that no longer resolves to one live record has no topic to act on, so the
-    # cleanup is skipped and the caller's row rewrite proceeds without it
+    # An asset that is no longer live has no topic to act on, so the cleanup is skipped and the
+    # caller's row rewrite proceeds without it
     if asset_obj is None:
-        logger.error(f"No live asset found for asset {asset_id}")
         return
 
     if not asset_obj.get("snsTopic"):
@@ -90,7 +68,12 @@ def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
         return
 
     resp = sns_client.list_subscriptions_by_topic(TopicArn=asset_obj.get("snsTopic"))
-    subscription_arns = [subscription['SubscriptionArn'] for subscription in resp['Subscriptions'] if subscription['Endpoint'] in subscribers]
+    wanted_endpoints = {endpoint.lower() for endpoint in subscribers}
+    subscription_arns = [
+        subscription['SubscriptionArn']
+        for subscription in resp['Subscriptions']
+        if subscription['Endpoint'].lower() in wanted_endpoints
+    ]
 
     for subscription_arn in subscription_arns:
         if subscription_arn != "PendingConfirmation":
@@ -102,7 +85,7 @@ def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
         # missing key would otherwise create a key-only phantom record
         try:
             asset_table.update_item(
-                Key={'databaseId': asset_obj["databaseId"], 'assetId': asset_id},
+                Key={'databaseId': database_id, 'assetId': asset_id},
                 UpdateExpression="REMOVE snsTopic",
                 ConditionExpression='attribute_exists(assetId)'
             )
@@ -113,21 +96,32 @@ def delete_sns_subscriptions(asset_id, subscribers, delete_sns=False):
                 raise
 
 
-def get_subscription_obj(event_name, entity_name, entity_id):
+def _row_key(body):
+    return subscription_key(body["eventName"], body["entityName"], body["databaseId"], body["entityId"])
+
+
+def get_subscription_obj(body):
+    serializer = TypeSerializer()
     resp = dynamodb_client.get_item(
         TableName=subscription_table_name,
-        Key={
-            'eventName': {'S': event_name},
-            'entityName_entityId': {'S': f'{entity_name}#{entity_id}'}
-        }
+        Key={k: serializer.serialize(v) for k, v in _row_key(body).items()}
     )
     return resp.get('Item')
+
+
+def _resolve_profile_email(user_id):
+    """The address the asset topic uses for a user: the profile email, like the subscribe path."""
+    from .subscriptionService import (  # noqa: WPS433 (lazy import)
+        get_userProfile_Email,
+    )
+
+    return get_userProfile_Email(user_id)
 
 
 def delete_subscription(body):
     response = copy.deepcopy(STANDARD_JSON_RESPONSE)
     subscription_table = dynamodb.Table(subscription_table_name)
-    items = get_subscription_obj(body["eventName"], body["entityName"], body["entityId"])
+    items = get_subscription_obj(body)
 
     if not items:
         response['statusCode'] = 400
@@ -142,15 +136,23 @@ def delete_subscription(body):
     # for a subscriber the row no longer lists -- a retry after a failure between the two writes
     # still owes the SNS half, and it is a no-op for an endpoint the topic never carried.
     if body["entityName"] == "Asset":
-        delete_sns_subscriptions(body["entityId"], list(body["subscribers"]), delete_sns=False)
+        # The topic carries resolved addresses: the profile email, or the value as submitted
+        # when no profile email is set. Resolve every submitted value -- an email-shaped user
+        # ID can still have a different profile email -- and keep the submitted one as a match
+        # too, so a topic endpoint stored under it is released as well (#2028).
+        endpoints = set(body["subscribers"])
+        for submitted in body["subscribers"]:
+            email = _resolve_profile_email(submitted)
+            if email != "INVALID_FORMAT":
+                endpoints.add(email)
+
+        delete_sns_subscriptions(body["databaseId"], body["entityId"], endpoints,
+                                 delete_sns=False)
 
     if subscriber in existing_subscribers:
         existing_subscribers.remove(subscriber)
         subscription_table.update_item(
-            Key={
-                'eventName': body["eventName"],
-                'entityName_entityId': f'{body["entityName"]}#{body["entityId"]}'
-            },
+            Key=_row_key(body),
             UpdateExpression='SET subscribers = :subscribers',
             ExpressionAttributeValues={
                 ':subscribers': existing_subscribers
@@ -162,6 +164,7 @@ def delete_subscription(body):
     return response
 
 
+@audited_handler
 def lambda_handler(event, context):
     normalize_event(event)
     response = copy.deepcopy(STANDARD_JSON_RESPONSE)
@@ -179,30 +182,36 @@ def lambda_handler(event, context):
         if isinstance(event['body'], str):
             event['body'] = json.loads(event['body'])
 
-        if "eventName" not in event['body'] or "entityName" not in event['body'] or "entityId" not in event['body'] or "subscribers" not in event['body']:
-            message = "eventName, entityName and entityId are required fields."
+        body = event['body']
+        required = ("eventName", "entityName", "entityId", "databaseId", "subscribers")
+        if not isinstance(body, dict) or any(name not in body for name in required):
+            message = "eventName, entityName, entityId, databaseId and subscribers are required fields."
             response['statusCode'] = 400
             response['body'] = json.dumps({"message": message})
             return response
 
         # The stored subscriber ids are normalized, so the ids to remove are normalized too
-        event['body']['subscribers'] = normalize_userid_array(event['body']['subscribers'])
+        body['subscribers'] = normalize_userid_array(body['subscribers'])
 
         (valid, message) = validate({
             'eventName': {
-                'value': event['body']['eventName'],
+                'value': body['eventName'],
                 'validator': 'OBJECT_NAME'
             },
             'entityName': {
-                'value': event['body']['entityName'],
+                'value': body['entityName'],
                 'validator': 'OBJECT_NAME'
             },
+            'databaseId': {
+                'value': body['databaseId'],
+                'validator': 'ID'
+            },
             'entityId': {
-                'value': event['body']['entityId'],
+                'value': body['entityId'],
                 'validator': 'ASSET_ID'
             },
             'subscribers': {
-                'value': event['body']['subscribers'],
+                'value': body['subscribers'],
                 'validator': 'USERID_ARRAY'
             }
         })
@@ -228,38 +237,33 @@ def lambda_handler(event, context):
             response['body'] = json.dumps({"message": "Not Authorized"})
             return response
 
-        asset_object = get_asset_object_from_id(None, event['body']["entityId"])
+        # Tier 2 on the asset of the named database, decided before its existence is revealed
+        database_id, asset_id = body["databaseId"], body["entityId"]
+        asset_object = get_asset_object_from_id(database_id, asset_id)
+        authorization_object = asset_authorization_object(asset_object, database_id, asset_id)
+        if httpMethod != 'DELETE' or not casbin_enforcer.enforce(authorization_object, "POST"):
+            response['statusCode'] = 403
+            response['body'] = json.dumps({"message": "Not Authorized"})
+            return response
         if asset_object is None:
-            # A missing asset is checked as a provisional object built from the entityId (the
-            # route carries no databaseId), so the 404 is answered only when that check allows
-            if len(claims_and_roles["tokens"]) == 0:
-                response['statusCode'] = 403
-                response['body'] = json.dumps({"message": "Not Authorized"})
-                return response
-            if not casbin_enforcer.enforce({"assetId": event['body']["entityId"], "object__type": "asset"}, "POST"):
-                response['statusCode'] = 403
-                response['body'] = json.dumps({"message": "Not Authorized"})
-                return response
             response['statusCode'] = 404
             response['body'] = json.dumps({"message": "Asset not found"})
             return response
 
-        asset_object.update({"object__type": "asset"})
-
-        allowed = False
-        if len(claims_and_roles["tokens"]) > 0:
-            if casbin_enforcer.enforce(asset_object, "POST"):
-                allowed = True
-
-        if allowed and httpMethod == 'DELETE':
-            return delete_subscription(event['body'])
-        else:
-            response['statusCode'] = 403
-            response['body'] = json.dumps({"message": "Not Authorized"})
-            return response
+        result = delete_subscription(body)
+        if result.get('statusCode') == 200:
+            log_action(event, "subscriptionUnsubscribe", database_id=database_id, asset_id=asset_id,
+                       subscriptionId=subscription_audit_id(body.get('eventName'), body.get('entityName'),
+                                                            database_id, asset_id),
+                       changes={"subscribers": body.get('subscribers')})
+        return result
+    except VAMSGeneralErrorResponse as v:
+        logger.exception(v)
+        response['statusCode'] = 400
+        response['body'] = json.dumps({"message": str(v)})
+        return response
     except Exception as e:
         logger.exception(e)
         response['statusCode'] = 500
         response['body'] = json.dumps({"message": "Internal Server Error"})
         return response
-

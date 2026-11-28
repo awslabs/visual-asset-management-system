@@ -1,0 +1,207 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/**
+ * The web half of the CLI/web consistency check: every record in workstationStatusCases.json, which
+ * tools/VamsCLI/tests/addon/test_edh_start_status.py reads too, shows the agreed badge label and the
+ * agreed start-failure sentence and detail line. The CLI test asserts its State column and `get`
+ * lines against the same file, so the two clients cannot drift apart.
+ */
+
+import React from "react";
+import { render, screen } from "@testing-library/react";
+import WorkstationStatusBadge, {
+    StartFailureNotice,
+    describeStartFailure,
+} from "./WorkstationStatusBadge";
+import fixture from "../workstationStatusCases.json";
+import {
+    connectionUnavailableMessage,
+    connectUnavailableReason,
+} from "../workstations/ConnectLink";
+import type {
+    ConnectionUnavailableReason,
+    StartFailure,
+    WorkstationActivity,
+    WorkstationRecord,
+    WorkstationState,
+} from "../types";
+
+interface StatusCase {
+    name: string;
+    record: {
+        state: string;
+        edhState: string | null;
+        activity: string | null;
+        lastError: string | null;
+        startFailure: StartFailure | null;
+        sessionId: string | null;
+        connectionAvailable: boolean;
+        connectionUnavailableReason?: string | null;
+        instanceType: string;
+    };
+    badge: string;
+    state: string;
+    startFailureMessage: string | null;
+    startFailureDetail: string | null;
+    /** The sentence under an inert Connect of a running workstation that cannot be connected to. */
+    connectionUnavailableMessage?: string;
+}
+
+const CASES = fixture.cases as StatusCase[];
+const table = CASES.map((c) => [c.name, c] as const);
+
+describe("workstationStatusCases.json (shared with the CLI tests)", () => {
+    it("covers every state, every activity and every start failure code (control)", () => {
+        const states = new Set(CASES.map((c) => c.record.state));
+        expect([...states].sort()).toEqual(
+            ["ACTIVE", "CREATING", "DELETED", "ORPHANED", "STOPPED"].sort()
+        );
+        const activities = new Set(CASES.map((c) => c.record.activity));
+        expect(activities).toEqual(new Set(["starting", "stopping", null]));
+        const stoppedCodes = new Set(
+            CASES.filter((c) => c.record.state === "STOPPED").map((c) => c.record.lastError)
+        );
+        for (const code of [
+            "CAPACITY_UNAVAILABLE",
+            "RESERVATION_FULL",
+            "RESERVATION_ENDED",
+            "START_FAILED",
+            "LEASE_EXPIRED",
+            null,
+        ]) {
+            expect(stoppedCodes).toContain(code);
+        }
+        // A start EDH accepted and never finished is a CREATING row the sweep marked stalled.
+        const creatingCodes = new Set(
+            CASES.filter((c) => c.record.state === "CREATING").map((c) => c.record.lastError)
+        );
+        expect(creatingCodes).toContain("START_STALLED");
+        expect(CASES.filter((c) => c.badge === "Start stalled").length).toBeGreaterThanOrEqual(1);
+        // So is a new launch EDH has not placed after 3 hours.
+        expect(creatingCodes).toContain("LAUNCH_STALLED");
+        expect(CASES.filter((c) => c.badge === "Launch stalled").length).toBeGreaterThanOrEqual(1);
+        // A running workstation whose remote display session has ended.
+        expect(
+            CASES.filter((c) => c.record.connectionUnavailableReason === "DISPLAY_SESSION_ENDED")
+        ).toHaveLength(1);
+        // A workstation that has run which EDH reports in error, in each state it keeps.
+        expect(
+            CASES.filter(
+                (c) =>
+                    c.record.connectionUnavailableReason === "DESKTOP_ERROR" &&
+                    c.record.lastError !== "LAUNCH_STALLED" &&
+                    c.record.lastError !== "START_STALLED"
+            )
+                .map((c) => c.record.state)
+                .sort()
+        ).toEqual(["ACTIVE", "CREATING", "STOPPED"]);
+        // A stalled start EDH then reports in error has run, so it keeps both codes: the start
+        // stall's badge and the desktop error's Connect sentence.
+        expect(
+            CASES.filter(
+                (c) =>
+                    c.record.connectionUnavailableReason === "DESKTOP_ERROR" &&
+                    c.record.lastError === "START_STALLED"
+            ).map((c) => [c.badge, c.connectionUnavailableMessage !== undefined])
+        ).toEqual([["Start stalled", true]]);
+        // Both at once: a stalled launch EDH reports in error is orphaned, and a record carrying both
+        // codes anyway reads as the launch stall.
+        expect(
+            CASES.filter((c) => c.record.state === "ORPHANED" && c.record.edhState === "error").map(
+                (c) => c.record.lastError
+            )
+        ).toEqual(["LAUNCH_ERROR"]);
+        expect(
+            CASES.filter(
+                (c) =>
+                    c.record.connectionUnavailableReason === "DESKTOP_ERROR" &&
+                    c.record.lastError === "LAUNCH_STALLED"
+            ).map((c) => c.badge)
+        ).toEqual(["Launch stalled"]);
+    });
+
+    it.each(table)("%s: the Connect reason is as agreed", (_name, c) => {
+        const record = {
+            ...c.record,
+            bootstrapId: "b-1",
+            userId: "user@example.com",
+            edhUid: "vabcdefghij23456",
+            name: "Render-box",
+            imageId: "12",
+            osFamily: "linux",
+            createdAt: "2026-10-23T10:00:00Z",
+            updatedAt: "2026-10-23T15:19:13Z",
+        } as unknown as WorkstationRecord;
+        if (c.connectionUnavailableMessage === undefined) {
+            // No sentence for the record's reason: none recorded, or a launch stall that outranks it.
+            expect(connectionUnavailableMessage(record)).toBeNull();
+            if (c.record.lastError !== "LAUNCH_STALLED") {
+                expect(c.record.connectionUnavailableReason ?? null).toBeNull();
+            }
+            return;
+        }
+        expect(connectUnavailableReason(record)).toBe(c.connectionUnavailableMessage);
+    });
+
+    it.each(table)("%s: the badge reads as agreed", (_name, c) => {
+        render(
+            <WorkstationStatusBadge
+                state={c.record.state as WorkstationState}
+                edhState={c.record.edhState}
+                lastError={c.record.lastError}
+                connectionAvailable={c.record.connectionAvailable}
+                sessionId={c.record.sessionId}
+                activity={c.record.activity as WorkstationActivity | null}
+                instanceType={c.record.instanceType}
+                startFailure={c.record.startFailure}
+                connectionUnavailableReason={
+                    c.record.connectionUnavailableReason as ConnectionUnavailableReason | null
+                }
+            />
+        );
+        expect(screen.getByText(c.badge)).toBeInTheDocument();
+        // The phases in motion carry the pulsing dot; a workstation EDH reports in error is not moving.
+        const moving =
+            ["Starting", "Stopping", "Creating"].includes(c.badge) &&
+            c.record.connectionUnavailableReason !== "DESKTOP_ERROR";
+        const dot = screen.getByText(c.badge).parentElement?.querySelector(".animate-pulse");
+        if (moving) {
+            expect(dot).not.toBeNull();
+        } else {
+            expect(dot).toBeNull();
+        }
+    });
+
+    it.each(table)("%s: the start-failure sentence and detail line are as agreed", (_name, c) => {
+        const failure = describeStartFailure({
+            ...c.record,
+            state: c.record.state as WorkstationState,
+            activity: c.record.activity as WorkstationActivity | null,
+        });
+        expect(failure?.message ?? null).toBe(c.startFailureMessage);
+        expect(failure?.detail ?? null).toBe(c.startFailureDetail);
+
+        const { container } = render(
+            <StartFailureNotice
+                row={{
+                    ...c.record,
+                    state: c.record.state as WorkstationState,
+                    activity: c.record.activity as WorkstationActivity | null,
+                }}
+            />
+        );
+        if (c.startFailureMessage === null) {
+            expect(container).toBeEmptyDOMElement();
+        } else {
+            expect(screen.getByText(c.startFailureMessage)).toBeInTheDocument();
+            if (c.startFailureDetail) {
+                expect(screen.getByText(c.startFailureDetail)).toBeInTheDocument();
+            } else {
+                expect(screen.queryByText(/^AWS:/)).not.toBeInTheDocument();
+            }
+        }
+    });
+});

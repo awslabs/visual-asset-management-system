@@ -16,8 +16,10 @@ import {
     buildSearchFunction,
     buildFileIndexingFunction,
     buildAssetIndexingFunction,
-    buildReindexerFunction,
-} from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
+} from "../../lambdaBuilder/osSemanticSearchFunctions";
+import { buildReindexerFunction } from "../../lambdaBuilder/indexingFunctions";
+import { buildVectorSearchFunction } from "../../lambdaBuilder/osVectorSearchFunctions";
+import { VectorIndexingConstruct } from "./constructs/vectorIndexing-construct";
 import { RouteRegistry, attachFunctionToApi } from "../apiLambda/apiRouteRegistry";
 import { NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -30,12 +32,15 @@ import * as ssm from "aws-cdk-lib/aws-ssm";
 import { Service } from "../../helper/service-helper";
 import * as cr from "aws-cdk-lib/custom-resources";
 import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
+import { publishLateCoreResourceName } from "../resourceNames/lateCoreResourceNames";
 
 import { NAG_REASON_LAMBDA_BASIC_EXECUTION } from "../../helper/security";
 
 export class SearchBuilderNestedStack extends NestedStack {
     public reindexerFunctionName = "";
     public searchFunction: lambda.Function;
+    /** The POST /search/nlp Lambda; built only when vector search is enabled. */
+    public vectorSearchFunction?: lambda.Function;
 
     constructor(
         parent: Construct,
@@ -45,7 +50,8 @@ export class SearchBuilderNestedStack extends NestedStack {
         storageResources: storageResources,
         lambdaCommonBaseLayer: LayerVersion,
         vpc: ec2.IVpc,
-        subnets: ec2.ISubnet[]
+        subnets: ec2.ISubnet[],
+        executeWorkflowV2FunctionName: string
     ) {
         super(parent, name);
 
@@ -56,7 +62,8 @@ export class SearchBuilderNestedStack extends NestedStack {
             storageResources,
             lambdaCommonBaseLayer,
             vpc,
-            subnets
+            subnets,
+            executeWorkflowV2FunctionName
         );
     }
 
@@ -67,7 +74,8 @@ export class SearchBuilderNestedStack extends NestedStack {
         storageResources: storageResources,
         lambdaCommonBaseLayer: LayerVersion,
         vpc: ec2.IVpc,
-        subnets: ec2.ISubnet[]
+        subnets: ec2.ISubnet[],
+        executeWorkflowV2FunctionName: string
     ): lambda.Function {
         const searchFun = buildSearchFunction(
             scope,
@@ -96,6 +104,24 @@ export class SearchBuilderNestedStack extends NestedStack {
             registry: registry,
         });
 
+        // Natural-language search over the vector embeddings table; the route exists only with the feature.
+        if (config.app.vectorSearch.enabled) {
+            const vectorSearchFun = buildVectorSearchFunction(
+                scope,
+                storageResources,
+                config,
+                lambdaCommonBaseLayer,
+                vpc,
+                subnets
+            );
+            attachFunctionToApi(scope, vectorSearchFun, {
+                routePath: "/search/nlp",
+                method: apigwv2.HttpMethod.POST,
+                registry: registry,
+            });
+            this.vectorSearchFunction = vectorSearchFun;
+        }
+
         let fileIndexingFunction: lambda.Function | undefined = undefined;
         let assetIndexingFunction: lambda.Function | undefined = undefined;
         let reindexerFunction: lambda.Function | undefined = undefined;
@@ -103,6 +129,9 @@ export class SearchBuilderNestedStack extends NestedStack {
         // outer scope so the reindex trigger created after both branches can declare a dependency on
         // it; the constructs themselves are block-scoped to their branch.
         let schemaDeployResource: cdk.CustomResource | undefined = undefined;
+        // The endpoint the schema-deploy custom resource writes to aos/endPoint, held for the
+        // openSearch/* resource names published after both branches.
+        let openSearchEndpoint: string | undefined = undefined;
 
         // The dead-letter queues of the two indexer source queues. Held in the outer scope so the
         // CDK Nag suppression at the end of this method can be scoped to them rather than to the
@@ -130,6 +159,7 @@ export class SearchBuilderNestedStack extends NestedStack {
                 subnets: subnets,
             });
             schemaDeployResource = aoss.schemaDeployResource;
+            openSearchEndpoint = aoss.aossEndpointUrl;
 
             const osEndpointOutput = new cdk.CfnOutput(
                 scope,
@@ -299,6 +329,11 @@ export class SearchBuilderNestedStack extends NestedStack {
             //grant search function access to collection and VPCe
             aoss.grantCollectionAccess(searchFun);
             aoss.grantVPCeAccess(searchFun);
+            if (this.vectorSearchFunction) {
+                // Enrichment through the /search code needs the same collection access.
+                aoss.grantCollectionAccess(this.vectorSearchFunction);
+                aoss.grantVPCeAccess(this.vectorSearchFunction);
+            }
 
             // Grant OpenSearch access to reindexer
             aoss.grantCollectionAccess(reindexerFunction);
@@ -327,6 +362,7 @@ export class SearchBuilderNestedStack extends NestedStack {
                 numberOfShards: config.app.openSearch.useProvisioned.numberOfShards,
             });
             schemaDeployResource = aos.schemaDeployResource;
+            openSearchEndpoint = aos.domainEndpoint;
 
             const osEndpointOutput = new cdk.CfnOutput(
                 scope,
@@ -493,9 +529,31 @@ export class SearchBuilderNestedStack extends NestedStack {
 
             //grant search function access to AOS
             aos.grantOSDomainAccess(searchFun);
+            if (this.vectorSearchFunction) {
+                // Enrichment through the /search code needs the same domain access.
+                aos.grantOSDomainAccess(this.vectorSearchFunction);
+            }
 
             // Grant OpenSearch access to reindexer
             aos.grantOSDomainAccess(reindexerFunction);
+        }
+
+        /////////////////////////////////////////////////////////////////////////////
+        // Vector indexing and the system-workflow reindexer (independent of the OpenSearch flavour:
+        // its topics exist regardless). The reindexer and its launcher exist whenever the system
+        // pipeline is on and registered, vector search on or off; the indexer only with vector search.
+        /////////////////////////////////////////////////////////////////////////////
+
+        let vectorIndexing: VectorIndexingConstruct | undefined = undefined;
+        if (Config.systemWorkflowReindexerEnabled(config)) {
+            vectorIndexing = new VectorIndexingConstruct(scope, "VectorIndexing", {
+                config: config,
+                storageResources: storageResources,
+                lambdaCommonBaseLayer: lambdaCommonBaseLayer,
+                vpc: vpc,
+                subnets: subnets,
+                executeWorkflowV2FunctionName: executeWorkflowV2FunctionName,
+            });
         }
 
         /////////////////////////////////////////////////////////////////////////////
@@ -528,6 +586,26 @@ export class SearchBuilderNestedStack extends NestedStack {
             }
         }
 
+        // The endpoint and index names the schema-deploy custom resource writes to aos/*, published
+        // again as core resource names so the resource-name chunk parameters carry them and a cold
+        // start of search or an indexer reads them in the call it already makes. Each waits for the
+        // custom resource, which creates the indexes: two resources with no declared dependency are
+        // ordered arbitrarily (Rule 9), and a reader of the per-key parameter must not get a new
+        // index name before its index exists. aos/* stays published for the reindexer and the
+        // data-migration tooling.
+        if (schemaDeployResource && openSearchEndpoint) {
+            const published: [string, string][] = [
+                [RESOURCE_PARAM_KEYS.openSearch.endpoint, openSearchEndpoint],
+                [RESOURCE_PARAM_KEYS.openSearch.assetIndexName, config.openSearchAssetIndexName],
+                [RESOURCE_PARAM_KEYS.openSearch.fileIndexName, config.openSearchFileIndexName],
+            ];
+            for (const [key, value] of published) {
+                publishLateCoreResourceName(scope, config, key, value, {
+                    dependsOn: [schemaDeployResource],
+                });
+            }
+        }
+
         // Publish the reindexer function name for data-migration tooling. Created here
         // rather than through the resource-name registry because this stack builds after
         // the ResourceNames stack materializes the registry.
@@ -535,6 +613,37 @@ export class SearchBuilderNestedStack extends NestedStack {
             new ssm.StringParameter(scope, "ResourceNameParamCrOsReindexer", {
                 parameterName: `${config.resourceNamesSSMParamPrefix}/${RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer}`,
                 stringValue: reindexerFunction.functionName,
+            });
+        }
+
+        // Same reasoning for the vector reindexer: read by the data-migration tooling only.
+        if (vectorIndexing) {
+            new ssm.StringParameter(scope, "ResourceNameParamVectorReindexer", {
+                parameterName: `${config.resourceNamesSSMParamPrefix}/${RESOURCE_PARAM_KEYS.lambdaFunctions.vectorReindexer}`,
+                stringValue: vectorIndexing.vectorReindexerFunction.functionName,
+            });
+        }
+
+        // Vector reindex on deploy: clears the vector table and re-launches the system GenAI workflow
+        // for every latest live file. The handler reports SUCCESS once the run is started (it continues
+        // asynchronously past one Lambda window), so the deploy does not wait on the re-analysis. The
+        // system workflow the handler enqueues against is registered by the pipeline stack, which
+        // core-stack.ts orders ahead of this stack whenever vector search is enabled.
+        if (
+            vectorIndexing &&
+            config.app.vectorSearch.enabled &&
+            config.app.vectorSearch.reindexOnCdkDeploy
+        ) {
+            const vectorReindexProvider = new cr.Provider(scope, "VectorReindexProvider", {
+                onEventHandler: vectorIndexing.vectorReindexerFunction,
+            });
+
+            new cdk.CustomResource(scope, "VectorReindexTrigger", {
+                serviceToken: vectorReindexProvider.serviceToken,
+                properties: {
+                    Operation: "both",
+                    Timestamp: Date.now().toString(),
+                },
             });
         }
 

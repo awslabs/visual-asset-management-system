@@ -47,6 +47,7 @@ export type SERVICE =
     | "BACKUP_GATEWAY"
     | "BATCH"
     | "BEDROCK"
+    | "BEDROCK_AGENTCORE"
     | "BILLINGCONDUCTOR"
     | "BRAKET"
     | "BUDGETS"
@@ -385,6 +386,7 @@ export const TYPE_SERVICE_LOOKUP = {
     BACKUPSTORAGE: "backupstorage",
     BATCH: "batch",
     BEDROCK: "bedrock",
+    BEDROCK_AGENTCORE: "bedrock-agentcore",
     BILLINGCONDUCTOR: "billingconductor",
     BRAKET: "braket",
     BUDGETS: "budgets",
@@ -1754,6 +1756,17 @@ export const SERVICE_LOOKUP: { [key: string]: { [partition: string]: IServiceInf
             principal: "batch.amazonaws.com",
             hostname: "batch.{region}.amazonaws.eu",
             fipsHostname: "batch-fips.{region}.amazonaws.eu",
+        },
+    },
+    // Amazon Bedrock AgentCore is offered in the commercial partition only; getConfig() rejects the
+    // features that need it elsewhere, so a lookup here from another partition is a configuration
+    // defect rather than a missing entry.
+    "bedrock-agentcore": {
+        aws: {
+            arn: "arn:aws:bedrock-agentcore:{region}:{account-id}:{resource-id}",
+            principal: "bedrock-agentcore.amazonaws.com",
+            hostname: "bedrock-agentcore.{region}.amazonaws.com",
+            fipsHostname: "bedrock-agentcore.{region}.amazonaws.com",
         },
     },
     bedrock: {

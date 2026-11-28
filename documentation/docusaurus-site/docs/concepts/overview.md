@@ -87,7 +87,11 @@ VAMS supports two layers of versioning. **Asset versions** capture point-in-time
 
 ### Pipelines and workflows
 
-Pipelines define processing steps (3D conversion, thumbnail generation, AI labeling) that can be applied to assets. Workflows chain pipelines together and can trigger automatically on file upload. See [Pipelines and Workflows](pipelines-and-workflows.md).
+Pipelines define processing steps (3D conversion, thumbnail generation, GenAI metadata generation) that can be applied to assets. Workflows chain pipelines together and can trigger automatically on file upload. Pipelines shipped with the deployment are system pipelines, owned and re-asserted by the deployment. See [Pipelines and Workflows](pipelines-and-workflows.md) and [System pipelines](../pipelines/system-pipelines.md).
+
+### Vector search
+
+Natural-language search ranks files by semantic similarity to a query. The SYSTEM GenAI metadata pipeline embeds each file version's generated metadata, extracted text, and render-derived description with an Amazon Bedrock embeddings model into a DynamoDB vector index, and `POST /search/nlp` searches it across the databases the caller may read. See [Vector search](vector-search.md).
 
 ### Tags
 
@@ -96,6 +100,10 @@ Tags are free-form labels that can be applied to assets for categorization and f
 ### Permissions
 
 VAMS uses a two-tier authorization model. Tier 1 controls which API routes a role can access, while Tier 2 controls which specific data entities (databases, assets, pipelines) a role can operate on. Both tiers must allow access for an operation to succeed. See [Permissions Model](permissions-model.md).
+
+### Compliance
+
+Compliance schemas are versioned rule sets in the `vams-rules-v1` format, bound to a database or, as an override, to one asset. VAMS evaluates a bound asset on demand, in a per-schema sweep, and, when the binding's automatic evaluation is on (the default), whenever the asset changes. An asset that fails a `quarantine`-level rule is quarantined until it is released or granted an exception. See [Compliance](compliance.md).
 
 ### Subscriptions
 

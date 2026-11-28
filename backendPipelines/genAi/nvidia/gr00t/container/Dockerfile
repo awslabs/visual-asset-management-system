@@ -2,7 +2,9 @@
 # Based on the NVIDIA Isaac-GR00T sample Dockerfile
 # https://github.com/NVIDIA/Isaac-GR00T
 
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+# Base pinned by digest: the tag records which release the digest resolves to, and a re-pointed tag
+# cannot change what a rebuild of this commit pulls. Move the tag and the digest together.
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04@sha256:622e78a1d02c0f90ed900e3985d6c975d8e2dc9ee5e61643aed587dcf9129f42
 
 ARG STABLE_COMMIT=db107f03d165060998df166292578f1d7fb3c79a
 
@@ -37,7 +39,7 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 &
     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1
 
 # Install UV package manager
-COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.8.12@sha256:f64ad69940b634e75d2e4d799eb5238066c5eeda49f76e782d4873c3d014ea33 /uv /usr/local/bin/uv
 
 ENV UV_SYSTEM_PYTHON=1
 ENV PYTHONPATH=/workspace
@@ -55,11 +57,24 @@ RUN git clone ${GR00T_REPO} /workspace && \
 
 WORKDIR /workspace
 
-# Install dependencies
-RUN uv pip install --upgrade pip setuptools wheel
-RUN uv pip install --no-cache -e .[base]
-RUN pip install --no-build-isolation flash-attn==2.7.1.post4
-RUN uv pip install --no-cache gpustat
+# Stop the build when Isaac-GR00T's dependency lists at the clone differ from the copy requirements.lock was
+# resolved from (upstream-requirements.json, which pyproject.toml repeats). The check reads both with the
+# system Python 3.10 alone: tomllib starts at 3.11 and no package is installed yet.
+COPY check_upstream_requirements.py upstream-requirements.json /tmp/gr00t-check/
+RUN python3 /tmp/gr00t-check/check_upstream_requirements.py /workspace/pyproject.toml /tmp/gr00t-check/upstream-requirements.json && \
+    rm -rf /tmp/gr00t-check
+
+# Install dependencies: every file at the version and hash in requirements.lock, the uv export of uv.lock
+# (Isaac-GR00T's `dependencies` and `base` extra at the STABLE_COMMIT above, copied into pyproject.toml, plus
+# what the image adds, with the versions of its override-dependencies in place of upstream's pins and without
+# tensorflow; the header holds the command). Four packages publish no wheel (antlr4-python3-runtime, fvcore,
+# gpustat, iopath), so they build from their hashed source against the build tools of requirements-build.lock
+# (the `build` group), installed first: `--no-build-isolation` keeps the build from fetching unhashed tools.
+# Isaac-GR00T itself is then installed from the pinned clone, without dependencies.
+COPY requirements-build.lock requirements.lock /tmp/gr00t/
+RUN uv pip install --no-cache --require-hashes --only-binary :all: -r /tmp/gr00t/requirements-build.lock
+RUN uv pip install --no-cache --require-hashes --no-build-isolation -r /tmp/gr00t/requirements.lock
+RUN uv pip install --no-cache --no-deps --no-build-isolation -e .
 
 # Copy VAMS container code
 RUN mkdir -p /opt/ml/code
@@ -68,14 +83,39 @@ COPY __main__.py inference.py evaluation.py model_manager.py manifest_io.py entr
 # from a Windows working tree; otherwise the shebang becomes `/bin/bash\r`
 # and the kernel returns ENOENT ("no such file or directory") on exec.
 RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
+# Normalize read/traverse bits: COPY preserves the build host's umask, so on a hardened host
+# (umask 077/027) these files land root-owned 600/640 and the non-root USER below cannot read them
+# (PermissionError at import). a+rX = world-read files + traverse dirs, no plain-file exec bit.
+RUN chmod -R a+rX /opt/ml/code
 
 # Copy finetune training script to expected location
 RUN mkdir -p /workspace/scripts
 COPY finetune_gr00t.py /workspace/scripts/finetune_gr00t.py
+# Normalize read bits for the non-root USER (umask-proof; see /opt/ml/code note above).
+RUN chmod -R a+rX /workspace/scripts
 
 WORKDIR /opt/ml/code
-# Isolated AWS Batch GPU job (no inbound listener) built on a root-only NVIDIA base image; running
-# as a non-root USER needs a uid/volume-permission design first -- suppressed for the 2.6.1 gate per
-# release policy, flagged for follow-up.
-# nosemgrep: dockerfile.security.missing-user-entrypoint.missing-user-entrypoint
+
+# Create the non-root runtime user (issue #327) and give it a real HOME plus ownership of every
+# tree it writes at run time: /opt/ml/code (cwd), /workspace (PYTHONPATH, gr00t package + scripts),
+# and $HOME. GR00T's EFS model cache is NOT fronted by an access point (its file system lives in
+# gr00tCommon-construct.ts, untouched here); the launch-template userdata mounts the EFS root and
+# `chown -R 10000:10000` the mount dir after mounting, so ownership is handled there, not by an AP.
+# Point HF/Triton/uv caches at home-owned dirs (HF_HOME is redirected to EFS at runtime by the
+# entrypoint; these are the fallbacks) and pre-create them.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams \
+    HF_HOME=/home/vams/.cache/huggingface \
+    UV_CACHE_DIR=/home/vams/.cache/uv \
+    TRITON_CACHE_DIR=/home/vams/.triton
+RUN mkdir -p /home/vams/.cache/huggingface /home/vams/.cache/uv /home/vams/.triton && \
+    chown -R vams:vams /home/vams /opt/ml/code /workspace
+
+# Run as the non-root vams user (issue #327), switched only after the last root-owned build step.
+# The EFS model cache mount point is owned by this uid/gid via the launch-template userdata chown
+# after mount, so the container can read/write cached model weights without root.
+# Numeric form so runtime runAsNonRoot checks can verify it without reading the image's /etc/passwd.
+USER 10000:10000
+
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

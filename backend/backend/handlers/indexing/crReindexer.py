@@ -69,24 +69,58 @@ from decimal import Decimal
 import boto3
 from botocore.exceptions import ClientError
 from botocore.config import Config
-from boto3.dynamodb.conditions import Key
-
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
 )
-from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
+from common.s3 import region_routing_s3_client
 from common.dynamoDbMetadataKeys import REINDEX_METADATA_RECORD_KEY
-from common.validators import validate
+from common.indexing.fileEnumeration import (
+    extract_asset_id_from_key,
+    is_excluded_s3_key,
+    is_folder_marker,
+    is_valid_asset_id,
+    list_objects_kwargs,
+    normalize_base_prefix,
+    relative_file_key,
+    resolve_live_database_id,
+    scan_bucket_registrations,
+)
+from common.bucketRegistrations import active_registrations, primary_bucket_id, primary_registrations
+from common.assetLocations import (
+    RESOLVED_FOUND,
+    index_ready,
+    load_bucket_locations,
+    relative_path_in,
+)
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 
 logger = safeLogger(service_name="CrReindexer")
+
+
+def registrations_to_walk(registrations: List[Dict]) -> Tuple[List[Dict], Dict[str, List[str]]]:
+    """(the registration rows a file reindex walks, {location bucketId: every row's bucketId}).
+
+    Retired rows are left out; of the rows for one location (`duplicateOfBucketId`) only the row that
+    answers for it is walked, and the map names every active row of that location, the walked row
+    first."""
+    active = active_registrations([r for r in registrations or [] if r.get('bucketName')])
+    walked = primary_registrations(active)
+    member_ids: Dict[str, List[str]] = {}
+    for row in walked:
+        member_ids[primary_bucket_id(row)] = [row.get('bucketId') or '']
+    for row in active:
+        ids = member_ids.setdefault(primary_bucket_id(row), [])
+        if (row.get('bucketId') or '') not in ids:
+            ids.append(row.get('bucketId') or '')
+    return walked, member_ids
 
 # Initialize AWS clients
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
 dynamodb_resource = boto3.resource('dynamodb', config=retry_config)
-s3_client = boto3.client('s3', config=retry_config)
+s3_client = region_routing_s3_client()
 ssm_client = boto3.client('ssm', config=retry_config)
 
 # HTTP client for CloudFormation responses
@@ -730,9 +764,15 @@ class ReindexUtility:
         try:
             # Get all S3 bucket configurations
             logger.info(f"Scanning S3 buckets table: {self.s3_buckets_table_name}")
-            bucket_configs = self._scan_s3_buckets_table()
-            
-            logger.info(f"Found {len(bucket_configs)} bucket configurations")
+            registrations = self._scan_s3_buckets_table()
+            # A retired registration (it left the configuration) is not walked: no bucket sync and no
+            # grants serve it. Two rows for one location are walked once, as the row that answers for
+            # it, and an asset of either row is found (common/bucketRegistrations.py, as
+            # fileEnumeration walks them).
+            bucket_configs, member_ids = registrations_to_walk(registrations)
+
+            logger.info(f"Found {len(bucket_configs)} bucket configurations to walk "
+                        f"({len(registrations)} registration rows)")
             
             if len(bucket_configs) == 0:
                 logger.warning("No bucket configurations found")
@@ -756,7 +796,8 @@ class ReindexUtility:
                     base_prefix,
                     dry_run,
                     limit - results['total_count'] if limit else None,
-                    bucket_id
+                    bucket_id,
+                    member_ids.get(primary_bucket_id(bucket_config))
                 )
                 
                 results['success_count'] += bucket_results['success']
@@ -839,18 +880,8 @@ class ReindexUtility:
     
     def _scan_s3_buckets_table(self) -> List[Dict]:
         """Scan the S3 buckets table and return all bucket configurations."""
-        table = dynamodb_resource.Table(self.s3_buckets_table_name)
-        
         try:
-            response = table.scan()
-            buckets = response.get('Items', [])
-            
-            while 'LastEvaluatedKey' in response:
-                response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
-                buckets.extend(response.get('Items', []))
-            
-            return buckets
-            
+            return scan_bucket_registrations(dynamodb_resource.Table(self.s3_buckets_table_name))
         except ClientError as e:
             logger.error(f"Error scanning S3 buckets table: {e}")
             raise
@@ -980,26 +1011,12 @@ class ReindexUtility:
     @staticmethod
     def _extract_asset_id_from_key(object_key: str, base_prefix: str) -> Optional[str]:
         """Return the asset ID (first path segment beneath base_prefix), mirroring sqsBucketSync."""
-        if not base_prefix or base_prefix == '/':
-            parts = object_key.split('/')
-            return parts[0] if parts and parts[0] else None
-
-        prefix = base_prefix if base_prefix.endswith('/') else base_prefix + '/'
-        if object_key.startswith(prefix):
-            parts = object_key[len(prefix):].split('/')
-            return parts[0] if parts and parts[0] else None
-
-        return None
+        return extract_asset_id_from_key(object_key, base_prefix)
 
     @staticmethod
     def _is_valid_asset_id(asset_id: str) -> bool:
         """Validate an asset ID with the common ASSET_ID validator (as sqsBucketSync does)."""
-        try:
-            (valid, _) = validate({'assetId': {'value': asset_id, 'validator': 'ASSET_ID'}})
-            return valid
-        except Exception as e:
-            logger.warning(f"Error validating asset ID {asset_id}: {e}")
-            return False
+        return is_valid_asset_id(asset_id)
 
     def _resolve_database_id(self, bucket_id: Optional[str], asset_id: str) -> Optional[str]:
         """Resolve the active databaseId for (bucketId, assetId) via BucketIdGSI; cached, ignores archived."""
@@ -1012,16 +1029,9 @@ class ReindexUtility:
 
         database_id = None
         try:
-            table = dynamodb_resource.Table(self.asset_table_name)
-            response = table.query(
-                IndexName="BucketIdGSI",
-                KeyConditionExpression=Key('bucketId').eq(bucket_id) & Key('assetId').eq(asset_id)
+            database_id = resolve_live_database_id(
+                dynamodb_resource.Table(self.asset_table_name), bucket_id, asset_id
             )
-            for item in response.get('Items', []):
-                candidate = item.get('databaseId', '')
-                if candidate and not candidate.endswith('#deleted'):  # skip archived assets
-                    database_id = candidate
-                    break
         except Exception as e:
             logger.warning(f"Error resolving databaseId for asset {asset_id} in bucket {bucket_id}: {e}")
 
@@ -1029,17 +1039,28 @@ class ReindexUtility:
         self._asset_db_cache[cache_key] = database_id
         return database_id
 
+    def _resolve_in_location(self, bucket_ids: List[str], asset_id: str) -> Optional[str]:
+        """The active databaseId of `asset_id` in the first of `bucket_ids` (the rows of one location)
+        that holds it, or None."""
+        for bucket_id in bucket_ids or [None]:
+            database_id = self._resolve_database_id(bucket_id, asset_id)
+            if database_id:
+                return database_id
+        return None
+
     def _stamped_asset_file_path(
         self,
         bucket_id: Optional[str],
         database_id: Optional[str],
         asset_id: Optional[str],
-        object_key: str
+        object_key: str,
+        location_ids: Optional[List[str]] = None
     ) -> Optional[str]:
         """Asset-relative path of object_key under the active asset its metadata names, or None.
 
-        The binding holds only when that asset's record belongs to the bucket and its
-        assetLocation.Key holds the key on a path boundary.
+        The binding holds only when that asset's record belongs to the bucket registration (`bucket_id`,
+        or any of `location_ids`, the rows of its location) and its assetLocation.Key holds the key on
+        a path boundary.
         """
         if not database_id or not asset_id:
             return None
@@ -1063,7 +1084,8 @@ class ReindexUtility:
         if not location:
             return None
         asset_bucket_id, location_key = location
-        if bucket_id and asset_bucket_id != bucket_id:
+        allowed_ids = set(location_ids or []) or ({bucket_id} if bucket_id else set())
+        if allowed_ids and asset_bucket_id not in allowed_ids:
             return None
 
         normalized_base = location_key.lstrip('/')
@@ -1085,18 +1107,14 @@ class ReindexUtility:
         base_prefix: str,
         dry_run: bool,
         limit: Optional[int] = None,
-        bucket_id: Optional[str] = None
+        bucket_id: Optional[str] = None,
+        member_bucket_ids: Optional[List[str]] = None
     ) -> Dict:
-        """Process all objects in a bucket and update AssetsMetadata table."""
-        # Excluded patterns and prefixes from fileIndexer
-        excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
-        # '.previewFile.' files must be excluded here. The reindexer "touches" the
-        # metadata table to trigger indexing, which fires the DynamoDB metadata-stream
-        # path in fileIndexer (handle_metadata_stream). That path does NOT perform the
-        # base-file rewrite that the S3-event path does, so touching a '.previewFile.'
-        # record would index the preview file as its own standalone document. Skip them.
-        excluded_patterns = [PREVIEW_FILE_PATTERN]
-        
+        """Process all objects in a bucket and update AssetsMetadata table.
+
+        `member_bucket_ids` are the bucketIds of every row for the walked registration's location (the
+        walked row first); an asset of any of them is the location's. None means `bucket_id` alone."""
+        location_ids = [i for i in (member_bucket_ids or [bucket_id]) if i]
         results = {
             'success': 0,
             'failed': 0,
@@ -1112,19 +1130,19 @@ class ReindexUtility:
             files_batch = []
             current_timestamp = datetime.now(timezone.utc).isoformat()
 
-            # Normalize base prefix - remove leading slash if present
-            if base_prefix.startswith('/'):
-                base_prefix = base_prefix[1:]
+            base_prefix = normalize_base_prefix(base_prefix)
+            # Once the location index is ready, the bucket's index partition is read once and each
+            # key is attributed in memory to the asset (live, else archived) whose stored location
+            # holds it, with no HeadObject. Before that, the first folder and the stamp decide.
+            bucket_locations = None
+            if index_ready(self.asset_table_name):
+                bucket_locations = load_bucket_locations(
+                    dynamodb_resource.Table(self.asset_table_name), bucket_name)
             
             # List all objects in the bucket recursively
             paginator = s3_client.get_paginator('list_objects_v2')
             
-            # Use empty prefix to list all objects in bucket
-            pagination_config = {'Bucket': bucket_name}
-            if base_prefix and base_prefix != '/':
-                pagination_config['Prefix'] = base_prefix
-            
-            for page in paginator.paginate(**pagination_config):
+            for page in paginator.paginate(**list_objects_kwargs(bucket_name, base_prefix)):
                 if self.out_of_time():
                     logger.error(
                         f"Stopping file reindex of {bucket_name} mid-scan: "
@@ -1142,28 +1160,11 @@ class ReindexUtility:
                 results['objects_scanned'] += len(objects)
 
                 for obj in objects:
-                    # Skip folder markers
-                    if obj['Key'].endswith('/'):
-                        continue
-                    
-                    # Check for excluded patterns in the key
                     s3_key = obj['Key']
-                    
-                    # Skip if key contains any excluded patterns
-                    if any(pattern in s3_key for pattern in excluded_patterns):
-                        results['skipped_excluded'] += 1
+                    if is_folder_marker(s3_key):
                         continue
-                    
-                    # Check if any path component is a reserved excluded folder.
-                    path_parts = s3_key.split('/')
-                    skip_file = False
-                    for part in path_parts:
-                        if part in excluded_prefixes:
-                            results['skipped_excluded'] += 1
-                            skip_file = True
-                            break
-                    
-                    if skip_file:
+                    if is_excluded_s3_key(s3_key):
+                        results['skipped_excluded'] += 1
                         continue
                     
                     # Stop if we've reached the limit
@@ -1171,6 +1172,42 @@ class ReindexUtility:
                         break
                     
                     try:
+                        if bucket_locations is not None:
+                            resolution = bucket_locations.owner(s3_key, include_archived=True)
+                            if resolution.status != RESOLVED_FOUND:
+                                logger.info(f"Skipping {s3_key}: no asset location holds it ({resolution.status})")
+                                results['skipped_no_asset'] += 1
+                                continue
+                            entry = resolution.entry
+                            # The owner is found by bucket name; it must be in the registration being
+                            # walked (any row of its location), or a nested registration's files would
+                            # be reindexed under the walk of the outer one, as fileEnumeration checks.
+                            if entry.bucket_id and location_ids and entry.bucket_id not in location_ids:
+                                logger.warning(f"Skipping {s3_key}: held by asset {entry.asset_id} of "
+                                               f"registration {entry.bucket_id}, not of {bucket_id}")
+                                results['skipped_no_asset'] += 1
+                                continue
+                            live_database_id = entry.database_id[:-len('#deleted')] \
+                                if entry.database_id.endswith('#deleted') else entry.database_id
+                            files_batch.append({
+                                'databaseId': live_database_id,
+                                'assetId': entry.asset_id,
+                                'original_asset_id': entry.asset_id,
+                                'relative_path': relative_path_in(entry.location, s3_key),
+                            })
+                            results['total'] += 1
+                            if len(files_batch) >= self.memory_batch_size:
+                                if dry_run:
+                                    results['success'] += len(files_batch)
+                                else:
+                                    batch_results = self._update_files_in_metadata_table(
+                                        files_batch, current_timestamp)
+                                    results['success'] += batch_results['success']
+                                    results['failed'] += batch_results['failed']
+                                    results['errors'].extend(batch_results['errors'])
+                                files_batch = []
+                            continue
+
                         # Resolve the asset context from the key first: the assetId is
                         # the first path segment beneath the base prefix and the
                         # databaseId is looked up (and cached) from the asset table, as
@@ -1184,7 +1221,7 @@ class ReindexUtility:
                         asset_id = self._extract_asset_id_from_key(obj['Key'], base_prefix)
                         if asset_id and not self._is_valid_asset_id(asset_id):
                             asset_id = None
-                        database_id = self._resolve_database_id(bucket_id, asset_id) if asset_id else None
+                        database_id = self._resolve_in_location(location_ids, asset_id) if asset_id else None
                         file_path = None
 
                         if not asset_id or not database_id:
@@ -1201,7 +1238,8 @@ class ReindexUtility:
                                 # that asset's own location holds the key.
                                 stamped_database_id = metadata.get(DATABASE_ID_METADATA_KEY) or metadata.get('databaseId')
                                 file_path = self._stamped_asset_file_path(
-                                    bucket_id, stamped_database_id, stamped_asset_id, obj['Key'])
+                                    bucket_id, stamped_database_id, stamped_asset_id, obj['Key'],
+                                    location_ids)
                                 if not file_path:
                                     logger.info(
                                         f"Skipping {obj['Key']}: object metadata names asset "
@@ -1227,20 +1265,7 @@ class ReindexUtility:
                             continue
 
                         if file_path is None:
-                            # Calculate relative path from base prefix and asset ID
-                            # Start with the full S3 key
-                            relative_path = obj['Key']
-
-                            # Remove base prefix if present
-                            if base_prefix and relative_path.startswith(base_prefix):
-                                relative_path = relative_path[len(base_prefix):].lstrip('/')
-
-                            # Remove asset ID prefix if present (the file is stored under assetId/)
-                            if relative_path.startswith(f"{asset_id}/"):
-                                relative_path = relative_path[len(asset_id) + 1:]  # +1 to remove the trailing slash
-
-                            # Prepend with forward slash for metadata storage
-                            file_path = f"/{relative_path}"
+                            file_path = relative_file_key(obj['Key'], base_prefix, asset_id)
 
                         files_batch.append({
                             'databaseId': database_id,
@@ -1520,6 +1545,17 @@ def send_cfn_response(event: Dict, context: Any, status: str, data: Dict = None,
         logger.error(f"Failed to send CloudFormation response: {type(e).__name__}")
 
 
+def _log_reindex(event: Dict, results: Dict, failure_reasons: List[str], operation: str,
+                 clear_indexes: bool, dry_run: bool = False) -> None:
+    """Record one reindex run: what it reindexed and how many records succeeded."""
+    counts = [part.get('success_count') for part in (results.get('assets'), results.get('files'))
+              if isinstance(part, dict) and isinstance(part.get('success_count'), int)]
+    log_action(event, "searchReindex", outcome="failed" if failure_reasons else "success",
+               reason="internal" if failure_reasons else None, item_count=sum(counts) if counts else None,
+               details={"operation": operation, "clearIndexes": bool(clear_indexes), "dryRun": bool(dry_run)})
+
+
+@audited_handler
 def lambda_handler(event: Dict, context: Any) -> Dict:
     """
     Lambda handler for reindexing operations.
@@ -1654,6 +1690,7 @@ def lambda_handler(event: Dict, context: Any) -> Dict:
                     # indexes were emptied first, so a SUCCESS after partial restore
                     # leaves search silently incomplete with no signal.
                     failure_reasons = reindex_failure_reasons(results)
+                    _log_reindex(event, results, failure_reasons, operation, clear_indexes)
                     if failure_reasons:
                         reason = ("Reindexing did not complete: " + "; ".join(failure_reasons))[:1000]
                         logger.error(reason)
@@ -1739,6 +1776,7 @@ def lambda_handler(event: Dict, context: Any) -> Dict:
                 results['files'] = file_results
 
             failure_reasons = reindex_failure_reasons(results)
+            _log_reindex(event, results, failure_reasons, operation, clear_indexes, dry_run)
             if failure_reasons:
                 logger.error("Reindexing did not complete: " + "; ".join(failure_reasons))
 

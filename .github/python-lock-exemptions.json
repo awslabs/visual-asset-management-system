@@ -1,0 +1,28 @@
+{
+    "description": "Python dependency files that do not have a sibling uv.lock yet, so the python-dependency-audit CI job does not audit them. infra/test/ci/pythonDependencyLocks.test.ts fails a Python dependency file (pyproject.toml, requirements*.txt/.in/.lock, Pipfile, setup.py with install_requires) the audit does not cover unless it is listed here with a reason and the change that will add the lock. Remove an entry when its uv.lock lands; the test fails an entry whose path is gone or already has a uv.lock. rangedInputs lists the hand-written, ranged files of a published package that sit beside its uv.lock on purpose: the ranges are the published install contract, so they are not uv exports. The audit skips them, the test checks each entry still exists beside a uv.lock, and the lock resolves the same ranges.",
+    "rangedInputs": [
+        {
+            "path": "tools/VamsCLI/requirements.txt",
+            "reason": "Ranged install requirements of the published VamsCLI package, mirrored from pyproject.toml and setup.py by tests/test_packaging_manifests.py. They stay ranges because users install the package with them; tools/VamsCLI/uv.lock resolves the same ranges."
+        },
+        {
+            "path": "tools/VamsCLI/requirements-dev.txt",
+            "reason": "Ranged development requirements of VamsCLI, the same ranges as the dev extra in pyproject.toml; tools/VamsCLI/uv.lock resolves them."
+        },
+        {
+            "path": "tools/VamsCLI/requirements-build.txt",
+            "reason": "The build tools pyproject.toml's [build-system] requires, ranged as there. They are the build dependency group of tools/VamsCLI/uv.lock, which requirements.lock is exported from."
+        },
+        {
+            "path": "tools/VamsCLI/setup.py",
+            "reason": "setuptools install_requires of the published VamsCLI package, mirroring its ranged pyproject.toml dependencies; tools/VamsCLI/uv.lock resolves the same ranges."
+        }
+    ],
+    "exemptions": [
+        {
+            "path": "backendPipelines/3dRecon/splatToolbox/container/requirements.txt",
+            "reason": "Upstream-owned: the Splat Toolbox sync copies upstream's container/requirements.txt over this file on every cdk synth, so it cannot be a uv export. The image is upstream's Dockerfile, which does not install it; only the pipeline test runner does.",
+            "plannedIn": "not planned: upstream-owned file (#1741 / #1808)"
+        }
+    ]
+}

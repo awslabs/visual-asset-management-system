@@ -19,6 +19,44 @@ logger = safeLogger(service="ConstructPipeline-CoordinateTransform")
 s3 = boto3.client('s3', config=retry_config)
 sfn = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'), config=retry_config)
 
+# The input's launch version travels as a second Batch command argument, {"inputVersions": {<stage
+# type>: <version id>}}, never inside the definition. An image built before the field parses the
+# definition into dataclasses that reject an unknown key at every level, but reads only the first
+# argument, so a run that reaches such an image during an upgrade still starts. executeBatchJob
+# submits the whole list as the command.
+INPUT_VERSIONS_KEY = "inputVersions"
+# Where the input sits in its asset, from its manifest entry, in the same second argument:
+# {"relativePath", "assetRootS3Key", "assetRootBucket"}. That document always carries INPUT_VERSIONS_KEY
+# (empty when the run has no version): an image that reads only the version accepts an empty one and
+# ignores the other key, while it refuses a document without it.
+INPUT_ASSET_KEY = "inputAsset"
+
+
+def input_asset(event) -> dict:
+    """The input's asset-relative path and asset root from the event, or None when the event names
+    neither (a payload without a manifest, or an event from an older Lambda)."""
+    location = {
+        "relativePath": event.get("inputRelativePath") or "",
+        "assetRootS3Key": event.get("inputAssetRootS3Key") or "",
+        "assetRootBucket": event.get("inputAssetRootBucket") or "",
+    }
+    return location if location["relativePath"] or location["assetRootS3Key"] else None
+
+
+def definition_command(definition, event) -> list:
+    """The Batch command for ``definition``: the definition, then, when the run has a launch version or
+    an input asset location, one document naming them. With neither it is the one-element command
+    written before those fields."""
+    command = [json.dumps(definition)]
+    version_id = event.get("inputVersionId") or ""
+    asset = input_asset(event)
+    if version_id or asset:
+        extra = {INPUT_VERSIONS_KEY: {definition["stages"][0]["type"]: version_id} if version_id else {}}
+        if asset:
+            extra[INPUT_ASSET_KEY] = asset
+        command.append(json.dumps(extra))
+    return command
+
 
 def _merge_metadata_into_params(
     input_parameters: str, input_metadata: str
@@ -166,10 +204,14 @@ def _validated_transform_params(input_parameters):
     return json.dumps(params)
 
 
-def _asset_relative_file_key(input_key, asset_id):
-    """The asset-relative file key ('/folder/file.ext') of an input S3 key, sliced at the
-    threaded assetId path segment. Returns the asset-level key ('/') when the asset id is not a
-    segment of the key."""
+def _asset_relative_file_key(input_key, asset_id, relative_path=""):
+    """The asset-relative file key ('/folder/file.ext') of the input: its manifest relativePath when the
+    event carries one, else the input S3 key sliced at the threaded assetId path segment. Returns the
+    asset-level key ('/') when neither names it."""
+    if relative_path:
+        # As given, with a leading '/' added only when missing: '//x' (a key with an empty segment after
+        # the asset's folder) names another file's metadata than '/x'
+        return relative_path if relative_path.startswith("/") else "/" + relative_path
     parts = input_key.split("/")
     if asset_id and asset_id in parts:
         return "/" + "/".join(parts[parts.index(asset_id) + 1:])
@@ -222,6 +264,21 @@ def lambda_handler(event, context):
         raise
 
 
+def bucket_regions(event) -> dict:
+    """Bucket name -> Region for the asset buckets this job reads and writes, from the Regions the
+    vamsExecute Lambda resolved from the manifest. The container signs each bucket's requests with a
+    client for that Region. A bucket in the deployment Region (an empty Region, or an event from an
+    older Lambda) is left out: requests for it use the container's default client, as do the
+    auxiliary bucket's."""
+    regions = {}
+    for path_key, region_key in (("inputS3AssetFilePath", "inputBucketRegion"),
+                                 ("outputS3AssetFilesPath", "outputBucketRegion")):
+        uri, region = event.get(path_key) or "", event.get(region_key) or ""
+        if uri.startswith("s3://") and region:
+            regions[uri[len("s3://"):].split("/", 1)[0]] = region
+    return regions
+
+
 def _build_execution_params(event):
     """The state machine payload for the Batch container job."""
 
@@ -247,7 +304,7 @@ def _build_execution_params(event):
         metadata_body,
         event.get('databaseId', ''),
         event.get('assetId', ''),
-        _asset_relative_file_key(input_key, event.get('assetId', '')),
+        _asset_relative_file_key(input_key, event.get('assetId', ''), event.get('inputRelativePath', '')),
     ) if metadata_body else {}
     input_parameters = _validated_transform_params(_merge_metadata_into_params(
         json.dumps(input_configuration) if input_configuration else '',
@@ -260,6 +317,7 @@ def _build_execution_params(event):
         "inputFile": {
             "bucketName": input_bucket,
             "objectKey": input_key,
+            # The launch version is not written here: it travels beside the definition (definition_command).
             "fileExtension": extension,
         },
         "outputFiles": {
@@ -275,6 +333,7 @@ def _build_execution_params(event):
     definition = {
         "jobName": event.get("jobName"),
         "stages": [transform_stage],
+        "bucketRegions": bucket_regions(event),
         "assetId": event.get("assetId", ""),
         "databaseId": event.get("databaseId", ""),
         # Declared by the container's PipelineDefinition, so the key travels; the metadata CONTENT
@@ -293,7 +352,7 @@ def _build_execution_params(event):
     return {
         "jobName": event.get("jobName"),
         "currentStageType": "COORD_TRANSFORM",
-        "definition": [json.dumps(definition)],
+        "definition": definition_command(definition, event),
         # Both of these are re-emitted because this task's outputPath is $.Payload, which REPLACES
         # the state — a value only present in the state machine's original input would be dropped
         # here. pipelineEnd reads the token to release the external workflow task, and the batch

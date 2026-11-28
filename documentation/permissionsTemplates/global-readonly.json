@@ -38,7 +38,8 @@
                 { "field": "route__path", "operator": "starts_with", "value": "/search" },
                 { "field": "route__path", "operator": "starts_with", "value": "/workflows" },
                 { "field": "route__path", "operator": "starts_with", "value": "/executions" },
-                { "field": "route__path", "operator": "starts_with", "value": "/auth/api-keys" }
+                { "field": "route__path", "operator": "starts_with", "value": "/auth/api-keys" },
+                { "field": "route__path", "operator": "starts_with", "value": "/zipdownloads" }
             ],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },
@@ -49,7 +50,6 @@
             "criteriaAnd": [],
             "criteriaOr": [
                 { "field": "route__path", "operator": "starts_with", "value": "/secure-config" },
-                { "field": "route__path", "operator": "starts_with", "value": "/amplify-config" },
                 { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
                 {
                     "field": "route__path",
@@ -60,16 +60,10 @@
                 { "field": "route__path", "operator": "starts_with", "value": "/assets" },
                 { "field": "route__path", "operator": "starts_with", "value": "/comments" },
                 { "field": "route__path", "operator": "starts_with", "value": "/database" },
-                { "field": "route__path", "operator": "starts_with", "value": "/metadata" },
                 { "field": "route__path", "operator": "starts_with", "value": "/metadataschema" },
                 { "field": "route__path", "operator": "starts_with", "value": "/pipelines" },
                 { "field": "route__path", "operator": "starts_with", "value": "/search" },
                 { "field": "route__path", "operator": "starts_with", "value": "/subscriptions" },
-                {
-                    "field": "route__path",
-                    "operator": "starts_with",
-                    "value": "/check-subscription"
-                },
                 { "field": "route__path", "operator": "starts_with", "value": "/tags" },
                 { "field": "route__path", "operator": "starts_with", "value": "/tag-types" },
                 { "field": "route__path", "operator": "starts_with", "value": "/workflows" },
@@ -118,13 +112,27 @@
         },
         {
             "name": "{{ROLE_NAME}}-api-routes-download",
-            "description": "Allow requesting a file download, which the file viewers and the download action use; the request is a POST because its body names the file and version",
+            "description": "Allow requesting a file download (file viewers, download action); a POST because its body names the file and version. The pattern matches that one route only, whatever its path parameters are",
             "objectType": "api",
             "criteriaAnd": [
                 {
                     "field": "route__path",
                     "operator": "equals",
                     "value": "/database/[^/]+/assets/[^/]+/download"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "POST", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-export",
+            "description": "Allow requesting an asset export, which lists the asset tree, metadata and files and signs download links; a POST because its body carries the options. The pattern matches that one route only, whatever its path parameters are",
+            "objectType": "api",
+            "criteriaAnd": [
+                {
+                    "field": "route__path",
+                    "operator": "equals",
+                    "value": "/database/[^/]+/assets/[^/]+/export"
                 }
             ],
             "criteriaOr": [],
@@ -183,6 +191,39 @@
             "description": "Allow read access to all tag types",
             "objectType": "tagType",
             "criteriaAnd": [{ "field": "tagTypeName", "operator": "contains", "value": ".*" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-zip-downloads",
+            "description": "Allow Download as Zip on assets the role can read: create, list and get own jobs, list every user's jobs (/download/zip-all-users), request download URLs (a POST), cancel or delete own jobs. Each call also requires asset GET permission",
+            "objectType": "api",
+            "criteriaAnd": [
+                { "field": "route__path", "operator": "starts_with", "value": "/database/" },
+                { "field": "route__path", "operator": "contains", "value": "/download/zip" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                { "action": "GET", "type": "allow" },
+                { "action": "POST", "type": "allow" },
+                { "action": "DELETE", "type": "allow" }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-zip-downloads-list",
+            "description": "Allow listing the caller's own Download as Zip jobs across assets (My Download Queue)",
+            "objectType": "api",
+            "criteriaAnd": [
+                { "field": "route__path", "operator": "starts_with", "value": "/download/zip" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-buckets",
+            "description": "Allow read of every asset bucket registration. Listing buckets also needs the /buckets route; putting a database on a bucket needs read on that bucket",
+            "objectType": "bucket",
+            "criteriaAnd": [{ "field": "bucketId", "operator": "contains", "value": ".*" }],
             "criteriaOr": [],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         }

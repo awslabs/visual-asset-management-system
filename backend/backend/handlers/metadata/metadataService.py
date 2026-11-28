@@ -8,7 +8,7 @@ import boto3
 import json
 import base64
 import time
-from datetime import datetime
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
@@ -21,13 +21,25 @@ from common.apiRoutes import (
     API_FILE_METADATA, API_DATABASE_METADATA,
 )
 from common.validators import validate
+from common.assetLocations import (
+    normalize_base_prefix, object_key_for_request, relative_path_in,
+)
+from common.fileAttribution import nested_locations_of_asset
+from common.assetProvenance import (
+    METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
+    METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE,
+)
+from common.dynamodb import get_asset_record, asset_authorization_object, database_authorization_object
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
+from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.metadataSchemaValidation import (
     get_aggregated_schemas,
     validate_metadata_against_schema,
     validate_metadata_keys_against_schema,
+    keys_set_by_write,
     enrich_metadata_with_schema
 )
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
@@ -86,7 +98,7 @@ retry_config = Config(
 region = os.environ.get('AWS_REGION', 'us-east-1')
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
-s3 = boto3.client('s3', config=retry_config)
+s3 = region_routing_s3_client()
 logger = safeLogger(service_name="MetadataService")
 
 # Global variables for claims and roles
@@ -195,9 +207,81 @@ asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name)
 file_attribute_table = dynamodb.Table(file_attribute_table_name)
 s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 
+# The tables whose rows belong to an asset (asset and file metadata, file attributes, asset-link
+# metadata): a workflow execution's metadata write-back marks the rows it writes or deletes there
+# (`attribute_rows_to_writing_workflow`), which is how the compliance trigger tells a pipeline rule's
+# own output apart from a user change in the indexer events.
+WORKFLOW_ATTRIBUTED_TABLES = frozenset({
+    asset_file_metadata_table_name, file_attribute_table_name, asset_links_metadata_table_name})
+
+# The workflow execution whose metadata output this invocation writes back, or None for an API
+# request; `lambda_handler` sets it at the start of every invocation.
+writing_workflow_execution_id = None
+
 #######################
 # Common Utility Functions
 #######################
+
+
+def workflow_execution_writer(event):
+    """The workflow execution a metadata write is made for: the `workflowExecutionId` string a
+    `lambdaCrossCall` carries (`processWorkflowExecutionOutput` writing a workflow execution's
+    metadata output back), else None — an API request, or a system cross-call without one."""
+    cross_call = event.get('lambdaCrossCall') if isinstance(event, dict) else None
+    execution_id = cross_call.get('workflowExecutionId') if isinstance(cross_call, dict) else None
+    return execution_id if isinstance(execution_id, str) and execution_id else None
+
+
+def attribute_rows_to_writing_workflow(table_name: str, batch: list) -> list:
+    """The batch as it is written when a workflow execution's metadata write-back makes it.
+
+    For an API request (no writing execution), or a table outside WORKFLOW_ATTRIBUTED_TABLES, the
+    batch is returned unchanged: a user's write costs exactly the calls it made before. For a
+    write-back, every PutRequest row carries METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE (the
+    execution's id) — an attribute on the write already being made — and every row a DeleteRequest
+    removes is first marked METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE with one UpdateItem, so the
+    stream's old image of the delete names the execution. A user's later write replaces the whole
+    row and drops the mark. A failed mark is logged and the delete proceeds: the compliance trigger
+    then reads the delete as a user change and re-evaluates the asset, the safe failure."""
+    execution_id = writing_workflow_execution_id
+    if not execution_id or table_name not in WORKFLOW_ATTRIBUTED_TABLES:
+        return batch
+    attributed = []
+    for request in batch:
+        put = request.get('PutRequest') if isinstance(request, dict) else None
+        delete = request.get('DeleteRequest') if isinstance(request, dict) else None
+        if put and isinstance(put.get('Item'), dict):
+            item = dict(put['Item'])
+            item[METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE] = {'S': execution_id}
+            attributed.append({'PutRequest': {**put, 'Item': item}})
+            continue
+        if delete and isinstance(delete.get('Key'), dict) and delete['Key']:
+            _mark_row_deleted_by_workflow(table_name, delete['Key'], execution_id)
+        attributed.append(request)
+    return attributed
+
+
+def _mark_row_deleted_by_workflow(table_name: str, key: dict, execution_id: str) -> None:
+    """Mark the row `key` names as about to be deleted by `execution_id` (see
+    `attribute_rows_to_writing_workflow`); a row already gone is left gone."""
+    key_attribute = sorted(key)[0]
+    try:
+        dynamodb_client.update_item(
+            TableName=table_name,
+            Key=key,
+            UpdateExpression='SET #deletedBy = :executionId',
+            ConditionExpression='attribute_exists(#key)',
+            ExpressionAttributeNames={'#deletedBy': METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
+                                      '#key': key_attribute},
+            ExpressionAttributeValues={':executionId': {'S': execution_id}},
+        )
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') != 'ConditionalCheckFailedException':
+            logger.warning(f"Could not mark a {table_name} row as deleted by workflow execution "
+                           f"{execution_id}; the delete proceeds: {e}")
+    except Exception as e:
+        logger.warning(f"Could not mark a {table_name} row as deleted by workflow execution "
+                       f"{execution_id}; the delete proceeds: {e}")
 
 class BatchWriteIncompleteError(Exception):
     """DynamoDB still reported UnprocessedItems after the retry bound was exhausted.
@@ -223,7 +307,7 @@ def batch_write_with_retry(table_name: str, batch: list) -> None:
         BatchWriteIncompleteError: Requests remained unprocessed after
             BATCH_WRITE_MAX_ATTEMPTS attempts.
     """
-    pending = list(batch)
+    pending = attribute_rows_to_writing_workflow(table_name, list(batch))
     if not pending:
         return
 
@@ -262,7 +346,7 @@ def batch_write_with_retry(table_name: str, batch: list) -> None:
 
 # Stored-row attributes that a metadata read tolerates as absent, and the placeholder each is
 # validated with before being reported as null. A row written by an earlier release can carry
-# neither (handlers/indexing/fileIndexer.py tolerates exactly that shape), which is why the
+# neither (handlers/osSemanticSearch/osFileIndexer.py tolerates exactly that shape), which is why the
 # DELETE paths and the REPLACE_ALL rollbacks already read them with .get. The GET paths read
 # them by subscript, so ONE such row raised KeyError inside the schema-enrichment arm, the
 # unenriched fallback raised the same KeyError again, and the entity's whole metadata list
@@ -384,6 +468,17 @@ def stored_metadata_entries(items, key_fields=('metadataKey',),
         absent_keys_by_field,
         "evaluating those attributes as absent instead of refusing the operation")
     return entries
+
+
+def incoming_metadata_entries(items) -> dict:
+    """A write's metadata items in the stored-entry shape, keyed by metadata key."""
+    return {
+        item.metadataKey: {
+            'metadataValue': item.metadataValue,
+            'metadataValueType': item.metadataValueType.value,
+        }
+        for item in items
+    }
 
 
 def metadata_response_models(model_cls, items, **identity_fields) -> list:
@@ -536,17 +631,12 @@ def get_bucket_details(bucket_id: str) -> dict:
         if not bucket_name:
             raise VAMSGeneralErrorResponse("Bucket configuration not found")
         
-        # Ensure prefix ends with slash
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-        
-        # Remove leading slash
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
         
         return {
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
@@ -601,6 +691,30 @@ def check_multi_action_authorization(entity: dict, actions: list, claims_and_rol
         return False
 
 
+def require_route_delete_to_remove_keys(event, keys_to_remove, claims_and_roles: dict) -> None:
+    """Refuse a replace-all update that removes stored keys unless the route's DELETE is granted.
+
+    The Tier-1 check in lambda_handler covers the request's own method (PUT). Removing keys is what
+    the route's DELETE does, so a replace-all that would remove any stored key also needs Tier-1
+    DELETE on the same route, decided by the same enforceAPI check. ``keys_to_remove`` is computed
+    from the keys the replace-all read from the table, never from the request. A replace-all that
+    removes nothing is not checked. Raises PermissionError (403) before any write; without a
+    request event to check, it refuses.
+    """
+    if not keys_to_remove:
+        return
+    allowed = False
+    try:
+        if event is not None and len(claims_and_roles.get("tokens", [])) > 0:
+            allowed = bool(CasbinEnforcer(claims_and_roles).enforceAPI(event, 'DELETE'))
+    except Exception as e:
+        logger.exception(f"Error checking the route DELETE permission: {e}")
+        allowed = False
+    if not allowed:
+        raise PermissionError(
+            "REPLACE_ALL that removes existing keys requires DELETE permission on this route")
+
+
 #######################
 # Entity Validation Functions
 #######################
@@ -633,12 +747,20 @@ def validate_asset_link_exists(asset_link_id: str) -> dict:
         raise VAMSGeneralErrorResponse("Error validating asset link")
 
 
-def validate_asset_exists(database_id: str, asset_id: str) -> dict:
+def asset_link_ends(asset_link: dict) -> list:
+    """The (database_id, asset_id) pairs of an asset link's two ends, from end first"""
+    return [(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId']),
+            (asset_link['toAssetDatabaseId'], asset_link['toAssetId'])]
+
+
+def validate_asset_exists(database_id: str, asset_id: str, include_archived: bool = False) -> dict:
     """Validate that an asset exists and return it
     
     Args:
         database_id: The database ID
         asset_id: The asset ID
+        include_archived: Also resolve an archived asset's record (metadata reads asked with
+            showArchived); writes leave it False, so an archived asset stays not found
         
     Returns:
         The asset dictionary
@@ -646,23 +768,105 @@ def validate_asset_exists(database_id: str, asset_id: str) -> dict:
     Raises:
         VAMSGeneralErrorResponse: If asset not found
     """
+    asset = find_asset(database_id, asset_id, include_archived=include_archived)
+    if not asset:
+        raise VAMSGeneralErrorResponse("Asset not found")
+    return asset
+
+
+def find_asset(database_id: str, asset_id: str, include_archived: bool = False):
+    """Read an asset record, or None when it does not exist
+
+    Raises:
+        VAMSGeneralErrorResponse: If the read fails
+    """
     try:
-        response = asset_storage_table.get_item(
-            Key={
-                'databaseId': database_id,
-                'assetId': asset_id
-            }
-        )
-        
-        if 'Item' not in response:
-            raise VAMSGeneralErrorResponse("Asset not found")
-        
-        return response['Item']
-    except VAMSGeneralErrorResponse:
-        raise
+        return get_asset_record(asset_storage_table, database_id, asset_id,
+                                include_archived=include_archived)
     except Exception as e:
         logger.exception(f"Error validating asset: {e}")
         raise VAMSGeneralErrorResponse("Error validating asset")
+
+
+def entity_authorized(entity: dict, action, claims_and_roles: dict) -> bool:
+    """Decide Tier 2 for one action, or for a list of actions that must all be granted"""
+    if isinstance(action, (list, tuple)):
+        return check_multi_action_authorization(entity, list(action), claims_and_roles)
+    return check_entity_authorization(entity, action, claims_and_roles)
+
+
+def authorize_assets(asset_ids: list, action, claims_and_roles: dict, refusal_message: str,
+                     include_archived: bool = False) -> list:
+    """Resolve the assets a metadata route names and decide Tier 2 on each before any is reported missing
+
+    Every record is read, then Tier 2 is decided on each asset's asset_authorization_object: the
+    record when it exists, otherwise the request's identifiers (with include_archived, carrying the
+    archived "<databaseId>#deleted" id). Only when every asset is allowed is a missing one reported,
+    so a refused caller gets the same answer whether or not an asset exists.
+
+    Args:
+        asset_ids: The (database_id, asset_id) pairs, e.g. both ends of an asset link
+        action: The Tier 2 action, or a list of actions that must all be granted (REPLACE_ALL)
+        claims_and_roles: User claims and roles
+        refusal_message: The PermissionError message for a refused caller
+        include_archived: Also resolve an archived asset's record (reads asked with showArchived);
+            writes leave it False, so an archived asset stays not found
+
+    Returns:
+        The asset records, in order, each annotated with object__type 'asset'
+
+    Raises:
+        PermissionError: With refusal_message, if the caller is refused any of the assets
+        VAMSGeneralErrorResponse: If the caller is allowed every asset and one is not found
+    """
+    records = [find_asset(database_id, asset_id, include_archived=include_archived)
+               for database_id, asset_id in asset_ids]
+    for record, (database_id, asset_id) in zip(records, asset_ids):
+        authorization_object = asset_authorization_object(record, database_id, asset_id,
+                                                          include_archived=include_archived)
+        if not entity_authorized(authorization_object, action, claims_and_roles):
+            raise PermissionError(refusal_message)
+    if not all(records):
+        raise VAMSGeneralErrorResponse("Asset not found")
+    for record in records:
+        record.update({"object__type": "asset"})
+    return records
+
+
+def authorize_asset(database_id: str, asset_id: str, action, claims_and_roles: dict, refusal_message: str,
+                    include_archived: bool = False) -> dict:
+    """Resolve one asset for a metadata route and decide Tier 2 on it before its existence is reported
+
+    See authorize_assets.
+
+    Returns:
+        The asset record annotated with object__type 'asset'
+    """
+    return authorize_assets([(database_id, asset_id)], action, claims_and_roles, refusal_message,
+                            include_archived=include_archived)[0]
+
+
+def file_record_path(asset: dict, asset_id: str, file_path: str) -> str:
+    """The path a file's metadata and attributes are keyed by: the path the file is listed at
+
+    A request names a file by that path (the CLI, with its leading slash) or by its full S3 key (the
+    web's file panel, without one). The path names a key by the rule of the file routes
+    (common.assetLocations.object_key_for_request) and the records are keyed by that key's listed
+    path, so both forms of one file name the same records. A path that names no key of the location
+    (an asset without a location) is keyed as given, with one leading slash.
+
+    Args:
+        asset: The asset record
+        asset_id: The asset ID
+        file_path: The file path of the request, in the form the caller sent
+
+    Returns:
+        The asset-relative path (with leading slash) the records are keyed by
+    """
+    location = (asset.get('assetLocation') or {}).get('Key')
+    key = object_key_for_request(location, file_path)
+    record_path = relative_path_in(location, key) if key is not None else None
+    return record_path if record_path is not None else '/' + (file_path or '').lstrip('/')
 
 
 def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> bool:
@@ -691,19 +895,19 @@ def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> boo
         if 'assetLocation' not in asset or 'Key' not in asset['assetLocation']:
             raise VAMSGeneralErrorResponse("Asset location not found")
         
-        # Use the asset's actual location as the base path
-        asset_base_path = asset['assetLocation']['Key']
+        # The key the path names in the asset's location (the rule of the file routes); the callers
+        # pass the record path, which is the file's path in the asset
+        full_key = object_key_for_request(asset['assetLocation']['Key'], file_path)
+        if full_key is None:
+            raise VAMSGeneralErrorResponse("File not found in S3")
         
-        # Ensure asset base path ends with slash
-        if not asset_base_path.endswith('/'):
-            asset_base_path += '/'
-        
-        # Remove leading slash from file_path before combining (to avoid double slash)
-        normalized_file_path = file_path.lstrip('/')
-        
-        # Construct full S3 key using asset's actual location
-        full_key = f"{asset_base_path}{normalized_file_path}"
-        
+        # A file the location of another asset nested in this one holds is that asset's file
+        nested = nested_locations_of_asset(asset_storage_table, s3_asset_buckets_table, asset, bucket_name,
+                                           asset['assetLocation']['Key'],
+                                           asset_table_name=asset_storage_table_name)
+        if nested.holder(full_key) is not None:
+            raise VAMSGeneralErrorResponse("File not found in S3")
+
         # Check if file exists in S3
         try:
             s3.head_object(Bucket=bucket_name, Key=full_key)
@@ -732,20 +936,53 @@ def validate_database_exists(database_id: str) -> dict:
     Raises:
         VAMSGeneralErrorResponse: If database not found
     """
+    database = find_database(database_id)
+    if not database:
+        raise VAMSGeneralErrorResponse("Database not found")
+    return database
+
+
+def find_database(database_id: str):
+    """Read a database record, or None when it does not exist
+
+    Raises:
+        VAMSGeneralErrorResponse: If the read fails
+    """
     try:
         response = database_storage_table.get_item(
             Key={'databaseId': database_id}
         )
-        
-        if 'Item' not in response:
-            raise VAMSGeneralErrorResponse("Database not found")
-        
-        return response['Item']
-    except VAMSGeneralErrorResponse:
-        raise
+        return response.get('Item')
     except Exception as e:
         logger.exception(f"Error validating database: {e}")
         raise VAMSGeneralErrorResponse("Error validating database")
+
+
+def authorize_database(database_id: str, action, claims_and_roles: dict, refusal_message: str) -> dict:
+    """Resolve a database for a metadata route and decide Tier 2 on it before its existence is reported
+
+    The record is read, then Tier 2 is decided on its common.dynamodb.database_authorization_object (the
+    record, or the requested id when no record exists), so a refused caller gets the same answer whether
+    or not the database exists.
+
+    Args:
+        action: The Tier 2 action, or a list of actions that must all be granted (REPLACE_ALL)
+
+    Returns:
+        The database record annotated with object__type 'database'
+
+    Raises:
+        PermissionError: With refusal_message, if the caller may not act on the database
+        VAMSGeneralErrorResponse: If the caller is allowed and the database is not found
+    """
+    database = find_database(database_id)
+    authorization_object = database_authorization_object(database, database_id)
+    if not entity_authorized(authorization_object, action, claims_and_roles):
+        raise PermissionError(refusal_message)
+    if not database:
+        raise VAMSGeneralErrorResponse("Database not found")
+    database.update({"object__type": "database"})
+    return database
 
 
 def get_database_config(database_id: str) -> dict:
@@ -785,16 +1022,11 @@ def get_asset_link_metadata(asset_link_id: str, query_params: dict, claims_and_r
         # Validate asset link exists and check authorization
         asset_link = validate_asset_link_exists(asset_link_id)
         
-        # Check permissions on both assets
-        from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'])
-        to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'])
-        
-        from_asset.update({"object__type": "asset"})
-        to_asset.update({"object__type": "asset"})
-        
-        if not (check_entity_authorization(from_asset, "GET", claims_and_roles) and 
-                check_entity_authorization(to_asset, "GET", claims_and_roles)):
-            raise PermissionError("Not authorized to view metadata for this asset link")
+        # Both ends are authorized before either's existence is reported. showArchived also
+        # resolves an end that is archived, which is then authorized as its stored archived record
+        authorize_assets(asset_link_ends(asset_link), "GET", claims_and_roles,
+                         "Not authorized to view metadata for this asset link",
+                         include_archived=bool(query_params.get('showArchived', False)))
         
         # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
@@ -895,16 +1127,9 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
         # Validate asset link exists and check authorization
         asset_link = validate_asset_link_exists(asset_link_id)
         
-        # Check permissions on both assets
-        from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'])
-        to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'])
-        
-        from_asset.update({"object__type": "asset"})
-        to_asset.update({"object__type": "asset"})
-        
-        if not (check_entity_authorization(from_asset, "POST", claims_and_roles) and 
-                check_entity_authorization(to_asset, "POST", claims_and_roles)):
-            raise PermissionError("Not authorized to create metadata for this asset link")
+        # Both ends are authorized before either's existence is reported
+        authorize_assets(asset_link_ends(asset_link), "POST", claims_and_roles,
+                         "Not authorized to create metadata for this asset link")
         
         # Validate 500 record limit: Fetch existing + count with new
         try:
@@ -979,7 +1204,9 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
                 
                 # Validate the complete merged state
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    merged_metadata, aggregated_schema, "POST", existing_metadata
+                    merged_metadata, aggregated_schema, "POST", existing_metadata,
+                    value_check_keys=keys_set_by_write(
+                        incoming_metadata_entries(request_model.metadata), existing_metadata)
                 )
                 
                 if not is_valid:
@@ -995,7 +1222,8 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            merged_metadata, aggregated_schema, True
+                            merged_metadata, aggregated_schema, True,
+                            stored_keys=existing_metadata.keys()
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -1076,7 +1304,7 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(request_model.metadata)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -1101,13 +1329,14 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
         raise VAMSGeneralErrorResponse("Error creating metadata")
 
 
-def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLinkMetadataRequestModel, claims_and_roles: dict) -> BulkOperationResponseModel:
+def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLinkMetadataRequestModel, claims_and_roles: dict, event=None) -> BulkOperationResponseModel:
     """Update metadata for an asset link (bulk operation) - Supports UPDATE and REPLACE_ALL modes
     
     Args:
         asset_link_id: The asset link ID
         request_model: The update request model with metadata items and updateType
         claims_and_roles: User claims and roles
+        event: The request event; a REPLACE_ALL that removes stored keys checks the route's DELETE on it
         
     Returns:
         BulkOperationResponseModel with operation results
@@ -1116,24 +1345,15 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
         # Validate asset link exists and check authorization
         asset_link = validate_asset_link_exists(asset_link_id)
         
-        # Check permissions on both assets
-        from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'])
-        to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'])
-        
-        from_asset.update({"object__type": "asset"})
-        to_asset.update({"object__type": "asset"})
-        
-        # Check authorization based on updateType
+        # Both ends are authorized before either's existence is reported, based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL requires PUT, POST, and DELETE permissions
-            if not (check_multi_action_authorization(from_asset, ["PUT", "POST", "DELETE"], claims_and_roles) and 
-                    check_multi_action_authorization(to_asset, ["PUT", "POST", "DELETE"], claims_and_roles)):
-                raise PermissionError("REPLACE_ALL requires PUT, POST, and DELETE permissions on both assets")
+            authorize_assets(asset_link_ends(asset_link), ["PUT", "POST", "DELETE"], claims_and_roles,
+                             "REPLACE_ALL requires PUT, POST, and DELETE permissions on both assets")
         else:
             # UPDATE mode requires only PUT permission
-            if not (check_entity_authorization(from_asset, "PUT", claims_and_roles) and 
-                    check_entity_authorization(to_asset, "PUT", claims_and_roles)):
-                raise PermissionError("Not authorized to update metadata for this asset link")
+            authorize_assets(asset_link_ends(asset_link), "PUT", claims_and_roles,
+                             "Not authorized to update metadata for this asset link")
         
         # Check if user is SYSTEM_USER - bypass schema validation
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -1152,6 +1372,11 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
                 
                 # Build existing metadata dict
                 existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
+
+                # Keys stored before this write; the merge below adds the incoming keys
+                stored_metadata_keys = set(existing_metadata.keys())
+                value_check_keys = keys_set_by_write(
+                    incoming_metadata_entries(request_model.metadata), existing_metadata)
                 
                 # Validate 500 record limit based on updateType
                 if request_model.updateType == UpdateType.UPDATE:
@@ -1203,12 +1428,29 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
                 )
                 
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    metadata_to_validate, aggregated_schema, "PUT"
+                    metadata_to_validate, aggregated_schema, "PUT",
+                    value_check_keys=value_check_keys
                 )
                 
                 if not is_valid:
                     error_message = "Schema validation failed: " + "; ".join(errors)
                     raise VAMSGeneralErrorResponse(error_message)
+                
+                # Check restrictMetadataOutsideSchemas setting (only if schemas exist)
+                if aggregated_schema:
+                    from_db_config = get_database_config(asset_link['fromAssetDatabaseId'])
+                    to_db_config = get_database_config(asset_link['toAssetDatabaseId'])
+                    restrict = (from_db_config.get('restrictMetadataOutsideSchemas', False) or
+                               to_db_config.get('restrictMetadataOutsideSchemas', False))
+
+                    if restrict:
+                        keys_valid, key_errors = validate_metadata_keys_against_schema(
+                            metadata_to_validate, aggregated_schema, True,
+                            stored_keys=stored_metadata_keys
+                        )
+                        if not keys_valid:
+                            error_message = "Metadata key validation failed: " + "; ".join(key_errors)
+                            raise VAMSGeneralErrorResponse(error_message)
                 
             except VAMSGeneralErrorResponse:
                 raise
@@ -1219,7 +1461,7 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
         # Route to appropriate operation based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL: Delete unlisted keys, then upsert all provided
-            return _replace_all_asset_link_metadata(asset_link_id, request_model.metadata, claims_and_roles)
+            return _replace_all_asset_link_metadata(asset_link_id, request_model.metadata, claims_and_roles, event)
         else:
             # UPDATE: Upsert provided metadata (create or update)
             return _upsert_asset_link_metadata(asset_link_id, request_model.metadata, claims_and_roles)
@@ -1278,7 +1520,7 @@ def _upsert_asset_link_metadata(asset_link_id: str, metadata_items: list, claims
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(metadata_items)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -1299,7 +1541,7 @@ def _upsert_asset_link_metadata(asset_link_id: str, metadata_items: list, claims
         raise VAMSGeneralErrorResponse("Error upserting metadata")
 
 
-def _replace_all_asset_link_metadata(asset_link_id: str, metadata_items: list, claims_and_roles: dict) -> BulkOperationResponseModel:
+def _replace_all_asset_link_metadata(asset_link_id: str, metadata_items: list, claims_and_roles: dict, event=None) -> BulkOperationResponseModel:
     """Internal helper: Replace all asset link metadata with rollback on failure"""
     try:
         # Step 1: Fetch all existing metadata
@@ -1320,6 +1562,8 @@ def _replace_all_asset_link_metadata(asset_link_id: str, metadata_items: list, c
         provided_keys = {item.metadataKey for item in metadata_items}
         existing_keys = {item['metadataKey'] for item in existing_metadata}
         keys_to_delete = existing_keys - provided_keys
+        # Removing stored keys also needs the route's DELETE grant (refused before any write)
+        require_route_delete_to_remove_keys(event, keys_to_delete, claims_and_roles)
         
         # Store items to delete for potential rollback
         deleted_items_backup = [
@@ -1370,7 +1614,7 @@ def _replace_all_asset_link_metadata(asset_link_id: str, metadata_items: list, c
                 batch_write_with_retry(asset_links_metadata_table_name, batch)
             
             # Success - build response
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = utc_now().isoformat()
             return BulkOperationResponseModel(
                 success=True,
                 totalItems=len(metadata_items),
@@ -1457,16 +1701,9 @@ def delete_asset_link_metadata(asset_link_id: str, request_model: DeleteAssetLin
         # Validate asset link exists and check authorization
         asset_link = validate_asset_link_exists(asset_link_id)
         
-        # Check permissions on both assets
-        from_asset = validate_asset_exists(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId'])
-        to_asset = validate_asset_exists(asset_link['toAssetDatabaseId'], asset_link['toAssetId'])
-        
-        from_asset.update({"object__type": "asset"})
-        to_asset.update({"object__type": "asset"})
-        
-        if not (check_entity_authorization(from_asset, "DELETE", claims_and_roles) and 
-                check_entity_authorization(to_asset, "DELETE", claims_and_roles)):
-            raise PermissionError("Not authorized to delete metadata for this asset link")
+        # Both ends are authorized before either's existence is reported
+        authorize_assets(asset_link_ends(asset_link), "DELETE", claims_and_roles,
+                         "Not authorized to delete metadata for this asset link")
         
         # NEW: Schema validation for deletion
         try:
@@ -1589,7 +1826,7 @@ def delete_asset_link_metadata(asset_link_id: str, request_model: DeleteAssetLin
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(request_model.metadataKeys)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -1618,6 +1855,46 @@ def delete_asset_link_metadata(asset_link_id: str, request_model: DeleteAssetLin
 # Request Handlers - Asset Link Metadata
 #######################
 
+def _returned_count(response):
+    """The number of metadata entries a read returned (a count, never the entries)."""
+    for field in ("metadata", "Items", "items"):
+        value = getattr(response, field, None)
+        if value is None and isinstance(response, dict):
+            value = response.get(field)
+        if isinstance(value, (list, dict)):
+            return len(value)
+    return None
+
+
+def _log_metadata_write(event, action: str, response, request_model, **ids) -> None:
+    """
+    Record one metadata write on its target entity: the entries written (key -> value and value
+    type) or the keys deleted, and how many entries succeeded. Nothing when no entry succeeded.
+    """
+    succeeded = list(getattr(response, "successfulItems", None) or [])
+    if not getattr(response, "successCount", 0):
+        return
+    details = {}
+    changes = None
+    items = getattr(request_model, "metadata", None)
+    if items is not None:
+        written = set(succeeded)
+        changes = {
+            item.metadataKey: {"value": item.metadataValue,
+                               "valueType": getattr(item.metadataValueType, "value", item.metadataValueType)}
+            for item in items if not written or item.metadataKey in written
+        }
+        update_type = getattr(request_model, "updateType", None)
+        if update_type is not None:
+            details["updateType"] = getattr(update_type, "value", update_type)
+    else:
+        details["deletedKeys"] = succeeded
+    metadata_type = getattr(request_model, "type", None)
+    if isinstance(metadata_type, str):
+        details["type"] = metadata_type
+    log_action(event, action, item_count=response.successCount, changes=changes, details=details or None, **ids)
+
+
 def handle_asset_link_metadata_get(event):
     """Handle GET requests for asset link metadata"""
     path_parameters = event.get('pathParameters', {})
@@ -1637,7 +1914,8 @@ def handle_asset_link_metadata_get(event):
             query_params = {
                 'maxItems': query_request_model.maxItems,
                 'pageSize': query_request_model.pageSize,
-                'startingToken': query_request_model.startingToken
+                'startingToken': query_request_model.startingToken,
+                'showArchived': bool(query_request_model.showArchived),
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
@@ -1645,6 +1923,9 @@ def handle_asset_link_metadata_get(event):
         
         # Get metadata
         response = get_asset_link_metadata(path_request_model.assetLinkId, query_params, claims_and_roles)
+        log_action(event, "metadataGet", assetLinkId=path_request_model.assetLinkId,
+                   item_count=_returned_count(response),
+                   request_parameters=query_params)
         return success(body=response.dict())
         
     except PermissionError as p:
@@ -1691,6 +1972,8 @@ def handle_asset_link_metadata_post(event):
         
         # Create metadata
         response = create_asset_link_metadata(path_request_model.assetLinkId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataCreate", response, request_model,
+                            assetLinkId=path_request_model.assetLinkId)
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -1739,7 +2022,9 @@ def handle_asset_link_metadata_put(event):
         request_model = parse(body, model=UpdateAssetLinkMetadataRequestModel)
         
         # Update metadata
-        response = update_asset_link_metadata(path_request_model.assetLinkId, request_model, claims_and_roles)
+        response = update_asset_link_metadata(path_request_model.assetLinkId, request_model, claims_and_roles, event)
+        _log_metadata_write(event, "metadataUpdate", response, request_model,
+                            assetLinkId=path_request_model.assetLinkId)
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -1789,6 +2074,8 @@ def handle_asset_link_metadata_delete(event):
         
         # Delete metadata
         response = delete_asset_link_metadata(path_request_model.assetLinkId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataDelete", response, request_model,
+                            assetLinkId=path_request_model.assetLinkId)
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -1828,12 +2115,10 @@ def get_asset_metadata(database_id: str, asset_id: str, query_params: dict, clai
         )
 
     try:
-        # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this asset")
+        # Authorize the asset before its existence is reported
+        asset = authorize_asset(database_id, asset_id, "GET", claims_and_roles,
+                                "Not authorized to view metadata for this asset",
+                                include_archived=bool(query_params.get('showArchived')))
         
         # Build composite key for query
         composite_key = f"{database_id}:{asset_id}:/"
@@ -1920,12 +2205,10 @@ def get_asset_metadata_from_version(database_id: str, asset_id: str, asset_versi
                                     query_params: dict, claims_and_roles: dict) -> GetAssetMetadataResponseModel:
     """Get asset metadata from a specific version snapshot"""
     try:
-        # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-
-        if not check_entity_authorization(asset, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this asset")
+        # Authorize the asset before its existence is reported
+        asset = authorize_asset(database_id, asset_id, "GET", claims_and_roles,
+                                "Not authorized to view metadata for this asset",
+                                include_archived=bool(query_params.get('showArchived')))
 
         # Validate asset version exists before querying metadata
         validate_asset_version_exists(database_id, asset_id, asset_version_id)
@@ -2018,12 +2301,9 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
         BulkOperationResponseModel with operation results
     """
     try:
-        # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "POST", claims_and_roles):
-            raise PermissionError("Not authorized to create metadata for this asset")
+        # Authorize the asset before its existence is reported
+        authorize_asset(database_id, asset_id, "POST", claims_and_roles,
+                        "Not authorized to create metadata for this asset")
         
         # Validate 500 record limit: Fetch existing + count with new
         composite_key = f"{database_id}:{asset_id}:/"
@@ -2101,7 +2381,9 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
                 
                 # Validate the complete merged state
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    merged_metadata, aggregated_schema, "POST", existing_metadata
+                    merged_metadata, aggregated_schema, "POST", existing_metadata,
+                    value_check_keys=keys_set_by_write(
+                        incoming_metadata_entries(request_model.metadata), existing_metadata)
                 )
                 
                 if not is_valid:
@@ -2115,7 +2397,8 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            merged_metadata, aggregated_schema, True
+                            merged_metadata, aggregated_schema, True,
+                            stored_keys=existing_metadata.keys()
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -2199,7 +2482,7 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(request_model.metadata)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -2224,7 +2507,7 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
         raise VAMSGeneralErrorResponse("Error creating metadata")
 
 
-def update_asset_metadata(database_id: str, asset_id: str, request_model: UpdateAssetMetadataRequestModel, claims_and_roles: dict) -> BulkOperationResponseModel:
+def update_asset_metadata(database_id: str, asset_id: str, request_model: UpdateAssetMetadataRequestModel, claims_and_roles: dict, event=None) -> BulkOperationResponseModel:
     """Update metadata for an asset (bulk operation) - Supports UPDATE and REPLACE_ALL modes
     
     Args:
@@ -2232,24 +2515,21 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
         asset_id: The asset ID
         request_model: The update request model with metadata items and updateType
         claims_and_roles: User claims and roles
+        event: The request event; a REPLACE_ALL that removes stored keys checks the route's DELETE on it
         
     Returns:
         BulkOperationResponseModel with operation results
     """
     try:
-        # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        # Check authorization based on updateType
+        # Authorize the asset before its existence is reported, based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL requires PUT, POST, and DELETE permissions
-            if not check_multi_action_authorization(asset, ["PUT", "POST", "DELETE"], claims_and_roles):
-                raise PermissionError("REPLACE_ALL requires PUT, POST, and DELETE permissions")
+            authorize_asset(database_id, asset_id, ["PUT", "POST", "DELETE"], claims_and_roles,
+                            "REPLACE_ALL requires PUT, POST, and DELETE permissions")
         else:
             # UPDATE mode requires only PUT permission
-            if not check_entity_authorization(asset, "PUT", claims_and_roles):
-                raise PermissionError("Not authorized to update metadata for this asset")
+            authorize_asset(database_id, asset_id, "PUT", claims_and_roles,
+                            "Not authorized to update metadata for this asset")
         
         # Check if user is SYSTEM_USER - bypass schema validation
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -2272,6 +2552,11 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
                 # Build existing metadata dict
                 existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
+                # Keys stored before this write; the merge below adds the incoming keys
+                stored_metadata_keys = set(existing_metadata.keys())
+                value_check_keys = keys_set_by_write(
+                    incoming_metadata_entries(request_model.metadata), existing_metadata)
+
                 # Validate 500 record limit based on updateType
                 if request_model.updateType == UpdateType.UPDATE:
                     # For UPDATE: Check final count after merge
@@ -2321,7 +2606,8 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
                 )
                 
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    metadata_to_validate, aggregated_schema, "PUT", existing_metadata
+                    metadata_to_validate, aggregated_schema, "PUT", existing_metadata,
+                    value_check_keys=value_check_keys
                 )
                 
                 if not is_valid:
@@ -2335,7 +2621,8 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            metadata_to_validate, aggregated_schema, True
+                            metadata_to_validate, aggregated_schema, True,
+                            stored_keys=stored_metadata_keys
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -2350,7 +2637,7 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
         # Route to appropriate operation based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL: Delete unlisted keys, then upsert all provided
-            return _replace_all_asset_metadata(database_id, asset_id, request_model.metadata, claims_and_roles)
+            return _replace_all_asset_metadata(database_id, asset_id, request_model.metadata, claims_and_roles, event)
         else:
             # UPDATE: Upsert provided metadata (create or update)
             return _upsert_asset_metadata(database_id, asset_id, request_model.metadata, claims_and_roles)
@@ -2412,7 +2699,7 @@ def _upsert_asset_metadata(database_id: str, asset_id: str, metadata_items: list
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(metadata_items)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -2433,7 +2720,7 @@ def _upsert_asset_metadata(database_id: str, asset_id: str, metadata_items: list
         raise VAMSGeneralErrorResponse("Error upserting metadata")
 
 
-def _replace_all_asset_metadata(database_id: str, asset_id: str, metadata_items: list, claims_and_roles: dict) -> BulkOperationResponseModel:
+def _replace_all_asset_metadata(database_id: str, asset_id: str, metadata_items: list, claims_and_roles: dict, event=None) -> BulkOperationResponseModel:
     """Internal helper: Replace all asset metadata with rollback on failure"""
     try:
         composite_key = f"{database_id}:{asset_id}:/"
@@ -2458,6 +2745,8 @@ def _replace_all_asset_metadata(database_id: str, asset_id: str, metadata_items:
         provided_keys = {item.metadataKey for item in metadata_items}
         existing_keys = {item['metadataKey'] for item in existing_metadata}
         keys_to_delete = existing_keys - provided_keys
+        # Removing stored keys also needs the route's DELETE grant (refused before any write)
+        require_route_delete_to_remove_keys(event, keys_to_delete, claims_and_roles)
         
         # Store items to delete for potential rollback
         deleted_items_backup = [
@@ -2509,7 +2798,7 @@ def _replace_all_asset_metadata(database_id: str, asset_id: str, metadata_items:
                 batch_write_with_retry(asset_file_metadata_table_name, batch)
             
             # Success - build response
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = utc_now().isoformat()
             return BulkOperationResponseModel(
                 success=True,
                 totalItems=len(metadata_items),
@@ -2595,12 +2884,9 @@ def delete_asset_metadata(database_id: str, asset_id: str, request_model: Delete
         BulkOperationResponseModel with operation results
     """
     try:
-        # Validate asset exists and check authorization
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "DELETE", claims_and_roles):
-            raise PermissionError("Not authorized to delete metadata for this asset")
+        # Authorize the asset before its existence is reported
+        authorize_asset(database_id, asset_id, "DELETE", claims_and_roles,
+                        "Not authorized to delete metadata for this asset")
         
         # NEW: Schema validation for deletion
         composite_key = f"{database_id}:{asset_id}:/"
@@ -2722,7 +3008,7 @@ def delete_asset_metadata(database_id: str, asset_id: str, request_model: Delete
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(request_model.metadataKeys)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -2771,7 +3057,8 @@ def handle_asset_metadata_get(event):
                 'maxItems': query_request_model.maxItems,
                 'pageSize': query_request_model.pageSize,
                 'startingToken': query_request_model.startingToken,
-                'assetVersionId': query_request_model.assetVersionId
+                'assetVersionId': query_request_model.assetVersionId,
+                'showArchived': query_request_model.showArchived
             }
         except ValidationError as v:
             logger.exception(f"Validation error in query parameters: {v}")
@@ -2779,6 +3066,9 @@ def handle_asset_metadata_get(event):
         
         # Get metadata
         response = get_asset_metadata(path_request_model.databaseId, path_request_model.assetId, query_params, claims_and_roles)
+        log_action(event, "metadataGet", database_id=path_request_model.databaseId,
+                   asset_id=path_request_model.assetId, item_count=_returned_count(response),
+                   request_parameters=query_params)
         return success(body=response.dict())
         
     except PermissionError as p:
@@ -2825,6 +3115,8 @@ def handle_asset_metadata_post(event):
         
         # Create metadata
         response = create_asset_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataCreate", response, request_model,
+                            database_id=path_request_model.databaseId, asset_id=path_request_model.assetId)
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -2873,7 +3165,9 @@ def handle_asset_metadata_put(event):
         request_model = parse(body, model=UpdateAssetMetadataRequestModel)
         
         # Update metadata
-        response = update_asset_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        response = update_asset_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles, event)
+        _log_metadata_write(event, "metadataUpdate", response, request_model,
+                            database_id=path_request_model.databaseId, asset_id=path_request_model.assetId)
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -2923,6 +3217,8 @@ def handle_asset_metadata_delete(event):
         
         # Delete metadata
         response = delete_asset_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataDelete", response, request_model,
+                            database_id=path_request_model.databaseId, asset_id=path_request_model.assetId)
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -2943,7 +3239,12 @@ def handle_asset_metadata_delete(event):
 #######################
 
 def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_type: str, query_params: dict, claims_and_roles: dict):
-    """Get metadata or attributes for a file - Returns one page of records"""
+    """Get metadata or attributes for a file - Returns one page of records
+
+    Returns:
+        (page, record path): the GetFileMetadataResponseModel and the path the records were read
+        under (file_record_path of the request path), which the caller audits
+    """
     # Check if querying a specific version
     asset_version_id = query_params.get('assetVersionId')
     if asset_version_id:
@@ -2954,11 +3255,10 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
 
     try:
         # No S3 validation for GET - metadata can exist even if file doesn't
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this file")
+        asset = authorize_asset(database_id, asset_id, "GET", claims_and_roles,
+                                "Not authorized to view metadata for this file",
+                                include_archived=bool(query_params.get('showArchived')))
+        file_path = file_record_path(asset, asset_id, file_path)
         
         composite_key = f"{database_id}:{asset_id}:{file_path}"
         table_name = asset_file_metadata_table_name if metadata_type == 'metadata' else file_attribute_table_name
@@ -3046,7 +3346,7 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
             NextToken=next_token
         )
 
-        return result
+        return result, file_path
     except PermissionError as p:
         raise p
     except VAMSGeneralErrorResponse:
@@ -3059,13 +3359,16 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
 def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: str,
                                    metadata_type: str, asset_version_id: str,
                                    query_params: dict, claims_and_roles: dict):
-    """Get file metadata/attributes from a specific version snapshot"""
-    try:
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
+    """Get file metadata/attributes from a specific version snapshot
 
-        if not check_entity_authorization(asset, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this file")
+    Returns:
+        (page, record path), as get_file_metadata
+    """
+    try:
+        asset = authorize_asset(database_id, asset_id, "GET", claims_and_roles,
+                                "Not authorized to view metadata for this file",
+                                include_archived=bool(query_params.get('showArchived')))
+        file_path = file_record_path(asset, asset_id, file_path)
 
         # Validate asset version exists before querying metadata
         validate_asset_version_exists(database_id, asset_id, asset_version_id)
@@ -3077,7 +3380,7 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
             return GetFileMetadataResponseModel(
                 metadata=[],
                 restrictMetadataOutsideSchemas=False
-            )
+            ), file_path
 
         # Filter for this specific file and type
         file_metadata = [
@@ -3136,7 +3439,7 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
             metadata=page,
             restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
             NextToken=next_token
-        )
+        ), file_path
 
     except PermissionError as p:
         raise p
@@ -3150,12 +3453,12 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
 def create_file_metadata(database_id: str, asset_id: str, request_model: CreateFileMetadataRequestModel, claims_and_roles: dict):
     """Create metadata or attributes for a file (bulk operation)"""
     try:
+        # Authorize the asset before its existence is reported and before the file is checked
+        asset = authorize_asset(database_id, asset_id, "POST", claims_and_roles,
+                                "Not authorized to create metadata for this file")
+
+        request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
         validate_file_exists(database_id, asset_id, request_model.filePath)
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "POST", claims_and_roles):
-            raise PermissionError("Not authorized to create metadata for this file")
         
         # Validate 500 record limit: Fetch existing + count with new (separate limits for metadata vs attributes)
         composite_key = f"{database_id}:{asset_id}:{request_model.filePath}"
@@ -3246,7 +3549,9 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
                 
                 # Validate the complete merged state
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    merged_metadata, aggregated_schema, "POST", existing_metadata
+                    merged_metadata, aggregated_schema, "POST", existing_metadata,
+                    value_check_keys=keys_set_by_write(
+                        incoming_metadata_entries(request_model.metadata), existing_metadata)
                 )
                 
                 if not is_valid:
@@ -3260,7 +3565,8 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            merged_metadata, aggregated_schema, True
+                            merged_metadata, aggregated_schema, True,
+                            stored_keys=existing_metadata.keys()
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -3346,7 +3652,7 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
                             successful_items.remove(key)
                         failed_items.append({'key': key, 'error': 'Batch write failed'})
         
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return BulkOperationResponseModel(
             success=len(successful_items) > 0,
             totalItems=len(request_model.metadata),
@@ -3366,22 +3672,25 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
         raise VAMSGeneralErrorResponse("Error creating metadata")
 
 
-def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateFileMetadataRequestModel, claims_and_roles: dict):
-    """Update metadata or attributes for a file (bulk operation) - Supports UPDATE and REPLACE_ALL modes"""
+def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateFileMetadataRequestModel, claims_and_roles: dict, event=None):
+    """Update metadata or attributes for a file (bulk operation) - Supports UPDATE and REPLACE_ALL modes
+
+    A REPLACE_ALL that removes stored keys also checks the route's DELETE on ``event``.
+    """
     try:
-        validate_file_exists(database_id, asset_id, request_model.filePath)
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        # Check authorization based on updateType
+        # Authorize the asset before its existence is reported and before the file is checked,
+        # based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL requires PUT, POST, and DELETE permissions
-            if not check_multi_action_authorization(asset, ["PUT", "POST", "DELETE"], claims_and_roles):
-                raise PermissionError("REPLACE_ALL requires PUT, POST, and DELETE permissions")
+            asset = authorize_asset(database_id, asset_id, ["PUT", "POST", "DELETE"], claims_and_roles,
+                                    "REPLACE_ALL requires PUT, POST, and DELETE permissions")
         else:
             # UPDATE mode requires only PUT permission
-            if not check_entity_authorization(asset, "PUT", claims_and_roles):
-                raise PermissionError("Not authorized to update metadata for this file")
+            asset = authorize_asset(database_id, asset_id, "PUT", claims_and_roles,
+                                    "Not authorized to update metadata for this file")
+
+        request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
+        validate_file_exists(database_id, asset_id, request_model.filePath)
         
         # Check if user is SYSTEM_USER - bypass schema validation
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -3412,6 +3721,11 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
                 else:
                     existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
+                # Keys stored before this write; the merge below adds the incoming keys
+                stored_metadata_keys = set(existing_metadata.keys())
+                value_check_keys = keys_set_by_write(
+                    incoming_metadata_entries(request_model.metadata), existing_metadata)
+
                 # Validate 500 record limit based on updateType (separate limits for metadata vs attributes)
                 if request_model.updateType == UpdateType.UPDATE:
                     # For UPDATE: Check final count after merge
@@ -3462,7 +3776,8 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
                 )
                 
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    metadata_to_validate, aggregated_schema, "PUT", existing_metadata
+                    metadata_to_validate, aggregated_schema, "PUT", existing_metadata,
+                    value_check_keys=value_check_keys
                 )
                 
                 if not is_valid:
@@ -3476,7 +3791,8 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            metadata_to_validate, aggregated_schema, True
+                            metadata_to_validate, aggregated_schema, True,
+                            stored_keys=stored_metadata_keys
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -3491,7 +3807,7 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
         # Route to appropriate operation based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL: Delete unlisted keys, then upsert all provided
-            return _replace_all_file_metadata(database_id, asset_id, request_model.filePath, request_model.type, request_model.metadata, claims_and_roles)
+            return _replace_all_file_metadata(database_id, asset_id, request_model.filePath, request_model.type, request_model.metadata, claims_and_roles, event)
         else:
             # UPDATE: Upsert provided metadata (create or update)
             return _upsert_file_metadata(database_id, asset_id, request_model.filePath, request_model.type, request_model.metadata, claims_and_roles)
@@ -3564,7 +3880,7 @@ def _upsert_file_metadata(database_id: str, asset_id: str, file_path: str, metad
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(metadata_items)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -3585,7 +3901,7 @@ def _upsert_file_metadata(database_id: str, asset_id: str, file_path: str, metad
         raise VAMSGeneralErrorResponse("Error upserting metadata")
 
 
-def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_type: str, metadata_items: list, claims_and_roles: dict) -> BulkOperationResponseModel:
+def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_type: str, metadata_items: list, claims_and_roles: dict, event=None) -> BulkOperationResponseModel:
     """Internal helper: Replace all file metadata/attributes with rollback on failure"""
     try:
         composite_key = f"{database_id}:{asset_id}:{file_path}"
@@ -3614,6 +3930,8 @@ def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, 
         else:  # attribute
             existing_keys = {item.get('attributeKey', item.get('metadataKey')) for item in existing_metadata}
         keys_to_delete = existing_keys - provided_keys
+        # Removing stored keys also needs the route's DELETE grant (refused before any write)
+        require_route_delete_to_remove_keys(event, keys_to_delete, claims_and_roles)
         
         # Store items to delete for potential rollback
         deleted_items_backup = [
@@ -3684,7 +4002,7 @@ def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, 
                 batch_write_with_retry(table_name, batch)
             
             # Success - build response
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = utc_now().isoformat()
             return BulkOperationResponseModel(
                 success=True,
                 totalItems=len(metadata_items),
@@ -3769,12 +4087,12 @@ def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, 
 def delete_file_metadata(database_id: str, asset_id: str, request_model: DeleteFileMetadataRequestModel, claims_and_roles: dict):
     """Delete metadata or attributes for a file (bulk operation)"""
     try:
-        # No S3 validation for DELETE - allow deleting metadata even if file doesn't exist
-        asset = validate_asset_exists(database_id, asset_id)
-        asset.update({"object__type": "asset"})
-        
-        if not check_entity_authorization(asset, "DELETE", claims_and_roles):
-            raise PermissionError("Not authorized to delete metadata for this file")
+        # Authorize the asset before its existence is reported. No S3 validation for DELETE - allow
+        # deleting metadata even if file doesn't exist
+        asset = authorize_asset(database_id, asset_id, "DELETE", claims_and_roles,
+                                "Not authorized to delete metadata for this file")
+
+        request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
         
         # NEW: Schema validation for deletion
         composite_key = f"{database_id}:{asset_id}:{request_model.filePath}"
@@ -3915,7 +4233,7 @@ def delete_file_metadata(database_id: str, asset_id: str, request_model: DeleteF
                             successful_items.remove(key)
                         failed_items.append({'key': key, 'error': 'Batch delete failed'})
         
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return BulkOperationResponseModel(
             success=len(successful_items) > 0,
             totalItems=len(request_model.metadataKeys),
@@ -3948,17 +4266,16 @@ def handle_file_metadata_get(event):
         # Parse and validate path parameters (validation in model)
         path_request_model = parse(path_parameters, model=FileMetadataPathRequestModel)
         
-        # Parse query parameters - validation handled in model (adds leading slash)
+        # Parse query parameters - validation handled in model (filePath keeps the caller's form)
         query_request_model = parse(query_parameters, model=GetFileMetadataRequestModel)
         
-        # Strip assetId prefix if present (after model validation)
-        file_path = query_request_model.filePath
-        if file_path.startswith(f"/{path_request_model.assetId}/"):
-            file_path = file_path[len(path_request_model.assetId)+1:]
-            logger.info(f"Stripped assetId prefix from filePath: {query_request_model.filePath} -> {file_path}")
-        
-        query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId}
-        response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
+        query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId, 'showArchived': query_request_model.showArchived}
+        # The read keys the requested path by the path the file is listed at and returns it, so the
+        # record names the records read, as the writes do
+        response, file_path = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, query_request_model.filePath, query_request_model.type, query_params, claims_and_roles)
+        log_action(event, "metadataGet", database_id=path_request_model.databaseId,
+                   asset_id=path_request_model.assetId, file_path=file_path, item_count=_returned_count(response),
+                   request_parameters={**query_params, 'type': query_request_model.type})
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -3991,15 +4308,14 @@ def handle_file_metadata_post(event):
                 logger.exception(f"Invalid JSON in request body: {e}")
                 return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
-        # Parse request model - validation handled in model (adds leading slash)
+        # Parse request model - validation handled in model (filePath keeps the caller's form)
         request_model = parse(body, model=CreateFileMetadataRequestModel)
         
-        # Strip assetId prefix if present (after model validation)
-        if request_model.filePath.startswith(f"/{path_request_model.assetId}/"):
-            request_model.filePath = request_model.filePath[len(path_request_model.assetId)+1:]
-            logger.info(f"Stripped assetId prefix from filePath")
-        
+        # The write sets request_model.filePath to the path the file is listed at
         response = create_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataCreate", response, request_model,
+                            database_id=path_request_model.databaseId, asset_id=path_request_model.assetId,
+                            file_path=request_model.filePath)
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -4032,15 +4348,14 @@ def handle_file_metadata_put(event):
                 logger.exception(f"Invalid JSON in request body: {e}")
                 return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
-        # Parse request model - validation handled in model (adds leading slash)
+        # Parse request model - validation handled in model (filePath keeps the caller's form)
         request_model = parse(body, model=UpdateFileMetadataRequestModel)
         
-        # Strip assetId prefix if present (after model validation)
-        if request_model.filePath.startswith(f"/{path_request_model.assetId}/"):
-            request_model.filePath = request_model.filePath[len(path_request_model.assetId)+1:]
-            logger.info(f"Stripped assetId prefix from filePath")
-        
-        response = update_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        # The write sets request_model.filePath to the path the file is listed at
+        response = update_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles, event)
+        _log_metadata_write(event, "metadataUpdate", response, request_model,
+                            database_id=path_request_model.databaseId, asset_id=path_request_model.assetId,
+                            file_path=request_model.filePath)
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -4073,15 +4388,14 @@ def handle_file_metadata_delete(event):
                 logger.exception(f"Invalid JSON in request body: {e}")
                 return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
-        # Parse request model - validation handled in model (adds leading slash)
+        # Parse request model - validation handled in model (filePath keeps the caller's form)
         request_model = parse(body, model=DeleteFileMetadataRequestModel)
         
-        # Strip assetId prefix if present (after model validation)
-        if request_model.filePath.startswith(f"/{path_request_model.assetId}/"):
-            request_model.filePath = request_model.filePath[len(path_request_model.assetId)+1:]
-            logger.info(f"Stripped assetId prefix from filePath")
-        
+        # The write sets request_model.filePath to the path the file is listed at
         response = delete_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataDelete", response, request_model,
+                            database_id=path_request_model.databaseId, asset_id=path_request_model.assetId,
+                            file_path=request_model.filePath)
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -4102,11 +4416,9 @@ def handle_file_metadata_delete(event):
 def get_database_metadata(database_id: str, query_params: dict, claims_and_roles: dict):
     """Get metadata for a database - Returns one page of records"""
     try:
-        database = validate_database_exists(database_id)
-        database.update({"object__type": "database"})
-        
-        if not check_entity_authorization(database, "GET", claims_and_roles):
-            raise PermissionError("Not authorized to view metadata for this database")
+        # Authorize the database before its existence is reported
+        authorize_database(database_id, "GET", claims_and_roles,
+                           "Not authorized to view metadata for this database")
         
         # Fetch every record: the page is sliced after schema enrichment and ordering
         paginator = dynamodb_client.get_paginator('query')
@@ -4187,11 +4499,9 @@ def get_database_metadata(database_id: str, query_params: dict, claims_and_roles
 def create_database_metadata(database_id: str, request_model: CreateDatabaseMetadataRequestModel, claims_and_roles: dict):
     """Create metadata for a database (bulk operation)"""
     try:
-        database = validate_database_exists(database_id)
-        database.update({"object__type": "database"})
-        
-        if not check_entity_authorization(database, "POST", claims_and_roles):
-            raise PermissionError("Not authorized to create metadata for this database")
+        # Authorize the database before its existence is reported
+        authorize_database(database_id, "POST", claims_and_roles,
+                           "Not authorized to create metadata for this database")
         
         # Validate 500 record limit: Fetch existing + count with new
         try:
@@ -4266,7 +4576,9 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
                 
                 # Validate the complete merged state
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    merged_metadata, aggregated_schema, "POST", existing_metadata
+                    merged_metadata, aggregated_schema, "POST", existing_metadata,
+                    value_check_keys=keys_set_by_write(
+                        incoming_metadata_entries(request_model.metadata), existing_metadata)
                 )
                 
                 if not is_valid:
@@ -4280,7 +4592,8 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            merged_metadata, aggregated_schema, True
+                            merged_metadata, aggregated_schema, True,
+                            stored_keys=existing_metadata.keys()
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -4348,7 +4661,7 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
                             successful_items.remove(key)
                         failed_items.append({'key': key, 'error': 'Batch write failed'})
         
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return BulkOperationResponseModel(
             success=len(successful_items) > 0,
             totalItems=len(request_model.metadata),
@@ -4368,21 +4681,21 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
         raise VAMSGeneralErrorResponse("Error creating metadata")
 
 
-def update_database_metadata(database_id: str, request_model: UpdateDatabaseMetadataRequestModel, claims_and_roles: dict):
-    """Update metadata for a database (bulk operation) - Supports UPDATE and REPLACE_ALL modes"""
+def update_database_metadata(database_id: str, request_model: UpdateDatabaseMetadataRequestModel, claims_and_roles: dict, event=None):
+    """Update metadata for a database (bulk operation) - Supports UPDATE and REPLACE_ALL modes
+
+    A REPLACE_ALL that removes stored keys also checks the route's DELETE on ``event``.
+    """
     try:
-        database = validate_database_exists(database_id)
-        database.update({"object__type": "database"})
-        
-        # Check authorization based on updateType
+        # Authorize the database before its existence is reported, based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL requires PUT, POST, and DELETE permissions
-            if not check_multi_action_authorization(database, ["PUT", "POST", "DELETE"], claims_and_roles):
-                raise PermissionError("REPLACE_ALL requires PUT, POST, and DELETE permissions")
+            authorize_database(database_id, ["PUT", "POST", "DELETE"], claims_and_roles,
+                               "REPLACE_ALL requires PUT, POST, and DELETE permissions")
         else:
             # UPDATE mode requires only PUT permission
-            if not check_entity_authorization(database, "PUT", claims_and_roles):
-                raise PermissionError("Not authorized to update metadata for this database")
+            authorize_database(database_id, "PUT", claims_and_roles,
+                               "Not authorized to update metadata for this database")
         
         # Check if user is SYSTEM_USER - bypass schema validation
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -4403,6 +4716,11 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
                 # Build existing metadata dict
                 existing_metadata = stored_metadata_entries(page_iterator.get('Items', []))
                 
+                # Keys stored before this write; the merge below adds the incoming keys
+                stored_metadata_keys = set(existing_metadata.keys())
+                value_check_keys = keys_set_by_write(
+                    incoming_metadata_entries(request_model.metadata), existing_metadata)
+
                 # Validate 500 record limit based on updateType
                 if request_model.updateType == UpdateType.UPDATE:
                     # For UPDATE: Check final count after merge
@@ -4452,7 +4770,8 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
                 )
                 
                 is_valid, errors, metadata_with_defaults = validate_metadata_against_schema(
-                    metadata_to_validate, aggregated_schema, "PUT", existing_metadata
+                    metadata_to_validate, aggregated_schema, "PUT", existing_metadata,
+                    value_check_keys=value_check_keys
                 )
                 
                 if not is_valid:
@@ -4466,7 +4785,8 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
                     
                     if restrict:
                         keys_valid, key_errors = validate_metadata_keys_against_schema(
-                            metadata_to_validate, aggregated_schema, True
+                            metadata_to_validate, aggregated_schema, True,
+                            stored_keys=stored_metadata_keys
                         )
                         if not keys_valid:
                             error_message = "Metadata key validation failed: " + "; ".join(key_errors)
@@ -4481,7 +4801,7 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
         # Route to appropriate operation based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL: Delete unlisted keys, then upsert all provided
-            return _replace_all_database_metadata(database_id, request_model.metadata, claims_and_roles)
+            return _replace_all_database_metadata(database_id, request_model.metadata, claims_and_roles, event)
         else:
             # UPDATE: Upsert provided metadata (create or update)
             return _upsert_database_metadata(database_id, request_model.metadata, claims_and_roles)
@@ -4540,7 +4860,7 @@ def _upsert_database_metadata(database_id: str, metadata_items: list, claims_and
                         })
         
         # Build response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         total_items = len(metadata_items)
         success_count = len(successful_items)
         failure_count = len(failed_items)
@@ -4561,7 +4881,7 @@ def _upsert_database_metadata(database_id: str, metadata_items: list, claims_and
         raise VAMSGeneralErrorResponse("Error upserting metadata")
 
 
-def _replace_all_database_metadata(database_id: str, metadata_items: list, claims_and_roles: dict) -> BulkOperationResponseModel:
+def _replace_all_database_metadata(database_id: str, metadata_items: list, claims_and_roles: dict, event=None) -> BulkOperationResponseModel:
     """Internal helper: Replace all database metadata with rollback on failure"""
     try:
         # Step 1: Fetch all existing metadata
@@ -4583,6 +4903,8 @@ def _replace_all_database_metadata(database_id: str, metadata_items: list, claim
         provided_keys = {item.metadataKey for item in metadata_items}
         existing_keys = {item['metadataKey'] for item in existing_metadata}
         keys_to_delete = existing_keys - provided_keys
+        # Removing stored keys also needs the route's DELETE grant (refused before any write)
+        require_route_delete_to_remove_keys(event, keys_to_delete, claims_and_roles)
         
         # Store items to delete for potential rollback
         deleted_items_backup = [
@@ -4632,7 +4954,7 @@ def _replace_all_database_metadata(database_id: str, metadata_items: list, claim
                 batch_write_with_retry(database_metadata_table_name, batch)
             
             # Success - build response
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = utc_now().isoformat()
             return BulkOperationResponseModel(
                 success=True,
                 totalItems=len(metadata_items),
@@ -4707,11 +5029,9 @@ def _replace_all_database_metadata(database_id: str, metadata_items: list, claim
 def delete_database_metadata(database_id: str, request_model: DeleteDatabaseMetadataRequestModel, claims_and_roles: dict):
     """Delete metadata for a database (bulk operation)"""
     try:
-        database = validate_database_exists(database_id)
-        database.update({"object__type": "database"})
-        
-        if not check_entity_authorization(database, "DELETE", claims_and_roles):
-            raise PermissionError("Not authorized to delete metadata for this database")
+        # Authorize the database before its existence is reported
+        authorize_database(database_id, "DELETE", claims_and_roles,
+                           "Not authorized to delete metadata for this database")
         
         # NEW: Schema validation for deletion
         try:
@@ -4817,7 +5137,7 @@ def delete_database_metadata(database_id: str, request_model: DeleteDatabaseMeta
                             successful_items.remove(key)
                         failed_items.append({'key': key, 'error': 'Batch delete failed'})
         
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
         return BulkOperationResponseModel(
             success=len(successful_items) > 0,
             totalItems=len(request_model.metadataKeys),
@@ -4854,6 +5174,9 @@ def handle_database_metadata_get(event):
         query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken}
 
         response = get_database_metadata(path_request_model.databaseId, query_params, claims_and_roles)
+        log_action(event, "metadataGet", database_id=path_request_model.databaseId,
+                   item_count=_returned_count(response),
+                   request_parameters=query_params)
         return success(body=response.dict())
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
@@ -4885,6 +5208,7 @@ def handle_database_metadata_post(event):
         
         request_model = parse(body, model=CreateDatabaseMetadataRequestModel)
         response = create_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataCreate", response, request_model, database_id=path_request_model.databaseId)
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -4918,7 +5242,8 @@ def handle_database_metadata_put(event):
                 return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
         request_model = parse(body, model=UpdateDatabaseMetadataRequestModel)
-        response = update_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
+        response = update_database_metadata(path_request_model.databaseId, request_model, claims_and_roles, event)
+        _log_metadata_write(event, "metadataUpdate", response, request_model, database_id=path_request_model.databaseId)
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -4953,6 +5278,7 @@ def handle_database_metadata_delete(event):
         
         request_model = parse(body, model=DeleteDatabaseMetadataRequestModel)
         response = delete_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
+        _log_metadata_write(event, "metadataDelete", response, request_model, database_id=path_request_model.databaseId)
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -4970,9 +5296,12 @@ def handle_database_metadata_delete(event):
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for centralized metadata service"""
-    global claims_and_roles
+    global claims_and_roles, writing_workflow_execution_id
+    writing_workflow_execution_id = workflow_execution_writer(event)
     claims_and_roles = request_to_claims(event)
     
     try:

@@ -7,7 +7,7 @@ import base64
 import boto3
 import json
 import uuid
-from datetime import datetime
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -23,13 +23,14 @@ from common.constants import (
     CONSTRAINT_PERMISSION_LABELS,
     CONSTRAINT_PERMISSION_TYPE_LABELS,
 )
+from common.addonFeatures import constraint_object_type_deployed
 from common.apiRoutes import API_AUTH_CONSTRAINT_PERMISSION_OBJECTS
 from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_auth_changes
+from customLogging.auditLogging import log_action, log_auth_changes, audited_handler
 from common.dynamodb import validate_pagination_info
 from models.common import (
     validation_error_message,
@@ -143,8 +144,8 @@ def _transform_to_denormalized_format(constraint_data):
         'groupPermissions': json.dumps(constraint_data.get('groupPermissions', [])),
         'userPermissions': json.dumps(constraint_data.get('userPermissions', [])),
         # Metadata
-        'dateCreated': constraint_data.get('dateCreated', datetime.utcnow().isoformat()),
-        'dateModified': datetime.utcnow().isoformat(),
+        'dateCreated': constraint_data.get('dateCreated', utc_now().isoformat()),
+        'dateModified': utc_now().isoformat(),
         'createdBy': constraint_data.get('createdBy', 'SYSTEM_USER'),
         'modifiedBy': constraint_data.get('modifiedBy', 'SYSTEM_USER'),
     }
@@ -424,7 +425,7 @@ def create_or_update_constraint(constraint_data, claims_and_roles):
         logger.info(f"Creating/updating constraint {constraint_id}")
         
         # Add metadata
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         username = claims_and_roles["tokens"][0] if claims_and_roles.get("tokens") else "SYSTEM_USER"
         constraint_data['dateModified'] = now
         constraint_data['modifiedBy'] = username
@@ -556,7 +557,7 @@ def delete_constraint(constraint_id, claims_and_roles):
         logger.info(f"Successfully deleted all items for constraint {constraint_id}")
         
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return ConstraintOperationResponseModel(
             success=True,
             message=f"Constraint {constraint_id} deleted successfully",
@@ -577,7 +578,11 @@ def delete_constraint(constraint_id, claims_and_roles):
 
 def get_constraint_permission_objects(event):
     """Return the constraint permission objects: object types (with their valid
-    fields), operators, permissions, and permission types."""
+    fields), operators, permissions, and permission types.
+
+    An add-on object type is listed only when this deployment enabled its add-on
+    (``common/addonFeatures.py``), so the constraint editor offers no type a deployment cannot use.
+    """
     object_types = [
         {
             "label": CONSTRAINT_OBJECT_TYPE_FIELDS[object_type]["label"],
@@ -585,7 +590,7 @@ def get_constraint_permission_objects(event):
             "fields": CONSTRAINT_OBJECT_TYPE_FIELDS[object_type]["fields"],
         }
         for object_type in ALLOWED_CONSTRAINT_OBJECT_TYPES
-        if object_type in CONSTRAINT_OBJECT_TYPE_FIELDS
+        if object_type in CONSTRAINT_OBJECT_TYPE_FIELDS and constraint_object_type_deployed(object_type)
     ]
     response_model = GetConstraintPermissionObjectsResponseModel(
         objectTypes=object_types,
@@ -638,6 +643,7 @@ def handle_get_request(event):
             # Note: Constraints don't have object-level authorization in Casbin
             # Only API-level authorization is checked in the lambda_handler
             if constraint:
+                log_action(event, "constraintGet", constraintId=constraint_id)
                 # Convert to ConstraintResponseModel for consistent response format
                 try:
                     response_model = ConstraintResponseModel(**constraint)
@@ -680,6 +686,9 @@ def handle_get_request(event):
                     # Fall back to raw item if conversion fails
                     formatted_items.append(item)
             
+            log_action(event, "constraintList", item_count=len(formatted_items),
+                       request_parameters=dict(query_params))
+
             # Build response
             response = {"message": {"Items": formatted_items}}
             if 'NextToken' in constraints_result:
@@ -757,7 +766,7 @@ def handle_post_request(event):
             "objectType": request_model.objectType,
             "groupPermissions": request_model.groupPermissions,
             "userPermissions": request_model.userPermissions
-        })
+        }, entity_id=result.constraintId, changes=request_model.dict(exclude_unset=True))
         
         # Return success response with constraint data
         response_body = result.dict()
@@ -825,6 +834,7 @@ def handle_delete_request(event):
         return internal_error(event=event)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for auth constraints service APIs"""
     global claims_and_roles

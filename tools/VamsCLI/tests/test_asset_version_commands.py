@@ -54,7 +54,18 @@ class TestAssetVersionCreateCommand:
         assert '--files' in result.output
         assert '--json-input' in result.output
         assert '--json-output' in result.output
-    
+
+    def test_create_help_files_example_disables_use_latest_files(self, cli_runner):
+        """The --files example must not fail with --use-latest-files at its default."""
+        result = cli_runner.invoke(asset_version, ['create', '--help'])
+        assert result.exit_code == 0
+        # Click rewraps the help text, so compare the example with its whitespace collapsed.
+        help_text = " ".join(result.output.split())
+        assert (
+            'vamscli asset-version create -d my-db -a my-asset --comment "Specific files" '
+            "--no-use-latest-files --files"
+        ) in help_text
+
     def test_create_success(self, cli_runner, asset_version_command_mocks):
         """Test successful version creation."""
         with asset_version_command_mocks as mocks:
@@ -871,7 +882,7 @@ class TestAssetVersionGetCommand:
             
             # Verify API call
             mocks['api_client'].get_asset_version.assert_called_once_with(
-                'test-db', 'test-asset', '1'
+                'test-db', 'test-asset', '1', show_archived=False
             )
     
     def test_get_no_files(self, cli_runner, asset_version_command_mocks):

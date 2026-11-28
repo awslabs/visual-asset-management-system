@@ -23,17 +23,67 @@ client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"), co
 s3 = boto3.resource("s3", region_name=os.getenv("AWS_REGION", "us-east-1"), config=retry_config)
 
 
-def download(bucket_name: str, object_key: str, file_path: str) -> str | None:
-    """Download an object from S3 to a local file path."""
+# An asset bucket may be in another Region than this container. The pipeline definition carries a
+# bucket name -> Region map (constructPipeline builds it from the manifest's bucket Regions), the
+# entry point registers it, and every request for a registered bucket is signed with a client for
+# that Region; the client above serves the buckets the map leaves out (the auxiliary bucket, a
+# definition from an older Lambda). Per-Region clients keep the adaptive retry mode and address the
+# regional us-east-1 endpoint, which an interface endpoint's private DNS covers where the global
+# s3.amazonaws.com name is not.
+_bucket_regions = {}
+_clients_by_region = {}
+_regional_retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
+                                s3={'us_east_1_regional_endpoint': 'regional'})
+
+
+def register_bucket_regions(bucket_regions):
+    """Record the Region of each named bucket from a definition's bucketRegions map."""
+    for bucket_name, region in (bucket_regions or {}).items():
+        if bucket_name and region:
+            _bucket_regions[bucket_name] = region
+
+
+def client_for_bucket(bucket_name):
+    """The S3 client for the Region a bucket was registered in; the default client otherwise."""
+    region = _bucket_regions.get(bucket_name)
+    if not region or region == client.meta.region_name:
+        return client
+    regional = _clients_by_region.get(region)
+    if regional is None:
+        regional = boto3.client("s3", region_name=region, config=_regional_retry_config)
+        _clients_by_region[region] = regional
+    return regional
+
+
+# Error codes Amazon S3 answers a read of a version that no longer exists with: NoSuchVersion or
+# NoSuchKey (GET), 404 (HEAD of a deleted version), 405 / MethodNotAllowed (a delete marker).
+_MISSING_VERSION_CODES = ("NoSuchVersion", "NoSuchKey", "404", "405", "MethodNotAllowed")
+
+
+class InputVersionMissingError(Exception):
+    """The input file version the run was launched on no longer exists."""
+
+    def __init__(self, object_key, version_id):
+        super().__init__(f"The input file {object_key} at version {version_id} no longer exists; "
+                         f"it was deleted after the run started.")
+
+
+def download(bucket_name: str, object_key: str, file_path: str, version_id: str = "") -> str | None:
+    """Download an object from S3 to a local file path; ``version_id`` reads that version, empty the
+    current one. Returns None when the download fails, and raises ``InputVersionMissingError`` when the
+    requested version no longer exists."""
     logger.info(
         f"Downloading from S3. Bucket: {bucket_name}, "
-        f"Key: {object_key}, Path: {file_path}"
+        f"Key: {object_key}, Version: {version_id or 'current'}, Path: {file_path}"
     )
+    kwargs = {"ExtraArgs": {"VersionId": version_id}} if version_id else {}
     try:
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "wb") as data:
-            client.download_fileobj(bucket_name, object_key, data)
+            client_for_bucket(bucket_name).download_fileobj(bucket_name, object_key, data, **kwargs)
     except ClientError as e:
+        if version_id and str(e.response.get("Error", {}).get("Code", "")) in _MISSING_VERSION_CODES:
+            raise InputVersionMissingError(object_key, version_id) from e
         logger.exception(e)
         return None
     return file_path
@@ -53,7 +103,7 @@ def upload(bucket_name: str, object_key: str, file_path: str) -> str | None:
             multipart_chunksize=100 * MB,
             use_threads=True,
         )
-        s3.meta.client.upload_file(
+        client_for_bucket(bucket_name).upload_file(
             file_path,
             bucket_name,
             object_key,

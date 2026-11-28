@@ -55,14 +55,14 @@ describe("deriveAutomationInputFiles", () => {
         expect(out[0].versionId).toBeUndefined();
     });
 
-    it("maps a single file with its version pinned", () => {
+    it("sends no version for a file on its current version", () => {
+        // The live listing carries each file's current versionId, but nobody chose it: sending it would
+        // pin the run, and a re-run would read that version instead of the file's current one.
         const out = deriveAutomationInputFiles({
             ...base,
             selectedItem: { relativePath: "/pump.glb", versionId: "v3" },
         });
-        expect(out).toEqual([
-            { databaseId: "db1", assetId: "a1", relativeFileKey: "/pump.glb", versionId: "v3" },
-        ]);
+        expect(out).toEqual([{ databaseId: "db1", assetId: "a1", relativeFileKey: "/pump.glb" }]);
     });
 
     it("normalizes a path with no leading slash", () => {
@@ -83,7 +83,7 @@ describe("deriveAutomationInputFiles", () => {
             ],
         });
         expect(out.map((f) => f.relativeFileKey)).toEqual(["/a.glb", "/b.glb"]);
-        expect(out.map((f) => f.versionId)).toEqual(["v1", "v2"]);
+        expect(out.map((f) => f.versionId)).toEqual([undefined, undefined]);
     });
 
     it("pins the version-resolved file version while browsing a specific asset version", () => {
@@ -272,5 +272,24 @@ describe("automationDisabledReason", () => {
                 ],
             })
         ).toMatch(/cannot be processed/);
+    });
+});
+
+describe("a file whose key has an empty segment after the asset's folder (#1977)", () => {
+    it("is sent by its own path, never collapsed onto the other file's", () => {
+        const item = {
+            relativePath: "//cloud.las",
+            keyPrefix: "asset-1//cloud.las",
+            isFolder: false,
+        } as any;
+        const files = deriveAutomationInputFiles({
+            databaseId: "db1",
+            assetId: "asset-1",
+            isMultiSelect: false,
+            selectedItems: [item],
+            selectedItem: item,
+            isFolder: false,
+        } as any);
+        expect(files.map((f) => f.relativeFileKey)).toEqual(["//cloud.las"]);
     });
 });

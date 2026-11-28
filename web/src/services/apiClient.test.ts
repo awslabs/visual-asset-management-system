@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { apiClient, ApiError } from "./apiClient";
+import { apiClient, ApiError, isRequestBlocked } from "./apiClient";
 
 const mockEnsure = jest.fn();
 const mockLogout = jest.fn();
@@ -126,6 +126,43 @@ describe("apiClient backstop", () => {
         expect(mockLogout).not.toHaveBeenCalled();
     });
 
+    it("on 401 for a POST: re-sends the same body once after the refresh (#1212)", async () => {
+        // The authorizer answers an expired token with 401 before the handler runs, so a
+        // write is safe to re-send exactly once with its original body.
+        mockHeader.mockReset();
+        mockHeader.mockResolvedValueOnce("Bearer stale").mockResolvedValue("Bearer fresh");
+        const fetchMock = jest
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(401, { message: "Unauthorized" }))
+            .mockResolvedValueOnce(jsonResponse(200, { created: true }));
+        (global.fetch as any) = fetchMock;
+        mockEnsure.mockResolvedValue(true);
+
+        await expect(apiClient.post("thing", { body: { name: "n1" } })).resolves.toEqual({
+            created: true,
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls[1][1].method).toBe("POST");
+        expect(fetchMock.mock.calls[1][1].body).toBe(JSON.stringify({ name: "n1" }));
+        expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer fresh");
+    });
+
+    it("on the authorizer's 403 deny (e.g. an IP restriction): no refresh, no re-send (#1212)", async () => {
+        // From 2.7.0 the authorizer's Deny means the credential was accepted and refused
+        // (IP not allowed, no roles); a new token cannot change it.
+        const fetchMock = jest.fn().mockResolvedValue(
+            jsonResponse(403, {
+                message: "User is not authorized to access this resource with an explicit deny",
+            })
+        );
+        (global.fetch as any) = fetchMock;
+        mockEnsure.mockResolvedValue(true);
+        await expect(apiClient.get("thing")).rejects.toMatchObject({ status: 403 });
+        expect(mockEnsure).toHaveBeenCalledWith(false);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(mockLogout).not.toHaveBeenCalled();
+    });
+
     it("on a repeated 401 with an ALIVE session: surfaces after exactly one retry", async () => {
         const fetchMock = jest.fn().mockResolvedValue(jsonResponse(401, { message: "Expired" }));
         (global.fetch as any) = fetchMock;
@@ -208,5 +245,67 @@ describe("apiClient backstop", () => {
         await apiClient
             .post("thing", { body: {} })
             .catch((e: ApiError) => expect(e.message).not.toContain("[object Object]"));
+    });
+});
+
+describe("a request the deployment's AWS WAF web ACL blocked", () => {
+    // The body of the REST API's WAF_FILTERED gateway response.
+    const BLOCKED = {
+        message: "Request blocked by the deployment's AWS WAF web ACL",
+        blockedBy: "waf",
+        requestId: "r-1",
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.setItem("api_path", "https://api.example.test/");
+        mockHeader.mockResolvedValue("Bearer good");
+        mockEnsure.mockResolvedValue(true);
+    });
+
+    it("names the web ACL and the request ID, after one send and no refresh", async () => {
+        const fetchMock = jest.fn().mockResolvedValue(jsonResponse(403, BLOCKED));
+        (global.fetch as any) = fetchMock;
+        const error = await apiClient.get("thing").catch((e) => e);
+        expect(error).toBeInstanceOf(ApiError);
+        expect(error.status).toBe(403);
+        expect(error.message).toBe(
+            "Request blocked by the deployment's AWS WAF web ACL (request ID r-1)"
+        );
+        expect(isRequestBlocked(error)).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(mockEnsure).toHaveBeenCalledWith(false);
+        expect(mockLogout).not.toHaveBeenCalled();
+    });
+
+    it("keeps the message alone when the body names no request ID", async () => {
+        for (const requestId of [undefined, "", 7]) {
+            (global.fetch as any) = jest
+                .fn()
+                .mockResolvedValue(jsonResponse(403, { ...BLOCKED, requestId }));
+            const error = await apiClient.get("thing").catch((e) => e);
+            expect(error.message).toBe(BLOCKED.message);
+            expect(isRequestBlocked(error)).toBe(true);
+        }
+    });
+
+    it("reads the marker only on a 403", async () => {
+        (global.fetch as any) = jest.fn().mockResolvedValue(jsonResponse(400, BLOCKED));
+        const error = await apiClient.get("thing").catch((e) => e);
+        expect(error.message).toBe(BLOCKED.message);
+        expect(isRequestBlocked(error)).toBe(false);
+    });
+
+    it("is not a block for a Casbin denial, or for an error that is not an ApiError", async () => {
+        (global.fetch as any) = jest
+            .fn()
+            .mockResolvedValue(jsonResponse(403, { message: "Not Authorized" }));
+        const denial = await apiClient.get("thing").catch((e) => e);
+        expect(denial.message).toBe("Not Authorized");
+        expect(isRequestBlocked(denial)).toBe(false);
+        expect(isRequestBlocked({ status: 403, body: BLOCKED, message: "x" })).toBe(false);
+        expect(isRequestBlocked(new Error(BLOCKED.message))).toBe(false);
+        expect(isRequestBlocked(undefined)).toBe(false);
+        expect(isRequestBlocked(null)).toBe(false);
     });
 });

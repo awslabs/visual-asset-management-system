@@ -1,22 +1,29 @@
 import Table, { TableProps } from "@cloudscape-design/components/table";
-import {
-    CollectionPreferences,
-    Header,
-    Link,
-    Pagination,
-    Box,
-    Button,
-    SpaceBetween,
-    Alert,
-    Input,
-    Grid,
-    Select,
-    FormField,
-    Modal,
-    Icon,
-} from "@cloudscape-design/components";
+import CollectionPreferences from "@cloudscape-design/components/collection-preferences";
+import Header from "@cloudscape-design/components/header";
+import Link from "@cloudscape-design/components/link";
+import Pagination from "@cloudscape-design/components/pagination";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Alert from "@cloudscape-design/components/alert";
+import Input from "@cloudscape-design/components/input";
+import Grid from "@cloudscape-design/components/grid";
+import Select from "@cloudscape-design/components/select";
+import FormField from "@cloudscape-design/components/form-field";
+import Modal from "@cloudscape-design/components/modal";
+import Icon from "@cloudscape-design/components/icon";
+import Checkbox from "@cloudscape-design/components/checkbox";
 import Popover from "@cloudscape-design/components/popover";
-import { SearchExplanation, getTotalResultCount, getPageCount, FIELD_MAPPINGS } from "./types";
+import {
+    SearchExplanation,
+    getTotalResultCount,
+    getPageCount,
+    getPagedResultCount,
+    FIELD_MAPPINGS,
+    formatTotalResultCount,
+    isTotalLowerBound,
+} from "./types";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
 import AssetUnarchiveModal from "../modals/AssetUnarchiveModal";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
@@ -30,20 +37,26 @@ import { useNavigate } from "react-router-dom";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { fetchtagTypes } from "../../services/APIService";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
-import { Checkbox } from "@cloudscape-design/components";
 import MapThumbnail from "./SearchResults/MapThumbnail";
 import { appCache } from "../../services/appCache";
+import { paginationLabels, tableSelectionLabels } from "../../common/helpers/labels";
 import FileViewerModal from "../filemanager/modals/FileViewerModal";
 import { FileInfo } from "../../visualizerPlugin/core/types";
+import { ViewerMode } from "../../visualizerPlugin/core/PluginRegistry";
 import { EYE_ICON_SVG } from "../../visualizerPlugin/components/EyeIconSvg";
 import { useViewerRegistryReady } from "../../visualizerPlugin/core/useViewerRegistryReady";
 import {
     searchRowToFileInfo,
-    isViewableExtension,
+    isViewableSearchRow,
     reconcileViewerSelection,
 } from "./utils/searchRowToFileInfo";
-import { isFileHitSource } from "./utils/recordType";
-import { areFilenamesViewableTogether } from "../../visualizerPlugin/core/viewableExtensions";
+import { hasLocationOnlyMetadata, isFileHitSource } from "./utils/recordType";
+import {
+    areFilenamesViewableTogether,
+    areFilesComparableTogether,
+} from "../../visualizerPlugin/core/viewableExtensions";
+import { describeSegmentMatch, formatRelevancePercent } from "./utils/relevance";
+import { nlpCountExplanation } from "./utils/nlpResultPaging";
 
 let tagTypes: any;
 
@@ -369,6 +382,28 @@ const TruncatedCell: React.FC<{
     return <span title={isTruncated ? text : undefined}>{displayText}</span>;
 };
 
+/**
+ * The header text of a results column that has no header of its own: a short label, the
+ * FIELD_MAPPINGS label, or the field name without its type prefix. A cell that names itself after
+ * its column (a bool_ checkbox) uses the same text, so its name matches the header on screen.
+ */
+function fieldColumnLabel(name: string): string {
+    const shortLabels: Record<string, string> = {
+        str_assetname: Synonyms.Asset,
+        str_asset_version_id: "Version",
+        metadata: "Metadata",
+    };
+    return (
+        shortLabels[name] ||
+        (FIELD_MAPPINGS as any)[name]?.label ||
+        name
+            .split("_")
+            .slice(1)
+            .map((s: string) => s.charAt(0).toUpperCase() + s.slice(1))
+            .join(" ")
+    );
+}
+
 function columnRender(
     e: any,
     name: string,
@@ -447,10 +482,7 @@ function columnRender(
         // file mode when a viewer plugin can render the file's extension.
         const viewLabel = `Visualize File ${value || e.str_fileext || ""}`.trim();
         const viewButton =
-            isFileMode &&
-            onViewFile &&
-            viewerRegistryReady &&
-            isViewableExtension(e.str_fileext) ? (
+            isFileMode && onViewFile && viewerRegistryReady && isViewableSearchRow(e) ? (
                 <Button
                     variant="icon"
                     iconSvg={EYE_ICON_SVG}
@@ -553,10 +585,16 @@ function columnRender(
             </Box>
         );
     } else if (name.startsWith("bool_")) {
-        // Display all boolean fields as checkboxes
+        // Display all boolean fields as checkboxes, each named after its column header and value
+        // ("Archived: yes") so a screen reader can tell what the box states
+        const checked = value === true;
         return (
             <Box>
-                <Checkbox checked={value === true} disabled />
+                <Checkbox
+                    checked={checked}
+                    disabled
+                    ariaLabel={`${fieldColumnLabel(name)}: ${checked ? "yes" : "no"}`}
+                />
             </Box>
         );
     } else if (name === "num_filesize" || name === "num_size") {
@@ -586,6 +624,44 @@ function columnRender(
         return (
             <Box>
                 <div style={{ whiteSpace: "normal", wordBreak: "break-word" }}>{description}</div>
+            </Box>
+        );
+    } else if (name === "relevance") {
+        // Natural-language hits: `_score` is 1 - cosine distance; the popover names what the
+        // embedding was built from (render, text, ...) and, for a file matched through its segment
+        // vectors, the best window or chunk and how many matched.
+        const modalities: string[] = Array.isArray(e._vector?.sourceModalities)
+            ? e._vector.sourceModalities
+            : [];
+        const segmentMatch = describeSegmentMatch(e._vector);
+        return (
+            <Box>
+                <SpaceBetween direction="horizontal" size="xs">
+                    <span>{formatRelevancePercent(e._score)}</span>
+                    {(modalities.length > 0 || segmentMatch) && (
+                        <Popover
+                            size="small"
+                            position="right"
+                            triggerType="custom"
+                            dismissButton={false}
+                            header="Matched from"
+                            content={
+                                <Box>
+                                    {modalities.length > 0 && <div>{modalities.join(", ")}</div>}
+                                    {segmentMatch && <div>{segmentMatch}</div>}
+                                </Box>
+                            }
+                        >
+                            {/* A Button, not a bare Icon: a custom trigger is only reachable by
+                                keyboard when the child itself takes focus. */}
+                            <Button
+                                variant="inline-icon"
+                                iconName="status-info"
+                                ariaLabel="Show what this result matched from"
+                            />
+                        </Popover>
+                    )}
+                </SpaceBetween>
             </Box>
         );
     } else if (name.indexOf("str") === 0 || name.indexOf("num_") === 0) {
@@ -620,6 +696,7 @@ const COLUMN_WIDTHS: Record<string, { width: number; minWidth: number }> = {
     str_assetversionid: { width: 180, minWidth: 130 },
     num_filesize: { width: 100, minWidth: 70 },
     num_size: { width: 100, minWidth: 70 },
+    relevance: { width: 130, minWidth: 100 },
     // Client-side thumbnail columns. Each is declared from a separate asset-mode and file-mode
     // branch below, so they resolve here rather than being written out twice.
     preview: { width: 150, minWidth: 100 },
@@ -632,7 +709,13 @@ const FALLBACK_COLUMN_WIDTH = { width: 150, minWidth: 100 };
 const columnWidthFor = (name: string): { width: number; minWidth: number } =>
     COLUMN_WIDTHS[name] ?? (name.startsWith("date_") ? DATE_COLUMN_WIDTH : FALLBACK_COLUMN_WIDTH);
 
-function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: SearchPageViewProps) {
+function SearchPageListView({
+    state,
+    dispatch,
+    onShowToast,
+    onCreateAsset,
+    assetActionDisabledReasons,
+}: SearchPageViewProps) {
     // Guarantees a re-render once the viewer registry is ready. The container kicks initialization
     // off in an effect, so a render that happens first would see no compatible viewers and omit
     // every eye icon; today that self-corrects only because results arrive afterwards.
@@ -652,14 +735,18 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
     }>({});
     const [viewerFiles, setViewerFiles] = useState<FileInfo[]>([]);
     const [showViewerModal, setShowViewerModal] = useState(false);
+    // Which mode FileViewerModal opens in. "Compare Selected" opens directly on the compare surface;
+    // "View Selected" opens on visualize. The in-modal toggle lets the user flip either way after.
+    const [viewerInitialMode, setViewerInitialMode] = useState<ViewerMode>("visualize");
 
-    const openViewer = (files: FileInfo[]) => {
+    const openViewer = (files: FileInfo[], initialMode: ViewerMode = "visualize") => {
         const viewable = files.filter((f) => !!f.key);
         if (viewable.length === 0) {
             onShowToast?.("Nothing to preview", "No selected files can be visualized");
             return;
         }
         setViewerFiles(viewable);
+        setViewerInitialMode(initialMode);
         setShowViewerModal(true);
     };
 
@@ -706,7 +793,9 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
         setShowPreviewModal(true);
     };
 
-    if (!state?.initialResult) {
+    // Before the first answer, unless the first search failed: the table then says it did not finish
+    // rather than loading forever.
+    if (!state?.initialResult && !state?.searchFailed) {
         return <div>Loading..</div>;
     }
 
@@ -731,10 +820,18 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
     const viewerSelectionFilenames: string[] = (state.viewerSelection || []).map(
         (file: any) => file?.filename || file?.key || ""
     );
+    // "View Selected" asks the VISUALIZE path (never a compare-only viewer); "Compare Selected" asks
+    // the COMPARE path with the selection's real count and shape (cross-asset rows, N versions vs N
+    // distinct files). The two are independent: two .txt rows have a differ but no multi-file
+    // visualizer, two .glb rows the reverse.
     const selectionHasViewer =
         viewerSelectionFilenames.length > 0 &&
         viewerRegistryReady &&
         areFilenamesViewableTogether(viewerSelectionFilenames);
+    const selectionHasCompareViewer =
+        (state.viewerSelection?.length || 0) > 0 &&
+        viewerRegistryReady &&
+        areFilesComparableTogether(state.viewerSelection);
 
     // Determine if unarchive button should be shown (single archived asset selected)
     const showUnarchiveButton =
@@ -746,6 +843,10 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
     const hasArchivedAssetSelected = state?.selectedItems?.some(
         (item: any) => item.bool_archived === true || item.status === "archived"
     );
+    // A selection with an archived row can only be permanently deleted, so it needs that permission.
+    const deleteSelectedDisabledReason =
+        assetActionDisabledReasons?.delete ??
+        (hasArchivedAssetSelected ? assetActionDisabledReasons?.permanentDelete : undefined);
 
     // Filter out undefined/null column names and add preview column if showPreviewThumbnails is enabled
     let enhancedColumnDefinitions = orderedColumnNames
@@ -795,6 +896,16 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                     ...columnWidthFor(name),
                 };
             }
+            if (name === "relevance") {
+                return {
+                    id: name,
+                    header: "Relevance",
+                    cell: (e: any) => columnRender(e, name, e._score, navigate, isFileMode),
+                    sortingField: "_score",
+                    isRowHeader: false,
+                    ...columnWidthFor(name),
+                };
+            }
             if (name === "str_key" && isFileMode) {
                 return {
                     id: name,
@@ -826,27 +937,21 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
             }
 
             // Use FIELD_MAPPINGS label if available, with overrides for brevity
-            const shortLabels: Record<string, string> = {
-                str_assetname: Synonyms.Asset,
-                str_asset_version_id: "Version",
-                metadata: "Metadata",
-            };
-
-            const fieldLabel =
-                shortLabels[name] ||
-                (FIELD_MAPPINGS as any)[name]?.label ||
-                name
-                    .split("_")
-                    .slice(1)
-                    .map((s: string) => s.charAt(0).toUpperCase() + s.slice(1))
-                    .join(" ");
+            const fieldLabel = fieldColumnLabel(name);
 
             return {
                 id: name,
                 header: fieldLabel,
                 cell: (e: any) => {
                     if (name === "metadata") {
-                        const { metadata, attributes } = extractMetadata(e);
+                        // A natural-language asset row's MD_ is its asset's location only (D83).
+                        const { metadata, attributes } = hasLocationOnlyMetadata(
+                            e,
+                            e._vector,
+                            isFileMode
+                        )
+                            ? { metadata: [], attributes: [] }
+                            : extractMetadata(e);
                         // console.log("[MetadataDebug] Extracted data:", {
                         //     metadata,
                         //     attributes,
@@ -1030,7 +1135,10 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
 
     const totalResults = getTotalResultCount(state?.result);
     const currentPage = 1 + Math.floor(state?.pagination?.from / state?.tablePreferences?.pageSize);
-    const pageCount = getPageCount(totalResults, state?.tablePreferences?.pageSize);
+    const pageCount = getPageCount(
+        getPagedResultCount(state?.result),
+        state?.tablePreferences?.pageSize
+    );
 
     console.log("[SearchPageListView] Pagination calculation:", {
         from: state?.pagination?.from,
@@ -1065,19 +1173,40 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                     stickyHeader={true}
                     wrapLines={false}
                     empty={
-                        <EmptyState
-                            title="No matches"
-                            subtitle="We can't find a match."
-                            action={
-                                <Button
-                                    onClick={() => {
-                                        dispatch({ type: "query-criteria-cleared" });
-                                    }}
-                                >
-                                    Clear filter
-                                </Button>
-                            }
-                        />
+                        state?.searchFailed ? (
+                            // The search did not answer: no filter is the cause, so there is no action.
+                            <EmptyState
+                                title="No results to show"
+                                subtitle="The search did not finish."
+                            />
+                        ) : state?.nlpIdle ? (
+                            <EmptyState
+                                title="Describe what you are looking for"
+                                subtitle="Natural-language search runs once you enter a description. It matches on meaning across file contents, including image and video scenes."
+                            />
+                        ) : state?.nlpNoDatabaseSearched ? (
+                            // No database was searched: no filter is the cause, so there is no action.
+                            // Generic on purpose: it names no database and says nothing of whether one
+                            // exists.
+                            <EmptyState
+                                title="No results"
+                                subtitle={`This search didn't cover a ${Synonyms.database} you can access.`}
+                            />
+                        ) : (
+                            <EmptyState
+                                title="No matches"
+                                subtitle="We can't find a match."
+                                action={
+                                    <Button
+                                        onClick={() => {
+                                            dispatch({ type: "query-criteria-cleared" });
+                                        }}
+                                    >
+                                        Clear filter
+                                    </Button>
+                                }
+                            />
+                        )
                     }
                     columnDefinitions={enhancedColumnDefinitions}
                     selectedItems={state?.selectedItems}
@@ -1119,15 +1248,26 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                             ? "multi"
                             : undefined
                     }
+                    ariaLabels={tableSelectionLabels(
+                        (item: any) =>
+                            (isFileMode ? item?.str_key : item?.str_assetname) ||
+                            item?.str_assetname ||
+                            item?._id,
+                        `${isFileMode ? "Files" : Synonyms.Assets} selection`
+                    )}
                     trackBy="_id"
                     visibleColumns={state?.tablePreferences?.visibleContent}
                     loading={state.loading}
                     loadingText="Loading"
-                    items={state?.result?.hits?.hits?.map((hit: any) => ({
-                        ...hit._source,
-                        _id: hit._id,
-                        explanation: hit.explanation,
-                    }))}
+                    items={
+                        state?.result?.hits?.hits?.map((hit: any) => ({
+                            ...hit._source,
+                            _id: hit._id,
+                            _score: hit._score,
+                            _vector: hit._vector,
+                            explanation: hit.explanation,
+                        })) ?? []
+                    }
                     sortingColumn={
                         state?.tableSort?.sortingField
                             ? {
@@ -1167,6 +1307,7 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                     }}
                     pagination={
                         <Pagination
+                            ariaLabels={paginationLabels}
                             pagesCount={pageCount}
                             currentPageIndex={currentPage}
                             onChange={({ detail }) => {
@@ -1194,34 +1335,26 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                             children={
                                 state.filters._rectype.value === "file" ? "Files" : Synonyms.Assets
                             }
-                            counter={
-                                totalResults
-                                    ? `${totalResults.toLocaleString()}${
-                                          state?.result?.hits?.total?.relation === "gte" ? "+" : ""
-                                      }`
-                                    : ""
-                            }
+                            counter={totalResults ? formatTotalResultCount(state?.result) : ""}
                             info={
-                                totalResults ? (
+                                totalResults && isTotalLowerBound(state?.result) ? (
                                     <Popover
                                         header="About this count"
-                                        content={`This count includes every matching record in the ${Synonyms.databases} you can access, counted before each record's own permissions are checked. The table lists only the records you can open, so it can show fewer than this count.`}
+                                        content={
+                                            state?.result?.nlp
+                                                ? nlpCountExplanation(state.result)
+                                                : "This count includes only records you can open. The + means there may be more: some of your permission rules can't be counted in advance, so the count shows the records known to be yours."
+                                        }
                                         triggerType="custom"
                                     >
-                                        <Box
-                                            color="text-status-info"
-                                            fontSize="body-s"
-                                            display="inline"
-                                        >
-                                            <span
-                                                style={{
-                                                    cursor: "help",
-                                                    textDecoration: "underline dotted",
-                                                }}
-                                            >
-                                                &#9432;
-                                            </span>
-                                        </Box>
+                                        {/* A Button, not a bare glyph: a custom trigger is reachable
+                                            by keyboard (Tab, then Enter or Space) and named for
+                                            screen readers only when the child itself takes focus. */}
+                                        <Button
+                                            variant="inline-icon"
+                                            iconName="status-info"
+                                            ariaLabel="About this count"
+                                        />
                                     </Popover>
                                 ) : undefined
                             }
@@ -1231,8 +1364,10 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                                         <Button
                                             disabled={
                                                 state?.selectedItems?.length === 0 ||
-                                                state?.disableSelection
+                                                state?.disableSelection ||
+                                                !!deleteSelectedDisabledReason
                                             }
+                                            disabledReason={deleteSelectedDisabledReason}
                                             onClick={() => {
                                                 setShowDeleteModal(true);
                                             }}
@@ -1241,6 +1376,10 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                                         </Button>
                                         {showUnarchiveButton && (
                                             <Button
+                                                disabled={!!assetActionDisabledReasons?.unarchive}
+                                                disabledReason={
+                                                    assetActionDisabledReasons?.unarchive
+                                                }
                                                 onClick={() => {
                                                     setShowUnarchiveModal(true);
                                                 }}
@@ -1257,6 +1396,8 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                                                 }
                                             }}
                                             variant="primary"
+                                            disabled={!!assetActionDisabledReasons?.create}
+                                            disabledReason={assetActionDisabledReasons?.create}
                                         >
                                             Create {Synonyms.Asset}
                                         </Button>
@@ -1288,6 +1429,30 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                                                     }
                                                 >
                                                     View Selected (
+                                                    {state.viewerSelection?.length || 0})
+                                                </Button>
+                                            </span>
+                                            <span
+                                                title={
+                                                    !state.viewerSelection?.length
+                                                        ? undefined
+                                                        : selectionHasCompareViewer
+                                                        ? undefined
+                                                        : (state.viewerSelection?.length || 0) < 2
+                                                        ? "Select at least two files to compare."
+                                                        : "No compare viewer can diff this selection: the file types or the number of files are not supported by any compare viewer."
+                                                }
+                                            >
+                                                <Button
+                                                    disabled={
+                                                        !state.viewerSelection?.length ||
+                                                        !selectionHasCompareViewer
+                                                    }
+                                                    onClick={() =>
+                                                        openViewer(state.viewerSelection, "compare")
+                                                    }
+                                                >
+                                                    Compare Selected (
                                                     {state.viewerSelection?.length || 0})
                                                 </Button>
                                             </span>
@@ -1335,6 +1500,7 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                 mode="asset"
                 selectedAssets={state?.selectedItems || []}
                 forceDeleteMode={hasArchivedAssetSelected}
+                canPermanentlyDelete={!assetActionDisabledReasons?.permanentDelete}
                 onSuccess={(operation) => {
                     setShowDeleteModal(false);
 
@@ -1402,9 +1568,11 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                     files={viewerFiles}
                     databaseId={viewerFiles[0].databaseId || ""}
                     assetId={viewerFiles[0].assetId || ""}
+                    initialMode={viewerInitialMode}
                     onDismiss={() => {
                         setShowViewerModal(false);
                         setViewerFiles([]);
+                        setViewerInitialMode("visualize");
                     }}
                 />
             )}

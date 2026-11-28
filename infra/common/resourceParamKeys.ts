@@ -8,10 +8,19 @@
  * for every fixed-name deployment resource distributed to backend Lambda functions.
  * The dynamoTables, s3Buckets, and cloudwatchLogGroups categories are mirrored by
  * backend/backend/common/resourceNames.py — keep those lists identical. The
- * dynamoTablesLegacy and lambdaFunctions categories are consumed only by deployment
- * and data-migration tooling (mirrored by
- * infra/deploymentDataMigration/tools/ssm_resource_lookup.py), never by backend
- * Lambda handlers.
+ * dynamoTablesLegacy, lambdaFunctions and integration categories are consumed by
+ * deployment tooling, data-migration tooling and externally owned pipeline bridge stacks
+ * (mirrored by infra/deploymentDataMigration/tools/ssm_resource_lookup.py), not through
+ * backend/common/resourceNames.py; lambdaFunctions.largeObjectCopyEngine is also resolved by the
+ * workflow output step through backend/common/resourceNames.py (the key is
+ * ENGINE_FUNCTION_RESOURCE_KEY in backend/common/largeObjectCopy.py).
+ *
+ * The openSearch, web and location categories are deploy-time values that stacks built after the
+ * resource-name stack publish (publishLateCoreResourceName(), lateCoreResourceNames.ts), each only
+ * when its feature is deployed. Their backend mirror is backend/backend/common/deployTimeValues.py,
+ * not resourceNames.py. The parameters that held these values before (aos/*, web/deployedUrl and
+ * location/apiKeyArn beside the prefix) stay published for the reindexer, the data-migration
+ * tooling and add-ons.
  */
 export const RESOURCE_PARAM_KEYS = {
     dynamoTables: {
@@ -65,6 +74,18 @@ export const RESOURCE_PARAM_KEYS = {
         pipelineTemplateTagSchemaStorage: "dynamoTables/pipelineTemplateTagSchemaStorage",
         workflowStorageV2: "dynamoTables/workflowStorageV2",
         workflowTriggersStorage: "dynamoTables/workflowTriggersStorage",
+        workflowExecutionLocksStorage: "dynamoTables/workflowExecutionLocksStorage",
+        // Vector search tables
+        vectorEmbeddingsStorage: "dynamoTables/vectorEmbeddingsStorage",
+        largeObjectCopyJobsStorage: "dynamoTables/largeObjectCopyJobsStorage",
+        zipDownloadRequestsStorage: "dynamoTables/zipDownloadRequestsStorage",
+        auditLogQueriesStorage: "dynamoTables/auditLogQueriesStorage",
+        // Compliance tables
+        complianceSchemaStorage: "dynamoTables/complianceSchemaStorage",
+        complianceAssetStateStorage: "dynamoTables/complianceAssetStateStorage",
+        complianceEvaluationStorage: "dynamoTables/complianceEvaluationStorage",
+        complianceCascadeStorage: "dynamoTables/complianceCascadeStorage",
+        complianceAuditStorage: "dynamoTables/complianceAuditStorage",
     },
     // Deprecated tables retained for data migration only (no handler reads them)
     dynamoTablesLegacy: {
@@ -75,10 +96,24 @@ export const RESOURCE_PARAM_KEYS = {
         metadataSchemaStorage: "dynamoTables/legacy/metadataSchemaStorage",
         tagStorage: "dynamoTables/legacy/tagStorage",
         tagTypeStorage: "dynamoTables/legacy/tagTypeStorage",
+        commentStorageV1: "dynamoTables/legacy/commentStorageV1",
+        subscriptionsStorageV1: "dynamoTables/legacy/subscriptionsStorageV1",
     },
-    // Lambda function names consumed by data-migration tooling
+    // Lambda function names consumed by data-migration tooling and external bridge stacks
     lambdaFunctions: {
         crOsReindexer: "lambdaFunctions/crOsReindexer",
+        vectorReindexer: "lambdaFunctions/vectorReindexer",
+        importGlobalPipelineWorkflow: "lambdaFunctions/importGlobalPipelineWorkflow",
+        // The large object copy engine, resolved by the workflow output step through the backend
+        // resource-name resolver (it cannot take the name as an environment variable: the engine
+        // references it).
+        largeObjectCopyEngine: "lambdaFunctions/largeObjectCopyEngine",
+    },
+    // Integration surface an externally owned pipeline bridge stack resolves at deploy time
+    integration: {
+        orchestrationBusArn: "integration/orchestrationBusArn",
+        orchestrationEventSourcePrefix: "integration/orchestrationEventSourcePrefix",
+        workflowExecutionRoleArn: "integration/workflowExecutionRoleArn",
     },
     s3Buckets: {
         assetAuxiliary: "s3Buckets/assetAuxiliary",
@@ -94,5 +129,17 @@ export const RESOURCE_PARAM_KEYS = {
         auditAuthChanges: "cloudwatchLogGroups/auditAuthChanges",
         auditActions: "cloudwatchLogGroups/auditActions",
         auditErrors: "cloudwatchLogGroups/auditErrors",
+    },
+    // Deploy-time values of the search, web and map stacks (see the header comment)
+    openSearch: {
+        endpoint: "openSearch/endpoint",
+        assetIndexName: "openSearch/assetIndexName",
+        fileIndexName: "openSearch/fileIndexName",
+    },
+    web: {
+        deployedUrl: "web/deployedUrl",
+    },
+    location: {
+        apiKeyArn: "location/apiKeyArn",
     },
 } as const;

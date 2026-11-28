@@ -120,6 +120,10 @@ describe("ColumnarViewerComponent", () => {
             expect(screen.getByText(/\.rds is not supported/i)).toBeInTheDocument()
         );
         expect(mockReadRemoteFile).not.toHaveBeenCalled();
+        // The message sits on a theme panel over the striped viewer background.
+        const message = screen.getByText(/\.rds is not supported/i);
+        expect(message.style.background).toBe("var(--vams-bg-primary)");
+        expect(message.style.color).toBe("var(--vams-color-error)");
     });
 
     it("styles the grid for the VAMS theme and follows a theme switch", async () => {
@@ -221,5 +225,18 @@ describe("ColumnarViewerComponent", () => {
                 expect(screen.getByText(/Unable to read this file as FCS data/)).toBeInTheDocument()
             );
         });
+    });
+
+    it("names the missing permission when the API refuses the download with 403 (#1211)", async () => {
+        mockDownloadAsset.mockResolvedValue([false, "Not Authorized", 403]);
+
+        render(<ColumnarViewerComponent {...props("tables/data.csv")} />);
+
+        await waitFor(() =>
+            expect(
+                screen.getByText(/You do not have permission to view or download this file\./)
+            ).toBeInTheDocument()
+        );
+        expect(mockReadRemoteFile).not.toHaveBeenCalled();
     });
 });

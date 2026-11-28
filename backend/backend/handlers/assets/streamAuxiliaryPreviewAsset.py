@@ -5,36 +5,40 @@ import os
 import boto3
 import json
 import base64
+from typing import Optional
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.dynamodb import asset_authorization_object
 from common.validators import validate, exceeds_s3_object_key_limit
+from common.assetLocations import (
+    LOCATION_BUCKET_ATTRIBUTE, contains, normalize_location, object_key_for, object_key_for_path,
+)
+from common.fileAttribution import nested_locations_of_asset
+from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_download_streamed
-from common.s3 import validateUnallowedFileExtensionAndContentType, presigned_get_object_params
+from customLogging.auditLogging import log_file_download_streamed, audited_handler
+from common.s3 import (
+    validateUnallowedFileExtensionAndContentType,
+    region_routing_s3_client,
+    presigned_get_object_params,
+)
+from common.compliance.quarantineGuard import (
+    QuarantineBlockedResponse, check_quarantine_block, quarantine_refusal,
+)
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 
-# Set environment variable for S3 client configuration
-# 'regional' set to add region descriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
-os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional"
+# The S3 client is the Region-routing client from common.s3 (its per-Region clients carry
+# S3_ASSET_CLIENT_CONFIG); the DynamoDB resource gets the standard adaptive retries.
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
-# Standardized retry configuration merged with existing S3 config
-s3_config = Config(
-    signature_version='s3v4', 
-    s3={'addressing_style': 'path'},
-    retries={
-        'max_attempts': 5,
-        'mode': 'adaptive'
-    }
-)
-
-s3_client = boto3.client('s3', config=s3_config)
-dynamodb = boto3.resource('dynamodb', config=s3_config)
+s3_client = region_routing_s3_client()
+dynamodb = boto3.resource('dynamodb', config=retry_config)
 logger = safeLogger(service_name="StreamAuxiliaryPreviewAsset")
 
 # Delivery mode toggle. When True, every file is delivered by 307-redirecting to a short-lived
@@ -74,35 +78,127 @@ def get_asset_details(databaseId, assetId):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving asset")
 
-def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
+AUX_PREVIEW_SEGMENT = "/preview/"
+
+
+def viewer_data_of_nested_asset(asset_object, database_id: str, aux_key: str) -> bool:
+    """Whether a resolved auxiliary key is the viewer data of a file another asset's location, nested in this
+    asset's, holds. That file is the nested asset's whatever its database, so its data is not served through
+    this asset. The asset row's index attribute names the bucket; a row without it (before the index backfill)
+    finds no nested location, as before."""
+    bucket = (asset_object or {}).get(LOCATION_BUCKET_ATTRIBUTE)
+    if not bucket:
+        return False
+    nested = nested_locations_of_asset(asset_table, None, asset_object, bucket,
+                                       asset_table_name=asset_storage_table_name)
+    return bool(nested) and not nested.keep_aux(database_id, aux_key)
+
+
+NOT_PART_OF_ASSET = "Requested file is not part of this asset"
+
+
+def _is_full_key(location: str, path: str) -> bool:
+    """Whether a request path starts with a key the location holds by its own name: the file's full S3 key.
+
+    A folder location holds every key that starts with it. A single-file location ``K`` is named by ``K/...``
+    (the object's data and its companion entries) and ``K.previewFile.{ext}`` (its own previews)."""
+    if location.endswith("/"):
+        return path.startswith(location)
+    return path.startswith(location + "/") or path.startswith(location + PREVIEW_FILE_PATTERN)
+
+
+def resolve_aux_preview_key(database_id: str, location_key: str, file_path: str) -> str:
+    """The auxiliary-bucket key of a viewer data path ``{file}/preview/...`` in one asset.
+
+    A file's viewer data lives at ``{databaseId}/{file key}/preview/...``. The file part names a file the
+    asset's location holds. A leading ``/`` marks the file's path in the asset, the rule the download route
+    uses (``common.downloadEligibility.resolve_asset_file_key``); a path without one is read in this order:
+
+    - the file's full S3 key (the ``key`` the file list returns, the form the web viewers send): a path that
+      starts with the location key (a folder ``{location}...``; a single file ``K/...`` or
+      ``K.previewFile.{ext}...``) is used as given under ``{databaseId}/``;
+    - the auxiliary key itself, ``{databaseId}/{location}...``, used as given;
+    - any other path is the file's path in the asset.
+
+    A path in the asset is read only as a path (``object_key_for_path``): a folder location joins it under
+    ``{databaseId}/{location}``; a single-file location maps it by the file's name chain, so
+    ``/{file name}/preview/...`` reads the object's data and a companion entry's path reads that entry's data.
+    So ``/{location}x/preview/...`` is the file ``{location}{location}x`` of a subfolder named like the
+    location, never ``{location}x``. In a single-file location the file part ends at the first ``/preview/``
+    after the location key (full key) or after a non-empty path (path in the asset). The result is always
+    under ``{databaseId}/`` plus a key the location holds; a path that names none is refused with a fixed
+    message that echoes no input.
     """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-    
-    Args:
-        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-        
-    Returns:
-        The properly resolved S3 key without duplication
-    """
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-    
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-    
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
+    location = normalize_location(location_key)
+    db = (database_id or "").strip("/")
+    raw = file_path or ""
+    in_asset = raw.startswith("/")
+    stripped = raw.lstrip("/")
+    if not location:
+        raise VAMSGeneralErrorResponse(NOT_PART_OF_ASSET)
+    full_key = not in_asset and _is_full_key(location, stripped)
+    auxiliary_key = not in_asset and not full_key and stripped.startswith(
+        f"{db}/{location}" if location.endswith("/") else f"{db}/{location}/")
+    if not _empty_segment_after_location(location, db, raw, in_asset, full_key, auxiliary_key):
+        raise VAMSGeneralErrorResponse(NOT_PART_OF_ASSET)
+    if location.endswith("/"):
+        if full_key:
+            aux_key = f"{db}/{stripped}"
+        elif auxiliary_key:
+            aux_key = stripped
+        else:
+            # Exactly one leading '/' is the path marker: '//x' is the file '{location}/x' (#1977)
+            aux_key = f"{db}/{location}{raw[1:] if in_asset else raw}"
+        return _confined(db, location, aux_key)
+    if auxiliary_key:
+        return _confined(db, location, stripped)
+    path = raw if in_asset else "/" + stripped
+    # A full key's file part is at least the location key, which may itself hold a "/preview/" segment
+    start = len(location) + 1 if full_key else 1
+    while True:
+        index = path.find(AUX_PREVIEW_SEGMENT, start)
+        if index == -1:
+            raise VAMSGeneralErrorResponse(NOT_PART_OF_ASSET)
+        resolve = object_key_for if full_key else object_key_for_path
+        object_key = resolve(location, path[:index])
+        if object_key is not None and contains(location, object_key):
+            return _confined(db, location, f"{db}/{object_key}{path[index:]}", file_key=object_key)
+        start = index + 1
+
+
+def _empty_segment_after_location(location: str, db: str, raw: str, in_asset: bool, full_key: bool,
+                                  auxiliary_key: bool) -> bool:
+    """Whether a path's '//', if any, is the one empty segment a file path may have: right after the asset's
+    location, so the file is the key '{location}/x' (a folder) or '{file key}//x' (a single file) whose path in
+    the asset is '//x' (#1977). The validator has already refused '///', a second '//' and a '//' anywhere but
+    the start of a path in the asset."""
+    if "//" not in raw:
+        return True
+    if in_asset:
+        return raw.startswith("//")
+    base = location if location.endswith("/") else location + "/"
+    if full_key:
+        return raw.startswith(base + "/")
+    if auxiliary_key:
+        return raw.startswith(f"{db}/{base}/")
+    return False
+
+
+def _confined(db: str, location: str, aux_key: str, file_key: Optional[str] = None) -> str:
+    """The auxiliary key, after a last check that it stays inside the asset: under the asset's database prefix,
+    with a file part the asset's location holds (``file_key`` when the caller resolved it, else the whole rest,
+    which a folder location or a single file's ``{file key}/`` prefix holds), and no ``.`` or ``..`` segment.
+    Any other key is refused with the fixed message."""
+    prefix = f"{db}/"
+    rest = aux_key[len(prefix):] if aux_key.startswith(prefix) else None
+    if rest is None or any(segment in ("..", ".") for segment in rest.split("/")):
+        raise VAMSGeneralErrorResponse(NOT_PART_OF_ASSET)
+    held = contains(location, file_key) if file_key is not None else (
+        contains(location, rest) if location.endswith("/") else rest.startswith(location + "/"))
+    if not held:
+        raise VAMSGeneralErrorResponse(NOT_PART_OF_ASSET)
+    return aux_key
+
 
 def handle_head_request(event, claims_and_roles):
     """Handle HEAD requests to check file availability and permissions
@@ -142,14 +238,26 @@ def handle_head_request(event, claims_and_roles):
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
     
-    # Get asset details and check if it exists
+    # Get asset details; existence and the distributable flag are answered only after authorization,
+    # so a refused caller gets the same 403 for a missing asset as for an existing one (the
+    # request's ids stand in for a missing record).
     asset_object = get_asset_details(databaseId, assetId)
+
+    # Check authorization
+    operation_allowed_on_asset = False
+    if len(claims_and_roles["tokens"]) > 0:
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if casbin_enforcer.enforceAPI(event, "GET"):
+            if casbin_enforcer.enforce(asset_authorization_object(asset_object, databaseId, assetId), "GET"):
+                operation_allowed_on_asset = True
+
+    if not operation_allowed_on_asset:
+        return authorization_error()
+
     if not asset_object:
         message = f"Asset not found in database"
         logger.error(message)
         return general_error(body={'message': message}, status_code=404, event=event)
-    
-    asset_object.update({"object__type": "asset"})
 
     # Check if asset is distributable
     if not asset_object.get('isDistributable', False):
@@ -157,16 +265,9 @@ def handle_head_request(event, claims_and_roles):
         logger.error(message)
         return general_error(body={'message': message}, status_code=403, event=event)
 
-    # Check authorization
-    operation_allowed_on_asset = False
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if casbin_enforcer.enforceAPI(event, "GET"):
-            if casbin_enforcer.enforce(asset_object, "GET"):
-                operation_allowed_on_asset = True
-
-    if not operation_allowed_on_asset:
-        return authorization_error()
+    # The quarantine block is evaluated only for an authorized caller, so a denied caller
+    # cannot learn the asset's compliance state from the response.
+    check_quarantine_block(databaseId, assetId)
 
     # Get the location of the base asset key
     assetLocationKey = asset_object.get('assetLocation', {}).get("Key")
@@ -178,7 +279,9 @@ def handle_head_request(event, claims_and_roles):
     # Auxiliary preview objects live under the database-scoped per-file layout
     # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
     # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
-    object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
+    object_key = resolve_aux_preview_key(databaseId, assetLocationKey, object_key)
+    if viewer_data_of_nested_asset(asset_object, databaseId, object_key):
+        return general_error(body={'message': 'File not found'}, status_code=404, event=event)
 
     # The validator bounded the asset-relative part; the resolved key carries the database and asset
     # prefix as well and is what S3 measures. Refuse it here so an over-long key never reaches head_object.
@@ -205,6 +308,8 @@ def handle_head_request(event, claims_and_roles):
         response_headers = {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Headers': 'Range',
+            # Lets a cross-origin browser caller read the metadata headers below
+            'Access-Control-Expose-Headers': 'ETag, Last-Modified, Accept-Ranges, x-amz-version-id, x-amz-storage-class',
             'Cache-Control': 'no-cache, no-store',
             'Content-Type': content_type,
             'Content-Length': str(head_response.get('ContentLength', 0)),
@@ -240,6 +345,8 @@ def handle_head_request(event, claims_and_roles):
             logger.exception(f"S3 ClientError during HEAD request: {e}")
             return internal_error(event=event)
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for auxiliary preview asset streaming APIs"""
     global claims_and_roles
@@ -312,45 +419,50 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         operation_allowed_on_asset = False
 
-        # Get asset details and check if it exists
+        # Get asset details; existence and the distributable flag are answered only after
+        # authorization, so a refused caller gets the same 403 for a missing asset as for an
+        # existing one (the request's ids stand in for a missing record).
         asset_object = get_asset_details(databaseId, assetId)
-        if not asset_object:
-            message = f"Asset not found in database"
-            logger.error(message)
-            # Create custom headers for streaming response
-            streaming_headers = {
-                'Access-Control-Allow-Headers': 'Range',
-                'Access-Control-Allow-Origin': '*',
-            }
-            error_response = general_error(body={"message": message}, status_code=404, event=event)
-            error_response['headers'].update(streaming_headers)
-            return error_response
-
-        asset_object.update({"object__type": "asset"})
-
-        logger.info(asset_object)
-
-        # Check if asset is distributable
-        if not asset_object.get('isDistributable', False):
-            message = "Asset is not currently allowing file distribution"
-            logger.error(message)
-            streaming_headers = {
-                'Access-Control-Allow-Headers': 'Range',
-                'Access-Control-Allow-Origin': '*',
-            }
-            error_response = general_error(body={"message": message}, status_code=403, event=event)
-            error_response['headers'].update(streaming_headers)
-            return error_response
 
         # Check API authorization
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event, http_method):
                 # Check object-level authorization
-                if casbin_enforcer.enforce(asset_object, http_method):
+                if casbin_enforcer.enforce(asset_authorization_object(asset_object, databaseId, assetId), http_method):
                     operation_allowed_on_asset = True
 
         if operation_allowed_on_asset:
+            if not asset_object:
+                message = f"Asset not found in database"
+                logger.error(message)
+                # Create custom headers for streaming response
+                streaming_headers = {
+                    'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
+                }
+                error_response = general_error(body={"message": message}, status_code=404, event=event)
+                error_response['headers'].update(streaming_headers)
+                return error_response
+
+            logger.info(f"Asset loaded: databaseId={asset_object.get('databaseId')}, assetId={asset_object.get('assetId')}")
+
+            # Check if asset is distributable
+            if not asset_object.get('isDistributable', False):
+                message = "Asset is not currently allowing file distribution"
+                logger.error(message)
+                streaming_headers = {
+                    'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
+                }
+                error_response = general_error(body={"message": message}, status_code=403, event=event)
+                error_response['headers'].update(streaming_headers)
+                return error_response
+
+            # The quarantine block is evaluated only for an authorized caller, so a denied
+            # caller cannot learn the asset's compliance state from the response.
+            check_quarantine_block(databaseId, assetId)
+
             try:
                 # Get the location of the base asset key and normalize the object_key we are passing in
                 # (also ensures security of not fetching asset key files outside of provided asset ID)
@@ -370,7 +482,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 # Auxiliary preview objects live under the database-scoped per-file layout
                 # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
                 # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
-                object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
+                object_key = resolve_aux_preview_key(databaseId, assetLocationKey, object_key)
+                if viewer_data_of_nested_asset(asset_object, databaseId, object_key):
+                    error_response = general_error(body={"message": "File not found"}, status_code=404, event=event)
+                    error_response['headers'].update({
+                        'Access-Control-Allow-Headers': 'Range',
+                        'Access-Control-Allow-Origin': '*',
+                        'Cache-Control': 'no-cache, no-store',
+                    })
+                    return error_response
 
                 # The validator bounded the asset-relative part; the resolved key carries the database and
                 # asset prefix as well and is what S3 measures. Refuse it here so an over-long key never
@@ -459,6 +579,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                             'Location': presigned_url,
                             'Access-Control-Allow-Headers': 'Range',
                             'Access-Control-Allow-Origin': '*',
+                            # Lets a cross-origin browser caller read the redirect target
+                            'Access-Control-Expose-Headers': 'Location',
                             'Cache-Control': 'no-cache, no-store',
                         },
                         'body': ''
@@ -488,6 +610,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     'headers': {
                             'Access-Control-Allow-Headers': 'Range',
                             'Access-Control-Allow-Origin': '*',
+                            # Lets a cross-origin browser caller read the range/encoding metadata below
+                            'Access-Control-Expose-Headers': 'Accept-Ranges, Content-Range, Content-Encoding',
                             'Cache-Control': 'no-cache, no-store',
                             'Accept-Ranges': s3_response['ResponseMetadata']['HTTPHeaders']['accept-ranges'],
                             'Content-Type': s3_response['ResponseMetadata']['HTTPHeaders']['content-type'],
@@ -548,6 +672,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except QuarantineBlockedResponse as refusal:
+        # An expected refusal: one INFO line, no traceback (D174).
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

@@ -6,6 +6,7 @@ read (and each step's pipeline definition) before authorizing them one at a time
 """
 
 import os
+import sys
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -28,6 +29,10 @@ os.environ.setdefault("EXECUTE_WORKFLOW_V2_LAMBDA_FUNCTION_NAME", "t-execv2")
 from backend.backend.handlers.workflows import executionService as le
 
 MOD = "backend.backend.handlers.workflows.executionService"
+
+# The retry budget lives on the shared helper (common.dynamodb.batch_get_items), which the
+# conftest binds onto the mocked common.dynamodb module from the real source.
+BATCH_GET_MAX_RETRIES = sys.modules["common.dynamodb"].BATCH_GET_MAX_RETRIES
 
 # The table names the module resolved at import (the root conftest seeds them as env overrides), so
 # the batch_get_item stubs key off the same names the helpers request.
@@ -168,7 +173,7 @@ class TestPrewarmAssetDetailsUnprocessedKeys:
              patch(f"{MOD}.time.sleep"):
             ddb.batch_get_item = stub
             result = le.prewarm_asset_details([("db", "a1"), ("db", "a2")])
-        assert stub.call_count == le.BATCH_GET_MAX_RETRIES + 1
+        assert stub.call_count == BATCH_GET_MAX_RETRIES + 1
         assert per_item.call_count == 2
         assert result[("db", "a1")]["assetId"] == "a1"
         assert result[("db", "a2")]["assetId"] == "a2"

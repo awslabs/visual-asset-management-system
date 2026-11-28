@@ -10,7 +10,33 @@ import { VeerumViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
 import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
+import { auxiliaryPreviewStreamUrl, POTREE_VIEWER_METADATA } from "../../core/viewerData";
 import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
+import {
+    apiRefusalMessage,
+    describeStreamFailure,
+    probeStreamFailure,
+} from "../../core/streamFailure";
+
+/** A file request the API refused with a reason of its own (D166), shown as the API gave it. */
+class ApiRefusal extends Error {}
+
+/**
+ * Why a streamed file the viewer library could not load was refused, when the API refused it with
+ * a reason of its own (for example a quarantined asset while the download block is on): the
+ * request is made again for its status and body (`probeStreamFailure`), as the Potree viewer does.
+ * null when the API gave no such reason, and the viewer keeps its own message.
+ */
+const refusedBecause = async (
+    url: string,
+    headers: HeadersInit,
+    subject: string
+): Promise<string | null> => {
+    const failure = await probeStreamFailure(url, headers);
+    return apiRefusalMessage(failure.status, failure.body?.message)
+        ? describeStreamFailure(subject, failure)
+        : null;
+};
 
 // Lazy load unified panel to avoid circular dependency issues
 const VeerumPanel = lazy(() => import("./VeerumPanel"));
@@ -211,12 +237,18 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
 
                             // Wrap add() call with explicit promise handling to catch all errors
                             await Promise.resolve(viewerControllerRef.current.add(tileModel)).catch(
-                                (addError) => {
+                                async (addError) => {
                                     console.error(
                                         `VEERUM Viewer: Error adding tileset to viewer:`,
                                         addError
                                     );
-                                    throw addError;
+                                    // A tileset the API refused names the API's reason (D166).
+                                    const refusal = await refusedBecause(
+                                        assetUrl,
+                                        headers,
+                                        `the tileset "${tileModel.name}"`
+                                    );
+                                    throw refusal ? new ApiRefusal(refusal) : addError;
                                 }
                             );
 
@@ -226,21 +258,15 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                             // All other file types - use PointCloudModel with Potree metadata path
                             // This allows the plugin viewer system to control supported file types
                             // and makes it easier to add new point cloud formats later
-                            // Pass only the asset-relative path (not the databaseId or the leading
-                            // assetId). The stream endpoint prepends {databaseId}/{assetLocationKey}
-                            // to resolve the database-scoped per-file aux preview location. If
-                            // fileKey is the full, assetId-prefixed key, strip that leading segment.
-                            let relativeFileKey = fileKey;
-                            if (relativeFileKey.startsWith(assetId + "/")) {
-                                relativeFileKey = relativeFileKey.slice(assetId.length + 1);
-                            }
-                            const potreeFileKey =
-                                relativeFileKey + "/preview/PotreeViewer/metadata.json";
-                            const assetUrl = `${
-                                config.api
-                            }database/${databaseId}/assets/${encodeURIComponent(
-                                assetId
-                            )}/auxiliaryPreviewAssets/stream/${potreeFileKey}`;
+                            // The file's key as the host gives it; the API decides which file
+                            // it names.
+                            const assetUrl = auxiliaryPreviewStreamUrl(
+                                config.api,
+                                databaseId,
+                                assetId,
+                                fileKey,
+                                POTREE_VIEWER_METADATA
+                            );
 
                             console.log(`VEERUM Viewer: Validating point cloud URL ${assetUrl}`);
 
@@ -255,6 +281,14 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
 
                                 // Check for successful response (2xx) or redirect (3xx)
                                 if (!response.ok && response.status >= 400) {
+                                    // A HEAD answer has no body: a refusal's own reason is read
+                                    // from a GET of the same URL (D166).
+                                    const refusal = await refusedBecause(
+                                        assetUrl,
+                                        headers,
+                                        "the point cloud preview"
+                                    );
+                                    if (refusal) throw new ApiRefusal(refusal);
                                     throw new Error(
                                         `HTTP ${response.status}: ${
                                             response.statusText || "Request failed"
@@ -266,6 +300,9 @@ const VeerumViewerComponent: React.FC<VeerumViewerProps> = ({
                                     `VEERUM Viewer: Point cloud URL validation successful (${response.status})`
                                 );
                             } catch (fetchError: any) {
+                                // The API's own refusal is shown as it is: running the Potree
+                                // pipeline would not change it.
+                                if (fetchError instanceof ApiRefusal) throw fetchError;
                                 // Handle all fetch errors: CORS, network failures, HTTP errors
                                 const errorDetail =
                                     fetchError?.message ||

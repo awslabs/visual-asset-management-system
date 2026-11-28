@@ -50,6 +50,13 @@ class RecordingS3:
                 outer.downloads.append((bucket, key, local))
 
         self.client = _Client()
+        self.bucket_regions = {}
+
+    def register_bucket_regions(self, bucket_regions):
+        self.bucket_regions.update(bucket_regions or {})
+
+    def client_for_bucket(self, bucket):
+        return self.client
 
     def upload_file(self, local_path, s3_uri):
         self.uploads.append((local_path, s3_uri))
@@ -59,7 +66,7 @@ def make_config(**overrides) -> PipelineConfig:
     values = dict(
         job_name="job1",
         mode="evaluate",
-        task="Isaac-Cartpole-Direct-v0",
+        task="Isaac-Cartpole-Direct",
         rl_library="rsl_rl",
         input_s3_path="",
         output_s3_path=_OUTPUT_PREFIX,
@@ -71,6 +78,8 @@ def make_config(**overrides) -> PipelineConfig:
 class _ExitCode:
     def __init__(self, returncode):
         self.returncode = returncode
+        self.tail = ""
+        self.timed_out = False
         self.stdout = ""
         self.stderr = ""
 
@@ -94,7 +103,7 @@ class TestFailureReachesTheTaskTokens:
         monkeypatch.setattr(mod, "upload_evaluation_results", lambda *a, **k: None)
         monkeypatch.setattr(mod, "download_policy", lambda s3, config: "/tmp/policy.pt")
         monkeypatch.setattr(mod, "S3Client", RecordingS3)
-        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _ExitCode(returncode))
+        monkeypatch.setattr(mod, "run_isaac_lab", lambda *a, **k: _ExitCode(returncode))
         monkeypatch.setenv("SFN_TASK_TOKEN", "INT-TOKEN")
         monkeypatch.setattr(sys, "argv", ["__main__.py", json.dumps(job_config)])
 
@@ -107,7 +116,7 @@ class TestFailureReachesTheTaskTokens:
     def test_training_failure_fails_both_tokens(self, main_module, monkeypatch):
         job_config = {
             "jobName": "job1",
-            "trainingConfig": {"mode": "train", "task": "Isaac-Cartpole-Direct-v0",
+            "trainingConfig": {"mode": "train", "task": "Isaac-Cartpole-Direct",
                                "rlLibrary": "rsl_rl"},
             "outputS3AssetFilesPath": _OUTPUT_PREFIX,
             "externalSfnTaskToken": "EXT-TOKEN",
@@ -126,7 +135,7 @@ class TestFailureReachesTheTaskTokens:
     def test_evaluation_failure_fails_both_tokens(self, main_module, monkeypatch):
         job_config = {
             "jobName": "job1",
-            "trainingConfig": {"mode": "evaluate", "task": "Isaac-Cartpole-Direct-v0",
+            "trainingConfig": {"mode": "evaluate", "task": "Isaac-Cartpole-Direct",
                                "policyS3Uri": "s3://bucket/policy.pt", "rlLibrary": "rsl_rl"},
             "outputS3AssetFilesPath": _OUTPUT_PREFIX,
             "externalSfnTaskToken": "EXT-TOKEN",
@@ -209,7 +218,7 @@ class TestPolicyDownload:
 
     def _config(self, main_module, policy_s3_uri):
         return main_module.PipelineConfig(
-            job_name="isaaclab-job", mode="evaluate", task="Isaac-Cartpole-v0",
+            job_name="isaaclab-job", mode="evaluate", task="Isaac-Cartpole",
             rl_library="rsl_rl", input_s3_path="", output_s3_path="",
             policy_s3_uri=policy_s3_uri)
 
@@ -224,14 +233,18 @@ class TestPolicyDownload:
             main_module.download_policy(s3, self._config(main_module, uri))
         assert s3.downloads == []
 
-    def test_an_s3_uri_is_downloaded(self, main_module):
-        # Positive control: a check that rejected everything would pass the cases above.
+    def test_an_s3_uri_is_downloaded(self, main_module, monkeypatch, tmp_path):
+        # Positive control: a check that rejected everything would pass the cases above. The
+        # destination is redirected into tmp_path; where it lands in the image, and what play.py then
+        # writes beside it, is covered by test_isaaclab_nonroot_write_paths.py (issue #1312).
+        local = str(tmp_path / "evaluation" / "checkpoints" / "policy.pt")
+        monkeypatch.setattr(main_module, "EVALUATION_POLICY_PATH", local)
         s3 = RecordingS3()
         path = main_module.download_policy(
             s3, self._config(main_module, "s3://asset-bucket/xid1/checkpoints/model_300.pt"))
-        assert path == "/tmp/policy.pt"
+        assert path == local
         assert s3.downloads == [
-            ("asset-bucket", "xid1/checkpoints/model_300.pt", "/tmp/policy.pt")]
+            ("asset-bucket", "xid1/checkpoints/model_300.pt", local)]
 
     def test_a_missing_uri_still_raises(self, main_module):
         with pytest.raises(ValueError, match="No policy S3 URI provided"):
@@ -252,16 +265,16 @@ class TestRlLibraryResolution:
     different library than requested, succeed, and leave unloadable checkpoints."""
 
     @pytest.mark.parametrize("library", ["rsl_rl", "rl_games", "skrl"])
-    def test_supported_libraries_resolve_to_their_own_scripts(self, main_module, library):
+    def test_supported_libraries_resolve_to_their_own_entry_point_flag(self, main_module, library):
         train = main_module.build_training_command(
             make_config(mode="train", rl_library=library), "/tmp/checkpoints")
         play = main_module.build_evaluation_command(
             make_config(mode="evaluate", rl_library=library), "/tmp/policy.pt")
 
-        assert train[train.index("-p") + 1] == \
-            f"scripts/reinforcement_learning/{library}/train.py"
-        assert play[play.index("-p") + 1] == \
-            f"scripts/reinforcement_learning/{library}/play.py"
+        assert train[:2] == ["./isaaclab.sh", "train"]
+        assert train[train.index("--rl_library") + 1] == library
+        assert play[:2] == ["./isaaclab.sh", "play"]
+        assert play[play.index("--rl_library") + 1] == library
 
     @pytest.mark.parametrize("library", ["stable_baselines3", "RSL_RL", "", "rsl-rl"])
     def test_unsupported_library_is_rejected_for_training(self, main_module, library):
@@ -315,7 +328,7 @@ class TestMultiNodeTrainingIsNotSupported:
             executed.append(cmd)
             return _ExitCode(0)
 
-        monkeypatch.setattr(main_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(main_module, "run_isaac_lab", fake_run)
         monkeypatch.setattr(main_module, "setup_checkpoint_dir",
                             lambda config: "/tmp/checkpoints/job1")
         monkeypatch.setattr(main_module, "upload_logs", lambda s3, config: None)
@@ -327,9 +340,8 @@ class TestMultiNodeTrainingIsNotSupported:
 
         assert len(executed) == 1
         cmd = executed[0]
-        assert cmd[:3] == \
-            ["./isaaclab.sh", "-p", "scripts/reinforcement_learning/rsl_rl/train.py"]
-        assert "--headless" in cmd and "--max_iterations" in cmd
+        assert cmd[:4] == ["./isaaclab.sh", "train", "--rl_library", "rsl_rl"]
+        assert "--headless" not in cmd and "--max_iterations" in cmd
         assert "torchrun" not in cmd
         assert uploaded == ["/tmp/checkpoints/job1"]
 

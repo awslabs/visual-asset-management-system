@@ -6,14 +6,18 @@
 import {
     searchRowToFileInfo,
     isViewableExtension,
+    isViewableSearchRow,
     reconcileViewerSelection,
     clearViewableExtensionCache,
 } from "./searchRowToFileInfo";
 
 // Mock the registry so this test is pure and does not load real plugins.
 jest.mock("../../../visualizerPlugin/core/PluginRegistry", () => {
+    // .glb, .png and files with no extension ("(none)", like the shipped Text Viewer) are viewable.
     const getCompatibleViewers = jest.fn((exts: string[]) =>
-        exts.includes(".glb") || exts.includes(".png") ? [{ config: { id: "x" } }] : []
+        exts.includes(".glb") || exts.includes(".png") || exts.includes("(none)")
+            ? [{ config: { id: "x" } }]
+            : []
     );
     return {
         PluginRegistry: {
@@ -35,7 +39,7 @@ describe("searchRowToFileInfo", () => {
             num_filesize: 2400,
             date_lastmodified: "2026-06-10",
             bool_archived: false,
-            str_primarytype: "model",
+            MD_: { "s3_vams-primarytype": "model" },
         };
         const fi = searchRowToFileInfo(row);
         expect(fi).toEqual({
@@ -49,6 +53,13 @@ describe("searchRowToFileInfo", () => {
             isArchived: false,
             primaryType: "model",
         });
+    });
+
+    it("reads no primary type from a row without the indexed metadata key", () => {
+        expect(
+            searchRowToFileInfo({ str_key: "a/b/c.png", str_assetid: "x", str_databaseid: "d" })
+                .primaryType
+        ).toBeNull();
     });
 
     it("derives filename from the last path segment", () => {
@@ -68,6 +79,40 @@ describe("isViewableExtension", () => {
         expect(isViewableExtension(".docx")).toBe(false);
         expect(isViewableExtension(undefined)).toBe(false);
         expect(isViewableExtension("")).toBe(false);
+    });
+});
+
+describe("isViewableSearchRow (#1198)", () => {
+    beforeEach(() => clearViewableExtensionCache());
+
+    it("judges a row by its key, so a file without an extension is viewable", () => {
+        // The indexer stores no str_fileext for README.
+        expect(isViewableSearchRow({ str_key: "xasset1/docs/README" })).toBe(true);
+        expect(isViewableSearchRow({ str_key: "xasset1/docs/README", str_fileext: "" })).toBe(true);
+    });
+
+    it("applies the web dotfile rule, not the indexed str_fileext", () => {
+        // The indexer stores "gitignore" for .gitignore; the web rule gives it no extension.
+        expect(
+            isViewableSearchRow({ str_key: "xasset1/.gitignore", str_fileext: "gitignore" })
+        ).toBe(true);
+        // A row whose str_fileext claims a viewable type but whose key says otherwise is not viewable.
+        expect(isViewableSearchRow({ str_key: "xasset1/report.docx", str_fileext: ".glb" })).toBe(
+            false
+        );
+    });
+
+    it("is false for a folder key or a row without a key", () => {
+        expect(isViewableSearchRow({ str_key: "xasset1/folder/" })).toBe(false);
+        expect(isViewableSearchRow({})).toBe(false);
+        expect(isViewableSearchRow(undefined)).toBe(false);
+    });
+
+    it("lets an extensionless row join the viewer selection", () => {
+        const readme = { str_key: "README", str_assetid: "a1", str_databaseid: "d1" };
+        expect(reconcileViewerSelection([], [readme], [readme]).map((f) => f.key)).toEqual([
+            "README",
+        ]);
     });
 });
 

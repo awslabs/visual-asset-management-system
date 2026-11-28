@@ -1,5 +1,6 @@
 #  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
+import time
 import boto3
 from botocore.config import Config
 from typing import Tuple
@@ -11,7 +12,7 @@ from customLogging.logger import safeLogger
 from models.common import VAMSGeneralErrorResponse
 from common.resourceNames import ResourceKeys, get_table_name
 
-logger = safeLogger(service_name="DynamoDBCommon")
+logger = safeLogger()
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
@@ -35,6 +36,63 @@ def _asset_table_resource():
     if _asset_table is None:
         _asset_table = dynamodb.Table(get_table_name(ResourceKeys.ASSET_STORAGE_TABLE))
     return _asset_table
+
+
+# Archiving an asset rewrites its record under the "<databaseId>#deleted" partition, while its
+# versions, metadata, links, comments and history stay keyed by the original database id.
+ARCHIVED_ASSET_DATABASE_SUFFIX = "#deleted"
+
+
+def get_asset_record(table, databaseId, assetId, include_archived=False):
+    """Read one asset record by databaseId + assetId, optionally falling back to its archived row.
+
+    The live partition is read first. Only when include_archived is set and no live row exists is
+    the archived partition read; a row found there without a status (written before the field
+    existed) is reported as archived. Returns the stored record (an archived one keeps its stored
+    "<databaseId>#deleted" id) or None when neither partition holds the asset.
+
+    The table is the caller's handle, so each handler reads through the table it already holds.
+    """
+    response = table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
+    item = response.get('Item')
+    if item or not include_archived or str(databaseId).endswith(ARCHIVED_ASSET_DATABASE_SUFFIX):
+        return item
+
+    response = table.get_item(
+        Key={'databaseId': f"{databaseId}{ARCHIVED_ASSET_DATABASE_SUFFIX}", 'assetId': assetId})
+    item = response.get('Item')
+    if item and 'status' not in item:
+        item['status'] = 'archived'
+    return item
+
+
+def asset_authorization_object(asset, databaseId, assetId, include_archived=False):
+    """The object Tier 2 decides for a single-asset request, built before existence is revealed.
+
+    A found record is evaluated as a copy annotated with its object type. When no record was
+    found, the request's identifiers stand in, so the verdict is reached whether or not the asset
+    exists. On a read that includes archived assets the stand-in carries the archived
+    "<databaseId>#deleted" id, so a caller who may not read that database's archived records is
+    refused for a missing id exactly as for an archived one.
+    """
+    if asset:
+        return {**asset, 'object__type': 'asset'}
+    stand_in_database_id = databaseId or ''
+    if include_archived and not str(stand_in_database_id).endswith(ARCHIVED_ASSET_DATABASE_SUFFIX):
+        stand_in_database_id = f"{stand_in_database_id}{ARCHIVED_ASSET_DATABASE_SUFFIX}"
+    return {'databaseId': stand_in_database_id, 'assetId': assetId, 'object__type': 'asset'}
+
+
+def database_authorization_object(database, databaseId):
+    """The object Tier 2 decides for a single-database request, built before existence is revealed.
+
+    A found record is evaluated as a copy annotated with its object type, so the record a caller
+    writes back carries no object type. When no record was found, the requested id stands in, so
+    the verdict is reached whether or not the database exists.
+    """
+    if database:
+        return {**database, 'object__type': 'database'}
+    return {'databaseId': databaseId or '', 'object__type': 'database'}
 
 
 def query_all_items(table, **query_kwargs) -> List[Dict]:
@@ -97,15 +155,95 @@ def query_has_match(table, **query_kwargs) -> bool:
         query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
 
 
-def to_update_expr(record, op="SET") -> Tuple[Dict[str, str], Dict[str, Any], str]:
+# Keys per BatchGetItem request. 100 is the DynamoDB hard limit for a single BatchGetItem; a larger
+# key set is split across sequential requests.
+BATCH_GET_CHUNK_SIZE = 100
+
+# Re-requests of a BatchGetItem's UnprocessedKeys (throttling / a response that hit the 16 MB size
+# limit) before the remainder is handed back to the caller as unresolved.
+BATCH_GET_MAX_RETRIES = 3
+
+# Base seconds for the exponential backoff between UnprocessedKeys retries.
+BATCH_GET_RETRY_BACKOFF_SECONDS = 0.05
+
+
+def batch_get_items(dynamodb_resource, table_name, keys, *,
+                    max_retries=BATCH_GET_MAX_RETRIES,
+                    backoff_seconds=BATCH_GET_RETRY_BACKOFF_SECONDS) -> Tuple[List[Dict], List[Dict]]:
+    """BatchGetItem `keys` (full primary-key dicts) from one table.
+
+    Chunks at the per-call key limit and re-requests UnprocessedKeys with exponential backoff, up
+    to `max_retries` times per chunk. batch_get_item answers a partially throttled request, or one
+    whose response reached the 16 MB size limit, with HTTP 200 and the leftover keys in
+    UnprocessedKeys — outside the botocore retry config, so a caller that reads only `Responses`
+    silently loses those items. `max_retries=0` is one call per chunk and no retry.
+
+    Keys are deduplicated before sending: DynamoDB rejects a request whose key list carries a
+    duplicate, so a key set collected from a tree or a page of references would otherwise lose its
+    whole chunk to a ValidationException.
+
+    Returns (rows, unresolved_keys). A key absent from both is an item that does not exist; a key in
+    `unresolved_keys` is one the read did not complete within the retry budget. Keeping the two apart
+    is the point: a caller that reads every missing row as "no such item" would report a throttled
+    read as a deletion — or, after authorization, as a denial. A failed call (ClientError) propagates;
+    the caller owns its fallback.
+
+    Args:
+        dynamodb_resource: The caller's boto3 DynamoDB service resource.
+        table_name: Table the keys belong to.
+        keys: Full primary-key dicts, e.g. {'databaseId': ..., 'assetId': ...}.
+        max_retries: UnprocessedKeys re-requests per chunk; 0 disables retrying.
+        backoff_seconds: Base of the exponential backoff between retries.
+
+    Returns:
+        (rows, unresolved_keys): the items that came back, and the keys still unprocessed after
+        the retry budget.
     """
-    :param record:
-    :param op:
-    :return:
+    unique_keys = []
+    seen = set()
+    for key in keys:
+        marker = tuple(sorted(key.items()))
+        if marker not in seen:
+            seen.add(marker)
+            unique_keys.append(key)
+
+    rows: List[Dict] = []
+    unresolved_keys: List[Dict] = []
+    for start in range(0, len(unique_keys), BATCH_GET_CHUNK_SIZE):
+        pending = unique_keys[start:start + BATCH_GET_CHUNK_SIZE]
+        attempt = 0
+        while True:
+            response = dynamodb_resource.batch_get_item(RequestItems={table_name: {'Keys': pending}})
+            rows.extend(response.get('Responses', {}).get(table_name, []))
+            pending = response.get('UnprocessedKeys', {}).get(table_name, {}).get('Keys', [])
+            if not pending:
+                break
+            attempt += 1
+            if attempt > max_retries:
+                logger.info(f"Batch read of {table_name} left {len(pending)} keys unprocessed after "
+                            f"{max_retries} retries")
+                unresolved_keys.extend(pending)
+                break
+            # Exponential backoff before resending the keys batch_get_item left unprocessed. Must be
+            # the last comment line before the call -- semgrep attaches `nosemgrep` to the next line
+            # only.
+            # nosemgrep: arbitrary-sleep
+            time.sleep(backoff_seconds * (2 ** (attempt - 1)))
+    return rows, unresolved_keys
+
+
+def to_update_expr(record, op="SET") -> Tuple[Dict[str, str], Dict[str, Any], str]:
+    """Build (ExpressionAttributeNames, ExpressionAttributeValues, UpdateExpression) that `op`s
+    every attribute in `record`.
+
+    The placeholders are `#u<i>` / `:u<i>`. A caller may pass a boto3 condition object
+    (`Attr(...).eq(...)`) as the ConditionExpression of the same call; boto3 renders it with its own
+    `#n<i>` / `:v<i>` placeholders and merges them into these maps, replacing any entry of the same
+    name. Sharing its prefix would let the condition's value overwrite a SET value.
     """
     keys = record.keys()
-    keys_attr_names = ["#f{n}".format(n=x) for x in range(len(keys))]
-    values_attr_names = [":v{n}".format(n=x) for x in range(len(keys))]
+    keys_attr_names = ["#u{n}".format(n=x) for x in range(len(keys))]
+    values_attr_names = [":u{n}".format(n=x) for x in range(len(keys))]
 
     keys_map = {
         k: key
@@ -122,19 +260,21 @@ def to_update_expr(record, op="SET") -> Tuple[Dict[str, str], Dict[str, Any], st
     return keys_map, values_map, expr
 
 
-def get_asset_object_from_id(databaseId, assetId):
-    """Resolve an asset record for authorization, keyed by databaseId+assetId or by assetId alone.
+def get_asset_object_from_id(databaseId, assetId, include_archived=False):
+    """Read one asset record by its database and asset id, annotated for authorization.
 
-    Returns the asset record annotated with object__type 'asset', or None when the asset
-    does not exist. Callers must handle the None: an object with no attributes evaluates
-    against ABAC criteria as if the asset were present, which produces allow/deny outcomes
-    for an asset that is not there.
+    An asset is identified by its database and asset id together: two databases may hold assets
+    with the same asset id, so both are required. The live partition is read first; with
+    include_archived and no live row, the archived row (stored databaseId "<databaseId>#deleted")
+    is returned instead, so the flag never changes which record a live asset resolves to.
 
-    Raises VAMSGeneralErrorResponse when assetId is empty, when the read fails, and when
-    an assetId alone matches more than one live asset (assetIds are unique within a
-    database, not across databases, so that match cannot be resolved without a databaseId).
+    Returns the stored record annotated with object__type 'asset', or None when neither partition
+    holds the asset. Callers decide Tier 2 on asset_authorization_object(record, databaseId,
+    assetId, include_archived) before they reveal a None as a 404.
+
+    Raises VAMSGeneralErrorResponse when either id is empty and when the read fails.
     """
-    if not assetId:
+    if not databaseId or not assetId:
         raise VAMSGeneralErrorResponse("Empty assetId or databaseId received")
 
     try:
@@ -143,73 +283,16 @@ def get_asset_object_from_id(databaseId, assetId):
         logger.exception("Failed resolving asset storage table name")
         raise
 
-    if databaseId:
-        """Get asset details from DynamoDB"""
-        try:
-            response = asset_table.query(
-                KeyConditionExpression=Key('databaseId').eq(databaseId) & Key('assetId').eq(assetId),
-                ScanIndexForward=False
-            )
-            
-            if not response.get('Items'):
-                return None
+    try:
+        item = get_asset_record(asset_table, databaseId, assetId, include_archived=include_archived)
+    except Exception as e:
+        logger.exception(f"Error getting asset details: {e}")
+        raise VAMSGeneralErrorResponse("Error retrieving asset.")
 
-            #get first object
-            asset_object = response['Items'][0]
-            asset_object.update({
-                "object__type": "asset"
-            })
-            return asset_object
-        
-        except Exception as e:
-            logger.exception(f"Error getting asset details: {e}")
-            raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
-    else:
-        #Kept right now for backwards capability until all tables can be updated to use datbaseId/Assetid (comments, subscriptions, asset links)
-        #assetIdGSI is partitioned on assetId, so this is a keyed read of the index that
-        #returns only the rows carrying this assetId, not a filtered pass over the table.
-        try:
-            items = query_all_items(
-                asset_table,
-                IndexName='assetIdGSI',
-                KeyConditionExpression=Key('assetId').eq(assetId)
-            )
-        except Exception as e:
-            logger.exception(f"Error getting asset details: {e}")
-            raise VAMSGeneralErrorResponse("Error retrieving asset.")
-
-        #Archiving rewrites a record under a "{databaseId}#deleted" partition, so an
-        #archived row is not the live asset and cannot stand in for it.
-        live_items = [
-            item for item in items
-            if not str(item.get('databaseId', '')).endswith('#deleted')
-            and item.get('status') != 'archived'
-        ]
-
-        #assetIds are unique within a database only. Two live matches cannot be
-        #distinguished without a databaseId, so the ambiguity is surfaced instead of
-        #resolved to whichever row the index returned first.
-        if len(live_items) > 1:
-            logger.error(
-                f"assetId {assetId} matches {len(live_items)} live assets, in databases "
-                f"{sorted(str(item.get('databaseId')) for item in live_items)}"
-            )
-            raise VAMSGeneralErrorResponse("Asset ID matches more than one asset. Provide a database ID.")
-
-        if not live_items:
-            logger.info(
-                f"No live asset for assetId {assetId}. Archived matches: {len(items)}")
-            return None
-
-        item = live_items[0]
-        return {
-            "object__type": "asset",
-            "assetId": item.get('assetId'),
-            "assetName": item.get('assetName'),
-            "databaseId": item.get('databaseId'),
-            "assetType": item.get('assetType'),
-            "tags": list(item.get('tags') or [])
-        }
+    if not item:
+        return None
+    item.update({"object__type": "asset"})
+    return item
 
 
 # Ceilings for a boto3 paginator's PaginationConfig budget. build_full_result() accumulates pages

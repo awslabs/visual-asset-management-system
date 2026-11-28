@@ -16,17 +16,17 @@ Assets in VAMS are organized into databases. If your administrator has already c
 2. Select the **Create Database** button in the top-right corner of the page.
 3. In the **Create Database** modal, fill in the following fields:
 
-| Field                                 | Requirements                                                             | Description                                                                                                                       |
-| ------------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| **Database Name**                     | 4-63 characters, alphanumeric plus `-` and `_` only. Cannot be "GLOBAL". | A unique identifier for your database. This cannot be changed after creation.                                                     |
-| **Database Description**              | 4-256 characters.                                                        | A human-readable description of the database's purpose.                                                                           |
-| **Default Bucket and Prefix**         | Required. Select from available buckets.                                 | The Amazon S3 bucket where assets in this database will be stored. If only one bucket is available, it is selected automatically. |
-| **Restrict Metadata Outside Schemas** | Optional checkbox.                                                       | When enabled, only metadata fields defined in applied metadata schemas are allowed.                                               |
-| **Restrict File Upload Extensions**   | Optional. Comma-separated list (e.g., `.jpg,.png,.pdf`).                 | Limits file uploads to specified extensions. Leave blank or enter `.all` to allow all file types.                                 |
+| Field                                 | Requirements                                                             | Description                                                                                                                                                                                                   |
+| ------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Database Name**                     | 4-63 characters, alphanumeric plus `-` and `_` only. Cannot be "GLOBAL". | A unique identifier for your database. This cannot be changed after creation.                                                                                                                                 |
+| **Database Description**              | 4-256 characters.                                                        | A human-readable description of the database's purpose.                                                                                                                                                       |
+| **Default Bucket and Prefix**         | Required. Select from available buckets.                                 | The Amazon S3 bucket where assets in this database will be stored. If only one bucket is available, it is selected automatically. A bucket with S3 Transfer Acceleration turned on is marked `(accelerated)`. |
+| **Restrict Metadata Outside Schemas** | Optional checkbox.                                                       | When enabled, only metadata fields defined in applied metadata schemas are allowed.                                                                                                                           |
+| **Restrict File Upload Extensions**   | Optional. Comma-separated list (e.g., `.jpg,.png,.pdf`).                 | Limits file uploads to specified extensions. Leave blank or enter `.all` to allow all file types.                                                                                                             |
 
 4. Select **Create Database**.
 
-![Database listing page with databases](/img/database_page_20260323_v2.5.png)
+![Database listing page with databases](/img/database_page_20261109_v2.7.png)
 
 :::tip
 Choose a descriptive database name that reflects the type of assets it will contain, such as `building-models` or `site-scans-2024`. The name becomes part of asset URLs and cannot be changed later.
@@ -39,7 +39,7 @@ Choose a descriptive database name that reflects the type of assets it will cont
 1. In the side navigation, select **Create Asset**.
 2. The upload wizard opens with the first step: **Asset Details**.
 
-![Create Asset page showing the Asset Details wizard step](/img/create_asset_first_20260323_v2.5.png)
+![Create Asset page showing the Asset Details wizard step](/img/create_asset_first_20261109_v2.7.png)
 
 ---
 
@@ -65,7 +65,9 @@ Fill in the required fields on the **Asset Details** step:
     If your administrator has configured required tag types, you must select at least one tag from each required type before proceeding. Required tag types are listed in the constraint text below the Tags field.
     :::
 
-6. Select **Next** to proceed to the metadata step.
+6. **Compliance Schema** (optional) -- Select a compliance schema to bind to this asset instead of the database's schema, or leave it empty to inherit the database's. The field is available once a database is chosen. VAMS binds it once the upload completes. The field appears only when your role may list compliance schemas and bind one to an asset; see [Compliance](compliance.md#overriding-the-schema-of-one-asset).
+
+7. Select **Next** to proceed to the metadata step.
 
 <!-- The create asset screenshot above shows the Asset Details form -->
 
@@ -120,34 +122,52 @@ The **Select Files to Upload** step lets you attach files to your asset. This st
 
 ### Selecting Files
 
-1. Choose an upload mode using the toggle:
+1. Add what you want to upload, in any combination:
 
-    - **File Upload** -- Select one or more individual files.
-    - **Folder Upload** -- Select an entire folder, preserving the directory structure within the asset.
+    - **Add files** -- Pick one or more individual files.
+    - **Add folder** -- Pick a folder. Its subfolders and their files come along, with the folder structure kept. This works in every current browser.
+    - **Drop** files and folders together onto the upload zone.
 
-2. Drag and drop files onto the upload zone, or select the upload zone to open the file picker.
+    You can add more items at any time; each addition joins the current selection.
 
-3. Selected files appear in a table below the upload zone, showing the file name, path, and size. You can:
-    - **Remove individual files** by selecting the remove button on each row.
-    - **Remove all files** to clear the selection and start over.
-    - **Add more files** by dragging additional files or using the file picker again. Duplicate files (same relative path) are automatically skipped.
+2. Check where the files will land. A picked folder and a dropped folder always land at the same path:
+
+    - **A single folder added on its own** becomes the asset's contents, so its own name is dropped. For a folder `pack/` holding `scene.usda` and `props/pallet.usda`, the asset gets `/scene.usda` and `/props/pallet.usda`.
+    - **Every other selection** keeps each folder's name as its top-level folder: several folders, or folders mixed with loose files. If you add a loose file after a single folder, the folder switches to keeping its name (`/pack/scene.usda`), and an info line says why.
+    - **Loose files** keep their file name only, at the asset root.
+
+3. For a single folder, choose **Upload folder contents** (the default here, name dropped) or **Upload folder** (name kept). The preview updates as you switch.
+
+    ![Create Asset file step with a single folder added: the Upload folder contents / Upload folder choice and the preview of each file's final path](/img/upload_create_asset_single_folder_20261117_v2.7.png)
+
+4. Review the preview table below the upload zone. It lists the final asset path of every file, sorted by path, with its status and size underneath, and the total file count and size. You can filter by path, remove single files, selected files, or all files, and switch the view:
+
+    - **All** -- every file in the selection.
+    - **Errors (n)** -- the files that block the upload: **Duplicate path**, **Invalid path**, and an extension the database does not allow (for example **Extension .gltf not allowed**, or a preview file that is not one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`).
+
+    Also note:
+
+    - **Duplicate paths are errors.** When two files would land at the same path (for example, two different folders with the same name), both rows are marked **Duplicate path** and **Next** stays blocked until you remove one. Nothing is skipped silently. An alert above the table gives the number of files with path errors, and its **Show errors only** action switches the table to the **Errors** view.
+    - **Multi-file formats.** When a loose file can reference other files by relative path (`.usd*`, `.gltf`, `.obj`, `.fbx`, `.dae`, STEP, IFC, IGES and CAD assemblies, or `tileset.json`), an info alert suggests adding the whole folder with **Add folder** instead, so those references keep working. The alert does not block the upload.
+
+    ![Create Asset file step with two folders added: each folder keeps its name as a top-level folder](/img/upload_create_asset_two_folders_20261117_v2.7.png)
 
 ### File Extension Restrictions
 
-If the selected database has file upload extension restrictions, an alert banner displays the allowed extensions. Files with disallowed extensions are flagged with validation errors and cannot be uploaded.
+If the selected database has file upload extension restrictions, an alert banner displays the allowed extensions. Files with disallowed extensions are marked with an error on their row in the preview table (for example **Extension .gltf not allowed**), count toward its errors, and block the upload until you remove them.
 
 :::note
-Preview files (filenames containing `.previewFile.`) are exempt from the database's extension restrictions, but must still be one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`. A preview file with any other extension is flagged before the upload starts, and rejects the whole upload request if it reaches the API.
+Preview files (filenames containing `.previewFile.`) are exempt from the database's extension restrictions, but must still be one of `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, or `.bmp`. A preview file with any other extension is flagged before the upload starts, and rejects the whole upload request if it reaches the API.
 :::
 
 ### Preview Files
 
 VAMS supports two types of preview files:
 
--   **Overall asset preview** -- Use the **Asset Overall Preview File** uploader on the right side to select a single image (`.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`, maximum 5 MB) that represents the entire asset.
+-   **Overall asset preview** -- Use the **Asset Overall Preview File** uploader on the right side to select a single image (`.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, or `.bmp`, 5 MiB (5,242,880 bytes) or less) that represents the entire asset.
 -   **File-level previews** -- Include files named with the `.previewFile.{ext}` convention in your upload. For example, `model.gltf.previewFile.png` is automatically used as the preview thumbnail for `model.gltf`.
 
-4. Select **Next** to proceed to the review step.
+5. Select **Next** to proceed to the review step, which lists the same final paths.
 
 ---
 
@@ -163,7 +183,7 @@ The **Review and Upload** step displays a summary of everything you have configu
 1. Review all information carefully. To make changes, select the **Edit** button next to any section or use the **Previous** button to go back to a specific step.
 2. When satisfied, select **Upload Object** to begin the upload.
 
-![Upload progress showing file upload status](/img/upload_asset_finalprogress_20260323_v2.5.png)
+![Upload progress showing file upload status](/img/upload_asset_finalprogress_20261109_v2.7.png)
 
 ---
 
@@ -177,7 +197,7 @@ After submitting, the upload workflow begins:
     - File uploads to Amazon S3 (with individual progress bars per file)
     - Workflow execution (if auto-triggered workflows are configured)
 
-2. For large files, VAMS uses multipart upload to Amazon S3 for reliability. The progress bar updates in real time as each part completes.
+2. For large files, VAMS uses multipart upload to Amazon S3 for reliability. The progress bar updates in real time as each part completes. A file over 1 GiB is processed into the asset after its upload completes: the page then lists it under **Large files** as Processing, In the asset or Failed, and names each failed file with its reason. The page checks for up to an hour; `vamscli file upload-status` reads the same outcome later.
 
 3. Do not close or navigate away from the page until all uploads complete.
 
@@ -201,7 +221,7 @@ After the upload completes:
     - The **File Manager** tab displays your uploaded files in a directory tree.
     - The **Metadata** section at the bottom shows your key-value pairs.
 
-![Asset detail page showing metadata, files, and properties](/img/view_asset_page_20260323_v2.5.png)
+![Asset detail page showing metadata, files, and properties](/img/view_asset_page_20261109_v2.7.png)
 
 ---
 
@@ -215,18 +235,20 @@ If you uploaded a file in a supported format (such as `.gltf`, `.obj`, `.e57`, `
 
 ### Commonly Used File Formats
 
-| Format                                  | Viewer               | Description                           |
-| --------------------------------------- | -------------------- | ------------------------------------- |
-| `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl` | Three.js Viewer      | 3D models with full rotation and zoom |
-| `.e57`, `.las`, `.laz`                  | Potree Viewer        | Point cloud data with 3D navigation   |
-| `.usd`, `.usda`, `.usdc`, `.usdz`       | Needle USD Viewer    | Universal Scene Description files     |
-| `.png`, `.jpg`, `.svg`, `.gif`          | Image Viewer         | Raster and vector images              |
-| `.mp4`, `.webm`, `.mov`                 | Video Player         | Video playback with controls          |
-| `.pdf`                                  | PDF Viewer           | Multi-page document viewing           |
-| `.csv`                                  | Columnar Data Viewer | Tabular data browsing                 |
+| Format                                          | Viewer                | Description                                                                                                                               |
+| ----------------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`         | Three.js Viewer       | 3D models with full rotation and zoom                                                                                                     |
+| `.e57`, `.las`, `.laz`                          | Potree Viewer         | Point cloud data with 3D navigation                                                                                                       |
+| `.usd`, `.usda`, `.usdc`, `.usdz`               | Three.js Viewer       | Universal Scene Description files                                                                                                         |
+| `.png`, `.jpg`, `.svg`, `.gif`, `.webp`, `.bmp` | Image Viewer          | Raster and vector images                                                                                                                  |
+| `.tga`, `.tif`, `.tiff`                         | TIFF/TGA Image Viewer | Images browsers cannot show, decoded in the page; with location services, the GeoTIFF Map Viewer also opens `.tif` and `.tiff` on the map |
+| `.mdl`                                          | Text Viewer           | NVIDIA MDL material files as text                                                                                                         |
+| `.mp4`, `.webm`, `.mov`                         | Video Player          | Video playback with controls                                                                                                              |
+| `.pdf`                                          | PDF Viewer            | Multi-page document viewing                                                                                                               |
+| `.csv`                                          | Text Viewer           | Tabular data; Columnar Data Viewer also opens it                                                                                          |
 
 :::tip
-If a file has a preview image, the file page offers a **Preview** option that shows the image, including for a file that has no dedicated viewer.
+If a file has a preview image, the file page offers a **Preview** option that shows the image, including for a file that has no dedicated viewer. When you view an older version of the file, a notice on **Preview** says the preview belongs to the latest version.
 :::
 
 ---

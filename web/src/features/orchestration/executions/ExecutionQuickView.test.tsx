@@ -55,6 +55,46 @@ describe("ExecutionQuickView", () => {
         expect(screen.getByText("out-asset")).toBeInTheDocument();
     });
 
+    it("shows the ingestion summary, without the file table, while outputs are copied", () => {
+        renderPanel({
+            executionStatus: "RUNNING",
+            executionPhase: "INGESTING_OUTPUTS",
+            outputIngestion: {
+                filesTotal: 4,
+                filesDone: 3,
+                bytesTotal: 4096,
+                bytesDone: 3072,
+                files: [
+                    {
+                        relativeKey: "/scan.e57",
+                        status: "RUNNING",
+                        bytesTotal: 1024,
+                        partsTotal: 2,
+                        partsDone: 1,
+                    },
+                ],
+            },
+        });
+        expect(screen.getByText("Ingesting outputs (3 of 4)")).toBeInTheDocument();
+        expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    });
+
+    it("shows no ingestion summary for a finished run and marks its landed large output", () => {
+        renderPanel({
+            outputs: {
+                files: [
+                    { relativeFilePath: "/big.e57", ingestionStatus: "SUCCEEDED" },
+                    { relativeFilePath: "/small.glb" },
+                ],
+            },
+        });
+        expect(screen.queryByTestId("output-ingestion-progress")).not.toBeInTheDocument();
+        expect(screen.getAllByText("Ingested by copy engine")).toHaveLength(1);
+        expect(screen.getByText("/big.e57").closest("li")).toHaveTextContent(
+            "Ingested by copy engine"
+        );
+    });
+
     it("labels a results-only run rather than showing an empty target", () => {
         renderPanel({ outputLocationType: "none", outputDatabaseId: "", outputAssetId: "" });
         expect(screen.getByText("Results only (no asset output)")).toBeInTheDocument();
@@ -79,6 +119,35 @@ describe("ExecutionQuickView", () => {
     it("renders a whole-asset selection as '/'", () => {
         renderPanel({ inputFiles: [{ assetId: "a-1", inputAssetFileKey: "/a-1" }] });
         expect(screen.getByText("/")).toBeInTheDocument();
+    });
+
+    it("tells two versions of one input file apart", () => {
+        renderPanel({
+            inputFiles: [
+                {
+                    assetId: "a-1",
+                    inputAssetFileKey: "/a-1/f.glb",
+                    versionId: "3HL4kqtJlcpXroDTDmJ",
+                },
+                {
+                    assetId: "a-1",
+                    inputAssetFileKey: "/a-1/f.glb",
+                    versionId: "Zq9WpL0aB7cDeFgHiJk",
+                },
+            ],
+        });
+        const rows = screen.getAllByText("/f.glb").map((el) => el.closest("li")!);
+        expect(rows).toHaveLength(2);
+        expect(rows[0]).toHaveTextContent("3HL4kqtJ");
+        expect(rows[1]).toHaveTextContent("Zq9WpL0a");
+        expect(rows[0]).toHaveAttribute("title", expect.stringContaining("3HL4kqtJlcpXroDTDmJ"));
+    });
+
+    it("shows no version for an input without one", () => {
+        renderPanel();
+        const row = screen.getByText("/models/pump.laz").closest("li")!;
+        expect(row).toHaveTextContent(/^\/models\/pump\.laz$/);
+        expect(row).not.toHaveAttribute("title");
     });
 
     it("names the execution it shows", () => {

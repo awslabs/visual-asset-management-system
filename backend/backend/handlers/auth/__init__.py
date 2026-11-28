@@ -6,7 +6,17 @@ from common.auth.apiEvent import normalize_event
 from common.validators import normalize_userid, normalize_userid_array
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service="RequestToClaims")
+logger = safeLogger()
+
+#How a caller authenticated, as resolved by the authorizer. An API key sets vams:authMethod to
+#'apiKey'; everything else -- a JWT (Cognito or external IDP), which sets nothing, and a Lambda
+#cross-call, which has no authorizer -- reads as 'jwt'.
+AUTH_METHOD_JWT = "jwt"
+AUTH_METHOD_API_KEY = "apiKey"
+
+#Set to True on the claims when customAuthClaimsCheckOverride raised. CasbinEnforcer refuses every
+#check for claims that carry it (handlers/authz), so the request is denied.
+CLAIMS_CHECK_FAILED = "claimsCheckFailed"
 
 def request_to_claims(request):
     normalize_event(request)
@@ -23,14 +33,18 @@ def request_to_claims(request):
             "tokens": [normalize_userid(cross_call.get("userName", "SYSTEM_USER"))],
             "roles": [],
             "externalAttributes": [],
-            "mfaEnabled": bool(mfa_value)
+            "mfaEnabled": bool(mfa_value),
+            "authMethod": AUTH_METHOD_JWT,
+            "apiKeyId": None
         }
     elif 'requestContext' not in request or 'authorizer' not in request['requestContext']:
         return {
             "tokens": [],
             "roles": [],
             "externalAttributes": [],
-            "mfaEnabled": False
+            "mfaEnabled": False,
+            "authMethod": AUTH_METHOD_JWT,
+            "apiKeyId": None
         }
 
     claims = {}
@@ -79,6 +93,14 @@ def request_to_claims(request):
         mfaValue = claims['vams:mfaEnabled']
         mfaEnabled = mfaValue == 'true' if isinstance(mfaValue, str) else bool(mfaValue)
 
+    #Handlers that mint or seed a credential refuse the apiKey method so a key cannot be chained into
+    #another key; anything but the authorizer's API-key literal reads as a JWT.
+    authMethod = AUTH_METHOD_API_KEY if claims.get('vams:authMethod') == AUTH_METHOD_API_KEY else AUTH_METHOD_JWT
+
+    #The id of the API key an API-key caller authenticated with (the authorizer's vams:apiKeyId), for a
+    #handler that decides by the key itself; None for every other caller.
+    apiKeyId = claims.get('vams:apiKeyId') or None
+
     #The token list is the caller's identity: it keys per-user lookups, is written as createdBy /
     #modifiedBy, and is what Casbin compares a constraint's userId against. Normalized here, the one
     #point every handler receives it from, so it carries the same spelling as a stored user id.
@@ -88,16 +110,20 @@ def request_to_claims(request):
             "tokens": tokens,
             "roles": roles,
             "externalAttributes": externalAttributes,
-            "mfaEnabled": mfaEnabled
+            "mfaEnabled": mfaEnabled,
+            "authMethod": authMethod,
+            "apiKeyId": apiKeyId
         }
 
-    #Conduct custom claims check. If a customer-supplied hook raises, fail closed by
-    #dropping roles (rather than silently passing the un-filtered claims through) so a
-    #broken claims-restriction hook cannot grant more access than intended.
+    #Conduct custom claims check. If a customer-supplied hook raises, the request is denied: the
+    #claims are marked (CLAIMS_CHECK_FAILED) and roles emptied, and a CasbinEnforcer built from
+    #marked claims refuses every Tier 1 and Tier 2 check, so the route answers 403. The caller's
+    #tokens are kept so the denial is recorded against them.
     try:
         claims_and_roles = customAuthClaimsCheckOverride(claims_and_roles, request)
     except Exception as e:
-        logger.exception(f"customAuthClaimsCheckOverride failed; denying roles: {e}")
+        logger.exception(f"customAuthClaimsCheckOverride failed; denying the request: {e}")
         claims_and_roles["roles"] = []
+        claims_and_roles[CLAIMS_CHECK_FAILED] = True
 
     return claims_and_roles

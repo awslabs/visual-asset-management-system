@@ -12,7 +12,9 @@ Run these validation checks. For each check, report PASS or FAIL with details.
 
 #### 1. Config Validation
 
-Read `infra/config/config.json` and verify it contains all required fields:
+The configuration file is `infra/config/config.json` unless $ARGUMENTS names another one (for example `config.staging.json`), which is the value the deployment passes as CDK context `configFile`. A name or relative path resolves relative to `infra/config/`. Use that file for every check below and report its path in the results.
+
+Read the configuration file and verify it contains all required fields:
 
 **Required top-level fields:**
 
@@ -35,13 +37,15 @@ Check for common config mistakes:
 -   `coreStackName` containing spaces or special characters
 -   `region` not matching a valid AWS region pattern
 
+For each add-on enabled under `app.addons`, also run the checks in the "Deploy checks" section of that add-on's own `CLAUDE.md`, beside its nested stack under `infra/lib/nestedStacks/addon/<addon>/`, and report them under Config Validation.
+
 #### 2. CDK Synth
 
 ```bash
-cd infra && npx cdk synth --quiet 2>&1
+cd infra && npx cdk synth --quiet -c configFile=<file> 2>&1
 ```
 
-This validates that all CDK TypeScript compiles and generates valid CloudFormation. Check exit code for success.
+`<file>` is the configuration file from check 1 (`config.json` when none was named). This validates that all CDK TypeScript compiles and generates valid CloudFormation. Check exit code for success.
 
 If it fails, report the error output focusing on:
 
@@ -85,6 +89,14 @@ Report:
 
 If pytest is not installed or fails to run, report the setup issue.
 
+When the change touches a `pyproject.toml`, `uv.lock` or exported `requirements*.txt`, also run the CI dependency audit from the repository root with the uv version the projects require on `PATH` (`PIP_AUDIT_VERSION` is the value in `.github/workflows/ci.yml`):
+
+```bash
+PIP_AUDIT_VERSION=<version from ci.yml> python3 .github/scripts/python_dependency_audit.py
+```
+
+Report a stale lock, a stale export or an advisory as a FAIL.
+
 #### 6. CLI Tests
 
 ```bash
@@ -101,23 +113,50 @@ cd web && npm run build 2>&1
 
 This validates that the React/TypeScript frontend compiles (Vite build) without errors. Check for:
 
--   TypeScript type errors
 -   Missing imports
 -   Build warnings (report but don't fail)
 
 If the build runs out of memory, use `npm run build.lowmem`.
 
+The Vite build transpiles TypeScript without type-checking it, so it does not report TypeScript type errors. After the build, run the type check:
+
+```bash
+cd web && npm run typecheck 2>&1
+```
+
+Report the number of TypeScript errors `npm run typecheck` (`tsc --noEmit`) prints, and the files they are in, but do not fail the check on them.
+
 #### 8. Cross-Reference Validation
 
 Perform these static checks without running commands:
 
-**Handler-to-CDK mapping**: For each Python handler file in `backend/backend/handlers/`, verify there is a corresponding Lambda builder function in `infra/lib/lambdaBuilder/` that references it.
+**Handler-to-CDK mapping**: For each Python handler file in `backend/backend/handlers/`, verify there is a corresponding Lambda builder function in `infra/lib/lambdaBuilder/` that references it. Two lanes are built elsewhere: an add-on handler under `handlers/addon/` is built by its add-on nested stack under `infra/lib/nestedStacks/addon/`, and a fork handler under `handlers/custom/` by `infra/lib/nestedStacks/custom/customResources.ts` (empty upstream, so upstream has no `handlers/custom/` handler to map).
 
-**API route completeness**: Verify that every route registered through an `attachFunctionToApi(` call under `infra/lib/` references a Lambda function that exists, and that each registered route has a matching `ApiRoute` constant in `backend/backend/common/apiRoutes.py` (in a category group array). The calls are not confined to the two API builder stacks: the search stack and add-on stacks such as the Physna one register their own routes, and `rest-api-gateway-construct.ts` registers `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` asserts the same pairing against the synthesized REST API.
+**API route completeness**: Verify that every route registered through an `attachFunctionToApi(` call under `infra/lib/` references a Lambda function that exists, and that each registered route has a matching `ApiRoute` constant in `backend/backend/common/apiRoutes.py` (in a category group array), in `common/addonApiRoutes.py` (`ADDON_ROUTES`) for an add-on route, or in `custom/customApiRoutes.py` (`CUSTOM_ROUTES`) for a route the custom stack registers. The calls are not confined to the two API builder stacks: the search stack and add-on stacks such as the Physna one register their own routes, and `rest-api-gateway-construct.ts` registers `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` asserts the same pairing against the synthesized REST API.
 
-**Resource name resolution**: Spot-check that non-pipeline handlers resolve table/bucket/log-group names via `get_table_name(ResourceKeys.*)` / `get_bucket_name` / `get_log_group_name` from `common.resourceNames` (not hardcoded names), and that any handler-specific env vars set in CDK Lambda builders match the `os.environ` calls in the corresponding Python handlers.
+**Resource name resolution**: Spot-check that non-pipeline handlers resolve table/bucket/log-group names via `get_table_name(ResourceKeys.*)` (`AddonResourceKeys.*` from `common.addonResourceNames` for an add-on handler) / `get_bucket_name` / `get_log_group_name` from `common.resourceNames` (not hardcoded names), and that any handler-specific env vars set in CDK Lambda builders match the `os.environ` calls in the corresponding Python handlers.
 
-**Config template consistency**: Verify any config fields present in `config.json` also exist in all three templates (`config.template.commercial.json`, `config.template.govcloud.json`, `config.template.eusovereign.json`).
+**Config template consistency**: Verify any config fields present in the configuration file from check 1 also exist in all three templates (`config.template.commercial.json`, `config.template.govcloud.json`, `config.template.eusovereign.json`).
+
+#### 9. Vector Search and Amazon Bedrock Prerequisites
+
+Read `infra/config/config.json`. An absent `app.vectorSearch` or `app.vectorSearch.enabled` resolves to enabled only when `app.pipelines.useSystemGenAiMetadata.enabled` and `.autoRegisterAutoTriggerOnFileUpload` are `true`, `.autoRegisterWithVAMS` is not `false`, and `app.govCloud.enabled` is not `true`; otherwise it resolves to disabled with a warning. Report which way it resolves. When `app.vectorSearch.enabled` is `true`, set or resolved, verify:
+
+-   `app.pipelines.useSystemGenAiMetadata.enabled`, `.autoRegisterWithVAMS`, and `.autoRegisterAutoTriggerOnFileUpload` are all `true` (configuration validation throws otherwise)
+-   `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` is non-empty and `bedrockModels.embeddingDimensions` is a positive integer the model supports; `app.vectorSearch.indexingConcurrency` is an integer from 2 to 1000 (checked while the SYSTEM GenAI metadata pipeline is on and registered)
+-   When `app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis` is `true` (the default), `bedrockModels.analysisModelId` is non-empty and its prefix matches the partition (`global.` only in `aws`; `us-gov.` only in `aws-us-gov`; `us.` is accepted in both — in `aws-us-gov` configuration validation emits a warning to verify the profile exists there, not a failure)
+-   `app.pipelines.useSystemGenAiMetadata.bedrockGuardrail` has both `guardrailIdentifier` and `guardrailVersion` set, or both empty; `bedrockGuardrail.create.enabled` is not `true` while `guardrailIdentifier` is set; `create.promptAttackInputStrength` is `LOW`/`MEDIUM`/`HIGH` and `create.piiFilter` is `off`/`anonymize`/`block`. A guardrail is created (`create.enabled`) or named (`guardrailIdentifier`) whenever the pipeline calls Amazon Bedrock (`useGenAiAnalysis` or vector search on); configuration validation refuses the configuration otherwise, in every partition, also with vector search off
+-   The Region is in the `aws` or `aws-us-gov` partition: configuration validation refuses vector search in every other partition (`VECTOR_SEARCH_PARTITIONS`; DynamoDB vector search is not offered in `aws-eusc`)
+-   `app.pipelines.useSystemGenAiMetadata.useFargateRenderer` is `false` unless `app.useGlobalVpc.enabled` is `true`
+
+Model access is account state that `cdk synth` cannot see. When AWS credentials for the target account are available, check both models:
+
+```bash
+aws bedrock get-foundation-model-availability --model-id <bedrockModels.analysisModelId-without-profile-prefix> --region <region>
+aws bedrock get-foundation-model-availability --model-id <bedrockModels.embeddingModelId> --region <region>
+```
+
+Report `agreementAvailability.status`, `authorizationStatus`, and `entitlementAvailability`. An Anthropic analysis model whose use-case form has not been submitted reports it as not entitled; the first uploads would then fail with `BedrockAccessDenied` (attributes still written). Report PASS only when both models are available or the feature is disabled.
 
 ### Report Format
 
@@ -177,7 +216,7 @@ If a check cannot be run (e.g., tool not installed), report it as SKIP with inst
 2. Collect results
 3. Present the checklist report
 4. Offer to fix any auto-fixable issues
-5. If $ARGUMENTS contains "fix", automatically apply auto-fixes for lint/prettier issues
+5. If $ARGUMENTS contains "fix", automatically apply auto-fixes for lint/prettier issues. Any other word in $ARGUMENTS that ends in `.json` is the configuration file for check 1
 
 ## User Request
 

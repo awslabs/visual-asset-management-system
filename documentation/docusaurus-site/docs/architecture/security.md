@@ -107,6 +107,10 @@ When Amazon Cognito is not available, VAMS supports external OAuth identity prov
 
 VAMS supports API key authentication for machine-to-machine access. API keys are stored as SHA-256 hashes in the `ApiKeyStorageTable`. The custom authorizer validates incoming API keys by hashing them and comparing against stored hashes, caching each key's record per key for `API_KEY_CACHE_TTL` (15 seconds). A key that is not found is cached as a negative result for the same lifetime, so repeated requests presenting an invalid key do not re-query the table.
 
+The authorizer marks a request it authenticated with an API key (`vams:authMethod` is `apiKey` in the authorizer context; a token cannot set the `vams:` keys). The API key service refuses such a caller an API key create and any change to a key's expiration with `403`, whatever its roles grant, so a leaked key cannot mint its successor or extend itself. Reads, deletes, description changes, deactivation and reactivation stay open to a key; a reactivated key still stops working at its stored expiration. Users signed in through the deployment's identity provider create and extend keys.
+
+An API key whose name starts with the reserved prefix `temporary-session-` is a temporary session key: a short-lived key that a VAMS backend component mints on a user's behalf, through a Lambda cross-call, for one session. A caller that authenticates with a temporary session key cannot create or update API keys and receives `403`, so a session credential cannot outlive its session through a key of its own making. The API key service refuses a key name that carries the prefix with `400` unless the request is a Lambda cross-call, so no key a user creates passes for a temporary session key.
+
 ## Custom Lambda Authorizer
 
 VAMS uses a custom Lambda authorizer for all Amazon API Gateway endpoints, providing unified authentication across Amazon Cognito, external OAuth, and API key mechanisms.
@@ -120,7 +124,7 @@ VAMS uses a custom Lambda authorizer for all Amazon API Gateway endpoints, provi
 -   **Comprehensive JWT Claims Context**: All JWT claims are passed to downstream Lambda functions
 -   **Public Key Caching**: `CACHE_TTL` (1 hour) for JWKS public keys to reduce external API calls
 -   **User Role Caching**: `USER_ROLES_CACHE_TTL` (60 seconds) per user for resolved role names, or `USER_ROLES_EMPTY_CACHE_TTL` (5 seconds) when the lookup resolves to no roles
--   **Authorizer Result Caching**: applied by Amazon API Gateway on top of the caches above — `AUTH_CACHE_TTL_SECONDS` (30 seconds) keyed on the `Authorization` header for authenticated routes, `ANON_AUTH_CACHE_TTL_SECONDS` (900 seconds) keyed on the source IP for anonymous routes
+-   **Authorizer Result Caching**: applied by Amazon API Gateway on top of the caches above — `AUTH_CACHE_TTL_SECONDS` (30 seconds) keyed on the `Authorization` header for authenticated routes, `ANON_AUTH_CACHE_TTL_SECONDS` (900 seconds) keyed on the source IP for anonymous routes. With `authProvider.authorizerOptions.allowedIpRanges` set, both are 0, so API Gateway caches no authorizer decision
 -   **API Key Caching**: `API_KEY_CACHE_TTL` (15 seconds) per key, including negative results for unknown keys
 -   **Dedicated Lambda Layer**: Isolated dependencies for security and performance
 
@@ -241,7 +245,8 @@ VAMS uses the Casbin policy engine to enforce fine-grained attribute-based acces
 flowchart TD
     REQ["Incoming Request"] --> AUTH["Custom Lambda Authorizer"]
     AUTH -->|Valid JWT| HANDLER["Lambda Handler"]
-    AUTH -->|Invalid| DENY1["403 Forbidden"]
+    AUTH -->|Credential not accepted| DENY0["401 Unauthorized"]
+    AUTH -->|IP not allowed or user has no roles| DENY1["403 Forbidden"]
 
     HANDLER --> CLAIMS["Extract User Claims + Roles"]
     CLAIMS --> T1{"Tier 1: API Route Auth"}
@@ -255,44 +260,58 @@ flowchart TD
 
 **Tier 1 -- API Route Authorization** controls which API endpoints a user's role can access. Policies use `api` and `web` object types to gate route-level access.
 
-**Tier 2 -- Object Entity Authorization** controls which specific data entities a user can access. Policies use entity-type constraints (`database`, `asset`, `pipeline`, `workflow`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`, `apiKey`) with attribute-based rules.
+**Tier 2 -- Object Entity Authorization** controls which specific data entities a user can access. Policies use entity-type constraints (`database`, `asset`, `pipeline`, `workflow`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`, `complianceSchema`, `complianceEvaluation`, `complianceCascade`, `complianceBinding`, `auditLog`, `bucket`) with attribute-based rules. API keys have no object type: access to them is governed at Tier 1 through `api` constraints on `/auth/api-keys` and `/auth/user/api-keys`.
 
 ### Constraint Fields
 
 The following fields can be used in ABAC policy rules:
 
-| Field                      | Description                                                                   |
-| -------------------------- | ----------------------------------------------------------------------------- |
-| `databaseId`               | Database identifier                                                           |
-| `assetName`                | Asset name                                                                    |
-| `assetType`                | Asset type classification                                                     |
-| `tags`                     | Asset tags -- a **list** of values, so it takes `is_one_of` / `is_not_one_of` |
-| `tagName`                  | Tag name                                                                      |
-| `tagTypeName`              | Tag type name                                                                 |
-| `roleName`                 | Role name                                                                     |
-| `userId`                   | User identifier                                                               |
-| `pipelineId`               | Pipeline identifier                                                           |
-| `pipelineExecutionType`    | Pipeline execution type (`Lambda`, `SQS`, `EventBridge`, `DeadlineCloud`)     |
-| `workflowId`               | Workflow identifier                                                           |
-| `category`                 | Pipeline or workflow category, the grouping label assigned when it is created |
-| `name`                     | Pipeline name or workflow name (the display name, not the identifier)         |
-| `metadataSchemaName`       | Metadata schema name                                                          |
-| `metadataSchemaEntityType` | Metadata entity type                                                          |
-| `object__type`             | Entity type for Tier 2 enforcement                                            |
-| `route__path`              | API route path for Tier 1 enforcement                                         |
+| Field                      | Description                                                                                                           |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`               | Database identifier                                                                                                   |
+| `assetName`                | Asset name                                                                                                            |
+| `assetType`                | Asset type classification                                                                                             |
+| `tags`                     | Asset tags -- a **list** of values, so it takes `is_one_of` / `is_not_one_of`                                         |
+| `tagName`                  | Tag name                                                                                                              |
+| `tagTypeName`              | Tag type name                                                                                                         |
+| `roleName`                 | Role name                                                                                                             |
+| `userId`                   | User identifier                                                                                                       |
+| `pipelineId`               | Pipeline identifier                                                                                                   |
+| `pipelineExecutionType`    | Pipeline execution type (`Lambda`, `SQS`, `EventBridge`, `DeadlineCloud`)                                             |
+| `workflowId`               | Workflow identifier                                                                                                   |
+| `category`                 | Pipeline or workflow category, the grouping label assigned when it is created                                         |
+| `name`                     | Pipeline name or workflow name (the display name, not the identifier)                                                 |
+| `metadataSchemaName`       | Metadata schema name                                                                                                  |
+| `metadataSchemaEntityType` | Metadata entity type                                                                                                  |
+| `complianceSchemaName`     | Compliance schema name                                                                                                |
+| `complianceState`          | Asset compliance state (for example `quarantined`); set on the quarantine routes and one asset's state read only      |
+| `cascadeId`                | Compliance cascade identifier                                                                                         |
+| `auditLogGroup`            | Audit log group key, on the `auditLog` object type; the seeded `admin` role is the only role that holds it by default |
+| `object__type`             | Entity type for Tier 2 enforcement                                                                                    |
+| `route__path`              | API route path for Tier 1 enforcement                                                                                 |
 
 Each object type accepts only the fields that are meaningful for it. `category` and `name` are valid on the
 `pipeline` and `workflow` object types, which lets a role be scoped to a family of pipelines or workflows
 without listing every identifier — for example allowing GET where `category equals conversion`, or denying
 PUT where `name starts_with prod-`. The authoritative per-type field matrix is returned by
 `GET /auth/constraints/permissionObjects`, which is the same mapping the backend validates a submitted
-constraint against.
+constraint against. A deployment can register more object types and fields for its own entities (add-on
+and fork constants files); those appear in the same response, are validated and evaluated the same way,
+and start with no access for any role, administrators included, until a constraint grants it. Names are
+letters and digits only, and an entry that redefines a built-in type or field stops every backend
+function from loading rather than changing what the built-in type allows.
 
 :::note
 A pipeline's `name` and `pipelineExecutionType` are stored structurally on the pipeline record
 (`pipelineName` and `executionConfig.executionType`) and are surfaced as these flat fields on the Tier 2
 object before enforcement, so a constraint on either one evaluates against the real value.
 :::
+
+### Audit log access
+
+Audit log search authorizes twice: the `/audit` route, then the `auditLog` object with the `auditLogGroup` field once per requested log group. A refused or unknown group returns one generic `403`, and a handle that is not the caller's returns one generic `404`. The search function can read the audit log groups and nothing more: no role holds an action that modifies or deletes audit records.
+
+The free-text terms an auditor types into a search are restricted-charset text (letters, digits and a few punctuation marks, at most 128 characters each). The search must apply them again to every page, so they are stored in the search's handle row in the KMS-encrypted `AuditLogQueriesStorageTable`, readable only by the search function. The row expires `app.auditLogging.search.handleRetentionMinutes` (default 60) after its last use, a row past its expiry is treated as not found before DynamoDB deletes it, and the terms are removed as soon as the search is stopped, fails, times out or its export is complete. Audit records and function logs of the search hold only the term count, total length and a SHA-256 digest. Do not put secrets in search terms; the terms are not redacted in the handle row.
 
 ### MFA-Aware Roles
 
@@ -328,15 +347,16 @@ To narrow the scope in a hardened deployment, give the roles VAMS pipelines are 
 
 All VAMS storage resources support encryption at rest:
 
-| Resource               | Default Encryption              | KMS CMK Encryption                 |
-| ---------------------- | ------------------------------- | ---------------------------------- |
-| Amazon DynamoDB tables | AWS managed keys                | Customer-managed KMS key           |
-| Amazon S3 buckets      | Amazon S3 managed keys (SSE-S3) | Customer-managed KMS key (SSE-KMS) |
-| Amazon SNS topics      | N/A                             | Customer-managed KMS key           |
-| Amazon SQS queues      | SQS managed encryption          | Customer-managed KMS key           |
-| Amazon CloudWatch Logs | N/A                             | Customer-managed KMS key           |
-| Amazon OpenSearch      | Service-managed                 | Customer-managed KMS key           |
-| Amazon EventBridge bus | AWS owned key                   | Customer-managed KMS key           |
+| Resource                    | Default Encryption                     | KMS CMK Encryption                 |
+| --------------------------- | -------------------------------------- | ---------------------------------- |
+| Amazon DynamoDB tables      | AWS managed keys                       | Customer-managed KMS key           |
+| Amazon S3 buckets           | Amazon S3 managed keys (SSE-S3)        | Customer-managed KMS key (SSE-KMS) |
+| Amazon SNS topics           | N/A                                    | Customer-managed KMS key           |
+| Amazon SQS queues           | SQS managed encryption                 | Customer-managed KMS key           |
+| Amazon CloudWatch Logs      | N/A                                    | Customer-managed KMS key           |
+| Amazon OpenSearch           | Service-managed                        | Customer-managed KMS key           |
+| Amazon EventBridge bus      | AWS owned key                          | Customer-managed KMS key           |
+| AWS Secrets Manager secrets | AWS managed key (`aws/secretsmanager`) | Customer-managed KMS key           |
 
 The web app bucket uses Amazon S3 managed keys (SSE-S3) whatever the `useKmsCmkEncryption` setting, and so does its access logs bucket when the web application is served through an Application Load Balancer (`app.useAlb.enabled`).
 
@@ -396,7 +416,7 @@ All data in transit is encrypted using TLS:
 
 #### REST API TLS Security Policy
 
-A security policy is a predefined combination of minimum TLS version and cipher suites that Amazon API Gateway offers during the TLS handshake. VAMS sets one on the REST API resource itself, so it applies to the default `execute-api` endpoint the API serves from rather than only to a custom domain name.
+A security policy is a predefined combination of minimum TLS version and cipher suites that Amazon API Gateway offers during the TLS handshake. VAMS sets one on the REST API resource itself, so it applies to the default `execute-api` endpoint the API serves from rather than only to a custom domain name. It governs connections made to API Gateway; a request that reaches the API through the Amazon CloudFront distribution at `/api/*` negotiates TLS with CloudFront first (see [Amazon CloudFront Viewer TLS](#amazon-cloudfront-viewer-tls)).
 
 | Deployment                                               | Security policy                          | TLS versions accepted |
 | -------------------------------------------------------- | ---------------------------------------- | --------------------- |
@@ -410,6 +430,21 @@ This policy is an enhanced policy, identified by the `SecurityPolicy_` prefix, a
 The GovCloud mode, which AWS European Sovereign Cloud deployments also enable for their partition guardrails, leaves the security policy unset so the API keeps the default its partition and Region apply. Those partitions do not offer the `TLS_1_0` policy for Regional APIs, and APIs created there are FIPS-compliant by default, so the minimum version is already TLS 1.2 without VAMS asserting a specific policy.
 
 Changing a security policy takes about 15 minutes to propagate. The API remains invocable while its status is `UPDATING`. To see which TLS version and cipher a client negotiated, use the `$context.tlsVersion` and `$context.cipherSuite` variables in the API access logs.
+
+The optional REST API custom domain (`app.api.apiGatewayRest.customDomain`) is a Regional custom domain name with the same security policy and endpoint access mode in the commercial partition, and the `TLS_1_2` policy in the GovCloud mode, so the minimum version is TLS 1.2 on the custom domain as well. Its certificate is an AWS Certificate Manager certificate in the deployment Region.
+
+#### Amazon CloudFront Viewer TLS
+
+The Amazon CloudFront security policy sets the minimum TLS version and the ciphers CloudFront offers to viewers. Which policy applies depends on the domain the distribution serves:
+
+| Web domain                                                           | Security policy             | TLS versions accepted              |
+| -------------------------------------------------------------------- | --------------------------- | ---------------------------------- |
+| Default `*.cloudfront.net` domain (`customDomain.enabled: false`)    | `TLSv1`, set by CloudFront  | TLS 1.3, TLS 1.2, TLS 1.1, TLS 1.0 |
+| Custom domain with an ACM certificate (`customDomain.enabled: true`) | `TLSv1.2_2021`, set by VAMS | TLS 1.3, TLS 1.2                   |
+
+On the default domain the distribution uses the CloudFront certificate, and CloudFront always applies the `TLSv1` policy there; a distribution cannot raise that floor. VAMS therefore sets the security policy only when `app.useCloudFront.customDomain` supplies a certificate.
+
+The policy covers every path on the distribution, including the API at `/api/*`. On the default domain a client can therefore reach the API through the web URL at TLS 1.0, while the `execute-api` endpoint and the REST API custom domain keep the TLS 1.2 floor described in [REST API TLS Security Policy](#rest-api-tls-security-policy). To refuse TLS 1.1 and TLS 1.0 on the web application and on `/api/*`, configure a custom domain (see [Amazon CloudFront](../deployment/configuration-reference.md#amazon-cloudfront-appusecloudfront) in the configuration reference). The GovCloud mode (AWS GovCloud (US) and the AWS European Sovereign Cloud) refuses `app.useCloudFront.enabled`; those deployments serve the web application from the Application Load Balancer instead.
 
 The following bucket policy statement is applied to every Amazon S3 bucket in VAMS:
 
@@ -425,6 +460,16 @@ The following bucket policy statement is applied to every Amazon S3 bucket in VA
 }
 ```
 
+### Data Sent to Amazon Bedrock
+
+Two features send content to Amazon Bedrock in the deployment's own AWS account and Region: the SYSTEM GenAI metadata pipeline sends rendered views or video keyframes, extracted text excerpts, file attributes, and — when the template tag `SEED_WITH_EXISTING_METADATA` is `true` — the existing metadata of the file, its asset, and its database to the configured analysis model (or, for a request without images, the text model when one is set), and — when vector search is enabled — the composed embedding text, which always carries that existing metadata, to the embeddings model; its asset summary sends the titles, descriptions, keywords, and categories the pipeline wrote on an asset's files, with the asset's name, description, tags, and existing metadata, to the text model or the analysis model; natural-language search sends each query string to the embeddings model. The asset summary reads the files' metadata and the metadata schema with the identity of the user who runs it, so a summary carries only what that user may read. Requests use the deployment's Lambda roles over TLS, and Amazon Bedrock does not use customer content to train models or share it with model providers. Renders and keyframes are transient objects under the auxiliary bucket's execution prefix; embedding documents are deleted by the vector indexer once written to the vector table. Review the model provider's terms recorded in [Notices](../additional/notices.md) before enabling either feature.
+
+#### Amazon Bedrock guardrail
+
+File text, user-entered metadata, and asset descriptions are untrusted prompt content, so the deployment creates an Amazon Bedrock guardrail for the SYSTEM GenAI metadata pipeline by default (`app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled`) and sends every analysis prompt with it. Configuration validation refuses, in every partition, a pipeline that calls Amazon Bedrock (the GenAI analysis or vector search) while it neither creates a guardrail nor names an operator-owned one. The created guardrail carries a prompt-attack content filter on the prompt (`create.promptAttackInputStrength`, `LOW` by default and never `NONE`) and, because metadata generation does not need personal data, sensitive-information filters that anonymize (or, with `create.piiFilter: block`, block) email addresses, phone numbers, person names, postal addresses, US Social Security numbers, payment card numbers, AWS access and secret keys, and passwords in both the prompt and the model response. The pipeline tags the untrusted blocks of each Converse call as guard content so the filters evaluate them, and — because the embeddings model accepts no guardrail on its own invocation — the embedding step screens the composed text and every content chunk through the guardrail's `ApplyGuardrail` operation first and embeds and stores the text the guardrail returns, so a masked entity is a type token in the vector table's `sourceText` as well. A guardrail attached to a Converse call does not evaluate the tool input a model returns, so when the analysis or the asset summary asks for structured output (with a metadata schema in the run), the pipeline screens the tool answer through `ApplyGuardrail` as model output before it reads it. The analysis function, the asset summary's summarize function and, while vector search is enabled, the video window and embedding functions are the only principals granted `bedrock:ApplyGuardrail`, on that guardrail's ARN only. A blocked prompt or response is recorded as `BedrockGuardrailIntervened` on the execution without the matched text, and so is a blocked embedding text; a masked one completes normally, with the entities replaced by their type tokens and the masked types recorded on the execution's analysis summary and embedding summary, and every successful call logs the filters that acted by side, policy, type, and action.
+
+The guardrail is encrypted with the deployment's KMS key when `app.useKmsCmkEncryption.enabled` is `true` (the AWS-managed Amazon Bedrock key otherwise). Amazon Bedrock authorizes that key through the principals that create and use the guardrail rather than through a service principal: the role that deploys the stack needs `kms:Decrypt`, `kms:GenerateDataKey`, `kms:DescribeKey`, and `kms:CreateGrant` on the key — the key policy delegates to the account, and the default AWS CDK bootstrap role carries them — and the analysis functions hold `kms:Decrypt` through the standard VAMS key grant. No Amazon Bedrock service principal is added to the key policy. The commercial and AWS GovCloud (US) templates ship with `create.enabled` `true`. The AWS European Sovereign Cloud template ships it `false`, with the pipeline off and set to the attributes-only layer, which calls no Amazon Bedrock model; turning on the GenAI analysis there requires a guardrail. An operator-owned guardrail can replace the created one through `guardrailIdentifier` and `guardrailVersion`; see the [pipeline page](../pipelines/system-genai-metadata.md#amazon-bedrock-guardrail).
+
 ## Content Security Policy (CSP)
 
 VAMS generates a dynamic Content Security Policy for the web application based on the deployment configuration. The CSP is constructed at AWS CDK synthesis time and applied to the web distribution.
@@ -437,15 +482,38 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 | `default-src`     | `'none'`                                                                     |
 | `script-src`      | `'self'`, `'unsafe-hashes'`, `'wasm-unsafe-eval'`, per-script SHA-256 hashes |
 | `style-src`       | `'self'`, `'unsafe-inline'`                                                  |
-| `connect-src`     | `'self'`, `blob:`, `data:`, API Gateway URL, Amazon S3 endpoint              |
+| `connect-src`     | `'self'`, `blob:`, `data:`, API Gateway URL, AWS service hosts wildcard      |
 | `worker-src`      | `'self'`, `blob:`, `data:`                                                   |
-| `img-src`         | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                               |
-| `media-src`       | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                               |
+| `img-src`         | `'self'`, `blob:`, `data:`, AWS service hosts wildcard                       |
+| `media-src`       | `'self'`, `blob:`, `data:`, AWS service hosts wildcard                       |
 | `object-src`      | `'none'`                                                                     |
-| `frame-src`       | `'self'`, `blob:`                                                            |
+| `frame-src`       | `'self'`, `blob:`, AWS service hosts wildcard                                |
 | `frame-ancestors` | `'self'`                                                                     |
 | `font-src`        | `'self'`                                                                     |
 | `manifest-src`    | `'self'`                                                                     |
+
+:::note[AWS service hosts wildcard]
+`connect-src`, `img-src`, `media-src` and `frame-src` carry one source, `https://*.<suffix>`, where `<suffix>` is the DNS suffix of the deployment's partition (`amazonaws.com` in the commercial and GovCloud partitions, `amazonaws.com.cn`, `amazonaws.eu` and the isolated partitions' own suffixes elsewhere). The browser fetches presigned Amazon S3 URLs directly, and an asset bucket can be in any Region of the partition (see [Cross-Region buckets](../deployment/external-s3-setup.md#cross-region-buckets)). A CSP wildcard matches only the leading label, and the Region is a label inside the S3 host (`s3.us-west-2.amazonaws.com`), so no narrower single source covers every Region. The wildcard also covers virtual-hosted bucket hosts and `s3-accelerate` hosts.
+
+| Partition                 | Wildcard source in the four directives |
+| ------------------------- | -------------------------------------- |
+| `aws` (commercial)        | `https://*.amazonaws.com`              |
+| `aws-us-gov` (GovCloud)   | `https://*.amazonaws.com`              |
+| `aws-cn` (China)          | `https://*.amazonaws.com.cn`           |
+| `aws-eusc` (EU Sovereign) | `https://*.amazonaws.eu`               |
+| `aws-iso`                 | `https://*.c2s.ic.gov`                 |
+| `aws-iso-b`               | `https://*.sc2s.sgov.gov`              |
+| `aws-iso-e`               | `https://*.cloud.adc-e.uk`             |
+| `aws-iso-f`               | `https://*.csp.hci.ic.gov`             |
+
+The suffix comes from the partition's Amazon S3 hostname in the service table. The source admits every service host under that suffix. Synthesis fails, naming the partition, if a table row does not have the shape `s3.{region}.<suffix>` or its suffix has fewer than two labels or is a bare public suffix such as `com`, so a bad row can never emit `https://*.com`. Only the commercial partition has been verified in a live browser; the other partitions are verified by synthesis-time tests of the emitted policy.
+
+Trade-off: in those four directives the policy admits every AWS service host in the partition, including a bucket or API in another account. The earlier rule already admitted any bucket in the deployment Region, including one in another account. `script-src`, `worker-src`, `object-src`, `style-src` and `font-src` do not carry the wildcard, so a page cannot load script from these hosts. Operators who added another Region's S3 host to `cspAdditionalConfig.json` can remove it.
+:::
+
+:::note[Web workers]
+`worker-src` permits `'self'`, so a viewer can run a decoder in a same-origin web worker. The TIFF/TGA Image Viewer does: its worker is a content-hashed file served from the web application's own `assets/` path (`rasterWorker-<hash>.js`), not a `blob:` or `data:` script, and it loads no other origin. It needs no CSP change and no `allowUnsafeEvalFeatures`: the decoders (`utif2`, `tga-js`, `pako`) are pure JavaScript. If the worker file is blocked or stale, the viewer decodes on the page instead.
+:::
 
 :::note[Framing directives]
 `frame-src` controls which documents VAMS may load into an `<iframe>`; `'self'` plus `blob:` covers same-origin iframe viewers (such as the SuperSplat editor served under `/viewers/supersplat/`) and Blob-URL iframes. A viewer that frames a third-party document needs that document's origin added as well, which is what the Physna Sync add-on contributes in the conditional table below. `frame-ancestors 'self'` controls who may embed VAMS pages in a frame — same-origin only, so external sites cannot frame VAMS (clickjacking protection is preserved) while VAMS-hosted iframe viewers still work. The CloudFront distribution sets a matching `X-Frame-Options: SAMEORIGIN` response header as the legacy equivalent of `frame-ancestors`.
@@ -487,6 +555,7 @@ when `app.webUi.allowUnsafeEvalFeatures` is enabled.
 | External OAuth IDP               | IDP auth provider URL in `connect-src`                                                                                                |
 | `allowUnsafeEvalFeatures = true` | `'unsafe-eval'` in `script-src` (required for certain 3D viewer plugins)                                                              |
 | Amazon Location Service enabled  | Maps endpoint in `connect-src`                                                                                                        |
+| API custom domain enabled        | `https://{domainHost}` of `app.api.apiGatewayRest.customDomain` in `connect-src`, beside the API Gateway URL                          |
 | Physna Sync add-on enabled       | Physna viewer origin in `connect-src` and `frame-src`. The add-on adds no `script-src` source, and in particular no `'unsafe-inline'` |
 
 :::note[The Physna add-on does not relax inline-script protection]
@@ -509,9 +578,13 @@ Entries are screened when the file is read at synthesis time. A non-string or em
 
 ### Policy size on the Application Load Balancer path
 
-The two web distributions deliver the policy by different mechanisms with different size limits, and the tighter of the two belongs to the Application Load Balancer. The ALB carries the whole policy in a single listener attribute, whose value Elastic Load Balancing limits to 1 KB; a CloudFront response-headers policy allows 1,783 bytes. The shipped policy measures 858 bytes, leaving roughly 166 bytes on the ALB path — about three further inline-script hashes, or two to three further host sources.
+The two web distributions deliver the policy by different mechanisms with different size limits, and the tighter of the two belongs to the Application Load Balancer. The ALB carries the whole policy in a single listener attribute, whose value Elastic Load Balancing limits to 1 KB; a CloudFront response-headers policy allows 1,783 bytes. The shipped policy measures 794 bytes (GovCloud) and 790 bytes (EU Sovereign), leaving roughly 230 bytes on the ALB path — about three further inline-script hashes, or two to three further host sources.
 
 A policy that exceeds the limit is rejected at synthesis time with a message naming its measured size, so the constraint surfaces before deployment rather than as a load balancer error or a truncated header. Because the limit belongs to the delivery mechanism rather than to the policy, the check applies only where an ALB serves the web front. Restricted partitions use the ALB exclusively, so a deployment that adds several CSP sources should confirm the size there.
+
+### Amazon S3 Transfer Acceleration and the CSP
+
+When [Amazon S3 Transfer Acceleration](../deployment/s3-transfer-acceleration.md) is on for an asset bucket, the browser loads files from `<bucket>.s3-accelerate.amazonaws.com`. The `https://*.amazonaws.com` source for the partition that the S3 entries in `connect-src`, `img-src`, `media-src` and `frame-src` use (fix #1616) admits that host, so the feature adds no source and does not change the policy length.
 
 ## Web Response Security Headers
 
@@ -530,13 +603,13 @@ Two headers are available only on the CloudFront path. `Cross-Origin-Embedder-Po
 
 ## IP Range Restrictions
 
-The custom Lambda authorizer supports optional IP-based access control. When `authProvider.authorizerOptions.allowedIpRanges` is configured with one or more CIDR ranges, the authorizer validates the source IP of each request against the allowlist before proceeding with JWT validation.
+The custom Lambda authorizer supports optional IP-based access control. When `authProvider.authorizerOptions.allowedIpRanges` is configured with one or more CIDR ranges, the authorizer validates the source IP of each request against the allowlist before proceeding with JWT validation. API Gateway then caches no authorizer decision, so the authorizer runs on every API request.
 
 ## Presigned URL Network Restrictions
 
-VAMS supports optional network restrictions on Amazon S3 presigned URL access through bucket policies. When `app.assetBuckets.presignedUrlNetworkRestrictions` is configured with `allowedIpRanges` (IPv4/IPv6 CIDR blocks) or `allowedVpceIds` (Amazon S3 interface or gateway VPC endpoint IDs), these restrictions are enforced as bucket policy deny statements on the VAMS-created asset bucket and the auxiliary bucket. The restrictions apply only to presigned (query-string authenticated) requests, leaving backend operations and presigned URL lifetimes unchanged.
+VAMS supports optional network restrictions on Amazon S3 presigned URL access through bucket policies. When `app.assetBuckets.presignedUrlNetworkRestrictions` is configured with `allowedIpRanges` (CIDR blocks) or `allowedVpceIds` (Amazon S3 interface or gateway VPC endpoint IDs), these restrictions are enforced as bucket policy deny statements on the VAMS-created asset bucket and the auxiliary bucket. The restrictions apply only to presigned (query-string authenticated) requests, leaving backend operations and presigned URL lifetimes unchanged.
 
--   **Allowed IP ranges** — Array of IPv4 and IPv6 CIDR blocks (for example, `["192.168.1.0/24", "2001:db8::/32"]`). Requests are evaluated against the `aws:SourceIp` condition key.
+-   **Allowed IP ranges** — Array of CIDR blocks (for example, `["192.168.1.0/24"]`). Requests are evaluated against the `aws:SourceIp` condition key. Presigned requests reach Amazon S3 over IPv4, so list IPv4 ranges; see the [presigned URL restriction object](../deployment/configuration-reference.md#presigned-url-restriction-object) for why an IPv6 range never matches.
 -   **Allowed VPC endpoint IDs** — Array of Amazon S3 VPC endpoint IDs (for example, `["vpce-1234abcd"]`). Accepts both interface and gateway VPC endpoint IDs. Requests are evaluated against the `aws:SourceVpce` condition key.
 
 The two restriction types are mutually exclusive — configuration validation rejects setting both, because a request arrives either over the public path (`aws:SourceIp`) or through a VPC endpoint (`aws:SourceVpce`). Empty or omitted arrays mean no restrictions; no policy statement is emitted. The deny statement conditions include `StringEquals s3:authType=REST-QUERY-STRING` to scope it to presigned requests only, and `BoolIfExists aws:ViaAWSService=false` to exclude AWS service-to-service calls. All VAMS backend Lambda and pipeline operations use SDK header authentication and are never affected by these restrictions.
@@ -545,15 +618,39 @@ Enforcement occurs at URL use time. Restriction changes applied through a redepl
 
 For external (imported) asset buckets, VAMS does not apply resource policies to buckets it does not own. To restrict presigned URLs on an external bucket, the bucket owner applies an equivalent deny statement manually to the bucket policy. See [External Amazon S3 bucket setup](../deployment/external-s3-setup.md) for the complete statement and instructions.
 
+Transfer Acceleration changes how these restrictions apply. A request through the accelerate endpoint reaches S3 from the client's public address, never through a VPC endpoint, so `allowedVpceIds` cannot be combined with an accelerated bucket (configuration validation rejects it). See the restrictions section of the [Transfer Acceleration page](../deployment/s3-transfer-acceleration.md#presigned-url-network-restrictions) for `allowedIpRanges`, and for which buckets the restriction covers.
+
 For custom bucket policy statements beyond network restrictions, `infra/config/policy/s3AdditionalBucketPolicyConfig.json` applies an operator-defined statement to all VAMS-created buckets. See the [configuration reference](../deployment/configuration-reference.md) for details.
 
 ## AWS WAF and Rate Limiting
 
-When `app.useWaf` is enabled, AWS WAF protects the Amazon API Gateway API and — when present — the Amazon CloudFront distribution or Application Load Balancer. The rules come from `infra/config/policy/wafPolicyConfig.json` and apply identically to the CloudFront-scoped and regional web ACLs. The shipped policy enforces the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a rate-based rule.
+When `app.useWaf` is enabled, AWS WAF protects the Amazon API Gateway API and — when present — the Amazon CloudFront distribution or Application Load Balancer. The rules come from `infra/config/policy/wafPolicyConfig.json` and apply identically to the CloudFront-scoped and regional web ACLs. An enabled add-on can relax individual managed rules on its own routes in both web ACLs, the regional one and, on a CloudFront deployment, the CloudFront one; the add-on's page lists them (see [Add-ons Overview](../developer/addons-overview.md)). The shipped policy enforces the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a rate-based rule.
 
-The rate-based rule limits each client to a fixed number of requests per rolling 5-minute window. It aggregates on the address AWS WAF observes on the connection. An `X-Forwarded-For` aggregation key is not applied: the header is supplied by the caller and can be rotated to evade the limit, and AWS WAF omits a request that omits the header from the rule's evaluation altogether. Requests arriving through Amazon CloudFront, an Application Load Balancer, or a shared corporate NAT gateway or VPN egress address therefore share a counter. The limit is set well above a single active user's normal request rate — VAMS issues many requests per user action (live execution-status polling, multi-part uploads, and large-file viewer streaming) — so that legitimate use is not throttled while request floods are still stopped.
+The rate-based rule limits each client to a fixed number of requests per rolling 5-minute window. It aggregates on the address AWS WAF observes on the connection. An `X-Forwarded-For` aggregation key is not applied: the header is supplied by the caller and can be rotated to evade the limit, and AWS WAF omits a request that omits the header from the rule's evaluation altogether. Requests arriving through an Application Load Balancer, or a shared corporate NAT gateway or VPN egress address therefore share a counter. On a CloudFront deployment, CloudFront adds a per-deployment origin verification header to the API requests it forwards, and the regional web ACL's rate-based rule counts only requests without a valid value, so requests through CloudFront are counted per viewer address by the CloudFront-scoped web ACL rather than per CloudFront edge address. The limit is set well above a single active user's normal request rate — VAMS issues many requests per user action (live execution-status polling, multi-part uploads, and large-file viewer streaming) — so that legitimate use is not throttled while request floods are still stopped.
 
-When the rate-based rule blocks a request, AWS WAF returns HTTP `429 Too Many Requests` with a small JSON body. This is the correct throttle status and is deliberately distinct from the `403 Forbidden` returned for an authorization denial, so a throttled request is never mistaken for a permission failure. On the REST API, Amazon API Gateway renders the block through its `WAF_FILTERED` gateway response, and the API's default `4XX` gateway response adds `Access-Control-Allow-Origin` and `Access-Control-Allow-Headers` to every response it renders, so a browser can read the `429` whether the API is called same-origin (the Amazon CloudFront topology, where the web application calls `/api/*` on its own distribution) or cross-origin (the Application Load Balancer topology, where the web application is served from the ALB host and the API from the `execute-api` host, or a client calling the API Gateway endpoint directly from another origin). The WAF response does not repeat those headers — a second copy would give `Access-Control-Allow-Origin` two values, which browsers reject. It carries `Retry-After` and `Access-Control-Expose-Headers: Retry-After`, because `Retry-After` is not a CORS-safelisted response header and a cross-origin caller cannot read it without the exposure. A throttled CORS preflight (`OPTIONS`) request still fails, because AWS WAF answers it before the API's MOCK integration and a preflight requires a success status. The VAMS web application and the VAMS CLI both treat `429` as a transient, retryable condition — they honor the `Retry-After` header and retry with backoff rather than forcing re-authentication. Tune the limit and the response code in `wafPolicyConfig.json`; see the [configuration reference](../deployment/configuration-reference.md).
+On a CloudFront deployment the origin verification value is an AWS Secrets Manager secret, generated per deployment and rotated automatically every 45 days. A rotation function sets the regional web ACL to accept the new and the previous value, then points the distribution's origin header at the new value, so requests keep being recognised while the change reaches every CloudFront edge location. The previous value stays accepted until the next rotation, so a value is accepted for at most two rotation intervals (about 90 days). See [Rotation of the API origin verification secret](aws-resources.md#rotation-of-the-api-origin-verification-secret) for how to check rotation and why not to deploy during one. The REST authorizer's client-address resolution uses the same header. The value is referenced in the CloudFormation templates only through `{{resolve:secretsmanager:...}}` dynamic references, and the regional web ACL log and the VAMS logs redact the header.
+
+When the rate-based rule blocks a request, AWS WAF returns HTTP `429 Too Many Requests` with a small JSON body. This is the correct throttle status and is deliberately distinct from the `403 Forbidden` returned for an authorization denial, so a throttled request is never mistaken for a permission failure. On the REST API, Amazon API Gateway renders the block through its `WAF_FILTERED` gateway response, which keeps the rule's `429` and adds `Access-Control-Allow-Origin` and `Access-Control-Allow-Headers`. The web application calls the API Gateway endpoint cross-origin in every topology, because it sends its API requests to the base URL that `/api/amplify-config` returns — the `execute-api` invoke URL, or the API custom domain when one is configured — so those headers are what let a browser read the `429`. The WAF response does not repeat them — a second copy would give `Access-Control-Allow-Origin` two values, which browsers reject. It carries `Retry-After: 1` and `Access-Control-Expose-Headers: Retry-After`, because `Retry-After` is not a CORS-safelisted response header and a cross-origin caller cannot read it without the exposure. A throttled CORS preflight (`OPTIONS`) request still fails, because AWS WAF answers it before the API's MOCK integration and a preflight requires a success status. The VAMS web application and the VAMS CLI both treat `429` as a transient, retryable condition — they honor the `Retry-After` header and retry with backoff rather than forcing re-authentication. Tune the limit and the response code in `wafPolicyConfig.json`; see the [configuration reference](../deployment/configuration-reference.md).
+
+### Requests the web ACL blocks
+
+When a managed rule blocks a request at the API Gateway stage, API Gateway answers HTTP `403` with a JSON body that names AWS WAF as the source and carries API Gateway's extended request ID (the `WAF_FILTERED` gateway response):
+
+```json
+{
+    "message": "Request blocked by the deployment's AWS WAF web ACL",
+    "blockedBy": "waf",
+    "requestId": "E7BBKGcCvHcEXAMPLE="
+}
+```
+
+A rule with its own custom response, such as the rate-based rule's `429`, returns that response instead. The body tells a block apart from an authorization denial, which also answers `403`, and the VAMS clients present it as a block:
+
+-   The VAMS CLI reports `Request Blocked` after sending the request once, with exit code `1` and, under `--json-output`, the `error_type` `RequestBlockedError` with `blockedBy` and `requestId`. It does not refresh the token, retry or clear stored credentials, because signing in again does not change the result. A bare `403 Forbidden` from API Gateway on a signed-in request is reported the same way with `blockedBy` `waf-or-stage`, because both a web ACL block without this body and a base URL that names no deployed stage answer that way. See [Request Blocked (AWS WAF)](../cli/troubleshooting/general.md#request-blocked-aws-waf).
+-   The VAMS MCP server returns the tool error with the `error_type` `RequestBlockedError` and the same `blockedBy` and `requestId` fields.
+-   The VAMS web application shows the block's message with the request ID, `Request blocked by the deployment's AWS WAF web ACL (request ID ...)`, rather than a permission message. The Potree and Cesium 3D Tileset viewers show it for a blocked preview or tileset request too. A block on a request's URI path also blocks the browser's CORS preflight for it, so the browser reports a network error with no status, and those viewers report that the request failed before VAMS answered it.
+
+An administrator finds the request by its ID in the web ACL's `aws-waf-logs-vams-*` log group, where its record carries the ID as `httpRequest.requestId` and names the rule that matched; the response carries the same ID in its `x-amz-apigw-id` header. The web ACL's sampled requests carry no request ID, so a request is matched there by its time, URI and client IP.
 
 ### Rule policy validation
 
@@ -630,15 +727,19 @@ Each partition entry carries both a standard and a FIPS hostname, so `useFips` r
 
 ## Blocked File Types
 
-VAMS validates all uploaded files against blocked extension and MIME type lists to prevent malicious content, and checks the destination file name of a move, rename or copy against the blocked extension list. The comparison is case-insensitive on the file extension and on the media-type part of the reported content type (any parameter such as `; charset=binary` is ignored), so `.EXE` and `Application/X-Msdownload` are blocked exactly like their lower-case forms. The extension is everything from the last dot of the file name, read from the key's last non-empty path segment after any trailing dots and whitespace are removed, so `payload.exe.`, `payload.exe `, `.exe`, `..exe` and `payload.exe/` are blocked like `payload.exe`; dotfiles such as `.gitignore` are not affected, and a folder whose own name ends in a blocked extension (`builds.exe/`) cannot be downloaded as a prefix. Every colon-separated piece of the file name is checked against the list, because a Windows client writes whichever piece survives: a `:` opens an NTFS alternate data stream that is not part of the file written to disk, so `payload.exe::$DATA` and `payload.exe:evil` are blocked like `payload.exe`, and a browser that cannot write `:` substitutes it and keeps the rest of the name, so `a:b.exe` is blocked like `b.exe`. A file path that creates a new object (upload, move or copy destination) is also rejected when its final name ends in a dot or whitespace, because Windows drops that character when the file is written to disk, and an upload path is rejected when it ends in a slash, because a file is never a folder. A path that creates a new object (upload, create folder, move or copy destination) is rejected when it contains a `:` anywhere, because Windows forbids that character in a file or folder name.
+VAMS checks the file name of every upload, and the destination file name of a move, rename or copy, against the blocked extension list. The blocked MIME type list is checked against the content type Amazon S3 reports for a stored object: when an upload completes, when a workflow output is ingested, when the large object copy engine copies a workflow output over 1 GiB or an upload over 5 GiB into its asset, and when a file is downloaded, streamed, exported or added to a zip download. When an upload completes, the object checked is the staged upload, which VAMS creates with the content type `application/octet-stream`. That type is not on the list, so the MIME type check never refuses an upload by itself; the extension list is what refuses one. A workflow output is checked against the content type its pipeline wrote it with. A fork that adds `application/octet-stream` to the list refuses every upload (see [Upload deny lists](../developer/customizing-vams.md#upload-deny-lists)). A file written to an asset bucket outside VAMS with a blocked content type is not handed out: a download, stream or zip download of it is refused, and an export withholds its download URL. The comparison is case-insensitive on the file extension and on the media-type part of the reported content type (any parameter such as `; charset=binary` is ignored), so `.EXE` and `Application/X-Msdownload` are blocked exactly like their lower-case forms. The extension is everything from the last dot of the file name, read from the key's last non-empty path segment after any trailing dots and whitespace are removed, so `payload.exe.`, `payload.exe `, `.exe`, `..exe` and `payload.exe/` are blocked like `payload.exe`; dotfiles such as `.gitignore` are not affected, and a folder whose own name ends in a blocked extension (`builds.exe/`) cannot be downloaded as a prefix. Every colon-separated piece of the file name is checked against the list, because a Windows client writes whichever piece survives: a `:` opens an NTFS alternate data stream that is not part of the file written to disk, so `payload.exe::$DATA` and `payload.exe:evil` are blocked like `payload.exe`, and a browser that cannot write `:` substitutes it and keeps the rest of the name, so `a:b.exe` is blocked like `b.exe`. A file path that creates a new object (upload, move or copy destination) is also rejected when its final name ends in a dot or whitespace, because Windows drops that character when the file is written to disk, and an upload path is rejected when it ends in a slash, because a file is never a folder. A path that creates a new object (upload, create folder, move or copy destination) is rejected when it contains a `:` anywhere, because Windows forbids that character in a file or folder name.
 
 ### Blocked Extensions
 
-`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`
+`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.dotm`, `.xlsm`, `.xltm`, `.xlam`, `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm`, `.vbs`, `.bat`
 
 ### Blocked MIME Types
 
-`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/javascript`, `application/x-powershell`, `application/vbscript`, and additional potentially dangerous MIME types.
+`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/x-powershell`, `application/vbscript`, the macro-enabled Office types (`application/vnd.ms-word.document.macroEnabled.12`, `application/vnd.ms-excel.sheet.macroEnabled.12`, `application/vnd.ms-powerpoint.presentation.macroEnabled.12` and the matching template, add-in, slide show and slide types), and additional potentially dangerous MIME types.
+
+Word documents (`.docx`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`) and JavaScript files (`.js`, `application/javascript`) are on neither list, so a stored file of either type is downloaded, streamed, exported, zipped and ingested as a workflow output like any other file. Macro-enabled Office files (Word, Excel and PowerPoint documents, templates, add-ins, slide shows and slides) are blocked by their extension and by their MIME type. Excel binary workbooks (`.xlsb`) are on neither list: the format also holds ordinary workbooks without macros.
+
+A deployment can add entries to both lists in its add-on or fork constants files; it cannot remove one. Added entries are matched the same way as the shipped ones. See [Upload deny lists](../developer/customizing-vams.md#upload-deny-lists). A zip download applies the added entries, but a [Zip Archive pipeline](../pipelines/zip-archive.md#checks-before-writing) run started as a workflow applies only the shipped lists, so an added entry, such as `.js` or `.docx`, does not reach that run.
 
 Upload completion applies the blocked-extension check to every object it creates, including zero-byte files, before the object is written, and accepts only the files that were declared when the upload was initialized; an upload initialized before this check existed is completed without it until it expires, seven days after it was initialized, and an expired upload is refused. A file completed with no parts is cancelled: its multipart upload is aborted and no object is created.
 
@@ -653,16 +754,16 @@ VAMS maintains nine dedicated Amazon CloudWatch Log Groups for audit logging, ea
 | File Upload            | File upload operations with user, file, and bucket details |
 | File Download          | File download operations                                   |
 | File Download Streamed | Streamed file download operations                          |
-| Auth Other             | Miscellaneous authentication events                        |
-| Auth Changes           | Role, constraint, and user-role modifications              |
+| Auth Other             | Login profile changes and reads of the auth admin routes   |
+| Auth Changes           | Role, user-role, constraint, API key and user changes      |
 | Actions                | General CRUD operations                                    |
 | Errors                 | Application errors and exceptions                          |
 
 :::info[Silent Failure Pattern]
-Audit logging uses a silent failure pattern. If writing to an audit log fails, the error is logged locally to the Lambda's standard log group, but Lambda execution continues normally. This prevents audit logging failures from disrupting application operations.
+Audit logging uses a silent failure pattern. If writing to an audit log fails, the error is logged locally to the Lambda's standard log group, but Lambda execution continues normally. This prevents audit logging failures from disrupting application operations. The entry that could not be written is kept in the Lambda's own log as an `auditFallback` line and counted in the `AuditWriteFailures` metric (namespace `VAMS/Audit`); alarm on that metric (see [Monitoring Audit Logging Health](../developer/audit-logging.md#monitoring-audit-logging-health)).
 :::
 
-Each record carries an echo of the request after credential keys and caller-authored template content are redacted, including the verified token claims and the submitted request body, so audit records can contain personal data a user enters. See [What Is Logged](../developer/audit-logging.md#what-is-logged).
+Authorization, error, auth change and auth other records carry a short echo of the request (request ID and time, method, path, route, path parameters and connection addresses), with no headers, query string or body. Action and auth change records carry what a write changed, after credential keys and caller-authored template content are redacted, and authentication, file transfer and earlier orchestration records carry the redacted request, including the verified token claims and the submitted body, so audit records can contain personal data a user enters. On a deployment behind Amazon CloudFront, records name the viewer's address only for a request that carries the origin verification value. See [What Is Logged](../developer/audit-logging.md#what-is-logged).
 
 ## AWS CloudTrail Integration
 
@@ -695,17 +796,18 @@ Custom bucket policies can be applied to all VAMS Amazon S3 buckets via `infra/c
 
 `govCloud.enabled = true` is the restricted-partition switch: the AWS GovCloud (US), AWS European Sovereign Cloud, and ISO partitions all set it. When it is `true`:
 
-| Constraint                                | Enforcement                                                                           |
-| ----------------------------------------- | ------------------------------------------------------------------------------------- |
-| VPC required                              | `useGlobalVpc.enabled` must be `true`                                                 |
-| No Amazon CloudFront                      | `useCloudFront.enabled` must be `false`                                               |
-| No Amazon Location Service                | `useLocationService.enabled` must be `false`                                          |
-| No AWS Deadline Cloud                     | `pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                         |
-| No Amazon Cognito SAML or OIDC federation | `useCognito.useSaml` and `useCognito.useOidc` must be `false` (hosted UI unavailable) |
-| No next-generation OpenSearch Serverless  | `openSearch.useServerless.nextGen` must be `false`                                    |
-| FIPS endpoints                            | Not enforced; `useFips` adds only the AWS KMS FIPS interface VPC endpoint             |
+| Constraint                                | Enforcement                                                                                                                    |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| VPC required                              | `useGlobalVpc.enabled` must be `true`                                                                                          |
+| No Amazon CloudFront                      | `useCloudFront.enabled` must be `false`                                                                                        |
+| No Amazon Location Service                | `useLocationService.enabled` must be `false`                                                                                   |
+| No AWS Deadline Cloud                     | `pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                                                                  |
+| No Amazon Cognito SAML or OIDC federation | `useCognito.useSaml` and `useCognito.useOidc` must be `false` (hosted UI unavailable)                                          |
+| No next-generation OpenSearch Serverless  | `openSearch.useServerless.nextGen` must be `false`                                                                             |
+| FIPS endpoints                            | Not enforced; `useFips` adds only the AWS KMS FIPS interface VPC endpoint                                                      |
+| Vector search off by default              | `vectorSearch.enabled` is backfilled to `false`; enabling it is supported after the models are enabled in both linked accounts |
 
-The AWS European Sovereign Cloud (`aws-eusc`) additionally has no Amazon OpenSearch Serverless endpoint, so `openSearch.useServerless.enabled` must be `false` there and search runs on a provisioned domain. Amazon Rekognition is not offered in `aws-eusc` or in AWS GovCloud (US-East) (`us-gov-east-1`), so keep `pipelines.useGenAiMetadata3dLabeling.enabled` `false` in those Regions.
+The AWS European Sovereign Cloud (`aws-eusc`) additionally has no Amazon OpenSearch Serverless endpoint, so `openSearch.useServerless.enabled` must be `false` there and search runs on a provisioned domain, and no DynamoDB vector search: configuration validation accepts `vectorSearch.enabled` only in the commercial and AWS GovCloud (US) partitions, so it must be `false` there.
 
 When `govCloud.il6Compliant = true`:
 
@@ -726,7 +828,7 @@ The following recommendations should be reviewed with your organization's securi
 5. **Configure IP restrictions** — Consider configuring IP range restrictions using `authorizerOptions.allowedIpRanges` in the [deployment configuration](../deployment/configuration-reference.md) to limit API access to known networks.
 6. **Configure presigned URL network restrictions** — For production deployments where asset access should be restricted to specific networks, configure `assetBuckets.presignedUrlNetworkRestrictions` with `allowedIpRanges` (IPv4/IPv6 CIDR blocks) or `allowedVpceIds` (Amazon S3 VPC endpoint IDs). These restrictions limit presigned URL access to the specified networks through bucket policy deny statements applied to the VAMS-created asset and auxiliary buckets.
 7. **Enable KMS encryption** — For production deployments, enable customer-managed KMS encryption (`useKmsCmkEncryption.enabled: true`) for all storage resources.
-8. **Use CloudFront with custom TLS** — When using Amazon CloudFront, consider configuring a custom domain with your own TLS certificate rather than the default CloudFront domain.
+8. **Use CloudFront with custom TLS** — When using Amazon CloudFront, consider configuring a custom domain with your own TLS certificate rather than the default CloudFront domain. The default domain accepts TLS 1.0 and later; a custom domain accepts TLS 1.2 and later ([Amazon CloudFront Viewer TLS](#amazon-cloudfront-viewer-tls)).
 9. **Review Content Security Policy** — The CSP is dynamically generated based on deployment configuration. Review the generated policy headers for compliance with your organization's standards.
 10. **Enable audit logging review** — Regularly review audit logs in Amazon CloudWatch for suspicious activity patterns such as repeated authorization failures or unusual file download volumes.
 11. **Restrict constraint management to trusted administrators** — The constraint management routes (`/auth/constraints`, `/auth/constraints/{constraintId}`, `/auth/constraintsTemplateImport`) allow a role to define the authorization policy itself. A role with this access can grant access to any resource, comparable to holding AWS Identity and Access Management (IAM) policy-editing permissions. In the default deployment these routes are granted only to the `admin` role. Do not delegate `api` access to these routes to general or untrusted roles, and treat changes to who can manage constraints as privileged administrative changes. Auth changes are recorded in the Auth Changes audit log group for review.

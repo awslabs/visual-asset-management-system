@@ -22,9 +22,11 @@ CloudFront-fronted case that already worked — and that is the more expensive f
 the configuration path entirely rather than letting one bad URL through.
 """
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from vamscli.commands.setup import (
     normalize_base_url_for_stage,
@@ -57,6 +59,23 @@ class TestStageProbeClassification:
         assert ok is False
         assert "stage" in detail.lower()
         assert "403" in detail
+
+    def test_a_403_from_the_web_acl_is_rejected_and_names_the_web_acl_and_request(self):
+        """The deployment's WAF_FILTERED response. Its body does not say "forbidden", so without the
+        marker rule the probe would pass a deployment that blocks every request from this network."""
+        response = requests.Response()
+        response.status_code = 403
+        response._content = json.dumps({
+            "message": "Request blocked by the deployment's AWS WAF web ACL",
+            "blockedBy": "waf",
+            "requestId": "r-1",
+        }).encode("utf-8")
+        with patch("requests.get", return_value=response):
+            ok, detail = validate_api_gateway_reachable(API)
+        assert ok is False
+        assert "blocked by the deployment's AWS WAF web ACL" in detail
+        assert "request ID r-1" in detail
+        assert "aws-waf-logs-vams-*" in detail
 
     def test_a_200_is_accepted(self):
         """A fronted deployment may answer the probe route without a challenge; that is still reachable."""
@@ -119,5 +138,5 @@ class TestNormalizerAndProbeAgree:
         "https://abc123.execute-api.us-west-2.amazonaws.com/api",
     ])
     def test_a_url_that_already_resolves_is_left_alone(self, supplied):
-        """Paired arm: a fronted domain absorbs the stage, and must not gain a second one."""
+        """Paired arm: a fronted or an already-staged URL must not gain a second stage."""
         assert normalize_base_url_for_stage(supplied) == supplied

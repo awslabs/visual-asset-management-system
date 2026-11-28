@@ -32,6 +32,16 @@ from tests.handlers.assets.test_assetService_update_tag_scope import (
 # isDistributable True, tags [].
 _CHANGED_DESCRIPTION = "a changed description"
 
+# The change provenance an edit of the name, description or tags writes beside the edited fields;
+# pinned in test_assetService_edit_change_provenance.py.
+_PROVENANCE_ATTRIBUTES = ("lastChangeSource", "lastChangeAt")
+
+
+def _edited_attributes(asset_table):
+    """The request fields the edit wrote: what it wrote less the change provenance."""
+    return {name: value for name, value in _written_attributes(asset_table).items()
+            if name not in _PROVENANCE_ATTRIBUTES}
+
 
 def _put(body, stored_tags=None):
     """PUT `body` through handle_put_request as a permitted caller.
@@ -71,7 +81,7 @@ class TestExplicitNullLeavesTheFieldUnchanged:
         assert response["statusCode"] == 200, (
             f"a null {null_field} beside a valid {other_field} was refused: {response}"
         )
-        assert _written_attributes(m.asset_table) == {other_field: other_value}, (
+        assert _edited_attributes(m.asset_table) == {other_field: other_value}, (
             f"the explicit null for {null_field} reached the asset record as a value"
         )
 
@@ -93,7 +103,7 @@ class TestExplicitNullLeavesTheFieldUnchanged:
         assert response["statusCode"] == 200, (
             f"a null tag list surfaced as {response['statusCode']}: {response}"
         )
-        assert _written_attributes(m.asset_table) == {"description": _CHANGED_DESCRIPTION}
+        assert _edited_attributes(m.asset_table) == {"description": _CHANGED_DESCRIPTION}
         assert [call["action"] for call in spy.calls] == ["PUT"], (
             "a null tag list reached the tag-change authorization gate, which only a changed "
             f"tag list evaluates: {spy.calls}"
@@ -118,7 +128,7 @@ class TestExplicitValuesStillApply:
         )
 
         assert response["statusCode"] == 200, response
-        assert _written_attributes(m.asset_table) == {
+        assert _edited_attributes(m.asset_table) == {
             "assetName": "renamed",
             "description": _CHANGED_DESCRIPTION,
             "isDistributable": False,

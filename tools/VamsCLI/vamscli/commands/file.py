@@ -19,17 +19,17 @@ from ..utils.exceptions import (
     UploadSequenceError, FileUploadError, FileNotFoundError, FileOperationError,
     InvalidPathError, FilePermissionError, FileAlreadyExistsError, 
     FileArchivedError, InvalidVersionError, AssetNotFoundError, InvalidAssetDataError,
-    DatabaseNotFoundError
+    DatabaseNotFoundError, APIError, UploadStatusNotFoundError, GlobalInfrastructureError
 )
 from ..utils.file_processor import (
     FileInfo, collect_files_from_directory, collect_files_from_list,
     create_upload_sequences, validate_file_for_upload, 
     validate_preview_files_have_base_files, get_upload_summary, format_file_size
 )
-from ..utils.upload_manager import UploadManager, UploadProgress, format_duration
+from ..utils.upload_manager import UploadManager, UploadProgress, failed_file_reasons, format_duration
 from ..utils.api_client import APIClient
 from ..utils.profile import ProfileManager
-from ..constants import DEFAULT_PARALLEL_UPLOADS, DEFAULT_RETRY_ATTEMPTS
+from ..constants import DEFAULT_PARALLEL_UPLOADS, DEFAULT_RETRY_ATTEMPTS, DEFAULT_ASYNC_INGESTION_TIMEOUT_SECONDS
 
 
 class ProgressDisplay:
@@ -197,6 +197,169 @@ def file():
     pass
 
 
+# Upload status of an upload whose files over 1 GiB are ingested asynchronously (GET /uploads/{uploadId}).
+ASYNC_STATUS_PROCESSING = "processing_async"
+ASYNC_TERMINAL_STATUSES = ("completed", "completed_with_errors")
+ASYNC_POLL_INTERVAL_SECONDS = 15
+
+
+def async_ingestion_upload_ids(result) -> List[str]:
+    """Upload ids of the completions that handed files to asynchronous ingestion, in order."""
+    ids = []
+    for seq_result in (result or {}).get("sequence_results", []) or []:
+        completion = seq_result.get("completion_result") or {}
+        upload_id = completion.get("uploadId")
+        if completion.get("largeFileAsynchronousHandling") and upload_id and upload_id not in ids:
+            ids.append(upload_id)
+    return ids
+
+
+def async_ingestion_entry(upload_id: str, status_body: dict) -> dict:
+    """The CLI view of one upload's status response."""
+    return {
+        "upload_id": upload_id,
+        "status": status_body.get("status", ""),
+        "files": [{"relative_key": f.get("relativeKey", ""), "status": f.get("status", ""),
+                   "error": f.get("error", "")}
+                  for f in status_body.get("asyncFiles", []) or []],
+    }
+
+
+def wait_for_async_ingestion(api_client, database_id: str, asset_id: str, upload_ids: List[str],
+                             timeout_seconds: int, sleep=time.sleep, clock=time.monotonic) -> List[dict]:
+    """Poll each upload's status until it is completed or completed_with_errors, or the timeout
+    passes (an upload still processing is marked timed_out). An upload whose status cannot be read
+    (not found, for example a deployment without the status route, or an invalid request) is
+    reported with status 'unknown' at once. Any other failure (a 5xx or a network error) is
+    transient: the upload is polled again on the next round, until the timeout. A global error
+    (throttling past the retries, a sign-in that stopped working, a denial, a web ACL block) ends
+    the wait: the files are already uploaded, so each upload not yet settled is reported 'unknown'
+    with the error and the command to check it later, and the caller still prints the result."""
+    deadline = clock() + max(0, int(timeout_seconds or 0))
+    entries = {}
+    pending = list(upload_ids)
+    while True:
+        for upload_id in list(pending):
+            try:
+                body = api_client.get_upload_status(database_id, asset_id, upload_id)
+            except GlobalInfrastructureError as e:
+                log_debug(f"Upload status of {upload_id} could not be read, stopping the wait: {e}")
+                for unsettled in pending:
+                    entries[unsettled] = {
+                        "upload_id": unsettled, "status": "unknown", "files": [],
+                        "error": f"{type(e).__name__}: {e}",
+                        "check_command": f"vamscli file upload-status -d {database_id} -a {asset_id} -u {unsettled}",
+                    }
+                return [entries[uid] for uid in upload_ids]
+            except (UploadStatusNotFoundError, InvalidAssetDataError) as e:
+                log_debug(f"Upload status of {upload_id} is not available: {e}")
+                entries[upload_id] = {"upload_id": upload_id, "status": "unknown", "files": [],
+                                      "error": str(e)}
+                pending.remove(upload_id)
+                continue
+            except APIError as e:
+                log_debug(f"Upload status of {upload_id} could not be read, retrying: {e}")
+                # Keep the last status read; with none yet, report unknown if the wait times out.
+                entries.setdefault(upload_id, {"upload_id": upload_id, "status": "unknown",
+                                               "files": [], "error": str(e)})
+                continue
+            entries[upload_id] = async_ingestion_entry(upload_id, body)
+            if body.get("status") in ASYNC_TERMINAL_STATUSES:
+                pending.remove(upload_id)
+        if not pending or clock() >= deadline:
+            break
+        sleep(min(ASYNC_POLL_INTERVAL_SECONDS, max(0, deadline - clock())))
+    for upload_id in pending:
+        entries[upload_id]["timed_out"] = True
+    return [entries[upload_id] for upload_id in upload_ids]
+
+
+def apply_async_outcome(result: dict, waited: bool):
+    """Count asynchronously ingested files that failed as failed files (the completion counted them
+    as accepted), and with --wait-async treat a timed-out or unreadable wait as not successful."""
+    entries = result.get("async_ingestion") or []
+    failed = sum(1 for entry in entries for f in entry.get("files", []) if f.get("status") == "FAILED")
+    if failed:
+        result["failed_files"] = result.get("failed_files", 0) + failed
+        result["successful_files"] = max(0, result.get("successful_files", 0) - failed)
+        result["overall_success"] = False
+    if waited and any(entry.get("timed_out") or entry.get("status") == "unknown" for entry in entries):
+        result["overall_success"] = False
+
+
+def format_async_ingestion_lines(entries: List[dict]) -> List[str]:
+    """Human-readable lines for the asynchronously ingested files of an upload."""
+    lines = []
+    for entry in entries:
+        lines.append(f"\nLarge files of upload {entry['upload_id']}: {entry.get('status', '')}"
+                     + (" (timed out waiting)" if entry.get("timed_out") else ""))
+        for f in entry.get("files", []):
+            reason = f" - {f['error']}" if f.get("error") else ""
+            lines.append(f"  {f.get('status', '')}: {f.get('relative_key', '')}{reason}")
+        if entry.get("check_command"):
+            lines.append(f"  Check later: {entry['check_command']}")
+        if entry.get("error"):
+            lines.append(f"  {entry['error']}")
+    return lines
+
+
+@file.command('upload-status')
+@click.option('-d', '--database', 'database_id', required=True, help='Database ID')
+@click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
+@click.option('-u', '--upload-id', 'upload_id', required=True,
+              help='Upload ID (reported by file upload under async_ingestion)')
+@click.option('--json-input', help='JSON input with all parameters')
+@click.option('--json-output', is_flag=True, help='Output API response as JSON')
+@click.pass_context
+@requires_setup_and_auth
+def upload_status(ctx: click.Context, database_id: str, asset_id: str, upload_id: str,
+                  json_input: str, json_output: bool):
+    """Show the status of an upload whose files over 1 GiB are ingested asynchronously.
+
+    Each such file is PENDING, SUCCEEDED or FAILED (with a reason); the upload is processing_async
+    until none is pending, then completed or completed_with_errors. Exits non-zero when a file
+    failed. An upload whose files all landed at completion keeps no status (not found).
+
+    Examples:
+        vamscli file upload-status -d my-db -a my-asset -u y1234abcd-...
+        vamscli file upload-status -d my-db -a my-asset -u y1234abcd-... --json-output
+    """
+    try:
+        json_data = parse_json_input(json_input) if json_input else {}
+        database_id = json_data.get('database_id', database_id)
+        asset_id = json_data.get('asset_id', asset_id)
+        upload_id = json_data.get('upload_id', upload_id)
+
+        profile_manager = get_profile_manager_from_context(ctx)
+        config = profile_manager.load_config()
+        api_client = APIClient(config['api_gateway_url'], profile_manager)
+
+        output_status(f"Retrieving the status of upload '{upload_id}'...", json_output)
+        result = api_client.get_upload_status(database_id, asset_id, upload_id)
+
+        def format_status(data):
+            lines = [f"\nUpload: {data.get('uploadId', upload_id)}", f"Status: {data.get('status', '')}"]
+            files = data.get('asyncFiles') or []
+            if files:
+                lines.append(f"\nLarge files ({len(files)}):")
+                for f in files:
+                    reason = f" - {f['error']}" if f.get('error') else ""
+                    lines.append(f"  {f.get('status', '')}: {f.get('relativeKey', '')}{reason}")
+            return '\n'.join(lines)
+
+        output_result(result, json_output, success_message="✓ Upload status retrieved",
+                      cli_formatter=format_status)
+
+        if (any(f.get('status') == 'FAILED' for f in result.get('asyncFiles') or [])
+                and not invoked_from_another_command(ctx)):
+            sys.exit(1)
+        return result
+
+    except (APIError, InvalidAssetDataError) as e:
+        output_error(e, json_output, error_type="Upload Status Error")
+        raise click.ClickException(str(e))
+
+
 @file.command()
 @click.argument('files_or_directory', nargs=-1, type=click.Path(exists=True))
 @click.option('-d', '--database', 'database_id', required=True, 
@@ -206,9 +369,10 @@ def file():
 @click.option('--directory', type=click.Path(exists=True, file_okay=False, dir_okay=True),
               help='Directory to upload')
 @click.option('--asset-preview', is_flag=True,
-              help='Upload as asset preview (single file only)')
+              help='Upload as asset preview (single file only; .png, .jpg, .jpeg, .svg, .gif, .webp or .bmp, '
+                   'at most 5 MiB)')
 @click.option('--asset-location', default='/',
-              help='Base asset location (default: "/")')
+              help='Folder path in the asset to upload into, with a leading "/" (default: "/")')
 @click.option('--recursive', is_flag=True,
               help='Include subdirectories when uploading directory')
 @click.option('--parallel-uploads', type=int, default=DEFAULT_PARALLEL_UPLOADS,
@@ -223,15 +387,24 @@ def file():
               help='Output API response as JSON')
 @click.option('--hide-progress', is_flag=True,
               help='Hide upload progress display')
+@click.option('--wait-async', is_flag=True,
+              help='Wait until files over 1 GiB, which are ingested asynchronously, have landed or failed')
+@click.option('--async-timeout', type=int, default=DEFAULT_ASYNC_INGESTION_TIMEOUT_SECONDS,
+              help=f'Seconds --wait-async waits (default: {DEFAULT_ASYNC_INGESTION_TIMEOUT_SECONDS})')
 @click.pass_context
 @requires_setup_and_auth
 def upload(ctx: click.Context, files_or_directory, database_id, asset_id, directory, asset_preview,
            asset_location, recursive, parallel_uploads, retry_attempts, force_skip,
-           json_input, json_output, hide_progress):
+           json_input, json_output, hide_progress, wait_async, async_timeout):
     """Upload files to an asset.
 
     Exits non-zero when any file failed to upload, so a partial transfer is distinguishable from a
     complete one. The response still reports `overall_success`, `successful_files` and `failed_files`.
+
+    Files over 1 GiB are ingested into the asset asynchronously after the upload completes. The
+    result lists them under `async_ingestion` with each upload's status. With --wait-async the
+    command waits for their outcome (up to --async-timeout seconds) and exits non-zero when one of
+    them failed or the wait timed out. Without it, check later with `vamscli file upload-status`.
     """
     try:
         # Parse JSON input if provided
@@ -250,6 +423,8 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
         retry_attempts = json_data.get('retry_attempts', retry_attempts)
         force_skip = json_data.get('force_skip', force_skip)
         hide_progress = json_data.get('hide_progress', hide_progress)
+        wait_async = json_data.get('wait_async', wait_async)
+        async_timeout = json_data.get('async_timeout', async_timeout)
         
         # Handle files from JSON
         if 'files' in json_data:
@@ -432,10 +607,16 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
                 clean_sequence_results = []
                 for seq_result in result['sequence_results']:
                     clean_seq = {
-                        'sequence_number': seq_result.get('sequence_number'),
+                        'sequence_number': seq_result.get('sequence_id'),
                         'successful_files': seq_result.get('successful_files', 0),
                         'failed_files': seq_result.get('failed_files', [])
                     }
+                    # Why each failed file was not stored (#1072), and the sequence's own error
+                    # when the whole sequence failed (for example a 400 or 403 at initialization).
+                    if seq_result.get('error'):
+                        clean_seq['error'] = seq_result['error']
+                    if seq_result.get('failed_file_errors'):
+                        clean_seq['failed_file_errors'] = seq_result['failed_file_errors']
                     if 'completion_result' in seq_result:
                         clean_seq['completion_result'] = seq_result['completion_result']
                     clean_sequence_results.append(clean_seq)
@@ -443,6 +624,21 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             
             result = clean_result
         
+        # Files over 1 GiB land after completion: report each such upload's status, and with
+        # --wait-async wait for its outcome.
+        async_upload_ids = async_ingestion_upload_ids(result)
+        if async_upload_ids:
+            if wait_async:
+                output_status("Waiting for large files to be ingested...", json_output or hide_progress)
+                result['async_ingestion'] = wait_for_async_ingestion(
+                    api_client, database_id, asset_id, async_upload_ids, async_timeout)
+            else:
+                result['async_ingestion'] = [
+                    {'upload_id': upload_id, 'status': ASYNC_STATUS_PROCESSING, 'files': [],
+                     'check_command': f"vamscli file upload-status -d {database_id} -a {asset_id} -u {upload_id}"}
+                    for upload_id in async_upload_ids]
+            apply_async_outcome(result, wait_async)
+
         # Clear progress display (only in CLI mode)
         if not json_output and not hide_progress and progress_display._lines_printed > 0:
             click.echo('\033[2K\033[1A' * progress_display._lines_printed, nl=False)
@@ -492,15 +688,14 @@ def upload(ctx: click.Context, files_or_directory, database_id, asset_id, direct
             lines.append(f"  Duration: {format_duration(data['upload_duration'])}")
             lines.append(f"  Average speed: {data['average_speed_formatted']}")
             
-            # Show failed files if any
-            failed_files = []
-            for seq_result in data["sequence_results"]:
-                failed_files.extend(seq_result.get("failed_files", []))
-            
+            # Show each failed file with the reason it was not stored (#1072)
+            failed_files = failed_file_reasons(data)
             if failed_files:
                 lines.append("\nFailed files:")
                 for failed_file in failed_files:
-                    lines.append(f"  - {failed_file}")
+                    lines.append(f"  - {failed_file['relative_key']}: {failed_file['error']}")
+
+            lines.extend(format_async_ingestion_lines(data.get("async_ingestion") or []))
             
             return '\n'.join(lines)
         
@@ -607,6 +802,8 @@ def create_folder(ctx: click.Context, database_id: str, asset_id: str, folder_pa
 @click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
 @click.option('--prefix', help='Filter files by prefix')
 @click.option('--include-archived', is_flag=True, help='Include archived files')
+@click.option('--show-archived', is_flag=True,
+              help='Also find an archived asset; its files are all archived and always listed')
 @click.option('--basic', is_flag=True, help='Skip expensive lookups for faster listing')
 @click.option('--page-size', type=int, help='Number of items per page')
 @click.option('--max-items', type=int, help='Maximum total items to fetch (only with --auto-paginate, default: 10000)')
@@ -618,8 +815,8 @@ def create_folder(ctx: click.Context, database_id: str, asset_id: str, folder_pa
 @click.pass_context
 @requires_setup_and_auth
 def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str, include_archived: bool,
-               basic: bool, page_size: int, max_items: int, starting_token: str, auto_paginate: bool,
-               asset_version_id: str, json_input: str, json_output: bool):
+               show_archived: bool, basic: bool, page_size: int, max_items: int, starting_token: str,
+               auto_paginate: bool, asset_version_id: str, json_input: str, json_output: bool):
     """List files in an asset.
 
     Examples:
@@ -647,6 +844,9 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
 
         # With filters
         vamscli file list -d my-db -a my-asset --prefix "models/" --include-archived
+
+        # List an archived asset's files
+        vamscli file list -d my-db -a my-asset --show-archived
     """
     try:
         # Parse JSON input if provided
@@ -657,6 +857,7 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
         asset_id = json_data.get('asset_id', asset_id)
         prefix = json_data.get('prefix', prefix)
         include_archived = json_data.get('include_archived', include_archived)
+        show_archived = json_data.get('show_archived', show_archived)
         basic = json_data.get('basic', basic)
         page_size = json_data.get('page_size', page_size)
         max_items = json_data.get('max_items', max_items)
@@ -706,6 +907,8 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                     params['prefix'] = prefix
                 if include_archived:
                     params['includeArchived'] = 'true'
+                if show_archived:
+                    params['showArchived'] = 'true'
                 if basic:
                     params['basic'] = 'true'
                 if page_size:
@@ -760,6 +963,8 @@ def list_files(ctx: click.Context, database_id: str, asset_id: str, prefix: str,
                 params['prefix'] = prefix
             if include_archived:
                 params['includeArchived'] = 'true'
+            if show_archived:
+                params['showArchived'] = 'true'
             if basic:
                 params['basic'] = 'true'
             if page_size:
@@ -1161,11 +1366,13 @@ def delete_auxiliary_files(ctx: click.Context, database_id: str, asset_id: str, 
 @click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
 @click.option('-p', '--path', 'file_path', required=True, help='File path to get info for')
 @click.option('--include-versions', is_flag=True, help='Include version history')
+@click.option('--show-archived', is_flag=True, help='Also find an archived asset')
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
 @requires_setup_and_auth
-def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: str, include_versions: bool, json_input: str, json_output: bool):
+def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: str, include_versions: bool,
+              show_archived: bool, json_input: str, json_output: bool):
     """Get detailed information about a specific file.
     
     Examples:
@@ -1174,6 +1381,9 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
         
         # Get file info with version history
         vamscli file info -d my-db -a my-asset -p "/model.gltf" --include-versions
+
+        # Get info about a file of an archived asset
+        vamscli file info -d my-db -a my-asset -p "/model.gltf" --show-archived
         
         # Get info with JSON input
         vamscli file info --json-input '{"database_id": "my-db", "asset_id": "my-asset", "file_path": "/model.gltf"}'
@@ -1187,6 +1397,7 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
         asset_id = json_data.get('asset_id', asset_id)
         file_path = json_data.get('file_path', file_path)
         include_versions = json_data.get('include_versions', include_versions)
+        show_archived = json_data.get('show_archived', show_archived)
         
         # Validate required arguments
         if not database_id:
@@ -1206,6 +1417,8 @@ def file_info(ctx: click.Context, database_id: str, asset_id: str, file_path: st
             'filePath': file_path,
             'includeVersions': 'true' if include_versions else 'false'
         }
+        if show_archived:
+            params['showArchived'] = 'true'
         
         output_status(f"Retrieving file information for '{file_path}'...", json_output)
         
@@ -1472,19 +1685,19 @@ def copy_file(ctx: click.Context, database_id: str, asset_id: str, source: str, 
 @click.option('-d', '--database', 'database_id', required=True, help='Database ID')
 @click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
 @click.option('-p', '--path', 'file_path', required=True, help='File path to archive')
-@click.option('--prefix', is_flag=True, help='Archive all files under the path as a prefix')
+@click.option('--prefix', is_flag=True, help='Treat the path as a folder and archive every file in it')
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
 @requires_setup_and_auth
 def archive_file(ctx: click.Context, database_id: str, asset_id: str, file_path: str, prefix: bool, json_input: str, json_output: bool):
-    """Archive a file or files under a prefix (soft delete).
+    """Archive a file or every file in a folder (soft delete).
     
     Examples:
         # Archive a single file
         vamscli file archive -d my-db -a my-asset -p "/file.gltf"
         
-        # Archive all files under a prefix
+        # Archive every file in a folder
         vamscli file archive -d my-db -a my-asset -p "/folder/" --prefix
         
         # Archive with JSON input
@@ -1627,20 +1840,20 @@ def unarchive_file(ctx: click.Context, database_id: str, asset_id: str, file_pat
 @click.option('-d', '--database', 'database_id', required=True, help='Database ID')
 @click.option('-a', '--asset', 'asset_id', required=True, help='Asset ID')
 @click.option('-p', '--path', 'file_path', required=True, help='File path to delete')
-@click.option('--prefix', is_flag=True, help='Delete all files under the path as a prefix')
+@click.option('--prefix', is_flag=True, help='Treat the path as a folder and delete every file in it')
 @click.option('--confirm', is_flag=True, help='Confirm permanent deletion (required)')
 @click.option('--json-input', help='JSON input with all parameters')
 @click.option('--json-output', is_flag=True, help='Output API response as JSON')
 @click.pass_context
 @requires_setup_and_auth
 def delete_file(ctx: click.Context, database_id: str, asset_id: str, file_path: str, prefix: bool, confirm: bool, json_input: str, json_output: bool):
-    """Permanently delete a file or files under a prefix.
+    """Permanently delete a file or every file in a folder.
     
     Examples:
         # Delete a single file (requires confirmation)
         vamscli file delete -d my-db -a my-asset -p "/file.gltf" --confirm
         
-        # Delete all files under a prefix
+        # Delete every file in a folder
         vamscli file delete -d my-db -a my-asset -p "/folder/" --prefix --confirm
         
         # Delete with JSON input

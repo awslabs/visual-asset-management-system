@@ -31,9 +31,10 @@ USAGE_ERROR_CASES = [
     ["workflow", "get"],
     ["workflow", "execute"],
     ["workflow", "trigger", "list"],
-    ["execution", "details-metadata"],
+    ["execution", "details", "metadata"],
     ["assets", "get"],
     ["database", "get"],
+    ["search", "nlp"],
 ]
 
 

@@ -388,7 +388,7 @@ def _root_level_validation_error(authored):
     control that the payload is accepted when the dispatcher passes, and
     ``sys.modules`` is the module object the handler's own lazy import binds."""
     _pv._parse_viewer_request(_VALID_RAW)
-    model_module = sys.modules["models.physnaViewer"]
+    model_module = sys.modules["models.addon.physnaViewer"]
     with patch.object(model_module, "validate", return_value=(False, authored)):
         try:
             _pv._parse_viewer_request(_VALID_RAW)

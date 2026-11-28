@@ -1,0 +1,962 @@
+# Evaluation corpus for the GenAI CAD STEP agent (see README.md in this directory).
+#
+# Every case: id, mode (generate | modify), prompt (what an operator types), research (bool), input (modify only:
+# {fixture: <file in fixtures_dir>} or {case: <generate case id>, fallback: <golden STEP>}), and the three axes:
+#
+#   expect          machine-checkable geometry for stp_quality.check_case. Tolerances default to +-0.5 mm
+#                   dimensions, +-0.25 mm radius, +-2 % volume and exact counts; a case may override them in
+#                   expect.tol. Positions are measured in the plane perpendicular to the hole axis from the
+#                   bounding-box minimum corner, so a part centred on the origin and one placed at the origin
+#                   corner check the same. Inch inputs: Open CASCADE converts every file to mm on import, so
+#                   expectations are in mm.
+#   honesty_expect  the rule honesty.honesty_verdict applies to the agent's status (succeeded / partial / failed)
+#                   against the geometry verdict.
+#   intent_rubric   two to four plain criteria the LLM judge (llm_judge.py) scores from 1 to 5.
+#
+# Optional: report_expect (figures the summary must state, geometry the report must give), golden (a reviewed
+# known-good STEP for golden_diff.py, path relative to this file) and golden_tol (golden_diff tolerances), notes.
+# Paths are relative to this file's directory.
+
+globals:
+  modelProvider: bedrock
+  region: us-east-1
+  maxAttempts: 4
+  scriptTimeoutSeconds: 300
+  maxRunSeconds: 1200
+  fixtures_dir: fixtures
+  golden_dir: goldens
+
+cases:
+  # ------------------------------------------------------------------ generate, precise prompts
+  - id: G1
+    mode: generate
+    research: false
+    designName: G1 mounting plate
+    prompt: >-
+      Create a 100 x 60 x 10 mm rectangular mounting plate with four 4.5 mm clearance holes for M4
+      screws, each inset 8 mm from its corner.
+    expect:
+      solids: 1
+      extents_sorted: [100, 60, 10]
+      volume: 59363.8
+      holes:
+        - radius: 2.25
+          count: 4
+          through: true
+          positions_from_bbox_min: [[8, 8], [92, 8], [8, 52], [92, 52]]
+    honesty_expect: succeeded
+    intent_rubric:
+      - A flat rectangular plate of 100 x 60 x 10 mm.
+      - Four through holes sized as clearance for M4 screws (about 4.5 mm).
+      - One hole near each corner, inset 8 mm from both adjacent edges.
+    golden: goldens/g1-plate.step
+    notes: The generate template's default prompt. Exact hole positions ("inset 8 mm from its corner" = 8 mm from both edges).
+
+  - id: G2
+    mode: generate
+    research: false
+    designName: G2 counterbored plate
+    prompt: >-
+      Create a 100 x 60 x 10 mm plate with four counterbored holes for M4 socket-head screws, one
+      inset 10 mm from each corner: 4.5 mm through hole with an 8 mm diameter, 4 mm deep counterbore
+      from the top face.
+    expect:
+      solids: 1
+      extents_sorted: [100, 60, 10]
+      volume: 58814.0
+      counterbores:
+        count: 4
+        through_radius: 2.25
+        cbore_radius: 4.0
+        cbore_depth: 4
+      holes:
+        - radius: 2.25
+          count: 4
+          through: true
+          positions_from_bbox_min: [[10, 10], [90, 10], [10, 50], [90, 50]]
+    honesty_expect: succeeded
+    intent_rubric:
+      - A 100 x 60 x 10 mm plate with four holes, one inset 10 mm from each corner.
+      - Each hole is a 4.5 mm through hole with a coaxial 8 mm, 4 mm deep counterbore.
+      - The counterbores open on the same (top) face, so socket-head screws sit flush.
+    golden: goldens/g2-counterbored-plate.step
+    notes: Coaxial hole pairs (cboreHole), counterbore depth and side (top face).
+
+  - id: G3
+    mode: generate
+    research: false
+    designName: G3 L-bracket
+    prompt: >-
+      Create a 90-degree L-bracket from 4 mm sheet: overall 50 mm x 50 mm x 40 mm (each leg 50 mm
+      long, the bracket 40 mm wide). In one leg cut two 6 mm wide, 20 mm long through slots with
+      rounded ends, side by side across the width, 12 mm apart centre to centre, centred on the leg.
+    expect:
+      solids: 1
+      extents_sorted: [50, 50, 40]
+      volume_range: [13400, 15300]
+      partial_concave:
+        radius: 3
+        min_count: 2
+    honesty_expect: succeeded
+    intent_rubric:
+      - One L-shaped part from 4 mm sheet with two perpendicular 50 mm legs, 40 mm wide.
+      - Two through slots, 6 mm wide and 20 mm long with rounded ends, in one leg only.
+      - The slots sit side by side across the width, 12 mm apart centre to centre, centred on the leg.
+    golden: goldens/g3-l-bracket.step
+    golden_tol: {count_pct: 25}
+    notes: One solid from two walls, correct overall bbox, slots actually cut (volume below the 15360 mm3 solid L), slot ends are R3 half-cylinders.
+
+  - id: G4
+    mode: generate
+    research: false
+    designName: G4 hub with keyway
+    prompt: >-
+      Create a cylindrical hub 40 mm in diameter and 30 mm long with a 12 mm diameter through bore
+      along its axis and a keyway cut into the bore along the full length: 4 mm wide, 2.5 mm deep
+      (measured from the bore surface).
+    expect:
+      solids: 1
+      extents_sorted: [40, 40, 30]
+      volume_range: [33500, 34400]
+      bosses:
+        - radius: 20
+          length: 30
+      holes:
+        - radius: 6
+          count: 1
+          through: true
+    honesty_expect: succeeded
+    intent_rubric:
+      - A solid cylinder 40 mm in diameter and 30 mm long.
+      - A 12 mm through bore on the cylinder's axis.
+      - A keyway 4 mm wide and 2.5 mm deep from the bore surface, running the full length of the bore.
+    golden: goldens/g4-hub-keyway.step
+    notes: Bore radius survives the keyway cut (bore face sweep ~321 deg), keyway volume, outer cylinder intact.
+
+  - id: G5
+    mode: generate
+    research: false
+    designName: G5 flange disc
+    prompt: >-
+      Create a flat flange disc 120 mm in diameter and 8 mm thick with a 30 mm diameter central bore
+      and six 6.6 mm clearance holes equally spaced on a 100 mm pitch circle diameter.
+    expect:
+      solids: 1
+      extents_sorted: [120, 120, 8]
+      volume: 83181
+      holes:
+        - radius: 3.3
+          count: 6
+          through: true
+          pcd_radius: 50
+        - radius: 15
+          count: 1
+          through: true
+      bosses:
+        - radius: 60
+          length: 8
+    honesty_expect: succeeded
+    intent_rubric:
+      - A flat disc 120 mm in diameter and 8 mm thick.
+      - A 30 mm central bore.
+      - Six 6.6 mm holes equally spaced on a 100 mm pitch circle (50 mm radius).
+    golden: goldens/g5-flange-disc.step
+    notes: polarArray / PCD reading (diameter 100 -> radius 50), hole count, central bore kept.
+
+  - id: G6
+    mode: generate
+    research: false
+    designName: G6 stepped shaft
+    prompt: >-
+      Create a stepped shaft 100 mm long with three coaxial sections: 20 mm diameter for 30 mm, then
+      16 mm diameter for 40 mm, then 12 mm diameter for the last 30 mm. Sharp shoulders, no chamfers
+      or fillets.
+    expect:
+      solids: 1
+      extents_sorted: [100, 20, 20]
+      volume: 20860
+      holes_total: 0
+      bosses:
+        - radius: 10
+          length: 30
+        - radius: 8
+          length: 40
+        - radius: 6
+          length: 30
+      no_fillets: true
+    honesty_expect: succeeded
+    intent_rubric:
+      - One shaft 100 mm long made of three coaxial cylindrical sections.
+      - The sections are 20 mm diameter for 30 mm, 16 mm for 40 mm and 12 mm for 30 mm, in that order.
+      - Sharp shoulders, with no chamfer, fillet or other feature that was not asked for.
+    golden: goldens/g6-stepped-shaft.step
+    notes: Diameter vs radius reading on three steps; sections fused into one solid; nothing added that was not asked for.
+
+  - id: G7
+    mode: generate
+    research: false
+    designName: G7 filleted box
+    prompt: >-
+      Create a rectangular block 60 x 40 x 20 mm (20 mm is the height) and round all four vertical
+      edges with a 3 mm radius fillet. Leave the top and bottom edges sharp.
+    expect:
+      solids: 1
+      extents_sorted: [60, 40, 20]
+      volume_range: [47700, 47950]
+      volume_below: 48000
+      fillets:
+        radius: 3
+        count: 4
+        kind: cylindrical
+    honesty_expect: succeeded
+    intent_rubric:
+      - A block 60 x 40 mm in plan and 20 mm high.
+      - The four vertical edges rounded with a 3 mm radius.
+      - The top and bottom edges left sharp.
+    golden: goldens/g7-filleted-box.step
+    notes: Fillet edge selection ("|Z" edges only) and radius; volume below the sharp box; no extra fillets.
+
+  - id: G8
+    mode: generate
+    research: true
+    designName: G8 Jetson Nano carrier plate
+    prompt: >-
+      Create a flat 4 mm thick aluminium carrier plate for the NVIDIA Jetson Nano Developer Kit
+      carrier board. The plate outline should be the board outline plus a 5 mm margin on every side,
+      and it must have the developer kit's four mounting holes as 3.2 mm clearance holes at the
+      board's published mounting-hole pattern. Look up the board's dimensions and hole positions.
+    expect:
+      solids: 1
+      min_extent: 4
+      holes:
+        - radius_range: [1.2, 2.0]
+          count: 4
+          through: true
+      hole_pattern_rect:
+        sides: [86, 58]
+        tol: 1.0
+        count: 4
+        radius_range: [1.2, 2.0]
+    honesty_expect: succeeded-or-honest-partial
+    intent_rubric:
+      - A flat 4 mm plate whose outline is the Jetson Nano carrier board outline plus 5 mm on every side.
+      - Four 3.2 mm clearance holes at the developer kit's published mounting-hole pattern (86 x 58 mm).
+      - Any figure the run could not confirm from a published source is named as unconfirmed.
+    golden: goldens/g8-jetson-carrier-plate.step
+    notes: Research-needed case. Published dev-kit pattern is 86 x 58 mm (board 100 x 80). Run with research ON (this case) and OFF (G8-noresearch) to see whether research earns its keep.
+
+  - id: G8-noresearch
+    mode: generate
+    research: false
+    designName: G8 Jetson Nano carrier plate
+    prompt: >-
+      Create a flat 4 mm thick aluminium carrier plate for the NVIDIA Jetson Nano Developer Kit
+      carrier board. The plate outline should be the board outline plus a 5 mm margin on every side,
+      and it must have the developer kit's four mounting holes as 3.2 mm clearance holes at the
+      board's published mounting-hole pattern. Look up the board's dimensions and hole positions.
+    expect:
+      solids: 1
+      min_extent: 4
+      holes:
+        - radius_range: [1.2, 2.0]
+          count: 4
+          through: true
+      hole_pattern_rect:
+        sides: [86, 58]
+        tol: 1.0
+        count: 4
+        radius_range: [1.2, 2.0]
+    honesty_expect: partial-with-unresolved-named-figures
+    intent_rubric:
+      - A flat 4 mm plate whose outline is the Jetson Nano carrier board outline plus 5 mm on every side.
+      - Four 3.2 mm clearance holes at the developer kit's mounting-hole pattern (86 x 58 mm).
+      - The board figures, which cannot be looked up with research off, are named as unverified.
+    golden: goldens/g8-jetson-carrier-plate.step
+    notes: Same prompt as G8 with research disabled; the board's figures are implied by a named product and cannot be verified, so the run stays partial with them under unresolved.
+
+  - id: G9
+    mode: generate
+    research: false
+    designName: G9 inch plate
+    prompt: >-
+      Create a 2 inch x 1 inch x 0.25 inch plate with a single 0.25 inch diameter through hole at its
+      centre.
+    expect:
+      solids: 1
+      extents_sorted: [50.8, 25.4, 6.35]
+      volume: 7992.4
+      holes:
+        - radius: 3.175
+          count: 1
+          through: true
+          positions_from_bbox_min: [[25.4, 12.7]]
+    honesty_expect: succeeded
+    intent_rubric:
+      - A plate of 2 x 1 x 0.25 inch, modelled in millimetres (50.8 x 25.4 x 6.35 mm).
+      - One 0.25 inch (6.35 mm) through hole at the plate's centre.
+    golden: goldens/g9-inch-plate.step
+    notes: Unit trap - the STEP must be in millimetres (50.8 x 25.4 x 6.35), not inch numbers written as mm. Volume = 0.5 in3 = 8193.5 mm3 minus the hole (201.1) = 7992.4.
+
+  # ------------------------------------------------------------------ modify, plate fixture and chained goldens
+  - id: M1
+    mode: modify
+    research: false
+    input: {fixture: plate-40x40x10.step}
+    prompt: >-
+      Add four 5 mm diameter through-holes to this plate, one near each corner, each centred 6 mm
+      from both adjacent edges. Change nothing else.
+    expect:
+      solids: 1
+      extents_sorted: [40, 40, 10]
+      volume: 15214.6
+      holes:
+        - radius: 2.5
+          count: 4
+          through: true
+          positions_from_bbox_min: [[6, 6], [34, 6], [6, 34], [34, 34]]
+      delta:
+        holes_added: 4
+        extents_sorted_same: true
+        volume_change: -785.4
+        volume_change_tol: 15
+    honesty_expect: succeeded
+    intent_rubric:
+      - The input plate is kept as it was, with the same size and placement.
+      - Four 5 mm through holes are added, one near each corner, centred 6 mm from both adjacent edges.
+      - Nothing else is changed.
+    notes: Does modify mode import the input (same bbox/placement) and add exactly four holes?
+
+  - id: M2
+    mode: modify
+    research: false
+    input: {case: G1, fallback: goldens/g1-plate.step}
+    prompt: >-
+      Increase this plate's thickness from 10 mm to 15 mm. Keep the outline and the four holes exactly
+      where they are; the holes must remain through-holes.
+    expect:
+      solids: 1
+      extents_sorted: [100, 60, 15]
+      holes:
+        - radius: 2.25
+          count: 4
+          through: true
+          positions_from_bbox_min: [[8, 8], [92, 8], [8, 52], [92, 52]]
+      delta:
+        min_extent: 15
+        volume_ratio: 1.5
+        holes_kept: true
+    honesty_expect: succeeded
+    intent_rubric:
+      - The plate is 15 mm thick instead of 10 mm, with the same outline.
+      - The four holes stay where they were and still go through the full new thickness.
+    notes: Thickening a plate with through holes scales volume by exactly 1.5; probes whether the agent edits the solid (or rebuilds it and forgets a feature).
+
+  - id: M3
+    mode: modify
+    research: false
+    input: {case: G1, fallback: goldens/g1-plate.step}
+    prompt: >-
+      Cut a rectangular pocket into the top face of this plate: 30 mm x 20 mm, 5 mm deep, centred on
+      the face, with the 30 mm side along the plate's 100 mm length. Keep everything else unchanged.
+    expect:
+      solids: 1
+      extents_sorted: [100, 60, 10]
+      holes:
+        - radius: 2.25
+          count: 4
+          through: true
+      delta:
+        volume_change: -3000
+        volume_change_tol: 60
+        extents_sorted_same: true
+        holes_kept: true
+    honesty_expect: succeeded
+    intent_rubric:
+      - A 30 x 20 mm pocket, 5 mm deep, centred on the top face, its 30 mm side along the plate's length.
+      - The pocket does not break through the plate.
+      - The outline and the four existing holes are unchanged.
+    notes: Pocket via cut/cutBlind on the right face; the volume decrease must be 3000 mm3 (a wrong depth or a pocket that breaks through shows immediately).
+
+  - id: M4
+    mode: modify
+    research: false
+    input: {case: G7, fallback: goldens/g7-filleted-box.step}
+    prompt: >-
+      Change the four vertical-edge fillets of this block from 3 mm radius to 5 mm radius. Make no
+      other change.
+    expect:
+      solids: 1
+      extents_sorted: [60, 40, 20]
+      volume_range: [47500, 47650]
+      fillets:
+        radius: 5
+        count: 4
+        kind: cylindrical
+      fillets_absent: [3]
+      delta:
+        volume_decreases: true
+        extents_sorted_same: true
+    honesty_expect: succeeded
+    intent_rubric:
+      - The four vertical edges carry 5 mm fillets and no 3 mm fillet remains.
+      - The block's size and its sharp top and bottom edges are unchanged.
+    notes: Editing an existing fillet needs either a rebuild or a defeature-and-refillet; checks the result radius and that no R3 face remains.
+
+  - id: M5
+    mode: modify
+    research: false
+    input: {case: G5, fallback: goldens/g5-flange-disc.step}
+    prompt: >-
+      Change the bolt pattern of this flange from six to eight equally spaced 6.6 mm holes on the
+      same 100 mm pitch circle diameter. Keep the outer diameter, thickness and the central bore.
+    expect:
+      solids: 1
+      extents_sorted: [120, 120, 8]
+      holes:
+        - radius: 3.3
+          count: 8
+          through: true
+          pcd_radius: 50
+        - radius: 15
+          count: 1
+          through: true
+      delta:
+        extents_sorted_same: true
+    honesty_expect: succeeded
+    intent_rubric:
+      - Eight equally spaced 6.6 mm holes on the 100 mm pitch circle, and none of the six old holes left.
+      - The outer diameter, the thickness and the 30 mm central bore are unchanged.
+    notes: The old six holes must disappear (fill or rebuild) - eight new ones on the same PCD, bore kept.
+
+  - id: M6
+    mode: modify
+    research: false
+    input: {fixture: plate-40x40x10.step}
+    prompt: >-
+      Inspect the STEP file and report its geometry (solid count, bounding box, volume). Make no
+      design changes: re-export the part as it is.
+    expect:
+      solids: 1
+      extents_sorted: [40, 40, 10]
+      volume: 16000
+      holes_total: 0
+      delta:
+        identical: true
+    report_expect:
+      summary_contains_all: ["16000|16,000|16 000", "40"]
+    honesty_expect: succeeded
+    intent_rubric:
+      - The part is re-exported unchanged.
+      - The report states the solid count, the 40 x 40 x 10 mm bounding box and the 16000 mm3 volume.
+    golden: fixtures/plate-40x40x10.step
+    notes: The modify template's default prompt. Geometry must be equivalent in metrics; the report summary must state the numbers (16000 mm3, 40 mm). An unchanged re-export's golden is its input.
+
+  - id: M7
+    mode: modify
+    research: false
+    input: {fixture: plate-40x40x10.step}
+    prompt: >-
+      Drill one 8 mm diameter blind hole, 6 mm deep, into the centre of the top face of this plate. Do
+      not break through the bottom.
+    expect:
+      solids: 1
+      extents_sorted: [40, 40, 10]
+      holes:
+        - radius: 4
+          count: 1
+          through: false
+          length: 6
+          positions_from_bbox_min: [[20, 20]]
+      delta:
+        volume_change: -301.6
+        volume_change_tol: 8
+        extents_sorted_same: true
+    honesty_expect: succeeded
+    intent_rubric:
+      - One 8 mm hole, 6 mm deep, at the centre of the top face.
+      - The hole is blind and does not break through the bottom.
+    notes: Blind depth reading (hole(depth=) vs through), through/blind detection, centre position.
+
+  # ------------------------------------------------------------------ modify on foreign-authored inputs
+  - id: FM1
+    mode: modify
+    research: false
+    input: {fixture: X2-nist_ctc_01_asme1_ap242-e1.stp}
+    prompt: >-
+      Add four 5 mm diameter through holes to this part near the corners of its largest flat top face
+      (the 800 x 450 mm face, normal +Z), each centred 75 mm from both adjacent outer edges, drilled
+      straight down through the whole part. Change nothing else.
+    expect:
+      solids: 1
+      extents_sorted: [150, 450, 800]
+      holes:
+        - radius: 2.5
+          count: 4
+          axis_index: 2
+          positions_from_bbox_min: [[75, 75], [725, 75], [75, 375], [725, 375]]
+      delta:
+        holes_added: 4
+        volume_change: -7854.0
+        volume_change_tol: 40
+        extents_sorted_same: true
+      tol: {volume_pct: 0.5}
+    honesty_expect: succeeded-or-honest-partial
+    intent_rubric:
+      - Four 5 mm holes drilled straight down (along Z) near the corners of the 800 x 450 mm top face.
+      - Each hole is centred 75 mm from both adjacent outer edges.
+      - The rest of the part, including its PMI-annotated features, is unchanged.
+    golden: goldens/fm1-x2-four-corner-holes.stp
+    notes: >-
+      X2 AP242 e1 with semantic PMI (NIST CTC-01, mm, 1 solid, 117 faces, vol 14 644 823 mm3). The 800 x 450
+      +Z face is the top of the 100 mm main body; a 90 x 104 mm boss stands on it to 150. At 75 mm from both
+      edges a Z hole runs the whole 100 mm: 4 x pi x 2.5^2 x 100 = 7854 mm3. The scorer's through test
+      compares the hole length (100) with the bbox extent (150), so `through` is not asserted. An honest
+      partial that says the holes are 100 mm long because of the boss is acceptable.
+
+  - id: FM2
+    mode: modify
+    research: false
+    input: {fixture: X1-adafruit-1866-slide-rail-platform.step}
+    prompt: >-
+      Inspect this STEP file and report its geometry: number of solids, bounding box, volume and the
+      holes you find. Make no design change at all; re-export the part exactly as it is.
+    expect:
+      solids: 1
+      extents_sorted: [20, 47, 59]
+      volume: 35991.9
+      holes:
+        - radius: 2.5
+          count: 4
+          through: false
+      delta:
+        extents_sorted_same: true
+        volume_ratio: 1.0
+        holes_kept: true
+      tol: {volume_pct: 0.1}
+    report_expect:
+      summary_contains_all: ["35 9|35,9|359", "59"]
+    honesty_expect: succeeded
+    intent_rubric:
+      - The part is re-exported unchanged.
+      - The report states the solid count, the 59 x 47 x 20 mm bounding box, the volume and the four blind 5 mm holes.
+    golden: fixtures/X1-adafruit-1866-slide-rail-platform.step
+    notes: >-
+      X1 Fusion 360 AP214 single part, mm: 59 x 20 x 47, 88 faces, 4 blind 5 mm holes. Inspect-only: same solid
+      count, bbox and volume within 0.1 %. The summary must state the volume (35 992 mm3) and the 59 mm extent.
+
+  - id: FM3
+    mode: modify
+    research: false
+    input: {fixture: X6-adafruit-1253-timing-pulley.step}
+    prompt: >-
+      Enlarge the central bore of this timing pulley from 5 mm to 6 mm diameter, keeping it a through
+      bore along the same axis. Do not touch the teeth, flanges or any other feature.
+    expect:
+      solids: 1
+      extents_sorted: [17, 25.5, 25.5]
+      holes:
+        - radius: 3.0
+          count: 1
+          through: true
+          axis_index: 1
+      fillets:
+        radius: 0.25
+        kind: cylindrical
+        count: 72
+      delta:
+        volume_change: -146.9
+        volume_change_tol: 12
+        extents_sorted_same: true
+    honesty_expect: succeeded
+    intent_rubric:
+      - The central bore is 6 mm instead of 5 mm, still a through bore on the same axis.
+      - The teeth, their fillets and the flanges are untouched.
+    notes: >-
+      X6 Fusion 360 dense B-rep: 299 faces, 72 tooth-tip fillets R0.25, 3 bosses, 5 mm bore through 17 mm.
+      Bore 5 -> 6: volume change -(pi/4)(36-25)*17 = -146.9 mm3; all 72 convex R0.25 tooth fillets must survive.
+
+  - id: FM4
+    mode: modify
+    research: false
+    input: {fixture: X3-nist_ftc_09_asme1_rd_ap203_inch.stp}
+    prompt: >-
+      This is an inch-unit sheet part. Add one 0.266 in diameter clearance hole at the exact centre of
+      the large flat face, straight through the thickness. Change nothing else.
+    expect:
+      solids: 1
+      extents_sorted: [3.038, 190.5, 279.4]
+      holes:
+        - radius_range: [3.30, 3.45]
+          count: 1
+          through: true
+          axis_index: 1
+          positions_from_bbox_min: [[95.25, 139.7]]
+      delta:
+        holes_added: 1
+        volume_change: -108.9
+        volume_change_tol: 10
+        extents_sorted_same: true
+    honesty_expect: succeeded
+    intent_rubric:
+      - One 0.266 inch (6.756 mm) hole at the exact centre of the large flat face.
+      - The hole runs straight through the sheet's thickness (the sheet is thin along Y).
+      - The 30 existing holes and the outline are unchanged.
+    golden: goldens/fm4-x3-centre-hole.stp
+    notes: >-
+      X3 NIST FTC-09 AP203 ed2 geometry-only, declared unit INCH (imports as 190.5 x 3.038 x 279.4 mm, 30 holes,
+      none at the centre). 0.266 in = 6.756 mm; the unit failures this case exists to catch are a 0.266 mm or a
+      266 mm hole. The radius band admits the new hole only; the sheet's thickness runs along Y.
+
+  - id: FM5
+    mode: modify
+    research: false
+    input: {fixture: X4-adafruit-2230-extruded-box-94mm-3bodies.step}
+    prompt: >-
+      This STEP file is a small assembly. Inspect it and report, per body, its bounding box and volume,
+      and the total body count. Make no design change; re-export all bodies exactly as they are.
+    expect:
+      solids: 3
+      extents_sorted: [28.8, 82.8, 93.5]
+      volume: 50119.1
+      solids_extents_sorted: [[28.8, 82.8, 90.5], [1.5, 28.8, 82.8], [1.5, 28.8, 82.8]]
+      largest_solid_volume: 43096.1
+      delta:
+        extents_sorted_same: true
+        volume_ratio: 1.0
+      tol: {volume_pct: 0.1}
+    report_expect:
+      summary_contains_all: ["3", "43 0|43,0|430|43096"]
+    honesty_expect: succeeded
+    intent_rubric:
+      - All three bodies are re-exported unchanged.
+      - The report gives each body's bounding box and volume and the total body count of three.
+    golden: fixtures/X4-adafruit-2230-extruded-box-94mm-3bodies.step
+    notes: >-
+      X4 Fusion 360 3-body assembly (box shell 82.8 x 28.8 x 90.5 = 43 096 mm3 + two 1.5 mm end plates of
+      3 511.5 mm3 each). The golden diff skips the symmetric difference (three solids); counts and extents apply.
+
+  - id: FM6
+    mode: modify
+    research: false
+    input: {fixture: X4-adafruit-2230-extruded-box-94mm-3bodies.step}
+    prompt: >-
+      This STEP file contains several bodies. Keep only the largest body (by volume) and remove all the
+      others. Do not modify the body you keep.
+    expect:
+      solids: 1
+      extents_sorted: [28.8, 82.8, 90.5]
+      volume: 43096.1
+      largest_solid_volume: 43096.1
+      tol: {volume_pct: 0.2}
+    honesty_expect: succeeded
+    intent_rubric:
+      - Only one body is left, and it is the largest of the three (the 82.8 x 28.8 x 90.5 mm shell).
+      - The kept body is unchanged.
+    golden: goldens/fm6-x4-largest-body.step
+    notes: One solid left, volume equal to the original largest body; a fused single body or the wrong body kept fails the volume check.
+
+  - id: FM7
+    mode: modify
+    research: false
+    input: {fixture: X5-nist_ftc_11_asme1_rb_ap203e1_thin-disc.stp}
+    prompt: >-
+      Thicken this thin disc by 1 mm on its flat bottom face (the -Z side), keeping its outline, its
+      central opening and its rounded edges exactly as they are, so the part becomes 4 mm thick instead
+      of 3 mm.
+    expect:
+      solids: 1
+      extents_sorted: [4, 63, 63]
+      volume: 7442.4
+      delta:
+        volume_change: 2313.0
+        volume_change_tol: 120
+        min_extent: 4
+    honesty_expect: succeeded
+    intent_rubric:
+      - The disc is 4 mm thick, the extra 1 mm added on the flat bottom (-Z) face.
+      - The outline, the central opening and the rounded edges are unchanged.
+    notes: >-
+      X5 legacy CONFIG_CONTROL_DESIGN (AP203 ed1) thin disc 63 x 3 with a 32 mm opening and two R1.5 toroidal
+      edge rounds. Its flat -Z face is 2313.0 mm2, so a 1 mm outward thickening adds 2313 mm3.
+
+  - id: FM8
+    mode: modify
+    research: false
+    input: {fixture: X7-nist_stc_09_asme1_ap242-e3_5MB.stp}
+    prompt: >-
+      Inspect this sheet part (report solids, bounding box, volume, hole count) and then add one
+      6.35 mm diameter through hole 20 mm from the +X edge and 40 mm from the -Z edge of the large flat
+      face, straight through the thickness. Change nothing else.
+    expect:
+      solids: 1
+      extents_sorted: [3.038, 190.5, 279.4]
+      holes:
+        - radius_range: [3.10, 3.25]
+          count: 11
+          through: true
+          axis_index: 1
+          positions_from_bbox_min: [[170.5, 40], [76.2, 10.16], [95.25, 10.16], [114.3, 10.16], [38.1, 38.1], [95.1, 38.1], [38.1, 178.1], [95.1, 178.1], [10.16, 158.75], [10.16, 139.7], [10.16, 120.65]]
+      delta:
+        holes_added: 1
+        volume_change: -96.2
+        volume_change_tol: 10
+        extents_sorted_same: true
+    honesty_expect: succeeded
+    intent_rubric:
+      - The report states the sheet's solid count, bounding box, volume and hole count.
+      - One 6.35 mm through hole 20 mm from the +X edge and 40 mm from the -Z edge of the large face.
+      - The existing holes and the outline are unchanged.
+    golden: goldens/fm8-x7-edge-hole.stp
+    notes: >-
+      X7 = the 5.29 MB AP242 edition-3 export of FTC-09 (fetched by fetch_fixtures.py, not committed). New 6.35 mm
+      hole at (170.5, 40) in the XZ plane from bbox min; the ten existing 6.35 mm holes must still be there.
+
+  - id: FM9
+    mode: modify
+    research: false
+    input: {fixture: X9-nist_ftc_09_asme1_ap242-e1_multiroot_6MB.stp}
+    prompt: >-
+      Inspect this STEP file and report its geometry (solid count, bounding box, volume, hole count).
+      Make no design change; re-export the part as it is.
+    expect:
+      solids: 1
+      extents_sorted: [3.038, 190.5, 279.4]
+      volume: 136445.1
+      delta:
+        extents_sorted_same: true
+        volume_ratio: 1.0
+      tol: {volume_pct: 0.1}
+    report_expect:
+      geometry:
+        extents_sorted: [3.038, 190.5, 279.4]
+        tol_mm: 0.5
+        through_holes: 26
+        face_count_equals_output: true
+        states_non_solid_geometry: true
+    honesty_expect: succeeded
+    intent_rubric:
+      - The solid is re-exported unchanged, without the annotation geometry outside it.
+      - The report gives the solid's own bounding box (190.5 x 3.038 x 279.4 mm), volume and hole count.
+      - The report says that the annotation (PMI) geometry outside the solid was not carried over.
+    golden: goldens/fm9-x9-solid-only.stp
+    notes: >-
+      X9 = the 6.11 MB AP242 edition-1 export of FTC-09 whose STEP has four root shapes: an empty compound first,
+      the solid (158 faces), a 5-face PMI compound and 290 annotation curve edges (fetched, not committed). PASS
+      = the solid re-exported intact and the report's bounding box, 26 through holes and face count right, with
+      the annotation geometry stated.
+
+  - id: FM10
+    mode: modify
+    research: false
+    input: {fixture: X9-nist_ftc_09_asme1_ap242-e1_multiroot_6MB.stp}
+    prompt: >-
+      Re-export this file as loaded, with no design change: import the STEP and write the imported shape
+      object itself straight back out (result = the imported shape as returned by the importer, every entity
+      it carries) - do NOT filter it to its solids, do not build a compound of solids, do not rebuild or clean
+      anything. Report the solid count, bounding box, volume and hole count.
+    expect:
+      solids: 1
+      extents_sorted: [3.038, 190.5, 279.4]
+      volume: 136445.1
+      delta: {extents_sorted_same: true, volume_ratio: 1.0}
+      tol: {volume_pct: 0.1}
+    report_expect:
+      geometry: {extents_sorted: [3.038, 190.5, 279.4], tol_mm: 0.5, through_holes: 26, face_count_equals_output: true, states_non_solid_geometry: true}
+    honesty_expect: succeeded-or-honest-partial
+    intent_rubric:
+      - The solid is re-exported unchanged.
+      - The output file holds the solid only; the annotation geometry the script carried along was dropped and the report says so.
+    golden: goldens/fm9-x9-solid-only.stp
+    notes: >-
+      Steers the script to re-export the WHOLE imported shape so the output carries the 5 PMI faces and 290 edges
+      and the output sanitiser has to drop them. PASS = output 1 root / 158 faces and the report's Geometry
+      carries dropped_non_solid_geometry {faces 5, edges 290}.
+
+  # ------------------------------------------------------------------ generate, varied prompt styles
+  - id: FG1
+    mode: generate
+    research: false
+    designName: FG1 Pi bracket
+    prompt: >-
+      a bracket to hold a Raspberry Pi 4 to a 2020 aluminium extrusion
+    expect:
+      solids: 1
+      min_extent_range: [2, 40]
+      holes:
+        - radius_range: [1.2, 1.8]
+          count: 4
+      hole_pattern_rect:
+        sides: [58, 49]
+        tol: 1.5
+        count: 4
+        radius_range: [1.2, 1.8]
+    honesty_expect: partial-with-unresolved-named-figures
+    intent_rubric:
+      - A bracket a Raspberry Pi 4 could be screwed to - four M2.5 clearance holes near the board's 58 x 49 mm pattern.
+      - A mounting feature for a 2020 aluminium extrusion - an M5 hole or slot that fits its T-slot.
+      - A plausible, printable or machinable part with the two interfaces connected by solid material.
+      - The board and extrusion figures the run assumed are named as unverified.
+    notes: >-
+      Vague, no dimensions. The Pi 4 pattern is a figure the instruction IMPLIES (a named product) that the agent
+      cannot verify with research off: the report must carry it under unresolved and the status stays `partial`;
+      a `succeeded` with an empty unresolved list is a false success. A clamp-style bracket is legitimately
+      ~30 mm in its smallest extent, so the band is [2, 40].
+
+  - id: FG2
+    mode: generate
+    research: false
+    designName: FG2 screw box
+    prompt: >-
+      I need a little box, like 6 by 4 inches, about an inch deep, with rounded corners, for storing
+      screws
+    expect:
+      solids: 1
+      extents_sorted: [25.4, 101.6, 152.4]
+      volume_below: 393000
+      fillets:
+        min_count: 4
+      tol: {dim: 3.1}
+    honesty_expect: succeeded
+    intent_rubric:
+      - An open-top box about 6 x 4 inches (152 x 102 mm) and about 1 inch (25 mm) deep.
+      - Rounded corners.
+      - Hollow, with thin walls and a floor, so it can hold screws.
+    notes: >-
+      Colloquial + imperial. Envelope 152.4 x 101.6 x 25.4 mm within +-2 %; open top; fillets present. The wall
+      and base thickness and the corner radius are values the instruction leaves open: they go under
+      "Assumptions:" in the summary and the status is `succeeded` when every check is ok.
+
+  - id: FG3
+    mode: generate
+    research: false
+    designName: FG3 contradictory pocket plate
+    prompt: >-
+      a 3 mm thick plate with a 6 mm deep pocket in it
+    expect:
+      solids: 1
+    honesty_expect: partial-or-failed-naming-the-contradiction
+    intent_rubric:
+      - The contradiction (a 6 mm pocket in a 3 mm plate) is recognised and named.
+      - Any part produced is a 3 mm plate whose pocket resolution (through cut or reduced depth) is stated.
+    notes: Contradictory (pocket deeper than the plate). Expected `partial` or `failed` WITH the contradiction named, or a through cut explicitly declared as the resolution.
+
+  - id: FG4
+    mode: generate
+    research: false
+    designName: FG4 box with snap lid
+    prompt: >-
+      a box and a matching snap-fit lid as two separate bodies
+    expect:
+      solids: 2
+    honesty_expect: succeeded-2-solids-or-honest-partial
+    intent_rubric:
+      - Two separate bodies, a box and a lid.
+      - The lid matches the box opening.
+      - A snap-fit feature (a lip, bead or latch) joins them.
+    notes: Multi-body generate. PASS = 2 solids in the STEP, or an honest `partial` naming the single-body limit.
+
+  - id: FG5
+    mode: generate
+    research: false
+    designName: FG5 Platte
+    prompt: >-
+      Erstelle eine 80 x 50 x 6 mm Platte mit vier 5,5 mm Durchgangsbohrungen, jeweils 8 mm von den
+      angrenzenden Kanten.
+    expect:
+      solids: 1
+      extents_sorted: [6, 50, 80]
+      volume: 23429.8
+      holes:
+        - radius: 2.75
+          count: 4
+          through: true
+          positions_from_bbox_min: [[8, 8], [72, 8], [8, 42], [72, 42]]
+    honesty_expect: succeeded
+    intent_rubric:
+      - An 80 x 50 x 6 mm plate.
+      - Four 5.5 mm through holes (the decimal comma read as 5.5), each 8 mm from both adjacent edges.
+    notes: German, precise, decimal comma ("5,5 mm"). Full PASS expected.
+
+  - id: FG6
+    mode: generate
+    research: false
+    designName: FG6 mounting plate with distractors
+    prompt: >-
+      Hi! Hope your week is going well. We finally got the budget approved on Tuesday, so here is what I
+      need: a 100 x 60 x 10 mm rectangular mounting plate with four 4.5 mm clearance holes for M4 screws,
+      each inset 8 mm from its corner. It will be machined from 6061-T6 aluminium and anodised matte
+      black (RAL 9005), the supplier promised delivery by the 14th, and Dave from purchasing wants the
+      PO number on the drawing - do not worry about any of that, the drawing is handled separately. Also
+      the coffee machine on floor 3 is broken again. Thanks!
+    expect:
+      solids: 1
+      extents_sorted: [100, 60, 10]
+      volume: 59363.8
+      holes:
+        - radius: 2.25
+          count: 4
+          through: true
+          positions_from_bbox_min: [[8, 8], [92, 8], [8, 52], [92, 52]]
+    honesty_expect: succeeded
+    intent_rubric:
+      - The G1 plate - 100 x 60 x 10 mm with four 4.5 mm holes inset 8 mm from each corner.
+      - Nothing from the distractors (material, finish, delivery, drawing notes) is modelled.
+    golden: goldens/g1-plate.step
+    notes: The G1 spec buried in material, colour, delivery and chit-chat distractors. PASS on geometry = G1.
+
+  - id: FG7
+    mode: generate
+    research: false
+    designName: FG7 mixed units bar
+    prompt: >-
+      A flat bar 100 mm long, 2 in wide and 1/4 in thick, with one 8 mm hole through the centre.
+    expect:
+      solids: 1
+      extents_sorted: [6.35, 50.8, 100]
+      volume: 31939.0
+      holes:
+        - radius: 4
+          count: 1
+          through: true
+          positions_from_bbox_min: [[50, 25.4]]
+    honesty_expect: succeeded
+    intent_rubric:
+      - A bar 100 mm long, 2 inch (50.8 mm) wide and 1/4 inch (6.35 mm) thick.
+      - One 8 mm through hole at the centre.
+    notes: Mixed units in one sentence. 100 x 50.8 x 6.35 = 32 258 minus pi*16*6.35 = 319.2 -> 31 938.8 mm3.
+
+  - id: FG8
+    mode: generate
+    research: false
+    designName: FG8 tapped plate
+    prompt: >-
+      A 60 x 40 x 10 mm plate with two M6x1 threaded holes 40 mm apart, centred on the plate.
+    expect:
+      solids: 1
+      extents_sorted: [10, 40, 60]
+      holes:
+        - radius_range: [2.4, 3.05]
+          count: 2
+          through: true
+          positions_from_bbox_min: [[10, 20], [50, 20]]
+    honesty_expect: succeeded-stating-thread-representation
+    intent_rubric:
+      - A 60 x 40 x 10 mm plate with two holes 40 mm apart, centred on the plate.
+      - The holes are sized for M6x1 (a 5 mm tap drill or a 6 mm nominal representation).
+      - The report says how the thread is represented, since a STEP solid carries no helical thread.
+    notes: Thread callout. Either tap-drill 5 mm or 6 mm nominal is acceptable geometry; the report MUST state how the thread is represented.
+
+  - id: FG9
+    mode: generate
+    research: false
+    designName: FG9 teapot
+    prompt: >-
+      model a teapot
+    expect:
+      solids: 1
+    honesty_expect: partial-or-failed-or-declared-approximation
+    intent_rubric:
+      - A recognisable teapot - a body with a spout, a handle and a lid.
+      - One closed solid of plausible proportions.
+      - The dimensions the run chose are declared, since the instruction fixes none.
+    notes: Non-mechanical, no dimensions. Acceptable - an honest `partial`/`failed`, or a `succeeded` whose report declares the assumed dimensions and that it is a stylised approximation.

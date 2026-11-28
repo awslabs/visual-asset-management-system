@@ -26,9 +26,22 @@ sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGIO
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 
+def input_asset_fields(entry):
+    """``inputRelativePath``, ``inputAssetRootS3Key`` and ``inputAssetRootBucket`` from a manifest input
+    entry (``relativePath``, ``assetRootS3Key``, ``assetRootBucket``), each ``""`` when absent."""
+    entry = entry or {}
+    return {
+        "inputRelativePath": entry.get("relativePath") or "",
+        "inputAssetRootS3Key": entry.get("assetRootS3Key") or "",
+        "inputAssetRootBucket": entry.get("assetRootBucket") or "",
+    }
+
+
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
                                         , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
-                                        , executing_userName, executing_requestContext, asset_id, orchestration_event_prefix=""):
+                                        , executing_userName, executing_requestContext, asset_id, orchestration_event_prefix="",
+                     input_bucket_region="", output_bucket_region="", input_version_id="",
+                     output_s3_asset_results_path="", input_asset=None):
 
     # Create the object message to be sent
     messagePayload = {
@@ -36,14 +49,28 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "outputS3AssetFilesPath": output_s3_asset_files_path,
         "outputS3AssetPreviewPath": output_s3_asset_preview_path,
         "outputS3AssetMetadataPath": output_s3_asset_metadata_path,
+        # The execution's results folder: the container writes a result document there for a preview
+        # rendered without some of its referenced files, which the workflow records on the execution.
+        "outputS3AssetResultsPath": output_s3_asset_results_path,
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
+        # The Regions of the input and output asset buckets, from the manifest (empty when a bucket
+        # is in the deployment Region), so the Batch container signs its requests for each bucket
+        # with a client for that bucket's Region.
+        "inputBucketRegion": input_bucket_region,
+        "outputBucketRegion": output_bucket_region,
+        # The S3 version of the input file the run reads, from the manifest (empty reads the current object).
+        "inputVersionId": input_version_id,
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
         "assetId": asset_id,
-        "orchestrationEventPrefix": orchestration_event_prefix
+        "orchestrationEventPrefix": orchestration_event_prefix,
+        # Where the input sits in its asset, from its manifest entry: the asset-relative path (its
+        # folder is the preview's subfolder) and the asset root with that root's bucket. Empty without
+        # a manifest entry, and the container then derives them from the input key.
+        **input_asset_fields(input_asset),
     }
 
     # Invoke the pipeline construct pipeline lambda
@@ -135,6 +162,10 @@ def lambda_handler(event, context):
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
         # Single input file per execution today (SFN/manifest layer is multi-file-ready).
         manifestHelper.enforce_single_input_file(resolved)
+        # This pipeline's AWS Batch compute runs in the VPC's isolated subnets, which reach Amazon S3 in
+        # the deployment Region and in the Regions served by the VPC's cross-Region S3 endpoints
+        # (CROSS_REGION_S3_ENDPOINT_REGIONS); an input anywhere else is rejected before submission.
+        manifestHelper.enforce_inputs_in_region(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
         # Validate input is a specific file path, not a folder/whole asset
@@ -156,7 +187,12 @@ def lambda_handler(event, context):
                                             resolved['inputMetadataS3Location'],
                                             resolved['inputConfigurationS3Location'], external_task_token,
                                             executing_userName, executing_requestContext,
-                                            resolved['assetId'], resolved['orchestrationEventPrefix'])
+                                            resolved['assetId'], resolved['orchestrationEventPrefix'],
+                                            input_bucket_region=resolved['inputBucketRegion'],
+                                            output_bucket_region=resolved['outputBucketRegion'],
+                                            input_version_id=resolved['inputVersionId'],
+                                            output_s3_asset_results_path=resolved['outputS3AssetResultsPath'],
+                                            input_asset=(resolved['inputFiles'] or [None])[0])
 
         return {
             'statusCode': 200,

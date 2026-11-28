@@ -5,12 +5,16 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
 import { BabylonJSGaussianSplatViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { BabylonJSGaussianSplatDependencyManager } from "./dependencies";
 import BabylonJSPanel from "./BabylonJSPanel";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
 import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
+import { identifySplatFile, readFileHead, unsupportedSplatMessage } from "./splatFileHead";
+import { appCache } from "../../../services/appCache";
+import { featuresEnabled } from "../../../common/constants/featuresEnabled";
 
 // Declare BABYLON as it will be loaded dynamically
 declare const BABYLON: any;
@@ -26,6 +30,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
     const initializationRef = useRef(false);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
+    const [unsupportedMessage, setUnsupportedMessage] = useState<string | null>(null);
 
     // Viewer instance refs (populated after BabylonJS finishes loading the
     // splat). These power the floating control panel and HUD.
@@ -60,6 +65,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
         // panel and HUD don't stay mounted against the disposed scene.
         setSceneReady(false);
         setIsLoading(true);
+        setUnsupportedMessage(null);
         setLoadingMessage("Initializing viewer...");
 
         // Add CSS to hide any unwanted UI elements (Spectrum color pickers)
@@ -260,6 +266,32 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     );
                     // Keep "Downloading asset..." message since the actual download happens in GaussianSplattingMesh
 
+                    // Refuse a file the bundled loader cannot read (SPZ version 4 and later, or not a
+                    // splat file at all); handed over, it throws outside the load promise and the
+                    // viewer never leaves the loading state. Unreadable first bytes skip the check.
+                    const head = await readFileHead(response[1]);
+                    if (cancelled) return;
+                    if (head) {
+                        // SuperSplat reads SPZ version 4 and is offered only where the
+                        // deployment config the API returned enables ALLOWUNSAFEEVAL.
+                        const features: unknown = appCache.getItem("config")?.featuresEnabled;
+                        const refusal = unsupportedSplatMessage(
+                            identifySplatFile(head),
+                            assetKey.split("/").pop() || assetKey,
+                            {
+                                superSplatOffered:
+                                    Array.isArray(features) &&
+                                    features.includes(featuresEnabled.ALLOWUNSAFEEVAL),
+                            }
+                        );
+                        if (refusal) {
+                            console.warn(`BabylonJS Gaussian Splat Viewer: ${refusal}`);
+                            setUnsupportedMessage(refusal);
+                            setIsLoading(false);
+                            return;
+                        }
+                    }
+
                     try {
                         console.log(
                             "BabylonJS Gaussian Splat Viewer: Loading Gaussian Splat with SceneLoader..."
@@ -359,6 +391,9 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                     }
                 } else {
                     console.error("BabylonJS Gaussian Splat Viewer: Failed to download asset");
+                    setUnsupportedMessage(
+                        downloadFailureMessage(response, "Failed to download the splat file.")
+                    );
                     setIsLoading(false); // Hide loading on error
                 }
             } catch (error) {
@@ -490,6 +525,31 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
         >
             {/* Loading overlay */}
             {isLoading && <LoadingSpinner message={loadingMessage} />}
+
+            {/* File the loader cannot open: on a theme panel, readable over the dark scene */}
+            {unsupportedMessage && (
+                <div
+                    role="alert"
+                    style={{
+                        color: "var(--vams-color-error)",
+                        background: "var(--vams-bg-primary)",
+                        borderRadius: "8px",
+                        fontSize: "1.2em",
+                        lineHeight: "1.5",
+                        maxWidth: "80%",
+                        position: "absolute",
+                        top: "50%",
+                        left: "50%",
+                        transform: "translate(-50%, -50%)",
+                        textAlign: "center",
+                        padding: "12px 16px",
+                        boxSizing: "border-box",
+                        zIndex: VIEWER_LAYER.cover,
+                    }}
+                >
+                    {unsupportedMessage}
+                </div>
+            )}
 
             {/* Floating control panel — visible after the splat loads */}
             {sceneReady && viewerInstanceRef.current && showPanel && (

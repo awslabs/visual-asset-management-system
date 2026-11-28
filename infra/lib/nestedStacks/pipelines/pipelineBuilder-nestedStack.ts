@@ -12,17 +12,21 @@ import { Stack, NestedStack } from "aws-cdk-lib";
 import { SecurityGroupGatewayPipelineConstruct } from "./constructs/securitygroup-gateway-pipeline-construct";
 import { PcPotreeViewerBuilderNestedStack } from "./preview/pcPotreeViewer/pcPotreeViewerBuilder-nestedStack";
 import { SplatToolboxBuilderNestedStack } from "./3dRecon/splatToolbox/splatToolboxBuilder-nestedStack";
-import { Metadata3dLabelingNestedStack } from "./genAi/metadata3dLabeling/metadata3dLabelingBuilder-nestedStack";
+import { SystemGenAiMetadataNestedStack } from "./system/genAiMetadata/systemGenAiMetadataBuilder-nestedStack";
 import { RapidPipelineNestedStack } from "./multi/rapidPipeline/rapidPipeline-nestedStack";
 import { RapidPipelineEKSNestedStack } from "./multi/rapidPipelineEKS/rapidPipelineEKS-nestedStack";
 import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
-import { ConversionMeshCadMetadataExtractionNestedStack } from "./conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack";
 import { CoordinateTransformBuilderNestedStack } from "./conversion/coordinateTransform/coordinateTransformBuilder-nestedStack";
+import { CogConvertBuilderNestedStack } from "./conversion/cogConvert/cogConvertBuilder-nestedStack";
+import { ZipArchiveBuilderNestedStack } from "./utility/zipArchive/zipArchiveBuilder-nestedStack";
+import { VideoSopBomBuilderNestedStack } from "./genAi/videoSopBom/videoSopBomBuilder-nestedStack";
+import { CadStepAgentBuilderNestedStack } from "./genAi/cadStepAgent/cadStepAgentBuilder-nestedStack";
 import { ModelOpsNestedStack } from "./multi/modelOps/modelOps-nestedStack";
 import { IsaacLabTrainingBuilderNestedStack } from "./simulation/isaacLabTraining/isaacLabTrainingBuilder-nestedStack";
 import { Preview3dThumbnailBuilderNestedStack } from "./preview/3dThumbnail/preview3dThumbnailBuilder-nestedStack";
 import { CosmosBuilderNestedStack } from "./genAi/nvidia/cosmos/cosmosBuilder-nestedStack";
 import { Gr00tBuilderNestedStack } from "./genAi/nvidia/gr00t/gr00tBuilder-nestedStack";
+import { ImageTo3dBuilderNestedStack } from "./genAi/imageTo3d/imageTo3dBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../config/config";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -255,27 +259,50 @@ export class PipelineBuilderNestedStack extends NestedStack {
             }
         }
 
-        if (props.config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled) {
-            const conversionMeshCadMetadataExtractionPipelineNestedStack =
-                new ConversionMeshCadMetadataExtractionNestedStack(
-                    this,
-                    "ConversionMeshCadMetadataExtractionNestedStack",
-                    {
-                        ...props,
-                        config: props.config,
-                        storageResources: props.storageResources,
-                        vpc: props.vpc,
-                        pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
-                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                        importGlobalPipelineWorkflowV2FunctionName:
-                            props.importGlobalPipelineWorkflowV2FunctionName,
-                    }
-                );
+        if (props.config.app.pipelines.useImageTo3d?.enabled) {
+            const imageTo3dBuilderNestedStack = new ImageTo3dBuilderNestedStack(
+                this,
+                "ImageTo3dBuilderNestedStack",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    //GPU compute needs NAT egress for model weight downloads
+                    pipelineSubnets: pipelineNetwork.privateSubnets.pipeline,
+                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
+                }
+            );
 
             //Add function name to array for stack output
             this.pipelineVamsLambdaFunctionNames.push(
-                conversionMeshCadMetadataExtractionPipelineNestedStack.pipelineVamsLambdaFunctionName
+                imageTo3dBuilderNestedStack.pipelineVamsLambdaFunctionName
+            );
+        }
+
+        if (props.config.app.pipelines.useSystemGenAiMetadata.enabled) {
+            const systemGenAiMetadataNestedStack = new SystemGenAiMetadataNestedStack(
+                this,
+                "SystemGenAiMetadataNestedStack",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
+                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
+                }
+            );
+
+            //Add function name to array for stack output
+            this.pipelineVamsLambdaFunctionNames.push(
+                systemGenAiMetadataNestedStack.pipelineVamsLambdaFunctionName
             );
         }
 
@@ -283,12 +310,16 @@ export class PipelineBuilderNestedStack extends NestedStack {
         if (
             props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
             props.config.app.pipelines.usePreview3dThumbnail.enabled ||
-            props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
+            props.config.app.pipelines.useMediaPreviews?.enabled ||
             props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
+            props.config.app.pipelines.useCogConversion?.enabled ||
+            props.config.app.pipelines.useGenAiVideoSopBom?.enabled ||
+            props.config.app.pipelines.useGenAiCadStepAgent?.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
             props.config.app.pipelines.useModelOps.enabled ||
-            props.config.app.pipelines.useIsaacLabTraining.enabled
+            props.config.app.pipelines.useIsaacLabTraining.enabled ||
+            props.config.app.pipelines.useZipDownloads.enabled
         ) {
             //Create nested stack for each turned on pipeline
             if (props.config.app.pipelines.usePreviewPcPotreeViewer.enabled) {
@@ -335,7 +366,106 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 );
             }
 
-            if (props.config.app.pipelines.usePreview3dThumbnail.enabled) {
+            if (props.config.app.pipelines.useCogConversion?.enabled) {
+                const cogConvertPipelineNestedStack = new CogConvertBuilderNestedStack(
+                    this,
+                    "CogConvertBuilderNestedStack",
+                    {
+                        ...props,
+                        config: props.config,
+                        vpc: props.vpc,
+                        pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
+                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                        assetAuxiliaryBucket: props.storageResources.s3.assetAuxiliaryBucket,
+                        storageResources: props.storageResources,
+                        kmsKey: props.storageResources.encryption.kmsKey,
+                        importGlobalPipelineWorkflowV2FunctionName:
+                            props.importGlobalPipelineWorkflowV2FunctionName,
+                    }
+                );
+
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cogConvertPipelineNestedStack.pipelineVamsLambdaFunctionName
+                );
+            }
+
+            // Download as Zip: the zipArchive system pipeline. It registers itself (isSystem, fixed ids
+            // GLOBAL/utility-zip-archive), so its execute function is not listed for manual registration.
+            if (props.config.app.pipelines.useZipDownloads.enabled) {
+                new ZipArchiveBuilderNestedStack(this, "ZipArchiveBuilderNestedStack", {
+                    ...props,
+                    config: props.config,
+                    vpc: props.vpc,
+                    pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
+                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    assetAuxiliaryBucket: props.storageResources.s3.assetAuxiliaryBucket,
+                    kmsKey: props.storageResources.encryption.kmsKey,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
+                });
+            }
+
+            if (props.config.app.pipelines.useGenAiVideoSopBom?.enabled) {
+                const videoSopBomPipelineNestedStack = new VideoSopBomBuilderNestedStack(
+                    this,
+                    "VideoSopBomBuilderNestedStack",
+                    {
+                        ...props,
+                        config: props.config,
+                        vpc: props.vpc,
+                        pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
+                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                        assetAuxiliaryBucket: props.storageResources.s3.assetAuxiliaryBucket,
+                        kmsKey: props.storageResources.encryption.kmsKey,
+                        importGlobalPipelineWorkflowV2FunctionName:
+                            props.importGlobalPipelineWorkflowV2FunctionName,
+                    }
+                );
+
+                this.pipelineVamsLambdaFunctionNames.push(
+                    videoSopBomPipelineNestedStack.pipelineVamsLambdaFunctionName
+                );
+            }
+
+            if (props.config.app.pipelines.useGenAiCadStepAgent.enabled) {
+                // The Fargate runtime runs the agent container in the private subnets so its research
+                // tools have NAT egress; the AgentCore runtime reaches the internet through the service
+                // (PUBLIC network mode), so only its Lambdas sit in the isolated pipeline subnets.
+                const cadStepAgentRuntime = props.config.app.pipelines.useGenAiCadStepAgent.runtime;
+                const cadStepAgentPipelineNestedStack = new CadStepAgentBuilderNestedStack(
+                    this,
+                    "CadStepAgentBuilderNestedStack",
+                    {
+                        ...props,
+                        config: props.config,
+                        vpc: props.vpc,
+                        pipelineSubnets:
+                            cadStepAgentRuntime === "fargate"
+                                ? pipelineNetwork.privateSubnets.pipeline
+                                : pipelineNetwork.isolatedSubnets.pipeline,
+                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                        assetAuxiliaryBucket: props.storageResources.s3.assetAuxiliaryBucket,
+                        kmsKey: props.storageResources.encryption.kmsKey,
+                        importGlobalPipelineWorkflowV2FunctionName:
+                            props.importGlobalPipelineWorkflowV2FunctionName,
+                    }
+                );
+
+                this.pipelineVamsLambdaFunctionNames.push(
+                    cadStepAgentPipelineNestedStack.pipelineVamsLambdaFunctionName
+                );
+            }
+
+            // One deployment (container, Batch queue, state machine) serves the 3D and the media
+            // workflows; either flag deploys it and each registers its own workflow.
+            if (
+                props.config.app.pipelines.usePreview3dThumbnail.enabled ||
+                props.config.app.pipelines.useMediaPreviews?.enabled
+            ) {
                 const preview3dThumbnailPipelineNestedStack =
                     new Preview3dThumbnailBuilderNestedStack(
                         this,
@@ -356,29 +486,6 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 //Add function name to array for stack output
                 this.pipelineVamsLambdaFunctionNames.push(
                     preview3dThumbnailPipelineNestedStack.pipelineVamsLambdaFunctionName
-                );
-            }
-
-            if (props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled) {
-                const genAiMetadata3dLabelingNestedStack = new Metadata3dLabelingNestedStack(
-                    this,
-                    "GenAiMetadata3dLabelingNestedStack",
-                    {
-                        ...props,
-                        config: props.config,
-                        storageResources: props.storageResources,
-                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                        vpc: props.vpc,
-                        pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
-                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-                        importGlobalPipelineWorkflowV2FunctionName:
-                            props.importGlobalPipelineWorkflowV2FunctionName,
-                    }
-                );
-
-                //Add function name to array for stack output
-                this.pipelineVamsLambdaFunctionNames.push(
-                    genAiMetadata3dLabelingNestedStack.pipelineVamsLambdaFunctionName
                 );
             }
 

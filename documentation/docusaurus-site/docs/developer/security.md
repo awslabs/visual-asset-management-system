@@ -48,15 +48,17 @@ VAMS accepts three credential types, and the flow differs only in how the creden
 
 For Amazon Cognito, a pre-token-generation Lambda trigger (`pretokengenv1.py` for the GovCloud mode, `pretokengenv2.py` otherwise) adds VAMS claims to the issued token. It populates `vams:tokens` (the user name) and `email`, and leaves `vams:roles` and `vams:externalAttributes` empty. The authorizer does not read these `vams:` claims; it sets the context values of the same names itself (Stage 2). Roles are deliberately **not** resolved here — see [Where roles come from](#where-roles-come-from).
 
-External OAuth IDP deployments have no equivalent trigger. For every token, the authorizer derives the user identifier from the token's username claim: the first present of `cognito:username`, `username` and `sub`. A verified token with none of them is refused. For an Amazon Cognito token this is the user name the trigger writes, so Amazon Cognito users are identified as before.
+External OAuth IDP deployments have no equivalent trigger. For every token, the authorizer derives the user identifier from the token itself, once: the claim `useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim` names when it is set (a token without it is refused), otherwise the first present of `cognito:username`, `username` and `sub`. A verified token with no such identifier is refused. For an Amazon Cognito token this is the user name the trigger writes, so Amazon Cognito users are identified as before. That one identifier is `vams:tokens`, the identifier the roles and the MFA check are resolved for, and the one in the audit records, so the handlers and the Casbin enforcement use it too. The web application applies the same rule to the access token (`resolveExternalUserId` in `web/src/utils/authTokenUtils.ts`).
 
 The `vams:` prefix is reserved for the authorizer's own context values. The authorizer ignores every claim a token carries under that prefix (matched without regard to case). Map users to VAMS by the claim above, and assign roles to that value.
+
+The audience is read through the claims `useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims` lists (default `aud`; `client_id` may be added), for `lambdaAuthorizorJWTAudience` and for each `additionalTokenAudiences` entry alike. The first listed claim present in the token decides, and it must name one of those audiences. A token accepted only through an additional audience must also identify a user and carry no machine-token marker.
 
 ### Stage 2: The custom Lambda authorizer builds the context
 
 All API Gateway routes use a single custom REQUEST-type Lambda authorizer (`handlers/auth/apiGatewayAuthorizerRest.py`, with the shared logic in `common/auth/authorizerCore.py`). It runs these steps in order, and returns a deny as soon as one fails:
 
-1. **Resolve the true client IP and check IP ranges.** The IP is resolved in a fronting-aware way (`common/auth/clientIp.py`) and checked against `authProvider.authorizerOptions.allowedIpRanges`. This runs before credential verification so a disallowed IP costs no JWT work.
+1. **Resolve the true client IP and check IP ranges.** The IP is resolved in a fronting-aware way (`common/auth/clientIp.py`) and checked against `authProvider.authorizerOptions.allowedIpRanges`. On a CloudFront deployment the resolution uses the origin verification header CloudFront adds to the requests it forwards (`common/auth/originVerify.py`). This runs before credential verification so a disallowed IP costs no JWT work.
 2. **Bypass authentication for ignored paths.** Paths in `CUSTOM_AUTHORIZER_IGNORED_PATHS` (`/api/amplify-config`, `/api/version`) return an allow with no context. The IP check above still applies.
 3. **Verify the credential.** An `Authorization` value beginning with `vams_` (with or without a `Bearer` prefix) takes the API key path; anything else is treated as a JWT and verified according to the configured auth mode.
 4. **Resolve the caller's roles** from the user roles table.
@@ -117,7 +119,7 @@ Every handler calls `request_to_claims(event)` (`handlers/auth/__init__.py`) as 
 }
 ```
 
-It then calls the customizable `customAuthClaimsCheckOverride` hook. If that hook raises, VAMS fails closed by dropping `roles` rather than passing unfiltered claims through.
+It then calls the customizable `customAuthClaimsCheckOverride` hook. If that hook raises, VAMS fails closed: the error is logged, the claims are marked `claimsCheckFailed` with `roles` emptied, and a `CasbinEnforcer` built from marked claims refuses every Tier 1 and Tier 2 check, so the request is answered `403`.
 
 Internal Lambda-to-Lambda invocations carry no authorizer context. These pass `{'lambdaCrossCall': {'userName': ...}}` and short-circuit to a claims structure with the supplied user (defaulting to the reserved `SYSTEM_USER`), empty roles, and `mfaEnabled` defaulting to `True`. Because cross-call events bypass JWT verification, IAM permissions on direct Lambda invocation are the security boundary for who can construct one.
 
@@ -206,9 +208,9 @@ Resolving MFA here rather than in each handler is what keeps identity-provider a
 
 ### Claims check — `customAuthClaimsCheckOverride`
 
-Called by `request_to_claims` after the claims structure is assembled from the authorizer context, receiving that structure and the request event, and returning the structure to use. Use it for handler-time claims restrictions — for example, dropping roles when a claim indicates a restricted session, or mapping an external attribute into `externalAttributes`.
+Called by `request_to_claims` after the claims structure is assembled from the authorizer context, receiving that structure and the request event, and returning the structure to use. Use it to refuse a request (raise; VAMS then answers `403`, as described below), to map an external attribute into `externalAttributes`, or to set `mfaEnabled` to `false`, which withholds the caller's roles that require MFA for that request.
 
-MFA state is already resolved before this hook runs, so read `claims_and_roles["mfaEnabled"]` rather than re-deriving it. VAMS fails closed around this hook: if it raises, `roles` is emptied rather than passing the unfiltered structure through, so a broken hook cannot grant more access than intended.
+MFA state is already resolved before this hook runs, so read `claims_and_roles["mfaEnabled"]` rather than re-deriving it. VAMS fails closed around this hook: if it raises, the request is denied with `403` (see [Stage 3](#stage-3-the-handler-converts-context-into-claims)), and the denial is recorded against the caller's user ID.
 
 ### Login profile — `customAuthProfileLoginWriteOverride`
 

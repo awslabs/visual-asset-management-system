@@ -5,9 +5,10 @@ import os
 import boto3
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
-from typing import Dict, List, Tuple, Optional, Any
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
+from common.timestamps import utc_now
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from botocore.config import Config
@@ -33,25 +34,39 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_FILE_UNARCHIVE,
     VAMS_CHANGE_SOURCE_FILE_REVERT,
     VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE,
+    folder_marker_metadata,
     normalize_history_file_path,
     replace_metadata_copy_args,
     UserMetadataTooLargeError,
 )
-from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
-from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE
+from common.s3PathPatterns import (
+    PREVIEW_FILE_PATTERN,
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    select_newest_preview_file,
+)
+from common.assetLocations import (
+    NESTED_PATH_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations,
+    _is_preview_of, aux_owner_filter, aux_scope, contains,
+    fill_location_attributes, folder_aux_keep, folder_listing_prefix, held_objects, in_folder, is_folder_location,
+    names_own_object, normalize_base_prefix, object_key_for_path, object_key_for_request, relative_path_in,
+    viewer_data_prefix, viewer_data_scope,
+)
+from common.fileAttribution import nested_locations_of_asset
+from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from common.apiRoutes import (
     API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
     API_ARCHIVE_FILE, API_UNARCHIVE_FILE, API_DELETE_FILE,
     API_DELETE_ASSET_PREVIEW, API_DELETE_AUXILIARY_PREVIEW,
     API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE, API_CREATE_FOLDER,
 )
-from common.validators import validate, exceeds_s3_object_key_limit
+from common.validators import validate, exceeds_s3_object_key_limit, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from common.s3 import validateUnallowedFileExtensionAndContentType
-from common.dynamodb import validate_pagination_info, query_all_items
+from common.dynamodb import validate_pagination_info, query_all_items, get_asset_record, asset_authorization_object
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from models.assetsV3 import (
@@ -63,6 +78,9 @@ from models.assetsV3 import (
     DeleteAssetPreviewResponseModel, DeleteAuxiliaryPreviewAssetFilesRequestModel, DeleteAuxiliaryPreviewAssetFilesResponseModel
 )
 from handlers.assets.assetVersions import validate_asset_version_exists, get_all_asset_versions
+from common.compliance.quarantineGuard import (
+    QUARANTINE_COPY_BLOCK_MESSAGE, QuarantineBlockedResponse, check_quarantine_block, quarantine_refusal,
+)
 
 # Configure AWS clients with retry configuration
 region = os.environ.get('AWS_REGION', 'us-east-1')
@@ -75,8 +93,8 @@ retry_config = Config(
     }
 )
 
-s3_client = boto3.client('s3', config=retry_config)
-s3_resource = boto3.resource('s3', config=retry_config)
+s3_client = region_routing_s3_client()
+s3_resource = region_routing_s3_resource()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
 logger = safeLogger(service_name="AssetFiles")
@@ -127,6 +145,42 @@ VERSION_LISTING_PAGE_SIZE = 1500
 # Concurrency cap for parallel per-file S3 calls (head_object enrichment, version
 # checks). Bounds Lambda memory/thread usage; not a data cap.
 MAX_PARALLEL_S3_WORKERS = 10
+
+# DeleteItem calls in flight at once when a file delete removes its version snapshot rows. Below the
+# DynamoDB client's 10 pooled connections, so no call waits for a connection; the table is on-demand.
+VERSION_ROWS_DELETE_WORKERS = 8
+# A row whose DeleteItem is still throttled after the client's own adaptive retries is retried this
+# many more times, waiting VERSION_ROW_THROTTLE_BASE_DELAY_SECONDS, then twice that, and so on.
+VERSION_ROW_THROTTLE_RETRIES = 3
+VERSION_ROW_THROTTLE_BASE_DELAY_SECONDS = 0.5
+DYNAMODB_THROTTLING_ERROR_CODES = frozenset({
+    "ProvisionedThroughputExceededException", "ThrottlingException", "RequestLimitExceeded",
+})
+# No new row delete starts once less than this is left of the invocation's time, so the function
+# answers instead of timing out; the rows not reached are logged.
+VERSION_ROWS_DELETE_TIME_MARGIN_SECONDS = 60
+# Files named in the log line of rows left behind.
+VERSION_ROWS_LEFT_LOGGED_FILES = 20
+
+# The Lambda context of the running invocation, recorded by the handler (record_invocation_context).
+_invocation_context = None
+
+
+def record_invocation_context(context) -> None:
+    """Record the running invocation's Lambda context, so the version row cleanup stops before its timeout."""
+    global _invocation_context
+    _invocation_context = context
+
+
+def _version_rows_delete_deadline() -> Optional[float]:
+    """The time.monotonic() value after which no new row delete starts, or None without a Lambda context."""
+    try:
+        remaining_ms = _invocation_context.get_remaining_time_in_millis()
+    except Exception:
+        return None
+    if isinstance(remaining_ms, bool) or not isinstance(remaining_ms, (int, float)):
+        return None
+    return time.monotonic() + remaining_ms / 1000.0 - VERSION_ROWS_DELETE_TIME_MARGIN_SECONDS
 
 # Default list_objects_v2 page sizes for the current-file listing path. These are
 # per-page batch sizes; the current-file path returns a NextToken for external paging.
@@ -216,7 +270,8 @@ def send_subscription_email(database_id, asset_id):
     except Exception as e:
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
-def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict) -> Dict:
+def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict,
+                               include_archived: bool = False) -> Dict:
     """Get asset and verify permissions for the specified operation
     
     Args:
@@ -224,6 +279,8 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         assetId: The asset ID
         operation: The operation to check permissions for (GET, POST, PUT, DELETE)
         claims_and_roles: The claims and roles from the request
+        include_archived: Also resolve an archived asset's record (read routes asked with
+            showArchived); write routes leave it False, so an archived asset stays not found
         
     Returns:
         The asset if found and user has permissions, otherwise raises an exception
@@ -234,9 +291,8 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
     """
     try:
         # Get the asset from DynamoDB
-        response = asset_table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
-        asset = response.get('Item', {})
-        
+        asset = get_asset_record(asset_table, databaseId, assetId, include_archived=include_archived)
+
         # An empty token list carries no authenticated identity, so authorization
         # cannot be evaluated and the request is denied.
         if len(claims_and_roles["tokens"]) == 0:
@@ -245,11 +301,10 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         # Authorize before existence, so a refused caller gets the same answer for a missing asset
         # as for an existing one. A found record is checked as an annotated copy, so the returned
         # record, which callers write back, carries no object type; for a missing one the request's
-        # identifiers stand in.
-        if asset:
-            authorization_object = {**asset, 'object__type': 'asset'}
-        else:
-            authorization_object = {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
+        # identifiers stand in (on a showArchived read, with the archived database id, so a caller
+        # refused that database's archived records cannot tell an archived asset from a missing one).
+        authorization_object = asset_authorization_object(asset, databaseId, assetId,
+                                                          include_archived=include_archived)
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(authorization_object, operation):
             raise VAMSAuthorizationDeniedResponse()
@@ -282,18 +337,13 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
@@ -328,34 +378,104 @@ def get_asset_s3_location(asset: Dict) -> Tuple[str, str]:
     return bucket, key
 
 def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
-    """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-    
+    """The S3 key a request's file path names in the asset (common.assetLocations.object_key_for_request).
+
+    A path with a leading '/' is the file's path in the asset; a path without one is the file's full key
+    when the asset's location holds it, else the path in the asset. A single-file location's paths name
+    its object, its previews and its companion folder {key}/.
+
     Args:
         asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-        
+        file_path: The file path from the request
+
     Returns:
-        The properly resolved S3 key without duplication
+        The S3 key, always one the asset's location holds
+
+    Raises:
+        VAMSGeneralErrorResponse: the path names no key of the asset
     """
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-    
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-    
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
+    object_key = object_key_for_request(asset_base_key, file_path)
+    if object_key is None:
+        raise VAMSGeneralErrorResponse("Requested file is not part of this asset")
+    return object_key
+
+def nested_locations_for(asset: Dict, bucket: str, base_key: str, destructive: bool = False,
+                         include_shared: bool = False) -> NestedLocations:
+    """The stored locations of other assets nested in this asset's location: the files they hold belong to
+    those assets, so this asset's file operations leave them alone (``fileAttribution.nested_locations_of_asset``;
+    ``destructive`` for a delete, archive or move, ``include_shared`` for a write, which also names another live
+    asset on the same location)."""
+    return nested_locations_of_asset(asset_table, buckets_table, asset, bucket, base_key, destructive=destructive,
+                                     include_shared=include_shared, asset_table_name=asset_database_table_name)
+
+
+def refuse_nested_key(nested: Optional[NestedLocations], key: str, message: str,
+                      shared_message: str = SHARED_PATH_REFUSAL) -> None:
+    """Answer a path that resolves to a nested asset's file as the operation answers a missing file, and an
+    operation on a key another live asset's location also holds with `shared_message` (SHARED_PATH_REFUSAL for
+    a destructive operation, SHARED_LOCATION_WRITE_REFUSAL for a write)."""
+    if nested is None or nested.holder(key) is None:
+        return
+    if nested.is_shared_key(key):
+        raise VAMSGeneralErrorResponse(shared_message)
+    raise VAMSGeneralErrorResponse(message)
+
+
+def refuse_unwritable_key(asset: Dict, bucket: str, base_key: str, key: str, message: str) -> None:
+    """Refuse a write of `key` through this asset before anything is written: a nested asset's key with
+    `message`, a key of a location another live asset also holds with SHARED_LOCATION_WRITE_REFUSAL (bucket
+    sync could not attribute the written file to either asset)."""
+    refuse_nested_key(nested_locations_for(asset, bucket, base_key, include_shared=True), key, message,
+                      shared_message=SHARED_LOCATION_WRITE_REFUSAL)
+
+
+def _keep_aux(keep: Optional[Callable[[str], bool]], nested: Optional[NestedLocations],
+              database_id: str) -> Optional[Callable[[str], bool]]:
+    """An auxiliary-key filter that also leaves out the auxiliary data of a nested asset of the same database."""
+    if not nested:
+        return keep
+    return lambda aux_key: (keep is None or keep(aux_key)) and nested.keep_aux(database_id, aux_key)
+
+
+def _prefix_holds_folder_entry(bucket: str, prefix: str, location: str, folder: Optional[str],
+                               versions: bool = False, nested: Optional[NestedLocations] = None) -> bool:
+    """Whether a listing of ``prefix`` returns a key held in ``folder``: a current object, or with ``versions``
+    any version or delete marker. Without a single-file folder the first key decides. A single-file folder
+    named like the file is listed without its trailing ``/``, where keys that only start with its name
+    (``{key}/{name}.bak*``) sort first, so the listing pages until a held key or its end."""
+    operation = 'list_object_versions' if versions else 'list_objects_v2'
+    if folder is None:
+        response = getattr(s3_client, operation)(Bucket=bucket, Prefix=prefix, MaxKeys=1)
+        entries = (response.get('Versions', []) + response.get('DeleteMarkers', [])) if versions \
+            else response.get('Contents', [])
+        if any(_held_in_folder(location, None, entry['Key'], nested) for entry in entries):
+            return True
+        if not nested or response.get('IsTruncated') is not True:
+            return False
+    for page in s3_client.get_paginator(operation).paginate(Bucket=bucket, Prefix=prefix):
+        entries = (page.get('Versions', []) + page.get('DeleteMarkers', [])) if versions else page.get('Contents', [])
+        if any(_held_in_folder(location, folder, entry['Key'], nested) for entry in entries):
+            return True
+    return False
+
+def _held_in_folder(location: str, folder: Optional[str], key: str,
+                    nested: Optional[NestedLocations] = None) -> bool:
+    """Whether the location holds a key, under an asset-relative folder path when one is given, and no
+    location nested in it does."""
+    held = contains(location, key) if folder is None else in_folder(location, folder, key)
+    return held and (not nested or nested.keep(key))
+
+def _relative_to_location(base_key: str, key: str) -> str:
+    """The asset-relative path ('/...') of an S3 key in an asset's location: the path the file is listed at and
+    its records are keyed by (common.assetLocations.relative_path_in, which reads a stored location without its
+    leading '/'). In a folder location a key spelled with the stored location's leading '/' keeps the path after
+    it."""
+    path = relative_path_in(base_key, key)
+    if path:
+        return path
+    if base_key and is_folder_location(base_key) and key.startswith(base_key):
+        return '/' + key[len(base_key):]
+    return '/' + key
 
 def _is_missing_object_error(e: ClientError) -> bool:
     """Return True when a ClientError reports the S3 object as missing.
@@ -545,7 +665,63 @@ def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
     base = (database_id or "").strip('/')
     return f"{base}/{key}/" if key else f"{base}/"
 
-def delete_assetAuxiliary_files(prefix):
+def _single_file_location_prefixes(location: str) -> List[str]:
+    """The S3 prefixes that list what a single-file location holds besides its object: its own previews
+    (``{key}.previewFile.``) and its companion folder (``{key}/``)."""
+    return [location + PREVIEW_FILE_PATTERN, location + '/']
+
+# The continuation token of a single-file location's first page when the object fills it: the next
+# request lists the companion folder {key}/ from its start. It is never passed to Amazon S3, and it names
+# no prefix (':' is in no S3 continuation token), so it cannot select keys outside the location.
+COMPANION_FOLDER_START_TOKEN = "vams:companion-folder-start"
+
+def _list_single_file_location_page(bucket: str, location: str, list_params: Dict) -> Dict:
+    """One listing page of a single-file location, in the shape of a ListObjectsV2 response.
+
+    The first page (no continuation token) holds the object, read with a one-key listing of its own
+    key, and its own previews ``{key}.previewFile.{ext}`` (VAMS writes one per preview image format). The file
+    list attaches previews to their file rather than listing them, so they take no place on the page;
+    reading them with the object keeps the object's preview on the page that lists it. The rest of the
+    page lists the companion folder ``{key}/``. When the object fills the page, the page lists no
+    companion entry: if the folder holds a key (a one-key probe), the page's token is
+    COMPANION_FOLDER_START_TOKEN, which the next request maps to a listing of ``{key}/`` from its start.
+    Later pages list ``{key}/`` with Amazon S3's own continuation token. Every listing names a prefix
+    derived from the location, never from the token, so no page holds more than ``MaxKeys`` files and no
+    token reaches outside the location.
+    """
+    size = max(1, int(list_params['MaxKeys']))
+    token = list_params.get('ContinuationToken')
+    folder_prefix = location + '/'
+    contents: List[Dict] = []
+    if not token:
+        head = s3_client.list_objects_v2(Bucket=bucket, Prefix=location, MaxKeys=1)
+        contents.extend(obj for obj in head.get('Contents', []) if obj['Key'] == location)
+        previews = s3_client.get_paginator('list_objects_v2').paginate(
+            Bucket=bucket, Prefix=location + PREVIEW_FILE_PATTERN, Delimiter='/')
+        for preview_page in previews:
+            contents.extend(preview_page.get('Contents', []))
+    room = size - sum(1 for obj in contents if obj['Key'] == location)
+    if room <= 0:
+        page = {'Contents': contents}
+        probe = s3_client.list_objects_v2(Bucket=bucket, Prefix=folder_prefix, MaxKeys=1)
+        if probe.get('Contents'):
+            page['NextContinuationToken'] = COMPANION_FOLDER_START_TOKEN
+        return page
+    folder_params = {'Bucket': bucket, 'Prefix': folder_prefix, 'MaxKeys': room}
+    if token and token != COMPANION_FOLDER_START_TOKEN:
+        folder_params['ContinuationToken'] = token
+    folder = s3_client.list_objects_v2(**folder_params)
+    contents.extend(folder.get('Contents', []))
+    page = {'Contents': contents}
+    if 'NextContinuationToken' in folder:
+        page['NextContinuationToken'] = folder['NextContinuationToken']
+    return page
+
+def _call_with_keep(operation: Callable, *args, keep: Optional[Callable[[str], bool]] = None):
+    """Call an auxiliary-data operation, passing ``keep`` only when there is one (folder assets need none)."""
+    return operation(*args) if keep is None else operation(*args, keep=keep)
+
+def delete_assetAuxiliary_files(prefix, keep: Optional[Callable[[str], bool]] = None):
     """Permanently delete the auxiliary files under a prefix, with every version and delete marker
 
     The auxiliary bucket is versioned, so a delete that names no VersionId would only hide the data.
@@ -553,6 +729,7 @@ def delete_assetAuxiliary_files(prefix):
 
     Args:
         prefix: Auxiliary-bucket prefix (see aux_bucket_asset_file_base); a trailing '/' is added
+        keep: Optional predicate (see aux_owner_filter); only the keys it accepts are deleted
     """
 
     if not prefix:
@@ -570,7 +747,8 @@ def delete_assetAuxiliary_files(prefix):
         paginator = s3_client.get_paginator('list_object_versions')
         for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=prefix):
             entries = [{'Key': entry['Key'], 'VersionId': entry['VersionId']}
-                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])]
+                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])
+                       if keep is None or keep(entry['Key'])]
             for i in range(0, len(entries), 1000):  # DeleteObjects takes at most 1000 entries
                 batch = entries[i:i + 1000]
                 response = s3_client.delete_objects(
@@ -588,7 +766,7 @@ def delete_assetAuxiliary_files(prefix):
 
     return
 
-def move_auxiliary_files(source_key: str, dest_key: str) -> None:
+def move_auxiliary_files(source_key: str, dest_key: str, keep: Optional[Callable[[str], bool]] = None) -> None:
     """Move auxiliary files from source prefix to destination prefix.
     Silently logs errors if operations fail.
     
@@ -606,6 +784,8 @@ def move_auxiliary_files(source_key: str, dest_key: str) -> None:
                 
             for obj in page.get('Contents', []):
                 source_aux_key = obj['Key']
+                if keep is not None and not keep(source_aux_key):
+                    continue
                 
                 # Calculate the destination key by replacing the source prefix with destination prefix
                 dest_aux_key = source_aux_key.replace(source_key, dest_key, 1)
@@ -633,7 +813,7 @@ def move_auxiliary_files(source_key: str, dest_key: str) -> None:
         # Log error but don't raise exception to caller
         logger.warning(f"Error processing auxiliary files for move operation: {e}")
 
-def copy_auxiliary_files(source_key: str, dest_key: str) -> None:
+def copy_auxiliary_files(source_key: str, dest_key: str, keep: Optional[Callable[[str], bool]] = None) -> None:
     """Copy auxiliary files from source prefix to destination prefix.
     Silently logs errors if operations fail.
     
@@ -651,6 +831,8 @@ def copy_auxiliary_files(source_key: str, dest_key: str) -> None:
                 
             for obj in page.get('Contents', []):
                 source_aux_key = obj['Key']
+                if keep is not None and not keep(source_aux_key):
+                    continue
                 
                 # Calculate the destination key by replacing the source prefix with destination prefix
                 dest_aux_key = source_aux_key.replace(source_key, dest_key, 1)
@@ -787,63 +969,144 @@ def delete_s3_prefix(bucket: str, prefix: str) -> List[str]:
     
     return deleted_files
 
-def delete_s3_prefix_all_versions(bucket: str, prefix: str) -> List[str]:
+
+# A file record cleanup reads each file's rows up to this many files, and the asset's rows above it
+FILE_RECORDS_PER_FILE_QUERY_LIMIT = 100
+# Rows read, and deleted, per page when a cleanup reads the asset's rows
+FILE_RECORDS_DELETE_PAGE_SIZE = 500
+
+# Answers for a delete Amazon S3 does not complete. Generic: they name no key, bucket or path.
+FILE_DELETE_INCOMPLETE_MESSAGE = (
+    "Error deleting file: the file could not be fully deleted from the asset's storage. Check that VAMS "
+    "can delete objects in the asset's storage bucket (its permissions and any object lock), then try "
+    "again. The file and its previews were kept.")
+FILE_PREVIEWS_DELETE_INCOMPLETE_MESSAGE = (
+    "Error deleting file: the file was deleted, but its previews could not all be deleted from the asset's "
+    "storage. Check that VAMS can delete objects in the asset's storage bucket (its permissions and any "
+    "object lock), then delete the file again to remove the previews that were kept.")
+PREFIX_DELETE_INCOMPLETE_MESSAGE = (
+    "Error deleting files: the files under the prefix could not all be deleted from the asset's storage. "
+    "Check that VAMS can delete objects in the asset's storage bucket (its permissions and any object "
+    "lock), then try again. The remaining files were kept.")
+
+
+class S3PrefixDeleteIncomplete(Exception):
+    """A prefix delete left at least one object version or delete marker in place.
+
+    ``deleted_keys`` lists the keys whose every version and delete marker is gone, ``failed_keys`` the
+    keys that still have one. Both are empty when the prefix could not be listed, so nothing was deleted.
+    """
+
+    def __init__(self, deleted_keys: List[str], failed_keys: List[str]):
+        super().__init__(f"{len(failed_keys)} key(s) not deleted, {len(deleted_keys)} deleted")
+        self.deleted_keys = deleted_keys
+        self.failed_keys = failed_keys
+
+
+def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[str] = None,
+                                  folder: Optional[str] = None,
+                                  nested: Optional[NestedLocations] = None) -> List[str]:
     """Permanently delete all objects and their versions under a prefix
     
     Args:
         bucket: The S3 bucket
         prefix: The S3 key prefix
+        location: The asset location the deleted keys must belong to (``common.assetLocations``)
+        folder: An asset-relative folder path of the location the deleted keys must sit under
+        nested: The locations of other assets nested in ``location``; their keys are not deleted
         
     Returns:
         List of deleted file keys
+
+    Raises:
+        S3PrefixDeleteIncomplete: The prefix could not be listed, or a key keeps a version or delete
+            marker. It names the keys that were deleted and the keys that were not. A bucket that does
+            not exist is an empty listing, not a failure.
     """
-    deleted_files = []
+    # Collect unique keys across all pages (versions and delete markers)
+    keys_to_delete = []
+    processed_keys = set()
 
     try:
         # Get all object versions under the prefix
         paginator = s3_client.get_paginator('list_object_versions')
 
-        # Collect unique keys across all pages (versions and delete markers)
-        keys_to_delete = []
-        processed_keys = set()
+        def list_versions(list_prefix, cap=None):
+            if cap:
+                response = s3_client.list_object_versions(Bucket=bucket, Prefix=list_prefix, MaxKeys=cap)
+                return response.get('Versions', []) + response.get('DeleteMarkers', [])
+            return (entry for page in paginator.paginate(Bucket=bucket, Prefix=list_prefix)
+                    for entry in page.get('Versions', []) + page.get('DeleteMarkers', []))
 
-        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            for entry in page.get('Versions', []) + page.get('DeleteMarkers', []):
-                key = entry['Key']
-                if key not in processed_keys:
-                    processed_keys.add(key)
-                    keys_to_delete.append(key)
+        # A whole single-file location is read through its own prefixes, so keys that only share its
+        # characters are never listed; any other prefix is listed as given and filtered
+        if location is not None and folder is None and not is_folder_location(location):
+            entries = held_objects(location, list_versions)
+        else:
+            entries = list_versions(prefix)
 
-        # Delete each key's versions in parallel; per-key work is independent
-        if keys_to_delete:
-            max_workers = min(MAX_PARALLEL_S3_WORKERS, len(keys_to_delete))
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                results = list(executor.map(
-                    lambda key: (key, delete_s3_object_all_versions(bucket, key)),
-                    keys_to_delete
-                ))
-            deleted_files.extend(key for key, ok in results if ok)
-        
-        # Check if the prefix folder itself exists and delete it if it does
-        # Ensure the prefix ends with a slash for folder check
-        folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
+        for entry in entries:
+            key = entry['Key']
+            if location is not None and not _held_in_folder(location, folder, key, nested):
+                continue
+            if key not in processed_keys:
+                processed_keys.add(key)
+                keys_to_delete.append(key)
+    except ClientError as e:
+        # A bucket that no longer exists holds nothing, so there is nothing left to delete
+        if e.response.get('Error', {}).get('Code') == 'NoSuchBucket':
+            logger.warning(f"Bucket {bucket} does not exist, so nothing is left to delete under prefix {prefix}")
+            return []
+        logger.exception(f"Error listing object versions under prefix {prefix}: {e}")
+        raise S3PrefixDeleteIncomplete([], []) from e
+    except Exception as e:
+        logger.exception(f"Error listing object versions under prefix {prefix}: {e}")
+        raise S3PrefixDeleteIncomplete([], []) from e
+
+    deleted_files = []
+    failed_files = []
+
+    # Delete each key's versions in parallel; per-key work is independent
+    if keys_to_delete:
+        max_workers = min(MAX_PARALLEL_S3_WORKERS, len(keys_to_delete))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(
+                lambda key: (key, delete_s3_object_all_versions(bucket, key)),
+                keys_to_delete
+            ))
+        for key, ok in results:
+            (deleted_files if ok else failed_files).append(key)
+
+    # Check if the prefix folder itself exists and delete it if it does, unless the listing returned it
+    # Ensure the prefix ends with a slash for folder check
+    folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
+    if folder_prefix not in processed_keys and (location is None
+                                                or _held_in_folder(location, folder, folder_prefix, nested)):
         try:
             # Check if the folder marker exists
             s3_client.head_object(Bucket=bucket, Key=folder_prefix)
             # Delete the folder marker if it exists
             if delete_s3_object_all_versions(bucket, folder_prefix):
                 deleted_files.append(folder_prefix)
+            else:
+                failed_files.append(folder_prefix)
         except ClientError as e:
             # If the folder doesn't exist, that's fine
             if e.response['Error']['Code'] != '404' and e.response['Error']['Code'] != 'NoSuchKey':
                 logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
-    
-    except Exception as e:
-        logger.exception(f"Error deleting all versions under prefix {prefix}: {e}")
-    
+        except Exception as e:
+            logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
+
+    if failed_files:
+        logger.error(f"{len(failed_files)} key(s) under prefix {prefix} kept a version or delete marker, "
+                     f"{len(deleted_files)} deleted")
+        raise S3PrefixDeleteIncomplete(deleted_files, failed_files)
+
     return deleted_files
 
-def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -> Dict[str, str]:
+def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
+                      location: Optional[str] = None, folder: Optional[str] = None,
+                      nested: Optional[NestedLocations] = None) -> Dict[str, str]:
     """Archive all objects under a prefix
 
     Args:
@@ -851,6 +1114,9 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -
         prefix: The S3 key prefix
         databaseId: The database ID
         assetId: The asset ID
+        location: The asset location the archived keys must belong to (``common.assetLocations``)
+        folder: An asset-relative folder path of the location the archived keys must sit under
+        nested: The locations of other assets nested in ``location``; their keys are not archived
 
     Returns:
         Dict mapping each archived file key to its new delete-marker VersionId
@@ -864,6 +1130,8 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
                 key = obj['Key']
+                if location is not None and not _held_in_folder(location, folder, key, nested):
+                    continue
 
                 # Process folder markers separately
                 if key.endswith('/'):
@@ -881,17 +1149,18 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -
         # Check if the prefix folder itself exists and archive it if it does
         # Ensure the prefix ends with a slash for folder check
         folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
-        try:
-            # Check if the folder marker exists
-            s3_client.head_object(Bucket=bucket, Key=folder_prefix)
-            # Archive the folder marker if it exists
-            marker_version_id = archive_s3_object(bucket, folder_prefix)
-            if marker_version_id is not None:
-                archived_files[folder_prefix] = marker_version_id
-        except ClientError as e:
-            # If the folder doesn't exist, that's fine
-            if e.response['Error']['Code'] != '404' and e.response['Error']['Code'] != 'NoSuchKey':
-                logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
+        if location is None or _held_in_folder(location, folder, folder_prefix, nested):
+            try:
+                # Check if the folder marker exists
+                s3_client.head_object(Bucket=bucket, Key=folder_prefix)
+                # Archive the folder marker if it exists
+                marker_version_id = archive_s3_object(bucket, folder_prefix)
+                if marker_version_id is not None:
+                    archived_files[folder_prefix] = marker_version_id
+            except ClientError as e:
+                # If the folder doesn't exist, that's fine
+                if e.response['Error']['Code'] != '404' and e.response['Error']['Code'] != 'NoSuchKey':
+                    logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
 
     except Exception as e:
         logger.exception(f"Error archiving files under prefix {prefix}: {e}")
@@ -1006,7 +1275,8 @@ def process_preview_files(
     source_database_id: str = None,
     dest_asset_id: str = None,
     dest_database_id: str = None,
-    dest_bucket: str = None
+    dest_bucket: str = None,
+    source_location: str = None
 ) -> List[str]:
     """Process preview files for move, copy, or rename operations
 
@@ -1021,6 +1291,7 @@ def process_preview_files(
         dest_asset_id: Destination asset ID (for copy operations)
         dest_database_id: Destination database ID (for copy operations)
         dest_bucket: Destination S3 bucket (defaults to source bucket if not provided)
+        source_location: The source asset's location; preview files outside it are left alone
 
     Returns:
         List of affected preview file paths (source and destination for move/rename)
@@ -1031,7 +1302,8 @@ def process_preview_files(
     
     # Find preview files for the source file
     logger.info(f"Looking for preview files for base file: {source_key}")
-    preview_files = find_preview_files_for_base(bucket, source_key)
+    preview_files = [preview_file for preview_file in find_preview_files_for_base(bucket, source_key)
+                     if source_location is None or contains(source_location, preview_file)]
     logger.info(f"Found {len(preview_files)} preview files: {preview_files}")
     
     for preview_file in preview_files:
@@ -1068,15 +1340,9 @@ def process_preview_files(
         
         if operation_success:
             # Get relative paths for reporting
-            if preview_file.startswith(base_key):
-                rel_preview_source = '/' + preview_file[len(base_key):]
-            else:
-                rel_preview_source = '/' + preview_file
+            rel_preview_source = _relative_to_location(base_key, preview_file)
                 
-            if preview_dest.startswith(base_key):
-                rel_preview_dest = '/' + preview_dest[len(base_key):]
-            else:
-                rel_preview_dest = '/' + preview_dest
+            rel_preview_dest = _relative_to_location(base_key, preview_dest)
             
             # For move/rename, include both source and dest; for copy, only dest
             if operation == 'move' or operation == 'rename':
@@ -1279,26 +1545,58 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
                 raise VAMSGeneralErrorResponse(f"Error retrieving file metadata.")
         raise VAMSGeneralErrorResponse(f"Error retrieving file metadata.")
 
-def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: Dict, include_archived: bool = False, basic_mode: bool = False) -> Dict:
+def listed_relative_path(prefix: str, key: str) -> str:
+    """The path a folder listing names a key at: the key after the listing's ``prefix`` with one leading '/'.
+
+    A prefix that ends in '/' (the asset's folder, or a folder filter) always gets exactly one '/' added, so a
+    key with an empty segment right after it (``A1//x`` under ``A1/``) is listed at ``//x``, the path that names
+    it on the file routes (common.assetLocations.relative_path_in), never at ``/x``, the path of ``A1/x``
+    (#1977). A filter prefix that does not end in '/' keeps the listing's earlier form."""
+    rest = key[len(prefix):]
+    if prefix.endswith('/') or not rest.startswith('/'):
+        return '/' + rest
+    return rest
+
+
+def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: Dict, include_archived: bool = False,
+                                        basic_mode: bool = False, nested: Optional[NestedLocations] = None) -> Dict:
     """List S3 objects with pagination and archive status
     
     Args:
         bucket: The S3 bucket
-        prefix: The S3 key prefix
+        prefix: The S3 key prefix (the asset's location key)
         query_params: Dictionary containing pagination parameters
         include_archived: Whether to include archived files
         basic_mode: If True, skip expensive head_object calls and return only S3 list data
+        nested: The locations of other assets nested in the asset's location; their files are not listed
         
     Returns:
         Dictionary containing the list of files and pagination token if applicable
     """
     logger.info(f"Listing files from bucket: {bucket}, prefix: {prefix}, basic_mode: {basic_mode}")
+
+    # A single-file location lists the keys it holds: its object, its own previews and its companion
+    # folder {key}/. Each is listed by its own prefix, so keys that only share the location's characters
+    # ({key}.bak, {key}_tiles/...) are never read and cannot fill a page.
+    location = prefix
+    single_object = not is_folder_location(location)
+    # The prefix filter is a path in the asset: exactly one leading '/' is dropped, so '//' is the folder of the
+    # keys with an empty segment after the location ('A1//'), not the whole asset (#1977)
+    single_object_filter = version_entry_key(query_params.get('prefix') or '')
+
+    def _listed(key):
+        if nested and not nested.keep(key):
+            return False
+        if not single_object:
+            return True
+        return (contains(location, key)
+                and version_entry_key(relative_path_in(location, key)).startswith(single_object_filter))
     
     # If prefix filter is provided, append it to the base prefix
-    if query_params.get('prefix'):
+    if query_params.get('prefix') and not single_object:
         if not prefix.endswith('/'):
             prefix = prefix + '/'
-        prefix = prefix + query_params['prefix'].lstrip('/')
+        prefix = prefix + version_entry_key(query_params['prefix'])
     
     # List objects with pagination
     result = {
@@ -1317,14 +1615,23 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         if query_params.get('startingToken'):
             list_params['ContinuationToken'] = query_params['startingToken']
         
-        # Single S3 list call
-        page = s3_client.list_objects_v2(**list_params)
+        if single_object:
+            page = _list_single_file_location_page(bucket, location, list_params)
+        elif list_params.get('ContinuationToken') == COMPANION_FOLDER_START_TOKEN:
+            # A single-file location's token means nothing for a folder location; it never reaches S3
+            raise VAMSGeneralErrorResponse("Invalid pagination token.")
+        else:
+            # Single S3 list call
+            page = s3_client.list_objects_v2(**list_params)
         
         # Items that need head_object enrichment (non-basic mode)
         items_needing_enrichment = []
 
         # Process objects from this single page
         for obj in page.get('Contents', []):
+            if not _listed(obj['Key']):
+                continue
+
             # Extract filename from key
             file_name = os.path.basename(obj['Key'])
             
@@ -1333,11 +1640,10 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
             
             # Get relative path by removing the prefix
             relative_path = obj['Key']
-            if relative_path.startswith(prefix):
-                relative_path = relative_path[len(prefix):]
-                # Ensure relative path starts with /
-                if not relative_path.startswith('/'):
-                    relative_path = '/' + relative_path
+            if single_object:
+                relative_path = relative_path_in(location, relative_path)
+            elif relative_path.startswith(prefix):
+                relative_path = listed_relative_path(prefix, relative_path)
             
             # Create the item with fields available from S3 list operation
             item = {
@@ -1431,11 +1737,20 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                 # Track keys we've already processed to avoid duplicates
                 existing_keys = {item['key'] for item in result['items']}
                 
-                for page in version_paginator.paginate(
-                    Bucket=bucket,
-                    Prefix=prefix,
-                    PaginationConfig=pagination_config
-                ):
+                # A single-file location reads its object's newest version alone, then its own prefixes
+                version_pages = []
+                if single_object:
+                    newest = s3_client.list_object_versions(Bucket=bucket, Prefix=location, MaxKeys=1)
+                    version_pages.append({'DeleteMarkers': [marker for marker in newest.get('DeleteMarkers', [])
+                                                            if marker['Key'] == location]})
+                version_pages.extend(page for version_prefix in (
+                    _single_file_location_prefixes(location) if single_object else [prefix])
+                    for page in version_paginator.paginate(
+                        Bucket=bucket,
+                        Prefix=version_prefix,
+                        PaginationConfig=pagination_config
+                    ))
+                for page in version_pages:
                     # Process delete markers
                     for marker in page.get('DeleteMarkers', []):
                         key = marker['Key']
@@ -1452,14 +1767,17 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                         # Skip folders
                         if key.endswith('/'):
                             continue
+
+                        if not _listed(key):
+                            continue
                         
                         # Extract filename and relative path
                         file_name = os.path.basename(key)
                         relative_path = key
-                        if relative_path.startswith(prefix):
-                            relative_path = relative_path[len(prefix):]
-                            if not relative_path.startswith('/'):
-                                relative_path = '/' + relative_path
+                        if single_object:
+                            relative_path = relative_path_in(location, relative_path)
+                        elif relative_path.startswith(prefix):
+                            relative_path = listed_relative_path(prefix, relative_path)
                         
                         # Find the latest version before the delete marker
                         latest_version = None
@@ -1547,48 +1865,62 @@ def is_allowed_preview_extension(file_path: str) -> bool:
     return False
 
 def find_preview_files_for_base(bucket: str, base_key: str) -> List[str]:
-    """Find preview files for a base file
-    
+    """Find preview files for a base file; a listing error is logged and gives an empty list
+
     Args:
         bucket: The S3 bucket
         base_key: The base file key
-        
+
+    Returns:
+        List of preview file keys
+    """
+    try:
+        return list_preview_files_for_base(bucket, base_key)
+    except Exception as e:
+        logger.warning(f"Error finding preview files for {base_key}: {e}")
+        return []
+
+
+def _own_preview_files(bucket: str, location: str, object_key: str) -> List[str]:
+    """The preview files a location holds for one of its objects; a listing error is raised."""
+    return [key for key in list_preview_files_for_base(bucket, object_key) if contains(location, key)]
+
+
+def list_preview_files_for_base(bucket: str, base_key: str) -> List[str]:
+    """Preview files of a base file, sorted; a listing error is raised
+
+    Args:
+        bucket: The S3 bucket
+        base_key: The base file key
+
     Returns:
         List of preview file keys
     """
     preview_files = []
-    
-    try:
-        # Get the directory and filename parts
-        directory = os.path.dirname(base_key)
-        filename = os.path.basename(base_key)
-        
-        # Create the prefix for listing objects
-        prefix = f"{directory}/" if directory else ""
-        
-        # Create the pattern to match preview files for this base file
-        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
-        
-        logger.info(f"Searching for preview files in bucket {bucket} with prefix {prefix}")
-        logger.info(f"Looking for pattern: {pattern}")
-        
-        # List objects in the directory
-        paginator = s3_client.get_paginator('list_objects_v2')
-        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            for obj in page.get('Contents', []):
-                key = obj['Key']
-                base_filename = os.path.basename(key)
-                
-                # Check if this is a preview file for our base file
-                if base_filename.startswith(pattern):
-                    preview_files.append(key)
-        
-        # Sort the preview files alphabetically
-        preview_files.sort()
-        
-    except Exception as e:
-        logger.warning(f"Error finding preview files for {base_key}: {e}")
-    
+    filename = os.path.basename(base_key)
+
+    # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+    prefix = f"{base_key}{PREVIEW_FILE_PATTERN}"
+
+    # Create the pattern to match preview files for this base file
+    pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
+
+    logger.info(f"Searching for preview files in bucket {bucket} with prefix {prefix}")
+    logger.info(f"Looking for pattern: {pattern}")
+
+    # List objects in the directory
+    paginator = s3_client.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get('Contents', []):
+            key = obj['Key']
+            base_filename = os.path.basename(key)
+
+            # Check if this is a preview file for our base file
+            if base_filename.startswith(pattern):
+                preview_files.append(key)
+
+    # Sort the preview files alphabetically
+    preview_files.sort()
     return preview_files
 
 def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -> List[Dict]:
@@ -1604,12 +1936,10 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
     preview_files = []
     
     try:
-        # Get the directory and filename parts
-        directory = os.path.dirname(base_key)
         filename = os.path.basename(base_key)
-        
-        # Create the prefix for listing objects
-        prefix = f"{directory}/" if directory else ""
+
+        # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+        prefix = f"{base_key}{PREVIEW_FILE_PATTERN}"
         
         # Create the pattern to match preview files for this base file
         pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
@@ -1684,28 +2014,63 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
     
     return preview_files
 
-def get_top_preview_file(preview_files: List[str], filter_extensions: bool = True) -> Optional[str]:
-    """Get the top preview file from a list of preview files
-    
-    Args:
-        preview_files: List of preview file keys
-        filter_extensions: Whether to filter by allowed extensions
-        
-    Returns:
-        The top preview file key or None if no valid preview files
+def find_newest_preview_file_for_base(bucket: str, base_key: str) -> Optional[str]:
+    """The key of the newest allowed preview object for ``base_key`` (see select_newest_preview_file).
+
+    Only the file's own previews count (``_is_preview_of``): the listed prefix also matches keys inside a
+    folder whose name starts with it, such as ``p/model.glb.previewFile.png/model.glb.previewFile.jpg``."""
+    directory = os.path.dirname(base_key)
+    prefix = f"{directory}/" if directory else ""
+    pattern = f"{os.path.basename(base_key)}{PREVIEW_FILE_PATTERN}"
+    candidates = []
+    try:
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix + pattern):
+            for obj in page.get('Contents', []):
+                if _is_preview_of(base_key, obj['Key']):
+                    candidates.append((obj['Key'], obj.get('LastModified'), False))
+    except Exception as e:
+        logger.warning(f"Error finding preview files for {base_key}: {e}")
+    return select_newest_preview_file(candidates)
+
+def version_entry_key(file_key) -> str:
+    """The key a version entry is compared and deduplicated by: its path with exactly one leading '/'
+    removed, the key's part after the asset's location. The same rule as assetVersions.version_entry_key:
+    'x' and the legacy '/x' name one file, '//x' names the key with an empty segment after the location."""
+    file_key = str(file_key or '')
+    return file_key[1:] if file_key.startswith('/') else file_key
+
+
+def stored_version_entry_key(file_key) -> str:
+    """The form a version entry is stored and handed out in ('x', or '//x' for a key whose first segment
+    after the location is empty), as assetVersions.stored_version_entry_key."""
+    key = version_entry_key(file_key)
+    return '/' + key if key.startswith('/') else key
+
+
+def names_no_file(file_key) -> bool:
+    """Whether a version entry's key is made only of '/' (or is empty): the asset root, not a file."""
+    return not str(file_key or '').strip('/')
+
+
+def collapse_version_entries(items: List[Dict]) -> List[Dict]:
+    """The rows of an asset version's files, one per file, keyed by version_entry_key.
+
+    A version a file list created before #1795 can name one file both as '/a.txt' and 'a.txt' (D1),
+    and can hold a '/' row that names no file. The row stored in the current form
+    (stored_version_entry_key) wins, the first one read otherwise, and a row that names no file is
+    left out. '//a.txt' is another file and stays its own entry.
     """
-    if not preview_files:
-        return None
-    
-    if filter_extensions:
-        # Filter by allowed extensions
-        allowed_files = [f for f in preview_files if is_allowed_preview_extension(f)]
-        if allowed_files:
-            return allowed_files[0]  # Return the first allowed file
-        return None
-    else:
-        # Return the first file without filtering
-        return preview_files[0]
+    chosen: Dict[str, Dict] = {}
+    for item in items:
+        stored_key = str(item.get('fileKey') or '')
+        if names_no_file(stored_key):
+            continue
+        relative_key = version_entry_key(stored_key)
+        if relative_key not in chosen or stored_key == stored_version_entry_key(stored_key):
+            chosen[relative_key] = item
+    return list(chosen.values())
+
 
 def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, relativeFileKey: Optional[str]) -> Optional[Dict]:
     """Get file versions for a specific asset version using the databaseIdAssetIdVersionIdIndex GSI
@@ -1726,28 +2091,40 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, 
 
         # Build query kwargs using the table PK directly (no IndexName needed)
         # fileKey is the table sort key, so we can use it directly in the KeyConditionExpression
-        query_kwargs = {
-            'KeyConditionExpression': Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
-        }
+        version_key_condition = Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
 
-        # Add fileKey to key condition if provided (fileKey is the table sort key)
+        # relativeFileKey is the file's key after the asset's location (version_entry_key form). An
+        # entry is stored as stored_version_entry_key of it; one a file list stored before #1795 can
+        # carry a leading slash ('/x' for 'x'), so a single-file lookup (fileKey is the table sort key)
+        # reads the stored form first and that legacy form on a miss.
         if relativeFileKey:
-            query_kwargs['KeyConditionExpression'] = Key('databaseId:assetId:assetVersionId').eq(version_composite_key) & Key('fileKey').eq(relativeFileKey)
-
-        # Page to exhaustion: a version snapshot can hold more files than fit in one
-        # 1 MB query page, and a partial file list would misreport the version. A
-        # single-file lookup (relativeFileKey set) returns one item and never pages.
-        items = query_all_items(asset_version_files_table, **query_kwargs)
+            stored_file_key = '/' + relativeFileKey if relativeFileKey.startswith('/') else relativeFileKey
+            candidates = [stored_file_key]
+            if not stored_file_key.startswith('/'):
+                candidates.append('/' + stored_file_key)
+            items = []
+            for stored_file_key in candidates:
+                # A single-file lookup returns one item and never pages.
+                items = query_all_items(
+                    asset_version_files_table,
+                    KeyConditionExpression=version_key_condition & Key('fileKey').eq(stored_file_key))
+                if items:
+                    break
+        else:
+            # Page to exhaustion: a version snapshot can hold more files than fit in one
+            # 1 MB query page, and a partial file list would misreport the version.
+            items = query_all_items(asset_version_files_table, KeyConditionExpression=version_key_condition)
 
         # If no items found, return None
         if not items:
             return None
 
-        # Reconstruct the file versions structure
+        # Reconstruct the file versions structure. The key is handed out in the form new entries are
+        # stored in (stored_version_entry_key) whatever form it is stored in (#1795), once per file.
         files = []
-        for item in items:
+        for item in collapse_version_entries(items):
             file_info = {
-                'relativeKey': item.get('fileKey'),
+                'relativeKey': stored_version_entry_key(item.get('fileKey')),
                 'versionId': item.get('versionId'),
                 'size': item.get('size'),
                 'lastModified': item.get('lastModified'),
@@ -1760,7 +2137,7 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, 
             'assetId': assetId,
             'assetVersionId': assetVersionId,
             'files': files,
-            'createdAt': items[0].get('createdAt') if items else datetime.utcnow().isoformat()
+            'createdAt': items[0].get('createdAt') if items else utc_now().isoformat()
         }
         
     except Exception as e:
@@ -2016,6 +2393,23 @@ def delete_file_metadata(databaseId: str, assetId: str, relative_file_path: str)
         logger.exception(f"Error deleting metadata for file: {e}")
         return False
 
+def _delete_version_row(item: dict) -> None:
+    """Delete one version snapshot row by the key it is stored under, retrying a throttled call."""
+    key = {
+        'databaseId:assetId:assetVersionId': item['databaseId:assetId:assetVersionId'],
+        'fileKey': item['fileKey']
+    }
+    for attempt in range(VERSION_ROW_THROTTLE_RETRIES + 1):
+        try:
+            asset_version_files_table.delete_item(Key=key)
+            return
+        except ClientError as e:
+            throttled = e.response.get('Error', {}).get('Code') in DYNAMODB_THROTTLING_ERROR_CODES
+            if not throttled or attempt == VERSION_ROW_THROTTLE_RETRIES:
+                raise
+            time.sleep(VERSION_ROW_THROTTLE_BASE_DELAY_SECONDS * (2 ** attempt))
+
+
 def delete_file_version_records(databaseId: str, assetId: str, file_paths: list) -> int:
     """Delete version snapshot records from asset_version_files_table for given file paths.
 
@@ -2025,10 +2419,14 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
     Args:
         databaseId: The database ID
         assetId: The asset ID
-        file_paths: List of relative file paths (with or without leading slash)
+        file_paths: The files' paths in the asset (the listed path, or the path without its leading slash).
+            Rows are matched by version_entry_key, exactly one leading slash removed: '/x', 'x' and a legacy
+            '/x' row are one file, and '//x' (the key with an empty segment after the location) another, so
+            deleting one never deletes the other's rows (#1977).
 
     Returns:
-        Number of records deleted
+        Number of records deleted. Rows not deleted (a failed delete, or the invocation's time limit
+        reached first) stay listed in the asset's versions and are logged as an error.
     """
     if not file_paths:
         return 0
@@ -2036,15 +2434,15 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
     deleted_count = 0
     db_asset_key = f"{databaseId}:{assetId}"
 
-    # Normalize file paths: the table stores fileKey with leading slash
+    # A row's fileKey is the stored form ('x', '//x'); a version built from a file list before #1795 stored
+    # the path as the caller wrote it, often with the slash. Paths and rows are compared by
+    # version_entry_key, and each row is deleted by the key it is stored under.
     normalized_paths = set()
     for fp in file_paths:
         fp_clean = fp.strip()
-        if fp_clean.endswith('/'):
+        if fp_clean.endswith('/') or names_no_file(fp_clean):
             continue
-        if not fp_clean.startswith('/'):
-            fp_clean = '/' + fp_clean
-        normalized_paths.add(fp_clean)
+        normalized_paths.add(version_entry_key(fp_clean))
 
     if not normalized_paths:
         return 0
@@ -2059,7 +2457,7 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
         while True:
             response = asset_version_files_table.query(**query_kwargs)
             for item in response.get('Items', []):
-                if item.get('fileKey', '') in normalized_paths:
+                if version_entry_key(item.get('fileKey', '')) in normalized_paths:
                     records_to_delete.append(item)
 
             if 'LastEvaluatedKey' in response:
@@ -2067,22 +2465,147 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
             else:
                 break
 
-        # Batch delete the matching records
-        with asset_version_files_table.batch_writer() as batch:
-            for item in records_to_delete:
-                batch.delete_item(Key={
-                    'databaseId:assetId:assetVersionId': item['databaseId:assetId:assetVersionId'],
-                    'fileKey': item['fileKey']
-                })
-                deleted_count += 1
+        # One DeleteItem per row (one per asset version that lists the file), at most
+        # VERSION_ROWS_DELETE_WORKERS at a time: the role holds DeleteItem on this table and no batch
+        # write. The count is the rows deleted. A failed row stops new deletes; so does the time limit.
+        deadline = _version_rows_delete_deadline()
+        rows = iter(records_to_delete)
+        in_flight = {}
+        not_deleted = []
+        failure = None
+        out_of_time = False
+        with ThreadPoolExecutor(max_workers=VERSION_ROWS_DELETE_WORKERS) as executor:
+            while True:
+                while failure is None and not out_of_time and len(in_flight) < VERSION_ROWS_DELETE_WORKERS:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        out_of_time = True
+                        break
+                    item = next(rows, None)
+                    if item is None:
+                        break
+                    in_flight[executor.submit(_delete_version_row, item)] = item
+                if not in_flight:
+                    break
+                done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                for future in done:
+                    item = in_flight.pop(future)
+                    error = future.exception()
+                    if error is None:
+                        deleted_count += 1
+                    else:
+                        not_deleted.append(item)
+                        failure = failure or error
+        not_deleted.extend(rows)
 
         if deleted_count > 0:
             logger.info(f"Deleted {deleted_count} version snapshot records for {len(normalized_paths)} file(s) in {db_asset_key}")
 
+        if not_deleted:
+            left_files = sorted({item['fileKey'] for item in not_deleted})
+            reason = "a row delete failed" if failure is not None else "the invocation's time limit was near"
+            logger.error(f"Stopped deleting version snapshot records in {db_asset_key} because {reason}: "
+                         f"{deleted_count} deleted, {len(not_deleted)} left listed in its asset versions, of "
+                         f"{len(left_files)} file(s) such as {left_files[:VERSION_ROWS_LEFT_LOGGED_FILES]}")
+        if failure is not None:
+            raise failure
+
     except Exception as e:
-        logger.warning(f"Error cleaning up version records for {db_asset_key}: {e}")
+        # The files are already gone from Amazon S3, so the delete stands; rows left here are listed
+        # in the asset's versions until they are removed.
+        logger.exception(f"Error deleting version snapshot records for {len(normalized_paths)} file(s) in {db_asset_key}: {e}")
 
     return deleted_count
+
+
+def delete_files_metadata(databaseId: str, assetId: str, relative_file_paths: List[str]) -> int:
+    """Delete the metadata and attributes of several files of one asset.
+
+    Up to ``FILE_RECORDS_PER_FILE_QUERY_LIMIT`` files, each file's rows are read from the
+    ``DatabaseIdAssetIdFilePathIndex``, so only the rows of those files are read. Above that, the asset's
+    rows are read from the ``DatabaseIdAssetIdIndex`` one page of at most ``FILE_RECORDS_DELETE_PAGE_SIZE``
+    rows at a time, and each page's rows of the given files are deleted before the next page is read, so
+    memory stays flat however large the asset. A path is the file's listed path: a ``/`` is added when it has
+    none, and repeated leading slashes are kept, so ``//x`` (the key with an empty segment after the location)
+    is not ``/x`` (#1977). Folder paths and a path made only of ``/`` (the asset's own metadata) are skipped.
+    Failures are logged, not raised.
+
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        relative_file_paths: Asset-relative file paths, with or without a leading slash
+
+    Returns:
+        Number of rows deleted
+    """
+    composite_keys = set()
+    for path in relative_file_paths or []:
+        path = path or ''
+        path = path if path.startswith('/') else '/' + path
+        if path.strip('/') and not path.endswith('/'):
+            composite_keys.add(f"{databaseId}:{assetId}:{path}")
+    if not composite_keys:
+        return 0
+
+    deleted_count = 0
+    for table, row_key in ((asset_file_metadata_table, 'metadataKey'), (file_attribute_table, 'attributeKey')):
+        if not table:
+            continue
+        try:
+            with table.batch_writer() as batch:
+                for item in _file_record_rows(table, databaseId, assetId, composite_keys):
+                    file_key = item.get('databaseId:assetId:filePath')
+                    if file_key in composite_keys and row_key in item:
+                        batch.delete_item(Key={row_key: item[row_key], 'databaseId:assetId:filePath': file_key})
+                        deleted_count += 1
+        except Exception as e:
+            logger.warning(f"Error deleting file {row_key} rows for {databaseId}:{assetId}: {e}")
+
+    logger.info(f"Deleted {deleted_count} metadata and attribute row(s) for {len(composite_keys)} file(s) "
+                f"in {databaseId}:{assetId}")
+    return deleted_count
+
+
+def _file_record_rows(table, databaseId: str, assetId: str, composite_keys: set):
+    """The rows of the given files: per-file reads for a small set, the asset's rows page by page above it."""
+    if len(composite_keys) <= FILE_RECORDS_PER_FILE_QUERY_LIMIT:
+        for composite_key in sorted(composite_keys):
+            yield from query_all_items(
+                table,
+                IndexName='DatabaseIdAssetIdFilePathIndex',
+                KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
+            )
+        return
+    query_kwargs = {
+        'IndexName': 'DatabaseIdAssetIdIndex',
+        'KeyConditionExpression': Key('databaseId:assetId').eq(f"{databaseId}:{assetId}"),
+        'Limit': FILE_RECORDS_DELETE_PAGE_SIZE,
+    }
+    while True:
+        response = table.query(**query_kwargs)
+        yield from response.get('Items', [])
+        if 'LastEvaluatedKey' not in response:
+            break
+        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+
+def delete_auxiliary_files_of_keys(databaseId: str, keys: List[str]) -> None:
+    """Delete the own viewer data of deleted files (``common.assetLocations.viewer_data_scope``).
+
+    Each file's data sits in its own ``preview/`` folder, so the data of the files that remain, including
+    a kept file or a nested asset's file in a folder named like a deleted file, stays. The deletes run on
+    the S3 worker pool and log their failures.
+
+    Args:
+        databaseId: The database ID owning the asset
+        keys: Full S3 keys of the files whose every version is gone
+    """
+    scopes = [viewer_data_scope(databaseId, key) for key in keys or [] if not key.endswith('/')]
+    if not scopes:
+        return
+
+    with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_S3_WORKERS, len(scopes))) as executor:
+        list(executor.map(lambda scope: _call_with_keep(delete_assetAuxiliary_files, scope[0], keep=scope[1]),
+                          scopes))
 
 
 def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, confirm_permanent_delete: bool, claims_and_roles: Dict) -> FileOperationResponseModel:
@@ -2113,9 +2636,30 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
     
+    # A prefix names a folder, so it ends in '/' and selects no sibling that only starts with its name
+    if is_prefix and not file_path.endswith('/'):
+        file_path = file_path + '/'
+
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+
+    # The key listed at '/' is the top-level asset folder, named as a folder or as a single key: a folder
+    # location itself, or a single-file location's companion folder {key}/
+    if relative_path_in(base_key, full_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot delete the top-level asset folder")
+
+    # In a single-file asset a folder is selected by asset-relative path (a folder named like the
+    # file also holds the companion entry listed inside it)
+    folder = None
+    if is_prefix and not is_folder_location(base_key):
+        folder = relative_path_in(base_key, full_key) or file_path
+        full_key = folder_listing_prefix(base_key, folder)
     
+    # A path a nested asset's location holds is that asset's file, not this asset's; a key another live
+    # asset's location also holds is left alone (destructive lookup)
+    nested = nested_locations_for(asset, bucket, base_key, destructive=True)
+    refuse_nested_key(nested, full_key, "No files found under prefix." if is_prefix else "File not found.")
+
     # Check if path exists (including archived files)
     try:
         if not is_prefix:
@@ -2131,87 +2675,107 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
             has_versions = any(version['Key'] == full_key for version in versions_response.get('Versions', []))
             has_delete_markers = any(marker['Key'] == full_key for marker in versions_response.get('DeleteMarkers', []))
             
-            if not (has_versions or has_delete_markers):
+            # A file whose own delete went through while one of its previews was kept is still
+            # found, so the delete can be run again for those previews
+            if not (has_versions or has_delete_markers) and \
+                    not any(nested.keep(key) for key in _own_preview_files(bucket, base_key, full_key)):
                 raise VAMSGeneralErrorResponse(f"File not found.")
         else:
-            # For prefix, check if at least one object exists
-            response = s3_client.list_objects_v2(
-                Bucket=bucket,
-                Prefix=full_key,
-                MaxKeys=1
-            )
-            if 'Contents' not in response or len(response['Contents']) == 0:
-                # If no current objects, check for archived objects
-                versions_response = s3_client.list_object_versions(
-                    Bucket=bucket,
-                    Prefix=full_key,
-                    MaxKeys=1
-                )
-                
-                has_versions = any(version['Key'].startswith(full_key) for version in versions_response.get('Versions', []))
-                has_delete_markers = any(marker['Key'].startswith(full_key) for marker in versions_response.get('DeleteMarkers', []))
-                
-                if not (has_versions or has_delete_markers):
-                    raise VAMSGeneralErrorResponse(f"No files found under prefix.")
+            # For prefix, check if at least one object exists, then for archived objects
+            if not _prefix_holds_folder_entry(bucket, full_key, base_key, folder, nested=nested) and \
+                    not _prefix_holds_folder_entry(bucket, full_key, base_key, folder, versions=True, nested=nested):
+                raise VAMSGeneralErrorResponse(f"No files found under prefix.")
     except ClientError as e:
         logger.exception(f"Error checking file existence: {e}")
         raise VAMSGeneralErrorResponse(f"Error checking file.")
     
     # Delete file(s)
     affected_files = []
+    # The deleted files' listed paths, for their metadata and version records
+    deleted_paths = []
+    incomplete = None
+    kept_previews = []
     
     if is_prefix:
-        # Delete all files under prefix including all versions
-        deleted_keys = delete_s3_prefix_all_versions(bucket, full_key)
+        # Delete all files under prefix including all versions; a partial delete still clears the
+        # records and auxiliary data of the files it removed, then fails
+        try:
+            deleted_keys = delete_s3_prefix_all_versions(bucket, full_key, location=base_key, folder=folder,
+                                                         nested=nested)
+        except S3PrefixDeleteIncomplete as e:
+            incomplete = e
+            deleted_keys = e.deleted_keys
 
-        # Delete aux files under prefix if they exist
-        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+        # Delete aux files under prefix if they exist; the files that remain, and a nested asset's
+        # files, keep theirs
+        if incomplete is None:
+            folder_aux = aux_bucket_asset_file_base(databaseId, full_key)
+            owner_keep = aux_owner_filter(databaseId, base_key, full_key, folder_aux)
+            folder_files_keep = folder_aux_keep(databaseId, full_key)
+            folder_keep = folder_files_keep if owner_keep is None else (
+                lambda k: owner_keep(k) and folder_files_keep(k))
+            _call_with_keep(delete_assetAuxiliary_files, folder_aux, keep=_keep_aux(folder_keep, nested, databaseId))
+        else:
+            delete_auxiliary_files_of_keys(databaseId, [key for key in deleted_keys if contains(base_key, key)])
         
-        # Convert full keys to relative paths and delete metadata
+        # Convert full keys to relative paths and delete the metadata of non-folder files, by each file's
+        # listed path ('//x' for '{location}/x', #1977)
         for key in deleted_keys:
-            if key.startswith(base_key):
-                relative_path = key[len(base_key):]
-                affected_files.append(relative_path)
-                
-                # Delete metadata for non-folder files
-                if not key.endswith('/'):
-                    delete_file_metadata(databaseId, assetId, relative_path)
+            if contains(base_key, key):
+                deleted_paths.append(_relative_to_location(base_key, key))
+                affected_files.append(deleted_paths[-1].lstrip('/'))
+        delete_files_metadata(databaseId, assetId, deleted_paths)
     else:
         # Check if this is a preview file - don't allow direct operations on preview files
         if is_preview_file(file_path):
             raise VAMSGeneralErrorResponse(f"Cannot directly delete preview files. Delete the base file instead.")
             
-        # For base files, also delete any associated preview files
-        preview_files = find_preview_files_for_base(bucket, full_key)
+        # List the preview files the asset holds for this file before anything is deleted, so a
+        # listing S3 refuses changes nothing
+        try:
+            preview_files = [preview_file for preview_file in _own_preview_files(bucket, base_key, full_key)
+                             if nested.keep(preview_file)]
+        except Exception as e:
+            logger.exception(f"Error listing the preview files of {full_key}: {e}")
+            raise VAMSGeneralErrorResponse(FILE_DELETE_INCOMPLETE_MESSAGE)
+
+        # Delete the main file including all versions; when S3 keeps a version, its previews and
+        # derived data stay with it
+        if not delete_s3_object_all_versions(bucket, full_key):
+            raise VAMSGeneralErrorResponse(FILE_DELETE_INCOMPLETE_MESSAGE)
+
+        # Then its previews; a preview S3 keeps keeps its records, and the request fails below
         for preview_file in preview_files:
             if delete_s3_object_all_versions(bucket, preview_file):
                 # Get relative path for reporting
-                if preview_file.startswith(base_key):
-                    rel_preview_path = '/' + preview_file[len(base_key):]
-                else:
-                    rel_preview_path = '/' + preview_file
+                rel_preview_path = _relative_to_location(base_key, preview_file)
                 
                 affected_files.append(rel_preview_path)
+                deleted_paths.append(rel_preview_path)
                 logger.info(f"Deleted preview file: {rel_preview_path}")
+            else:
+                kept_previews.append(preview_file)
         
-        # Delete the main file including all versions
-        success = delete_s3_object_all_versions(bucket, full_key)
-
-        # Delete aux files if they exist
-        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
-        
-        if not success:
-            raise VAMSGeneralErrorResponse(f"Failed to delete file.")
+        # Delete the file's own viewer data; another file's in a folder named like this file stays
+        aux_prefix, aux_keep = viewer_data_scope(databaseId, full_key)
+        delete_assetAuxiliary_files(aux_prefix, keep=aux_keep)
         
         affected_files.append(file_path)
+        deleted_paths.append(_relative_to_location(base_key, full_key))
         
-        # Delete metadata for the main file (not a folder since we checked earlier)
-        # Extract relative path from file_path (remove leading slash if present)
-        relative_path = file_path.lstrip('/')
-        delete_file_metadata(databaseId, assetId, relative_path)
+        # Delete metadata for the main file (not a folder since we checked earlier), keyed by the
+        # file's listed path whichever form the request named it by
+        delete_file_metadata(databaseId, assetId, _relative_to_location(base_key, full_key))
 
-    # Clean up version snapshot records in DynamoDB for deleted files
-    delete_file_version_records(databaseId, assetId, affected_files)
+    # Clean up version snapshot records in DynamoDB for deleted files, by their listed paths: the request
+    # may name a file by its full key, and '//x' is not '/x'
+    delete_file_version_records(databaseId, assetId, deleted_paths)
+
+    if incomplete is not None:
+        raise VAMSGeneralErrorResponse(PREFIX_DELETE_INCOMPLETE_MESSAGE)
+    if kept_previews:
+        logger.error(f"{len(kept_previews)} preview file(s) of {full_key} kept a version after the file was deleted")
+        raise VAMSGeneralErrorResponse(FILE_PREVIEWS_DELETE_INCOMPLETE_MESSAGE)
 
     # Send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -2241,7 +2805,7 @@ def build_archive_history_record(database_id, asset_id, relative_file_path, vers
         "filePath": relative_file_path,
         "changeSource": VAMS_CHANGE_SOURCE_FILE_ARCHIVE,
         "changeUserId": user_id or "SYSTEM_USER",
-        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "recordCreated": utc_now().isoformat() + "Z",
         "s3LastModified": "",
     }
 
@@ -2281,9 +2845,30 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
     
+    # A prefix names a folder, so it ends in '/' and selects no sibling that only starts with its name
+    if is_prefix and not file_path.endswith('/'):
+        file_path = file_path + '/'
+
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+
+    # The key listed at '/' is the top-level asset folder, named as a folder or as a single key: a folder
+    # location itself, or a single-file location's companion folder {key}/
+    if relative_path_in(base_key, full_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot archive the top-level asset folder")
+
+    # In a single-file asset a folder is selected by asset-relative path (a folder named like the
+    # file also holds the companion entry listed inside it)
+    folder = None
+    if is_prefix and not is_folder_location(base_key):
+        folder = relative_path_in(base_key, full_key) or file_path
+        full_key = folder_listing_prefix(base_key, folder)
     
+    # A path a nested asset's location holds is that asset's file, not this asset's; a key another live
+    # asset's location also holds is left alone (destructive lookup)
+    nested = nested_locations_for(asset, bucket, base_key, destructive=True)
+    refuse_nested_key(nested, full_key, "No files found under prefix." if is_prefix else "File not found.")
+
     # Check if path exists and if it's already archived
     try:
         if not is_prefix:
@@ -2302,12 +2887,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
                 raise e
         else:
             # For prefix, check if at least one object exists
-            response = s3_client.list_objects_v2(
-                Bucket=bucket,
-                Prefix=full_key,
-                MaxKeys=1
-            )
-            if 'Contents' not in response or len(response['Contents']) == 0:
+            if not _prefix_holds_folder_entry(bucket, full_key, base_key, folder, nested=nested):
                 raise VAMSGeneralErrorResponse(f"No files found under prefix.")
     except ClientError as e:
         if _is_missing_object_error(e):
@@ -2322,32 +2902,32 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
 
     if is_prefix:
         # Archive all files under prefix (maps each archived key -> delete-marker VersionId)
-        archived_keys = archive_s3_prefix(bucket, full_key, databaseId, assetId)
+        archived_keys = archive_s3_prefix(bucket, full_key, databaseId, assetId, location=base_key, folder=folder,
+                                          nested=nested)
 
         # Convert full keys to relative paths
         for key, marker_version_id in archived_keys.items():
-            if key.startswith(base_key):
-                relative_path = key[len(base_key):]
-                affected_files.append(relative_path)
+            if contains(base_key, key):
+                listed_path = _relative_to_location(base_key, key)
+                affected_files.append(listed_path.lstrip('/'))
                 # Archive uses a delete marker (no S3 metadata) so sqsBucketSync
                 # cannot derive provenance -- write the history record directly,
-                # keyed to the new delete-marker VersionId. Skip folder markers.
+                # keyed to the new delete-marker VersionId and the file's listed path
+                # ('//x' for '{location}/x', #1977). Skip folder markers.
                 if not key.endswith('/'):
                     write_archive_history(
-                        databaseId, assetId, relative_path, marker_version_id, acting_user
+                        databaseId, assetId, listed_path, marker_version_id, acting_user
                     )
     else:
         # Check if this is a preview file - allow direct archive operations on preview files
         if not is_preview_file(file_path):
-            # For base files, also archive any associated preview files
-            preview_files = find_preview_files_for_base(bucket, full_key)
+            # For base files, also archive any associated preview files the asset holds
+            preview_files = [preview_file for preview_file in find_preview_files_for_base(bucket, full_key)
+                             if contains(base_key, preview_file) and nested.keep(preview_file)]
             for preview_file in preview_files:
                 if delete_s3_object(bucket, preview_file):
                     # Get relative path for reporting
-                    if preview_file.startswith(base_key):
-                        rel_preview_path = '/' + preview_file[len(base_key):]
-                    else:
-                        rel_preview_path = '/' + preview_file
+                    rel_preview_path = _relative_to_location(base_key, preview_file)
                     
                     affected_files.append(rel_preview_path)
                     logger.info(f"Archived preview file: {rel_preview_path}")
@@ -2362,10 +2942,11 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
 
         # Archive uses a delete marker (no S3 metadata) so sqsBucketSync cannot
         # derive provenance -- write the history record directly. Key it to the new
-        # delete-marker VersionId so it matches the version shown in file history.
-        # Use the relative path (no leading slash) to match sqsBucketSync's filePath key form.
+        # delete-marker VersionId so it matches the version shown in file history, and to
+        # the file's listed path, the key sqsBucketSync records it under, whichever form
+        # the request named it by ('//x' for '{location}/x', #1977)
         write_archive_history(
-            databaseId, assetId, file_path.lstrip('/'), delete_marker_version_id, acting_user
+            databaseId, assetId, _relative_to_location(base_key, full_key), delete_marker_version_id, acting_user
         )
 
     # Send email for asset file change
@@ -2399,6 +2980,8 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+    nested = nested_locations_for(asset, bucket, base_key, include_shared=True)
+    refuse_nested_key(nested, full_key, "File not found.", shared_message=SHARED_LOCATION_WRITE_REFUSAL)
     
     # Find the delete marker and the most recent content version to restore.
     # S3 returns versions newest-first per key, so the latest delete marker and
@@ -2473,7 +3056,8 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
         if not is_preview_file(file_path):
             # Find preview files for this base file, including archived ones
             logger.info(f"Looking for preview files (including archived) for base file: {full_key}")
-            preview_files_info = find_preview_files_for_base_including_archived(bucket, full_key)
+            preview_files_info = [info for info in find_preview_files_for_base_including_archived(bucket, full_key)
+                                  if contains(base_key, info['key']) and nested.keep(info['key'])]
             
             logger.info(f"Found {len(preview_files_info)} preview files (including archived)")
             
@@ -2538,10 +3122,7 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                         logger.info(f"Successfully unarchived preview file {preview_file} from version {preview_latest_version['VersionId']}")
                             
                         # Get relative path for reporting
-                        if preview_file.startswith(base_key):
-                            rel_preview_path = '/' + preview_file[len(base_key):]
-                        else:
-                            rel_preview_path = '/' + preview_file
+                        rel_preview_path = _relative_to_location(base_key, preview_file)
                         
                         affected_files.append(rel_preview_path)
                         logger.info(f"Unarchived preview file: {rel_preview_path}")
@@ -2606,6 +3187,12 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         # Validate cross-asset permissions
         if not validate_cross_asset_permissions(source_asset, dest_asset, claims_and_roles):
             raise VAMSAuthorizationDeniedResponse()
+
+        # A copy to another asset takes the file's bytes out of the source asset, so the quarantine
+        # block applies to it as to a download (a no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD
+        # is on). Checked after both assets are authorized, so a refused caller never learns the
+        # source's state. A copy within the asset keeps the bytes where the block still applies.
+        check_quarantine_block(databaseId, assetId, message=QUARANTINE_COPY_BLOCK_MESSAGE)
     else:
         # Same asset, need POST permission
         dest_asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
@@ -2617,6 +3204,19 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     # Use smart path resolution to avoid duplication for both source and destination
     source_key = resolve_asset_file_path(source_base_key, source_path)
     dest_key = resolve_asset_file_path(dest_base_key, dest_path)
+
+    # The key listed at '/' is the destination asset's top-level folder (see delete_file): no file is copied
+    # onto it
+    if relative_path_in(dest_base_key, dest_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot copy a file onto the top-level asset folder")
+    # A key ending in '/' is a folder entry: a file copied there would become one, and its viewer data would land
+    # in another file's viewer-data folder (viewer_data_prefix drops the slashes)
+    if dest_key.endswith('/') and not source_key.endswith('/'):
+        raise VAMSGeneralErrorResponse("Cannot copy a file onto a folder")
+
+    refuse_nested_key(nested_locations_for(source_asset, source_bucket, source_base_key), source_key,
+                      "Source file not found.")
+    refuse_unwritable_key(dest_asset, dest_bucket, dest_base_key, dest_key, NESTED_PATH_REFUSAL)
 
     # The request model bounded destinationPath; the resolved key carries the destination asset's prefix
     # as well and is what S3 measures. Refuse it here, before the source is even looked up, so an
@@ -2672,18 +3272,18 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         source_database_id=databaseId,
         dest_asset_id=dest_asset_id if is_cross_asset else assetId,
         dest_database_id=effective_dest_db,
-        dest_bucket=dest_bucket
+        dest_bucket=dest_bucket,
+        source_location=source_base_key
     )
 
-    # Copy auxiliary files if they exist
-    copy_auxiliary_files(
-        aux_bucket_asset_file_base(databaseId, source_key),
-        aux_bucket_asset_file_base(effective_dest_db, dest_key)
-    )
+    # Copy the file's own viewer data, not another file's in a folder named like it
+    source_aux, source_keep = viewer_data_scope(databaseId, source_key)
+    copy_auxiliary_files(source_aux, viewer_data_prefix(effective_dest_db, dest_key), keep=source_keep)
 
-    # Copy metadata and attributes to the destination (merge with existing)
-    source_rel = source_path.lstrip('/')
-    dest_rel = dest_path.lstrip('/')
+    # Copy metadata and attributes to the destination (merge with existing), keyed by the files'
+    # listed paths whichever form the request named them by
+    source_rel = _relative_to_location(source_base_key, source_key)
+    dest_rel = _relative_to_location(dest_base_key, dest_key)
     actual_dest_asset = dest_asset_id if is_cross_asset else assetId
     metadata_copied = _copy_file_metadata_to_destination(
         databaseId, assetId, source_rel,
@@ -2736,6 +3336,25 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     # Use smart path resolution to avoid duplication
     source_key = resolve_asset_file_path(base_key, source_path)
     dest_key = resolve_asset_file_path(base_key, dest_path)
+
+    # The key listed at '/' is the top-level asset folder (see delete_file): it is not moved, and no file is
+    # moved onto it
+    if relative_path_in(base_key, source_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot move or rename the top-level asset folder")
+    if relative_path_in(base_key, dest_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot move or rename a file onto the top-level asset folder")
+    # A key ending in '/' is a folder entry (see copy_file)
+    if dest_key.endswith('/') and not source_key.endswith('/'):
+        raise VAMSGeneralErrorResponse("Cannot move or rename a file onto a folder")
+
+    # Moving deletes the source, so a source key another live asset also holds is left alone
+    nested = nested_locations_for(asset, bucket, base_key, destructive=True)
+    refuse_nested_key(nested, source_key, "Source file not found.")
+    refuse_nested_key(nested, dest_key, NESTED_PATH_REFUSAL)
+
+    # A single-file asset's own object stays at the key its location names
+    if names_own_object(base_key, source_path):
+        raise VAMSGeneralErrorResponse("The file of a single-file asset cannot be moved or renamed.")
 
     # The request model bounded destinationPath; the resolved key carries the asset prefix as well and
     # is what S3 measures. Refuse it here, before the source is even looked up, so an over-long
@@ -2828,18 +3447,18 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
         bucket=bucket,
         source_key=source_key,
         dest_key=dest_key,
-        base_key=base_key
+        base_key=base_key,
+        source_location=base_key
     )
     
-    # Move auxiliary files if they exist
-    move_auxiliary_files(
-        aux_bucket_asset_file_base(databaseId, source_key),
-        aux_bucket_asset_file_base(databaseId, dest_key)
-    )
+    # Move the file's own viewer data, not another file's in a folder named like it
+    source_aux, source_keep = viewer_data_scope(databaseId, source_key)
+    move_auxiliary_files(source_aux, viewer_data_prefix(databaseId, dest_key), keep=source_keep)
 
-    # Move metadata and attributes: copy to new path (merge), then delete from old path
-    source_rel = source_path.lstrip('/')
-    dest_rel = dest_path.lstrip('/')
+    # Move metadata and attributes: copy to new path (merge), then delete from old path, keyed by the
+    # files' listed paths whichever form the request named them by
+    source_rel = _relative_to_location(base_key, source_key)
+    dest_rel = _relative_to_location(base_key, dest_key)
     metadata_moved = _copy_file_metadata_to_destination(
         databaseId, assetId, source_rel,
         databaseId, assetId, dest_rel
@@ -2881,6 +3500,12 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+
+    # The key listed at '/' is the top-level asset folder (see delete_file)
+    if relative_path_in(base_key, full_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot revert the top-level asset folder")
+
+    refuse_unwritable_key(asset, bucket, base_key, full_key, "File not found.")
     
     # Check if file exists
     try:
@@ -2949,8 +3574,9 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         logger.exception(f"Error reverting file version: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to revert file version.")
 
-    #Delete aux files for asset as they don't match anymore with the version.
-    delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+    # Delete the file's own viewer data, which no longer matches the reverted version
+    aux_prefix, aux_keep = viewer_data_scope(databaseId, full_key)
+    delete_assetAuxiliary_files(aux_prefix, keep=aux_keep)
 
     #send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -2965,7 +3591,8 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         newVersionId=new_version_id
     )
 
-def get_file_info(databaseId: str, assetId: str, file_path: str, include_versions: bool, claims_and_roles: Dict) -> FileInfoResponseModel:
+def get_file_info(databaseId: str, assetId: str, file_path: str, include_versions: bool, claims_and_roles: Dict,
+                  show_archived: bool = False) -> FileInfoResponseModel:
     """Get detailed information about a specific file
     
     Args:
@@ -2974,28 +3601,27 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
         file_path: The relative file path
         include_versions: Whether to include version history
         claims_and_roles: The claims and roles from the request
+        show_archived: Also resolve an archived asset
         
     Returns:
         FileInfoResponseModel with detailed file information
     """
     # Get asset and verify permissions
-    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles,
+                                       include_archived=show_archived)
     
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+    nested = nested_locations_for(asset, bucket, base_key)
+    refuse_nested_key(nested, full_key, "File not found.")
 
-    # Get the relative path for comparison with fileKey in version records.
-    # fileKey is stored as the path relative to the asset prefix (e.g., "model.glb"
-    # or "subfolder/model.glb"), while file_path may include the assetId prefix and
-    # may or may not carry a leading slash. Strip the base_key prefix from the
-    # resolved key to get the same relative path format.
-    relative_path_for_lookup = full_key
-    if base_key and relative_path_for_lookup.startswith(base_key):
-        relative_path_for_lookup = relative_path_for_lookup[len(base_key):]
-    relative_path_for_lookup = relative_path_for_lookup.lstrip('/')
+    # The key version records are compared by (version_entry_key): the file's path in the asset with
+    # exactly one leading '/' dropped, 'x' for '{location}x' and '/x' for '{location}/x' (#1977).
+    listed_path = relative_path_in(base_key, full_key) if base_key else None
+    relative_path_for_lookup = version_entry_key(listed_path if listed_path is not None else full_key)
     
     # Get object metadata
     metadata = get_s3_object_metadata(bucket, full_key, include_versions)
@@ -3039,7 +3665,8 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
             # Change-history records for this asset, keyed by (filePath, versionId),
             # for in-memory per-version lookup. filePath uses a leading slash.
             history_map = query_asset_version_history_map(databaseId, assetId)
-            history_path_key = normalize_history_file_path(relative_path_for_lookup)
+            # The history ledger keys a file by its listed path ('//x' for '{location}/x')
+            history_path_key = '/' + relative_path_for_lookup
 
             # Query the GSI to get all version file records for this database+asset
             all_version_file_records = []
@@ -3079,15 +3706,17 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
             version_id_to_asset_versions = {}
             pk_prefix = f"{databaseId}:{assetId}:"
 
+            # One record per asset version: a version created before #1795 can hold this file both
+            # with and without the leading slash (D1), and the row without it wins, as in the
+            # current-version check above.
+            record_by_asset_version = {}
             for record in all_version_file_records:
-                record_file_key = record.get('fileKey', '')
+                # Compared by version_entry_key: a legacy '/x' is this file's, '//x' another file's
+                stored_file_key = str(record.get('fileKey') or '')
+                record_file_key = version_entry_key(stored_file_key)
 
                 # Only include records that match this file's relative path
                 if record_file_key != relative_path_for_lookup:
-                    continue
-
-                s3_version_id = record.get('versionId')
-                if not s3_version_id:
                     continue
 
                 # Extract assetVersionId from the PK field: "databaseId:assetId:assetVersionId"
@@ -3099,6 +3728,15 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
 
                 # Skip archived asset versions
                 if asset_version_id in archived_version_ids:
+                    continue
+
+                if (asset_version_id not in record_by_asset_version
+                        or stored_file_key == stored_version_entry_key(stored_file_key)):
+                    record_by_asset_version[asset_version_id] = record
+
+            for asset_version_id, record in record_by_asset_version.items():
+                s3_version_id = record.get('versionId')
+                if not s3_version_id:
                     continue
 
                 if s3_version_id not in version_id_to_asset_versions:
@@ -3136,18 +3774,14 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
 
     # Add preview file information if this is not a preview file itself
     if not is_preview_file(file_path) and not metadata.get('isFolder', False):
-        # Find preview files for this base file
-        preview_files = find_preview_files_for_base(bucket, full_key)
-        
-        # Get the top preview file with allowed extension
-        top_preview_file = get_top_preview_file(preview_files)
+        # The newest preview file with an allowed extension, when the asset holds it
+        top_preview_file = find_newest_preview_file_for_base(bucket, full_key)
+        if top_preview_file and not (contains(base_key, top_preview_file) and nested.keep(top_preview_file)):
+            top_preview_file = None
         
         if top_preview_file:
             # Add relative path to the preview file
-            if top_preview_file.startswith(base_key):
-                relative_preview_path = '/' + top_preview_file[len(base_key):]
-            else:
-                relative_preview_path = '/' + top_preview_file
+            relative_preview_path = _relative_to_location(base_key, top_preview_file)
             
             metadata['previewFile'] = relative_preview_path
         else:
@@ -3157,7 +3791,9 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
         metadata['previewFile'] = ""
     
     # The path relative to the asset's base key, whatever that base key is
-    metadata['relativePath'] = '/' + relative_path_for_lookup
+    # The file's path in the asset (relative_path_in), which names this key again: a key with an empty
+    # segment right after the location ('{location}/x') is '//x', never the '/x' of another file (#1943)
+    metadata['relativePath'] = relative_path_in(base_key, full_key) or '/' + relative_path_for_lookup
     
     # Return response model
     return FileInfoResponseModel(**metadata)
@@ -3177,6 +3813,7 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
 
     # Normalize the path by combining asset base key with the relative folder path
     normalized_key_path = resolve_asset_file_path(asset_base_key, request_model.relativeKey)
+    refuse_unwritable_key(asset, asset_bucket, asset_base_key, normalized_key_path, NESTED_PATH_REFUSAL)
 
     # The request model bounded relativeKey; the resolved key carries the asset prefix as well and is
     # what S3 measures. Refuse it here, before put_object, so an over-long folder key is a plain 400
@@ -3192,7 +3829,10 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
             Body='',
             # Grant the bucket owner full control so a folder marker written into a
             # cross-account asset bucket is owned/readable by that account.
-            ACL='bucket-owner-full-control'
+            ACL='bucket-owner-full-control',
+            # The asset metadata the bucket-sync handler checks, so it does not stamp the
+            # marker by copying it onto itself.
+            Metadata=folder_marker_metadata(databaseId, assetId),
         )
 
         logger.info(f"Created folder {normalized_key_path} in bucket {asset_bucket}")
@@ -3231,6 +3871,7 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+    refuse_unwritable_key(asset, bucket, base_key, full_key, "File not found")
     
     # Check if file exists and is not archived
     try:
@@ -3310,10 +3951,18 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
         logger.exception(f"Error setting primary type metadata: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to set primary type metadata.")
 
-def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_and_roles: Dict) -> ListAssetFilesResponseModel:
-    """List files for an asset, optionally filtered by asset version"""
+def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_and_roles: Dict,
+                     show_archived: bool = False) -> ListAssetFilesResponseModel:
+    """List files for an asset, optionally filtered by asset version.
+
+    With show_archived an archived asset is listed too. Archiving puts a delete marker on every
+    file, so an archived asset's listing always includes archived files; a live asset's listing is
+    unchanged by the flag.
+    """
     # Get asset and verify permissions
-    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles,
+                                       include_archived=show_archived)
+    asset_is_archived = asset.get('status') == 'archived'
 
     # Get asset location
     bucket, key = get_asset_s3_location(asset)
@@ -3331,7 +3980,7 @@ def list_asset_files(databaseId: str, assetId: str, query_params: Dict, claims_a
         pageSize=page_size,
         startingToken=query_params.get('startingToken'),
         prefix=query_params.get('prefix'),
-        includeArchived=query_params.get('includeArchived', 'false').lower() == 'true',
+        includeArchived=asset_is_archived or query_params.get('includeArchived', 'false').lower() == 'true',
         basic=basic_mode,
         assetVersionId=asset_version_id
     )
@@ -3358,13 +4007,15 @@ def list_asset_files_current(databaseId: str, assetId: str, asset: Dict,
         'prefix': request_model.prefix
     }
 
-    # List files with archive status, passing basic_mode flag
+    # List files with archive status, passing basic_mode flag. The files of an asset nested in this
+    # asset's location are that asset's and are not listed.
     result = list_s3_objects_with_archive_status(
         bucket,
         key,
         resolved_query_params,
         request_model.includeArchived,
-        basic_mode=request_model.basic
+        basic_mode=request_model.basic,
+        nested=nested_locations_for(asset, bucket, key)
     )
 
     # Convert to response model
@@ -3395,8 +4046,14 @@ def list_asset_files_current(databaseId: str, assetId: str, asset: Dict,
                 # Store in lookup dictionary for preview file matching
                 base_files[item['key']] = len(file_items) - 1
 
-        # Process preview files
+        # The page's first and last keys from the S3 listing (archived entries are not part of it)
+        listed_keys = [item['key'] for item in result.get('items', []) if not item.get('isArchived')]
+        first_listed_key = min(listed_keys) if listed_keys else None
+        last_listed_key = max(listed_keys) if listed_keys else None
+
+        # Process preview files: collect each base file's candidates, then attach the newest
         orphaned_preview_files = []
+        preview_candidates = {}  # base file index -> [(key, lastModified, isArchived)]
 
         for preview_item in preview_files:
             # Get the base file key for this preview file
@@ -3404,23 +4061,40 @@ def list_asset_files_current(databaseId: str, assetId: str, asset: Dict,
 
             # Check if the base file exists
             if base_key in base_files:
-                # Base file exists, add this preview file to it if it has an allowed extension
-                if is_allowed_preview_extension(preview_item['key']):
-                    base_file_index = base_files[base_key]
-
-                    # Only add if the base file doesn't already have a preview file
-                    if not hasattr(file_items[base_file_index], 'previewFile') or not file_items[base_file_index].previewFile:
-                        # Add relative path to the preview file
-                        if preview_item['key'].startswith(key):
-                            relative_preview_path = '/' + preview_item['key'][len(key):]
-                        else:
-                            relative_preview_path = '/' + preview_item['key']
-
-                        # Add preview file to base file
-                        file_items[base_file_index].previewFile = relative_preview_path
+                preview_candidates.setdefault(base_files[base_key], []).append((
+                    preview_item['key'],
+                    preview_item.get('dateCreatedCurrentVersion'),
+                    bool(preview_item.get('isArchived')),
+                ))
+            elif request_model.startingToken and first_listed_key is not None and base_key < first_listed_key:
+                # The base file sorts before this page, so it was listed on an earlier page
+                continue
             else:
                 # Base file doesn't exist, this is an orphaned preview file
                 orphaned_preview_files.append(preview_item['key'])
+
+        def _relative_preview_path(preview_key):
+            return _relative_to_location(key, preview_key)
+
+        for base_file_index, candidates in preview_candidates.items():
+            newest_preview = select_newest_preview_file(candidates)
+            if newest_preview:
+                # Add relative path to the preview file
+                file_items[base_file_index].previewFile = _relative_preview_path(newest_preview)
+
+        # '<file>.previewFile.<ext>' sorts after '<file>', so a file near the end of a page that is
+        # followed by another page can have its previews on that next page. Each such file still
+        # without a preview is looked up by its own preview prefix.
+        if result.get('NextToken') and last_listed_key is not None:
+            for base_file_key, base_file_index in base_files.items():
+                base_item = file_items[base_file_index]
+                if base_file_index in preview_candidates or base_item.isFolder or base_item.isArchived:
+                    continue
+                if base_file_key + PREVIEW_FILE_PATTERN <= last_listed_key:
+                    continue
+                newest_preview = find_newest_preview_file_for_base(bucket, base_file_key)
+                if newest_preview:
+                    base_item.previewFile = _relative_preview_path(newest_preview)
 
         # Log orphaned preview files
         if orphaned_preview_files:
@@ -3499,28 +4173,28 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
         logger.info(f"No files found in version {asset_version_id}")
         return ListAssetFilesResponseModel(items=[], NextToken=None)
 
-    versioned_files = asset_file_versions.get('files', [])
+    # A snapshot taken before nested assets were left out can name a nested asset's files; they are not listed
+    nested = nested_locations_for(asset, bucket, key)
+    versioned_files = [file_info for file_info in asset_file_versions.get('files', [])
+                       if not nested or nested.keep(object_key_for_path(key, file_info.get('relativeKey', '')) or '')]
     logger.info(f"Found {len(versioned_files)} files in version snapshot")
 
     if request_model.basic:
         # BASIC MODE: Construct file list directly from DynamoDB snapshot - NO S3 calls
         # First pass: separate base files from preview files
         base_file_items = []
-        preview_file_map = {}  # base_relative_key -> preview relative path
+        preview_candidates = {}  # base_relative_key -> [(preview relative key, lastModified, False)]
 
         for file_info in versioned_files:
             relative_key = file_info.get('relativeKey', '')
-            full_file_key = key + relative_key.lstrip('/')
+            full_file_key = object_key_for_path(key, relative_key)
 
             # Skip preview files — group them under their base file
             if is_preview_file(full_file_key):
                 base_file_key = get_base_file_for_preview(full_file_key)
-                if base_file_key.startswith(key):
-                    base_relative = base_file_key[len(key):].lstrip('/')
-                else:
-                    base_relative = base_file_key
-                if is_allowed_preview_extension(full_file_key):
-                    preview_file_map[base_relative] = '/' + relative_key.lstrip('/')
+                base_relative = _relative_to_location(key, base_file_key).lstrip('/')
+                preview_candidates.setdefault(base_relative, []).append(
+                    (relative_key.lstrip('/'), file_info.get('lastModified'), False))
                 continue
 
             file_name = relative_key.rsplit('/', 1)[-1] if '/' in relative_key else relative_key
@@ -3543,11 +4217,12 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
             }
             base_file_items.append(AssetFileItemModel(**item))
 
-        # Second pass: attach preview files to their base files
+        # Second pass: attach each base file's newest preview file
         for file_item in base_file_items:
-            item_relative_key = file_item.key[len(key):].lstrip('/') if file_item.key.startswith(key) else file_item.key
-            if item_relative_key in preview_file_map:
-                file_item.previewFile = preview_file_map[item_relative_key]
+            item_relative_key = _relative_to_location(key, file_item.key).lstrip('/')
+            newest_preview = select_newest_preview_file(preview_candidates.get(item_relative_key, []))
+            if newest_preview:
+                file_item.previewFile = '/' + newest_preview
 
         return ListAssetFilesResponseModel(items=base_file_items, NextToken=None)
 
@@ -3578,7 +4253,8 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
             s3_result = list_s3_objects_with_archive_status(
                 bucket, key, resolved_query_params,
                 include_archived=True,
-                basic_mode=False
+                basic_mode=False,
+                nested=nested
             )
 
             all_s3_items.extend(s3_result.get('items', []))
@@ -3595,10 +4271,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
 
         for s3_item in all_s3_items:
             # Extract relative key from full S3 key
-            if s3_item['key'].startswith(key):
-                relative_key = s3_item['key'][len(key):].lstrip('/')
-            else:
-                relative_key = s3_item['key']
+            relative_key = _relative_to_location(key, s3_item['key']).lstrip('/')
 
             # Skip all preview files — they'll be grouped from the version snapshot below
             if is_preview_file(s3_item['key']):
@@ -3635,7 +4308,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
 
             def _check_permanently_deleted(relative_key_to_check: str) -> Tuple[str, bool]:
                 """Check if a single file has been permanently deleted from S3."""
-                full_key = key + relative_key_to_check.lstrip('/')
+                full_key = object_key_for_path(key, relative_key_to_check)
                 try:
                     versions_response = s3_client.list_object_versions(
                         Bucket=bucket,
@@ -3666,7 +4339,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                         version_info = versioned_file_lookup[relative_key]
                         file_name = relative_key.rsplit('/', 1)[-1] if '/' in relative_key else relative_key
                         relative_path = '/' + relative_key.lstrip('/')
-                        full_s3_key = key + relative_key.lstrip('/')
+                        full_s3_key = object_key_for_path(key, relative_key)
 
                         item = {
                             'fileName': file_name,
@@ -3687,16 +4360,20 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                         file_items.append(AssetFileItemModel(**item))
                         logger.info(f"File permanently deleted from S3: {relative_key}")
 
-        # Group preview files from the version snapshot under their base files
+        # Group preview files from the version snapshot under their base files and attach the newest
         # Only preview files that are part of this version snapshot are considered
-        for relative_key in versioned_file_lookup:
-            full_file_key = key + relative_key.lstrip('/')
-            if is_preview_file(full_file_key) and is_allowed_preview_extension(full_file_key):
+        version_preview_candidates = {}  # base file index -> [(preview relative key, lastModified, False)]
+        for relative_key, version_info in versioned_file_lookup.items():
+            full_file_key = object_key_for_path(key, relative_key)
+            if is_preview_file(full_file_key):
                 base_key_for_preview = get_base_file_for_preview(full_file_key)
                 if base_key_for_preview in base_files:
-                    base_file_index = base_files[base_key_for_preview]
-                    if not hasattr(file_items[base_file_index], 'previewFile') or not file_items[base_file_index].previewFile:
-                        file_items[base_file_index].previewFile = '/' + relative_key.lstrip('/')
+                    version_preview_candidates.setdefault(base_files[base_key_for_preview], []).append(
+                        (relative_key.lstrip('/'), version_info.get('lastModified'), False))
+        for base_file_index, candidates in version_preview_candidates.items():
+            newest_preview = select_newest_preview_file(candidates)
+            if newest_preview:
+                file_items[base_file_index].previewFile = '/' + newest_preview
 
         # Initialize previewFile field for files that don't have one
         for file_item in file_items:
@@ -3705,6 +4382,15 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
 
         logger.info(f"Returning {len(file_items)} files in detailed mode from version {asset_version_id}")
         return ListAssetFilesResponseModel(items=file_items, NextToken=None)
+
+
+def _log_per_file(event, action, path_params, response, requested_path, **kwargs):
+    """One record per file the operation acted on (a folder operation lists each), all in the request's
+    flush; the requested path when the response names none."""
+    for file_path in (getattr(response, "affectedFiles", None) or [requested_path]):
+        log_action(event, action, database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=file_path, **kwargs)
+
 
 def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
     """Handle DELETE /deleteFile requests
@@ -3784,6 +4470,9 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        _log_per_file(event, "fileDelete", path_params, response, request_model.filePath,
+                      changes={"isPrefix": request_model.isPrefix,
+                               "confirmPermanentDelete": request_model.confirmPermanentDelete})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -3873,6 +4562,7 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        _log_per_file(event, "fileUnarchive", path_params, response, request_model.filePath)
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -3963,6 +4653,8 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        _log_per_file(event, "fileArchive", path_params, response, request_model.filePath,
+                      changes={"isPrefix": request_model.isPrefix})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4055,6 +4747,12 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "fileCopy", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=request_model.sourcePath,
+                   targetFilePath=request_model.destinationPath,
+                   targetAssetId=request_model.destinationAssetId or path_params['assetId'],
+                   targetDatabaseId=request_model.destinationDatabaseId or path_params['databaseId'],
+                   file_count=len(getattr(response, "affectedFiles", None) or []) or None)
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4062,6 +4760,8 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSAuthorizationDeniedResponse:
         return authorization_error(event=event)
+    except QuarantineBlockedResponse as refusal:
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4145,6 +4845,10 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "fileMove", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=request_model.sourcePath,
+                   targetFilePath=request_model.destinationPath,
+                   file_count=len(getattr(response, "affectedFiles", None) or []) or None)
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4239,6 +4943,10 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
                 filePath=query_params['filePath'],
                 includeVersions=query_params.get('includeVersions', 'false').lower() == 'true'
             )
+
+        show_archived = parse_show_archived(query_params)
+        if show_archived is None:
+            return validation_error(body={'message': SHOW_ARCHIVED_INVALID_MESSAGE}, event=event)
         
         # Process request
         response = get_file_info(
@@ -4246,9 +4954,15 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
             path_params['assetId'],
             request_model.filePath,
             request_model.includeVersions,
-            claims_and_roles
+            claims_and_roles,
+            show_archived=show_archived
         )
         
+        # The record names the path the file is listed at (the response's relativePath), whichever form
+        # the request used, as the file metadata routes do
+        log_action(event, "fileInfoGet", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=response.relativePath,
+                   request_parameters={"includeVersions": request_model.includeVersions, "showArchived": show_archived})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4348,6 +5062,11 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "fileVersionRevert", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=request_model.filePath,
+                   versionId=path_params['versionId'],
+                   changes={"versionId": response.newVersionId},
+                   previous={"versionId": response.revertedFromVersionId})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4437,6 +5156,8 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "folderCreate", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=request_model.relativeKey)
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4471,7 +5192,17 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
-    aux_prefix = aux_bucket_asset_file_base(databaseId, full_key)
+    nested = nested_locations_for(asset, bucket, base_key)
+    refuse_nested_key(nested, full_key, "File not found.")
+    if full_key.endswith('/'):
+        # A folder: the data of every file in it, except a nested asset's and the file named like the folder's
+        aux_prefix, owner_keep = aux_scope(databaseId, base_key, full_key)
+        folder_files_keep = folder_aux_keep(databaseId, full_key)
+        aux_keep = folder_files_keep if owner_keep is None else (lambda k: owner_keep(k) and folder_files_keep(k))
+        aux_keep = _keep_aux(aux_keep, nested, databaseId)
+    else:
+        # A file: its own viewer data, not another file's in a folder named like it
+        aux_prefix, aux_keep = viewer_data_scope(databaseId, full_key)
 
     # Check if auxiliary files exist under the prefix
     file_count = 0
@@ -4482,15 +5213,16 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
         paginator = s3_client.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=aux_prefix):
             if 'Contents' in page:
-                file_count += len(page['Contents'])
                 for item in page['Contents']:
-                    deleted_files.append(item['Key'])
+                    if aux_keep is None or aux_keep(item['Key']):
+                        file_count += 1
+                        deleted_files.append(item['Key'])
 
         if file_count == 0:
             raise VAMSGeneralErrorResponse(f"No auxiliary files found under prefix")
 
         # Delete the auxiliary files
-        delete_assetAuxiliary_files(aux_prefix)
+        _call_with_keep(delete_assetAuxiliary_files, aux_prefix, keep=aux_keep)
         
         # Send email notification for asset change
         send_subscription_email(databaseId, assetId)
@@ -4539,8 +5271,8 @@ def delete_asset_preview(databaseId: str, assetId: str, claims_and_roles: Dict) 
         # Clear the previewLocation from the asset record
         asset.pop('previewLocation', None)
         
-        # Update the asset record in DynamoDB
-        asset_table.put_item(Item=asset)
+        # Update the asset record in DynamoDB (the whole row: it keeps or gains the location index attributes)
+        asset_table.put_item(Item=fill_location_attributes(asset, bucket))
         
         # Send email notification for asset change
         send_subscription_email(databaseId, assetId)
@@ -4607,6 +5339,7 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "assetPreviewDelete", database_id=path_params['databaseId'], asset_id=path_params['assetId'])
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4696,6 +5429,8 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
             claims_and_roles
         )
         
+        log_action(event, "auxiliaryPreviewDelete", database_id=path_params['databaseId'],
+                   asset_id=path_params['assetId'], file_path=request_model.filePath)
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4787,6 +5522,10 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "filePrimarySet", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   file_path=request_model.filePath,
+                   changes={"primaryType": request_model.primaryType,
+                            "primaryTypeOther": request_model.primaryTypeOther})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4850,6 +5589,10 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
         # Get query parameters
         query_params = event.get('queryStringParameters', {}) or {}
 
+        show_archived = parse_show_archived(query_params)
+        if show_archived is None:
+            return validation_error(body={'message': SHOW_ARCHIVED_INVALID_MESSAGE}, event=event)
+
         # Parse basic flag first to determine defaults
         basic_mode = query_params.get('basic', 'false').lower() == 'true'
 
@@ -4874,9 +5617,13 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
             path_params['databaseId'],
             path_params['assetId'],
             query_params,
-            claims_and_roles
+            claims_and_roles,
+            show_archived=show_archived
         )
         
+        log_action(event, "fileList", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   item_count=len(response.items),
+                   request_parameters={**query_params, "showArchived": show_archived})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -4897,6 +5644,8 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset file operations
 
@@ -4907,6 +5656,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     Returns:
         APIGatewayProxyResponseV2 with the response
     """
+    record_invocation_context(context)
     normalize_event(event)
     try:
         # Get API path and method

@@ -20,6 +20,8 @@ import { useNavigate, useParams } from "react-router";
 import { AssetVersionContext, AssetVersion, FileVersion } from "../AssetVersionManager";
 import { fetchAssetVersion, unarchiveAssetVersion } from "../../../../services/AssetVersionService";
 import Synonyms from "../../../../synonyms";
+import { useAssetArchived } from "../../../../context/ArchivedAssetContext";
+import { versionFilePath } from "../versionFilePath";
 
 interface AssetVersionListProps {
     onRevertVersion: (version: AssetVersion) => void;
@@ -36,6 +38,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
 }) => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
     const navigate = useNavigate();
+    const assetArchived = useAssetArchived();
 
     // State for unarchive loading
     const [unarchiveLoading, setUnarchiveLoading] = useState<string | null>(null);
@@ -78,6 +81,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         setPageSize,
         setSelectedVersion,
         refreshVersions,
+        onVersionsChanged,
         compareMode,
         versionToCompare,
         // New properties for enhanced functionality
@@ -211,7 +215,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                         name: fileName,
                         displayName: fileName,
                         relativePath: file.relativeKey,
-                        keyPrefix: file.relativeKey,
+                        keyPrefix: versionFilePath(file.relativeKey),
                         level: 1,
                         expanded: false,
                         subTree: [],
@@ -286,6 +290,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
 
             if (success) {
                 refreshVersions();
+                onVersionsChanged?.();
             } else {
                 console.log("Failed to unarchive version:", response);
             }
@@ -304,6 +309,12 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
             cell: (item: AssetVersion) => {
                 const isSelected = isVersionSelectedForComparison(item);
                 const selectionIndex = getComparisonSelectionIndex(item);
+                // Each button's name starts with its visible text (WCAG 2.5.3 Label in Name, #1592).
+                const selectText = isSelected
+                    ? selectionIndex > -1
+                        ? `Selected (${selectionIndex + 1})`
+                        : "Selected"
+                    : "Select for Comparison";
 
                 return (
                     <SpaceBetween direction="horizontal" size="xs">
@@ -331,15 +342,11 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                             iconName={isSelected ? "check" : "add-plus"}
                             ariaLabel={
                                 isSelected
-                                    ? `Remove version ${item.Version} from comparison`
-                                    : `Add version ${item.Version} to comparison`
+                                    ? `${selectText}: remove version ${item.Version} from comparison`
+                                    : `${selectText}: version ${item.Version}`
                             }
                         >
-                            {isSelected
-                                ? selectionIndex > -1
-                                    ? `Selected (${selectionIndex + 1})`
-                                    : "Selected"
-                                : "Select for Comparison"}
+                            {selectText}
                         </Button>
                         <Button
                             variant="normal"
@@ -353,7 +360,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                                 handleVersionSelectionForComparison(item, true);
                             }}
                             iconName="copy"
-                            ariaLabel={`Compare version ${item.Version} with current files`}
+                            ariaLabel={`Compare with Current: version ${item.Version}`}
                         >
                             Compare with Current
                         </Button>
@@ -432,6 +439,13 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         {
             id: "actions",
             header: "Actions",
+            // Four labelled buttons sit in this cell, and without a minimum the column only gets
+            // the width the other columns leave - about 110px at 1440px with the navigation open,
+            // which breaks the labels inside their words and makes every row several hundred
+            // pixels tall. This value keeps every label on one line; it is not wide enough for
+            // the widest row (Edit, Download, Revert, Archive), which needs about 457px before
+            // the cell padding, so that set wraps onto two rows of whole buttons instead.
+            minWidth: 420,
             cell: (item: AssetVersion) => (
                 <SpaceBetween direction="horizontal" size="xs">
                     <Button
@@ -482,6 +496,11 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
             ),
         },
     ];
+    // An archived asset's versions are listed without their comparison and action columns: each
+    // action either writes or reads the files, which need the asset unarchived
+    const tableColumns = assetArchived
+        ? columns.filter((column) => column.id !== "compare" && column.id !== "actions")
+        : columns;
 
     // Handle selection
     const handleSelectionChange = (selectedItems: AssetVersion[]) => {
@@ -515,11 +534,19 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
         <>
             <Table
                 trackBy="Version"
-                columnDefinitions={columns}
+                columnDefinitions={tableColumns}
                 items={versions}
                 loading={loading}
                 loadingText="Loading asset versions"
                 selectionType="single"
+                // The selection column's header and each row's radio name what they select (#1613):
+                // without them the header cell is empty and each radio has no name.
+                ariaLabels={{
+                    selectionGroupLabel: "Version selection",
+                    allItemsSelectionLabel: () => "Select all versions",
+                    itemSelectionLabel: (_selection, item) =>
+                        `Select version ${formatVersionDisplay(item)}`,
+                }}
                 selectedItems={selectedVersion ? [selectedVersion] : []}
                 sortingColumn={sortingColumn}
                 sortingDescending={sortingColumn.isDescending}

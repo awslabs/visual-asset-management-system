@@ -1,0 +1,34 @@
+[project]
+name = "system-genai-media-image"
+version = "0.1.0"
+description = "SYSTEM GenAI media extraction image"
+requires-python = ">=3.12,<3.13"
+# Direct dependencies of the MEDIA branch Lambda image. boto3/botocore match the backend layer pin; pip
+# installs into /var/lang/lib/python3.12/site-packages, the same directory that carries the base image's
+# boto3, so these pins replace it in place.
+dependencies = [
+    "aws-lambda-powertools==3.2.0",
+    "boto3==1.43.89",
+    "botocore==1.43.89",
+    "charset-normalizer==3.5.1",
+    "defusedxml==0.7.1",
+    "imageio-ffmpeg==0.6.0",
+    "numpy==2.5.5",
+    "openpyxl==3.1.5",
+    "Pillow==13.0.0",
+    "pyproj==3.8.0",
+    "pypdfium2==5.13.0",
+    "python-docx==1.2.0",
+    "python-pptx==1.0.2",
+    "tifffile==2026.11.16",
+    "tinytag==2.3.2",
+]
+
+# The image installs the committed, hashed requirements.txt with pip, which is exported from uv.lock;
+# uv is a development and CI tool only and is not part of the image.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"
+# Linux for the image; macOS so a developer machine can install the set to run the tests.
+environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'"]

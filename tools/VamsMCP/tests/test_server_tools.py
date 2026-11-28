@@ -4,6 +4,9 @@ Tools reference the module-global CLIENT, so we patch it with a MagicMock.
 No live VAMS deployment or vamscli profile is required.
 """
 
+import dataclasses
+import json
+import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -40,6 +43,36 @@ def test_list_databases_uses_pagination(mock_client):
     assert mock_client.paginate.called
 
 
+def test_list_buckets_passes_the_acceleration_flag_through(real_paginate_client):
+    """Each row reaches the agent as the API sent it, `isAccelerated` included, and the tool
+    description names the field."""
+    rows = [
+        {"bucketId": "b1", "bucketName": "n1", "bucketRegion": "us-west-2", "isAccelerated": True},
+        {"bucketId": "b2", "bucketName": "n2", "isAccelerated": False},
+        {"bucketId": "b3", "bucketName": "n3"},
+    ]
+    real_paginate_client.api.list_buckets.return_value = {"message": {"Items": rows}}
+    result = server.list_buckets()
+    assert [r.get("isAccelerated") for r in result["Items"]] == [True, False, None]
+    assert result["Items"][0]["bucketRegion"] == "us-west-2"
+    # The agent reads the field name from the description; the wording around it is free.
+    assert re.search(r"\bisAccelerated\b", server.list_buckets.__doc__ or ""), (
+        "list_buckets description must name isAccelerated"
+    )
+
+
+def test_list_buckets_passes_the_source_and_status_through(real_paginate_client):
+    """`source` and `status` (#1978) reach the agent as the API sent them, and the description names
+    both."""
+    rows = [{"bucketId": "b1", "bucketName": "n1", "source": "static", "status": "active"},
+            {"bucketId": "b2", "bucketName": "n2", "source": "runtime", "status": "pending"}]
+    real_paginate_client.api.list_buckets.return_value = {"message": {"Items": rows}}
+    result = server.list_buckets()
+    assert [(r["source"], r["status"]) for r in result["Items"]] == [("static", "active"), ("runtime", "pending")]
+    for field in ("source", "status"):
+        assert re.search(rf"\b{field}\b", server.list_buckets.__doc__ or ""), field
+
+
 def test_get_asset_calls_api(mock_client):
     mock_client.api.get_asset.return_value = {"assetId": "a1"}
     result = server.get_asset("db1", "a1")
@@ -52,6 +85,50 @@ def test_tool_result_wraps_errors(mock_client):
     result = server.get_database("missing")
     assert result["error"] == "boom"
     assert result["error_type"] == "RuntimeError"
+
+
+def test_tool_result_carries_what_a_blocked_request_names(mock_client):
+    """A request the deployment's AWS WAF web ACL blocked reaches the agent with the keys the CLI's
+    --json-output gives it, so the agent can tell a block from a permission denial and report the
+    request ID rather than retry."""
+    from vamscli.utils.exceptions import RequestBlockedError
+
+    mock_client.api.get_database.side_effect = RequestBlockedError("m", request_id="r-1")
+    assert server.get_database("db1") == {
+        "error": "m", "error_type": "RequestBlockedError", "blockedBy": "waf", "requestId": "r-1"}
+
+
+def test_tool_result_carries_an_unconfirmed_block_without_a_request_id(mock_client):
+    """A bare API Gateway "Forbidden" is a block or a base URL that names no stage, and says so."""
+    from vamscli.utils.exceptions import RequestBlockedError
+
+    mock_client.api.get_database.side_effect = RequestBlockedError("m", confirmed=False)
+    assert server.get_database("db1") == {
+        "error": "m", "error_type": "RequestBlockedError", "blockedBy": "waf-or-stage"}
+
+
+def test_tool_result_never_lets_json_fields_replace_the_error_or_its_type():
+    class Colliding(Exception):
+        json_fields = {"error": "replaced", "error_type": "Replaced", "extra": 1}
+
+    @server.tool_result
+    def tool():
+        raise Colliding("kept")
+
+    assert tool() == {"error": "kept", "error_type": "Colliding", "extra": 1}
+
+
+def test_tool_result_returns_an_error_whose_json_fields_are_not_a_mapping():
+    """The wrapper must never raise: a json_fields that is not a mapping is left out, not read."""
+
+    class Odd(Exception):
+        json_fields = ["blockedBy"]
+
+    @server.tool_result
+    def tool():
+        raise Odd("kept")
+
+    assert tool() == {"error": "kept", "error_type": "Odd"}
 
 
 def test_search_assets_builds_request(mock_client):
@@ -75,6 +152,97 @@ def test_search_files_entity_type(mock_client):
     server.search_files(query="texture")
     request = mock_client.api.search_query.call_args.args[0]
     assert request["entityTypes"] == ["file"]
+
+
+# --- Natural-language search: every narrowing parameter reaches the API ------
+
+_NLP_RAW = {"hits": {"total": {"value": 3, "relation": "gte"}, "hits": []},
+            "nlp": {"truncated": True, "classIntent": ["document"]},
+            "warnings": [{"code": "truncated:window"}]}
+
+
+def test_search_nlp_forwards_every_parameter_and_reattaches_the_bounds(mock_client):
+    mock_client.api.search_nlp.return_value = _NLP_RAW
+    mock_client.trim_search_results.return_value = {"total": 3, "returned": 0, "results": []}
+    geo = {"point": {"lat": 47.6, "lon": -122.3, "radiusMeters": 500}}
+
+    out = server.search_nlp(query="rusty pipe", database_ids=["db1", "GLOBAL"], entity_type="asset",
+                            size=7, include_archived=True, file_classes=["document"],
+                            file_extensions=[".PDF", "docx"], metadata_query="product:Training",
+                            geo_search=geo, tags=["training", "safety"], include_segments=False)
+
+    request = mock_client.api.search_nlp.call_args.args[0]
+    assert request == {"query": "rusty pipe", "entityTypes": ["asset"], "size": 7,
+                       "includeArchived": True, "databaseIds": ["db1"], "fileClasses": ["document"],
+                       "fileExtensions": ["pdf", "docx"],
+                       "metadataQuery": "product:Training", "metadataSearchMode": "both",
+                       "geoSearch": geo, "tags": ["training", "safety"],
+                       "includeSegments": False}
+    mock_client.trim_search_results.assert_called_once_with(_NLP_RAW, max_hits=7)
+    assert out["relation"] == "gte"
+    assert out["nlp"] == {"truncated": True, "classIntent": ["document"]}
+    assert out["warnings"] == [{"code": "truncated:window"}]
+    mock_client.api.search_query.assert_not_called()
+
+
+def test_search_nlp_reports_a_non_window_answer_as_a_lower_bound(mock_client):
+    """The route reports every non-zero total as `gte` (approximate nearest-neighbour matching),
+    whether or not a window filled; the tool hands the agent the lower bound in all three fields."""
+    raw = {"hits": {"total": {"value": 2, "relation": "gte"},
+                    "hits": [{"_id": "db1#a1#/x.glb#v1", "_score": 0.9, "_source": {"str_key": "/x.glb"}},
+                             {"_id": "db1#a2#/y.glb#v1", "_score": 0.8, "_source": {"str_key": "/y.glb"}}]},
+           "nlp": {"truncated": False}, "warnings": []}
+    mock_client.api.search_nlp.return_value = raw
+    mock_client.trim_search_results = server.VamsClient.trim_search_results
+    out = server.search_nlp(query="valve")
+    assert out["relation"] == "gte"
+    assert out["total"] == 2 and out["total_is_lower_bound"] is True and out["total_display"] == "2+"
+    assert out["nlp"] == {"truncated": False} and out["warnings"] == []
+
+
+def test_search_nlp_defaults_omit_the_optional_keys(mock_client):
+    mock_client.api.search_nlp.return_value = {"hits": {"total": {"value": 0, "relation": "eq"}, "hits": []}}
+    mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
+    out = server.search_nlp(query="anything")
+    request = mock_client.api.search_nlp.call_args.args[0]
+    assert request == {"query": "anything", "entityTypes": ["file"], "size": 25, "includeArchived": False}
+    assert out["relation"] == "eq" and out["nlp"] == {} and out["warnings"] == []
+
+
+@pytest.mark.parametrize("size, sent", [(0, 1), (-5, 1), (500, 100), (25, 25)])
+def test_search_nlp_clamps_size_to_the_api_bounds(mock_client, size, sent):
+    mock_client.api.search_nlp.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+    mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
+    server.search_nlp(query="q", size=size)
+    assert mock_client.api.search_nlp.call_args.args[0]["size"] == sent
+    mock_client.trim_search_results.assert_called_once_with(
+        mock_client.api.search_nlp.return_value, max_hits=sent)
+
+
+def test_search_nlp_rejects_an_unknown_entity_type_before_calling_the_api(mock_client):
+    out = server.search_nlp(query="q", entity_type="folder")
+    assert out["error_type"] == "ValueError" and "entity_type" in out["error"]
+    mock_client.api.search_nlp.assert_not_called()
+
+
+def test_search_nlp_rejects_an_unknown_file_class_and_names_the_valid_ids(mock_client):
+    # Refused before the call, with the valid ids named (the route answers 400 for it too).
+    out = server.search_nlp(query="q", file_classes=["document", "3d-model"])
+    assert out["error_type"] == "ValueError"
+    assert "3d-model" in out["error"] and "document" not in out["error"].split("got")[1]
+    for file_class in ("image", "mesh", "pointcloud", "other"):
+        assert file_class in out["error"]
+    mock_client.api.search_nlp.assert_not_called()
+
+
+def test_search_nlp_normalises_file_classes_and_extensions_as_the_route_does(mock_client):
+    mock_client.api.search_nlp.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+    mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
+    server.search_nlp(query="q", file_classes=[" Video", "video", "MESH"],
+                      file_extensions=[".GLB", "glb", " .fbx "])
+    request = mock_client.api.search_nlp.call_args.args[0]
+    assert request["fileClasses"] == ["video", "mesh"]
+    assert request["fileExtensions"] == ["glb", "fbx"]
 
 
 @pytest.mark.parametrize(
@@ -248,6 +416,30 @@ def test_find_and_summarize_clamps_the_hit_count(mock_client):
     assert "note" in result, "a clamped size must be reported, or the count reads as the real total"
 
 
+@pytest.mark.parametrize("relation,lower_bound,display", [("gte", True, "40+"), ("eq", False, "40")])
+def test_search_tools_carry_the_lower_bound_marker(mock_client, relation, lower_bound, display):
+    """The API reports `hits.total.relation == "gte"` when the caller's total is a minimum. Every
+    search summary keeps the numeric `total` and adds the marker beside it, so an agent does not
+    report a minimum as an exact count."""
+    hits = [{"_id": "a1", "_score": 1.0, "_source": {"str_databaseid": "db1", "str_assetid": "a1"}}]
+    mock_client.api.search_query.return_value = {
+        "hits": {"total": {"value": 40, "relation": relation}, "hits": hits}
+    }
+    mock_client.trim_search_results.side_effect = (
+        lambda raw, max_hits=50: server.VamsClient.trim_search_results(raw, max_hits=max_hits)
+    )
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+
+    for result in (
+        server.search_assets(query="x"),
+        server.search_files(query="x"),
+        server.find_and_summarize("x"),
+    ):
+        assert result["total"] == 40
+        assert result["total_is_lower_bound"] is lower_bound
+        assert result["total_display"] == display
+
+
 def test_find_and_summarize_bounds_each_inner_version_walk_to_one_page(mock_client):
     """Only `count` is read off the version walk, so the extra pages were fetched and discarded."""
     hits = [{"_id": "a1", "_score": 1.0, "_source": {"str_databaseid": "db1", "str_assetid": "a1"}}]
@@ -294,7 +486,12 @@ def test_find_and_summarize_within_the_clamp_adds_no_note(mock_client):
         lambda: server.list_workflow_triggers("db1", "w1", starting_token="tok"),
         lambda: server.list_executions(starting_token="tok"),
         lambda: server.page_execution_detail_metadata("e1", starting_token="tok"),
+        lambda: server.page_execution_detail_files("e1", starting_token="tok"),
         lambda: server.list_subscriptions(starting_token="tok"),
+        lambda: server.list_compliance_evaluations("db1", "a1", starting_token="tok"),
+        lambda: server.list_quarantined_assets(starting_token="tok"),
+        lambda: server.query_compliance_audit(starting_token="tok"),
+        lambda: server.get_asset_compliance_audit("db1", "a1", starting_token="tok"),
     ],
 )
 def test_every_paginated_read_tool_forwards_starting_token(mock_client, call):
@@ -547,6 +744,10 @@ def test_no_read_tool_calls_a_mutating_apiclient_method():
         "create_", "update_", "delete_", "set_", "archive_", "unarchive_", "execute_", "rerun_",
         "abort_", "permanent_", "revert_", "move_", "copy_", "import_", "reset_", "initialize_",
         "complete_",
+        # The compliance write verbs: none deletes stored data, but every one of them changes state
+        # or starts compute, and a read-section placement would reach them with both gates off.
+        "bind_", "unbind_", "evaluate_", "sweep_", "release_", "grant_", "revoke_", "approve_",
+        "reject_",
     )
 
     offenders = []
@@ -639,6 +840,46 @@ def test_list_executions_surfaces_page_warnings_and_flags_truncated(real_paginat
     # Reported once even though both pages carried it.
     assert result["warnings"] == [_WITHHELD_WARNING]
     assert result["truncated"] is True
+
+
+def test_list_executions_returns_skipped_rows_with_their_fields(real_paginate_client):
+    # #998: a SKIPPED record arrives under the same Items key as a run, with its optional fields kept,
+    # and the status filter is passed through for equality.
+    skipped = {"workflowExecutionId": "s1", "executionStatus": "SKIPPED", "skippedLaunchCount": 49,
+               "skipScope": "asset", "skipReason": "busy"}
+    real_paginate_client.api.list_executions.side_effect = [{"message": {"Items": [skipped]}}]
+
+    result = server.list_executions(status="SKIPPED")
+
+    assert result["Items"] == [skipped]
+    params = real_paginate_client.api.list_executions.call_args.kwargs.get("params") or \
+        real_paginate_client.api.list_executions.call_args.args[-1]
+    assert params["status"] == "SKIPPED"
+
+
+@pytest.mark.parametrize("tool, api_name, args", [
+    ("list_executions", "list_executions", {}),
+    ("list_workflow_executions", "list_workflow_executions", {"database_id": "db1", "asset_id": "a1"}),
+])
+def test_the_list_tools_send_exclude_status(real_paginate_client, tool, api_name, args):
+    # #998: exclude_status rides as excludeStatus; absent, nothing is sent.
+    api = getattr(real_paginate_client.api, api_name)
+    api.side_effect = [{"message": {"Items": []}}, {"message": {"Items": []}}]
+
+    def _sent():
+        call = api.call_args
+        return call.kwargs.get("params") or call.args[-1]
+
+    getattr(server, tool)(exclude_status="SKIPPED", **args)
+    assert _sent()["excludeStatus"] == "SKIPPED"
+    getattr(server, tool)(**args)
+    assert "excludeStatus" not in _sent()
+
+
+def test_the_execution_tools_describe_skipped_records():
+    for tool in (server.list_executions, server.list_workflow_executions,
+                 server.get_execution_details):
+        assert "SKIPPED" in (tool.__doc__ or "")
 
 
 _WORK_BUDGET_WARNING = (
@@ -795,6 +1036,17 @@ def test_get_execution_details_forwards_the_sub_execution_flag(mock_client):
     assert params == {"includeSubExecutions": "true"}
 
 
+def test_get_execution_details_passes_the_workflow_version_fields_through(mock_client):
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_details.return_value = {
+        "pipelines": [], "workflowVersion": 3, "workflowVersionCurrent": False}
+
+    result = server.get_execution_details("e1")
+
+    assert result["workflowVersion"] == 3
+    assert result["workflowVersionCurrent"] is False
+
+
 def test_get_execution_logs_forwards_log_id_and_stage_name_in_full_mode(mock_client):
     mock_client.unwrap_message.side_effect = lambda page: page
     mock_client.api.get_execution_logs.return_value = {"events": []}
@@ -949,7 +1201,8 @@ def test_get_execution_details_docstring_describes_the_metadata_collections(frag
 @pytest.mark.parametrize(
     "fragment",
     # The collection names an agent must pass verbatim, and the two row shapes it renders.
-    ["inputDatabase", "truncatedCollections", "pipelineId", "targetFilePath", "metadataValue"],
+    ["inputDatabase", "truncatedCollections", "pipelineId", "targetFilePath", "metadataValue",
+     "metadataType"],
 )
 def test_page_execution_detail_metadata_docstring_describes_collections_and_rows(fragment):
     assert fragment in _docstring_of("page_execution_detail_metadata")
@@ -971,12 +1224,46 @@ def test_config_tool_docstrings_list_every_metadata_input_key(tool):
     # A key missing here is a key an agent never sets; the backend rejects unknown ones,
     # so the list must match the model's exactly.
     docstring = _docstring_of(tool)
-    for key in ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata"):
+    for key in ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata",
+                "assetFileMetadata", "metadataSchema"):
         assert key in docstring, f"{tool} docstring omits metadataInputs.{key}"
+    # A four-key description would tell an agent the opt-in keys are rejected.
+    assert "four-key" not in docstring and "exactly four keys" not in docstring, tool
+
+
+@pytest.mark.parametrize("tool", ["get_execution_details", "page_execution_detail_metadata"])
+def test_execution_metadata_tools_explain_the_expanded_flag(tool):
+    # Without it an agent counts a whole-asset run's context records as the step's input files.
+    docstring = _docstring_of(tool)
+    assert "`expanded`" in docstring or "expanded}" in docstring, tool
+    assert "not one of its input files" in docstring or "not an input file" in docstring, tool
+
+
+@pytest.mark.parametrize("value", ["perAsset", "perInputFile", "perInputFileVersion"])
+def test_create_workflow_docstring_names_every_concurrency_restriction(value):
+    # The value set is closed on the backend; a value absent here is one no agent ever sets.
+    assert value in _docstring_of("create_workflow")
+
+
+@pytest.mark.parametrize("fragment", ["perInputFileVersion", "WorkflowAlreadyRunningError",
+                                      "Nothing started"])
+def test_execute_workflow_docstring_explains_a_concurrency_refusal(fragment):
+    # An agent reading the refusal must know nothing ran and that the remedy is to wait, not retry now.
+    assert fragment in _docstring_of("execute_workflow")
 
 
 def test_rerun_execution_docstring_mentions_warnings():
     assert "warnings" in _docstring_of("rerun_execution")
+
+
+def test_rerun_execution_docstring_states_the_input_version_rule():
+    """A re-run reads a file at the version the original launch pinned and otherwise takes the
+    current version. An agent that assumes a re-run reproduces the original bytes reports a
+    comparison that never held."""
+    docstring = _docstring_of("rerun_execution").lower()
+    assert "pinned" in docstring
+    assert "current version" in docstring
+    assert "before 2.7.0" in docstring
 
 
 def test_rerun_execution_docstring_says_the_group_id_assigns_rather_than_selects():
@@ -1099,6 +1386,8 @@ _PAGINATED_READ_TOOLS = (
     "list_subscriptions",
     "list_api_keys",
     "list_user_api_keys",
+    "list_zip_downloads",
+    "list_compliance_evaluations",
 )
 
 
@@ -1291,6 +1580,18 @@ def test_unwrap_message_with_warnings_handles_a_string_message(sibling_warning_c
     assert server._unwrap_message_with_warnings(abort) == abort
 
 
+def test_unwrap_message_with_warnings_keeps_only_the_named_siblings(sibling_warning_client):
+    """The default keeps `warnings` alone (pipeline saves); an abort names `notAbortable` as well."""
+    group = {"message": {"groupId": "g1"}, "warnings": ["e1: w"], "notAbortable": [{"executionId": "e2"}],
+             "other": "x"}
+    assert server._unwrap_message_with_warnings(group) == {"groupId": "g1", "warnings": ["e1: w"]}
+    assert server._unwrap_message_with_warnings(group, siblings=("warnings", "notAbortable")) == {
+        "groupId": "g1", "warnings": ["e1: w"], "notAbortable": [{"executionId": "e2"}]}
+    clean = {"message": {"groupId": "g1"}, "warnings": [], "notAbortable": []}
+    assert server._unwrap_message_with_warnings(clean, siblings=("warnings", "notAbortable")) == {
+        "groupId": "g1"}
+
+
 @pytest.mark.parametrize("tool", ["create_pipeline", "update_pipeline", "unarchive_pipeline", "abort_execution"])
 def test_mutating_tools_preserve_sibling_warnings(tool):
     source = _source_of(tool)
@@ -1321,7 +1622,13 @@ def test_non_pipeline_saves_stay_on_plain_unwrap(tool):
 # kill of running AWS compute. The classification is now stated in all three places, so the risk of
 # drift moves to keeping them in step — which is what this asserts.
 
-_COMPUTE_CAUTION_TOOLS = ("execute_workflow", "rerun_execution", "abort_execution")
+_COMPUTE_CAUTION_TOOLS = (
+    "execute_workflow", "rerun_execution", "abort_execution",
+    # A pipeline rule runs a workflow execution per evaluated asset, so these four start compute too:
+    # one asset, every bound asset, and the two ways a cascade's re-evaluation is set running.
+    "evaluate_asset_compliance", "sweep_compliance_schema", "create_compliance_cascade",
+    "approve_compliance_cascade",
+)
 
 
 def _sibling_doc(name):
@@ -1602,3 +1909,190 @@ def test_list_workflow_executions_docstring_states_the_id_identifies_the_workflo
     assert _CROSS_DATABASE_RULE in docstring
     assert "narrowing filter" in docstring
     assert _DATABASE_SCOPED_CLAIM not in docstring
+
+
+# ---------------------------------------------------------------------------
+# #858: page_execution_detail_files + get_execution_results
+# ---------------------------------------------------------------------------
+
+
+def test_page_execution_detail_files_forwards_collection_and_pipeline(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    result = server.page_execution_detail_files("e1", collection="output", pipeline_id="pA")
+    assert result["collection"] == "output"
+    # The collection + pipelineId ride on every page's request params (the token is pinned to them).
+    call = mock_client.paginate.call_args
+    # paginate is called with a _call closure; invoke it to see the params handed to the API.
+    inner = call.args[0]
+    mock_client.api.get_execution_details_files.return_value = {"Items": []}
+    inner({})
+    params = mock_client.api.get_execution_details_files.call_args.kwargs["params"]
+    assert params["collection"] == "output"
+    assert params["pipelineId"] == "pA"
+
+
+def test_page_execution_detail_files_rejects_inputdatabase(mock_client):
+    # Files have no inputDatabase collection (metadata-only split); it must be a clean ValueError.
+    result = server.page_execution_detail_files("e1", collection="inputDatabase")
+    assert result.get("error_type") == "ValueError"
+    assert not mock_client.paginate.called
+
+
+def test_page_execution_detail_files_defaults_to_input(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    result = server.page_execution_detail_files("e1")
+    assert result["collection"] == "input"
+
+
+def test_page_execution_detail_files_is_capped_at_the_page_size(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.page_execution_detail_files("e1", collection="output")
+    page_size = mock_client.paginate.call_args.kwargs["page_size"]
+    assert page_size <= server.EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE
+
+
+def test_get_execution_results_unwraps_the_message_envelope(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.return_value = {
+        "message": {"resultContent": "hello", "resultContentTruncated": False,
+                    "resultRowCount": 1, "resultContentBytes": 5}}
+    result = server.get_execution_results("e1")
+    assert result == {"resultContent": "hello", "resultContentTruncated": False,
+                      "resultRowCount": 1, "resultContentBytes": 5, "pageCount": 1}
+    mock_client.api.get_execution_results.assert_called_once_with("e1", params={})
+
+
+def _result_page(content, token=None, truncated=False):
+    page = {"resultContent": content, "resultContentTruncated": truncated,
+            "resultRowCount": 1, "resultContentBytes": len(content.encode("utf-8"))}
+    if token:
+        page["NextToken"] = token
+    return {"message": page}
+
+
+def test_get_execution_results_follows_pages_to_the_end(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page("a", "t2"), _result_page("b", "t3", truncated=True), _result_page("c")]
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == "abc"
+    assert result["resultRowCount"] == 3
+    assert result["resultContentTruncated"] is True
+    assert result["pageCount"] == 3
+    assert "NextToken" not in result and "note" not in result
+    sent = [c.kwargs["params"] for c in mock_client.api.get_execution_results.call_args_list]
+    assert sent == [{}, {"startingToken": "t2"}, {"startingToken": "t3"}]
+
+
+def test_get_execution_results_stops_at_the_size_budget_and_says_so(mock_client, monkeypatch):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    monkeypatch.setattr(server, "EXECUTION_RESULT_MAX_BYTES", 4)
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page("aaa", "t2"), _result_page("bbb", "t3"), _result_page("ccc")]
+    result = server.get_execution_results("e1")
+    # The budget is checked before a page is added: "bbb" would carry the answer to 6 > 4, so it is
+    # left for the next call, which resumes from the token that fetched it.
+    assert result["resultContent"] == "aaa"
+    assert result["NextToken"] == "t2"
+    assert result["pageCount"] == 1
+    assert "5 MiB result budget" in result["note"]
+    assert mock_client.api.get_execution_results.call_count == 2
+
+
+def test_get_execution_results_counts_escaped_bytes(mock_client, monkeypatch):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    # Quotes cost their escape: '""' is 4 bytes sent, so two such pages pass a 6-byte budget raw
+    # (2 + 2) but not as sent (4 + 4).
+    monkeypatch.setattr(server, "EXECUTION_RESULT_MAX_BYTES", 6)
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page('""', "t2"), _result_page('""')]
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == '""'
+    assert result["NextToken"] == "t2"
+
+
+def _sent(text):
+    """The tool answer's text as sent (UTF-8 inside a JSON string value), the measure under test."""
+    return len(json.dumps(text, ensure_ascii=False).encode("utf-8")) - 2
+
+
+def test_get_execution_results_large_ascii_result_stays_within_budget(mock_client):
+    # R1's shape: ~5.9 MB of plain ASCII the service serves as a full 5 MiB page plus the rest. The
+    # previous check-after-append returned both pages (~2x the budget) in one answer.
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    first = "x" * (server.EXECUTION_RESULT_MAX_BYTES - 64)
+    second = "y" * (6_062_048 - len(first))
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page(first, "t2"), _result_page(second)]
+    result = server.get_execution_results("e1")
+    assert _sent(result["resultContent"]) <= server.EXECUTION_RESULT_MAX_BYTES
+    assert result["resultContent"] == first
+    assert result["NextToken"] == "t2"
+    # The rest arrives on the resume call, also within budget, and the two answers rebuild the whole.
+    mock_client.api.get_execution_results.side_effect = [_result_page(second)]
+    rest = server.get_execution_results("e1", starting_token=result["NextToken"])
+    assert _sent(rest["resultContent"]) <= server.EXECUTION_RESULT_MAX_BYTES
+    assert "NextToken" not in rest
+    assert len((result["resultContent"] + rest["resultContent"]).encode("utf-8")) == 6_062_048
+
+
+def test_get_execution_results_large_cjk_result_stays_within_budget(mock_client):
+    # R3's shape: 4.4 MiB of CJK text with no line breaks, which the service pages by its own
+    # (doubly escaped) budget into three pages. Counted as sent, each answer stays within 5 MiB, and
+    # following NextToken rebuilds the whole text.
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    total_chars = (44 * 1024 * 1024 // 10) // 3  # 3 UTF-8 bytes per character
+    per_page = server.EXECUTION_RESULT_MAX_BYTES // 7  # the service's 7 wire bytes per character
+    text = "\u6f22" * total_chars
+    pages = [text[i:i + per_page] for i in range(0, total_chars, per_page)]
+    assert len(pages) == 3
+
+    def serve(start=None):
+        index = int(start[1:]) if start else 0
+        mock_client.api.get_execution_results.side_effect = [
+            _result_page(pages[i], f"t{i + 1}" if i + 1 < len(pages) else None)
+            for i in range(index, len(pages))]
+
+    serve()
+    gathered = []
+    token = None
+    while True:
+        result = server.get_execution_results("e1", starting_token=token)
+        assert _sent(result["resultContent"]) <= server.EXECUTION_RESULT_MAX_BYTES
+        gathered.append(result["resultContent"])
+        token = result.get("NextToken")
+        if not token:
+            break
+        assert "5 MiB result budget" in result["note"]
+        serve(token)
+    assert "".join(gathered) == text
+
+
+def test_get_execution_results_stops_at_max_pages_and_says_so(mock_client, monkeypatch):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    monkeypatch.setattr(server, "CONFIG", dataclasses.replace(server.CONFIG, max_pages=2))
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page("a", "t2"), _result_page("b", "t3"), _result_page("c")]
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == "ab"
+    assert result["NextToken"] == "t3"
+    assert "VAMS_MAX_PAGES=2" in result["note"]
+
+
+def test_get_execution_results_resumes_from_a_starting_token(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.side_effect = [_result_page("c")]
+    result = server.get_execution_results("e1", starting_token="t3")
+    assert result["resultContent"] == "c"
+    mock_client.api.get_execution_results.assert_called_once_with(
+        "e1", params={"startingToken": "t3"})
+
+
+def test_get_execution_results_empty_shape(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.return_value = {
+        "message": {"resultContent": "", "resultContentTruncated": False,
+                    "resultRowCount": 0, "resultContentBytes": 0}}
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == ""
+    assert result["resultRowCount"] == 0

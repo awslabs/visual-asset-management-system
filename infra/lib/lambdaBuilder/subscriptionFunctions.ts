@@ -171,6 +171,8 @@ export function buildUnSubscribeFunction(
     storageResources.dynamo.subscriptionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
+    // The unsubscribe lookup resolves a user ID through the user table (get_userProfile_Email).
+    storageResources.dynamo.userStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

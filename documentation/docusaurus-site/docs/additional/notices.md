@@ -40,25 +40,45 @@ You are also responsible for making your own independent assessment of the third
 
 The complete list of third-party dependencies and their licenses is maintained in the project's `NOTICE.md` file. Key categories include:
 
-| Category         | Notable Libraries                                                | Licenses                      |
-| ---------------- | ---------------------------------------------------------------- | ----------------------------- |
-| Web application  | React, Vite, Cloudscape Design System, Amplify                   | MIT, Apache-2.0               |
-| 3D visualization | Three.js, BabylonJS, CesiumJS, Potree, PlayCanvas, Needle Engine | MIT, Apache-2.0, BSD-2-Clause |
-| Backend          | Pydantic, Casbin, boto3, aws-lambda-powertools                   | MIT, Apache-2.0, MIT-0        |
-| 3D conversion    | trimesh, NumPy, Pillow (3D Basic Conversion pipeline)            | MIT, BSD-3-Clause, MIT-CMU    |
-| Infrastructure   | AWS CDK, cdk-nag, constructs                                     | Apache-2.0                    |
-| CLI              | Click, requests, boto3, pycognito                                | BSD-3-Clause, Apache-2.0      |
+| Category         | Notable Libraries                                                                                                                                                                | Licenses                                                                                                                                                             |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web application  | React, Vite, Cloudscape Design System, Amplify                                                                                                                                   | MIT, Apache-2.0                                                                                                                                                      |
+| 3D visualization | Three.js, BabylonJS, CesiumJS, Potree, PlayCanvas, Needle Engine                                                                                                                 | MIT, Apache-2.0, BSD-2-Clause                                                                                                                                        |
+| Image decoding   | utif2, tga-js, pako (TIFF/TGA Image Viewer)                                                                                                                                      | MIT, MIT AND Zlib                                                                                                                                                    |
+| Maps and rasters | MapLibre GL JS, geotiff, proj4, @geomatico/maplibre-cog-protocol (GeoTIFF Map Viewer and the Search map)                                                                         | BSD-3-Clause, MIT                                                                                                                                                    |
+| Backend          | Pydantic, Casbin, boto3, aws-lambda-powertools                                                                                                                                   | MIT, Apache-2.0, MIT-0                                                                                                                                               |
+| 3D conversion    | trimesh, NumPy, Pillow, usd-core (OpenUSD), lxml, networkx, pycollada, the Assimp tool, and cascadio with Open CASCADE when STEP input is enabled (3D Basic Conversion pipeline) | MIT, BSD-3-Clause, MIT-CMU, LicenseRef-TOST-1.0 (usd-core), BSD-3-Clause (Assimp), LGPL-2.1 with the OCCT exception (Open CASCADE, STEP image only)                  |
+| Media previews   | Pillow, tifffile, imagecodecs, PyAV (3D Preview Thumbnail container)                                                                                                             | HPND, BSD-3-Clause, BSD-3-Clause (the imagecodecs wheel bundles permissive codec libraries and the GCC OpenMP runtime; the PyAV wheels bundle LGPL FFmpeg libraries) |
+| Infrastructure   | AWS CDK, cdk-nag, constructs                                                                                                                                                     | Apache-2.0                                                                                                                                                           |
+| CLI              | Click, requests, boto3, pycognito                                                                                                                                                | BSD-3-Clause, Apache-2.0                                                                                                                                             |
+| MCP server       | mcp, pydantic, PyJWT, cryptography, requests (VamsMCP)                                                                                                                           | MIT, Apache-2.0 OR BSD-3-Clause, Apache-2.0                                                                                                                          |
 
 ### Optional LGPL-Licensed Components
 
-Certain optional components use LGPL-2.1 licensed libraries:
+Certain optional components use LGPL-licensed libraries:
 
 -   **OpenCascade.js** -- Dynamically loaded for CAD format support in the Three.js Viewer (STEP, IGES, BREP). Disabled by default and loaded on-demand from a CDN only when explicitly enabled.
--   **CadQuery** -- Used in the CAD/Mesh Metadata Extraction pipeline and the 3D Preview Thumbnail pipeline for STEP/STP file tessellation.
+-   **CadQuery / OCP (Open CASCADE)** -- Used in the SYSTEM GenAI metadata pipeline's 3D render image and the 3D Preview Thumbnail pipeline for STEP/STP/IGES/BREP tessellation and attribute extraction (Apache-2.0 bindings over LGPL-2.1 Open CASCADE).
+-   **IfcOpenShell** (LGPL-3.0) -- Used in the SYSTEM GenAI metadata pipeline's 3D render image to read IFC schema, project, and entity counts.
+-   **casadi** (LGPL-3.0-or-later) and **nlopt** (LGPL-2.1-or-later) -- Optimization libraries that CadQuery requires, installed in the 3D Preview Thumbnail pipeline image.
 
 :::note
-LGPL-2.1 license terms apply only when these optional features are enabled. Review the license requirements with your legal team before enabling CAD-related features.
+LGPL license terms apply only when these optional features are enabled. The SYSTEM GenAI metadata pipeline is enabled by default in the commercial configuration template; review the license requirements with your legal team before deploying it or enabling CAD-related viewer features.
 :::
+
+The 3D Preview Thumbnail pipeline image also contains MPL-2.0 code: the certifi package (required by requests), the tqdm package (required by open3d), and the Eigen library compiled into open3d. `NOTICE.md` lists all three.
+
+The Robotics Data Viewer is the Lichtblick web app (MPL-2.0), which the web application install builds from the upstream source at a pinned tag and commit and serves beside the web application, with the upstream license and a `SOURCE.txt` naming the source repository, tag and commit. VAMS compiles the upstream files unmodified. `NOTICE.md` lists it.
+
+When the 3D Preview Thumbnail pipeline reads a STEP file, it also loads the native libraries that the cadquery-ocp wheel bundles with Open CASCADE. They include JBIG-KIT (GPL-2.0-or-later), FreeImage (GPL-2.0, GPL-3.0 or the FreeImage Public License), LibRaw (LGPL-2.1 or CDDL-1.0) and FreeType (FreeType License or GPL-2.0-or-later). `NOTICE.md` lists every bundled library with its version and license.
+
+### 3D Preview Thumbnail Gaussian Splat Conversion Notice
+
+The 3D Preview Thumbnail pipeline converts `.spz`, `.sog`, `.ksplat`, `.lcc`, `.lcc2` and `.compressed.ply` Gaussian splats with the PlayCanvas [splat-transform](https://github.com/playcanvas/splat-transform) CLI (MIT license), installed at an exact version from a committed `package-lock.json`, and runs it on a pinned [Node.js](https://nodejs.org/) 22 release (MIT license) whose tarball is verified by SHA-256 when the image is built. Its dependency tree is permissively licensed (MIT, ISC, BSD-3-Clause, including the Dawn binaries bundled in `webgpu`); the full list is in `NOTICE.md`. Conversion runs on the CPU; no GPU is used.
+
+### XGRIDS LCC and LCC2 Formats
+
+The 3D Preview Thumbnail pipeline reads XGRIDS LCC (`.lcc`) and LCC2 (`.lcc2`) scene descriptions to choose a level of detail and the files to download, and the SuperSplat Editor viewer opens `.lcc` scenes. The LCC and LCC2 data organization formats originated from XGRIDS. Their specifications and terms are the [LCC white paper](https://github.com/xgrids/LCCWhitepaper) and the [LCC2 white paper](https://github.com/xgrids/LCC2Whitepaper).
 
 ### Coordinate Transform Pipeline Library Notice
 
@@ -66,6 +86,56 @@ The Coordinate Transform pipeline depends on the open-source [laspy](https://git
 
 :::note
 The laspy BSD-3-Clause license is functionally similar to the MIT and Apache-2.0 licenses already used throughout VAMS and does not introduce any copyleft (LGPL/GPL) requirements. The pipeline's other core libraries — PDAL (BSD-3-Clause), pyproj (MIT), and NumPy (BSD-3-Clause) — are likewise permissively licensed.
+:::
+
+### COG Conversion Pipeline Library Notice
+
+The COG Conversion pipeline runs the GDAL command line (`gdal_translate`, MIT license) as a separate process. The container image installs GDAL and its dependencies as the exact conda-forge packages listed in `backendPipelines/conversion/cogConvert/container/conda-explicit.txt`. Two of those packages carry copyleft terms: GEOS (LGPL-2.1) and libspatialite (MPL-1.1 OR GPL-2.0 OR LGPL-2.1, used here as the conda-forge `lgpl` build under LGPL-2.1). They are shared libraries that GDAL loads for its vector drivers; the pipeline converts raster files only and does not call them. The `lgpl` build is pinned so that the GPL-2.0 librttopo library is not part of the image. No VAMS code is linked against these libraries, nothing is modified, and each package's license text is kept in the image under `/opt/cog/licenses`. The per-package list is in the repository's `NOTICE.md`.
+
+### SYSTEM GenAI Metadata Pipeline Library Notice
+
+The SYSTEM GenAI metadata pipeline ships three AWS Lambda container images built in the deploying account. Their licensed components are recorded in the repository's `NOTICE.md`; the ones that carry copyleft terms are:
+
+-   **Blender** (GPL-3.0-or-later) -- The Blender renderer image downloads the Blender 5.2.3 LTS release archive at build time, verifies its checksum, and invokes the `blender` executable as a subprocess to import mesh and USD files and render views. Blender is not linked into VAMS code and no Blender source is modified.
+-   **FFmpeg** (GPL-3.0-or-later) -- The media extractor image installs `imageio-ffmpeg` 0.6.0 (BSD-2-Clause), which bundles a static FFmpeg 7.0.2 binary that the pipeline invokes as a separate process to read video metadata and extract keyframes; VAMS code does not link against it. The bundled binary is the johnvansickle.com static build, configured with `--enable-gpl --enable-version3`, so it is licensed under the GNU General Public License version 3 or later. The Isaac Lab training image installs the same wheel.
+-   **IfcOpenShell** (LGPL-3.0) and **CadQuery / OCP** (Apache-2.0 bindings over LGPL-2.1 Open CASCADE) -- used by the 3D render image; recorded under [Optional LGPL-Licensed Components](#optional-lgpl-licensed-components) above.
+
+No Python library imported by the three images carries a GPL license. The remaining libraries are permissively licensed: tinytag (MIT; the media extractor image reads audio tags and durations with it), defusedxml (PSF-2.0; SVG parsing without entity expansion), python-docx, python-pptx, and openpyxl (MIT; the media extractor image reads Word, PowerPoint, and Excel text and document properties with them) with their dependencies lxml (BSD-3-Clause), XlsxWriter (BSD-2-Clause), and et_xmlfile (MIT), trimesh, PyVista, Pillow (MIT-CMU), pypdfium2 (Apache-2.0 or BSD-3-Clause, bundling PDFium under BSD-3-Clause), charset-normalizer, ezdxf, networkx, numpy, scipy, laspy, pye57, DracoPy, VTK (BSD-3-Clause), and OpenUSD (`usd-core`, modified Apache-2.0; 26.8 in the Blender renderer image, which reads USD layers with it to find the files a scene references, and 25.11 in the 3D render image). The media extractor image also reads GeoTIFF and Cloud Optimized GeoTIFF headers with tifffile (BSD-3-Clause) and reprojects a raster's outline and a GeoPackage layer's extent to WGS84 with pyproj (MIT; its wheel bundles PROJ, libcurl, libtiff and SQLite). pyproj requires certifi, which is MPL-2.0 code. `NOTICE.md` lists all three.
+
+:::note[Amazon Bedrock model terms]
+The pipeline invokes the Amazon Bedrock models named in `app.pipelines.useSystemGenAiMetadata.bedrockModels` (`analysisModelId` and, when set, `textModelId` with the GenAI layer on, `embeddingModelId` with vector search on). Use of a model is governed by the model provider's terms accepted in the AWS account (for Anthropic models, a one-time use-case submission per account or organization). Content sent to the models is described in [Security Architecture](../architecture/security.md#data-sent-to-amazon-bedrock).
+:::
+
+### Zip Archive Pipeline Library Notice
+
+The Zip Archive pipeline, which builds Download as Zip archives, writes zip (ZIP64), tar and tar.gz archives with the Python standard library and reads and writes Amazon S3 with the AWS SDK for Python (Boto3 and Botocore, Apache-2.0), on the Python base image (PSF-2.0). It includes no other third-party archive library.
+
+### GenAI CAD STEP Agent Pipeline Library Notice
+
+The GenAI CAD STEP Agent pipeline container depends on [CadQuery](https://github.com/CadQuery/cadquery) (Apache-2.0) for STEP import, modelling and export, which in turn bundles the [OCP](https://github.com/CadQuery/OCP) bindings to Open CASCADE Technology. Open CASCADE Technology is distributed under the GNU Lesser General Public License v2.1 with the Open CASCADE exception, an LGPL license: the pipeline uses it as an unmodified, dynamically linked library inside the container image, which is the usage the LGPL permits without imposing its terms on the surrounding code. The agent framework [Strands Agents](https://github.com/strands-agents/sdk-python) and the [Amazon Bedrock AgentCore SDK](https://github.com/aws/bedrock-agentcore-sdk-python) are Apache-2.0, as is the [OpenAI Python SDK](https://github.com/openai/openai-python) that the Strands Agents `openai` extra installs for the OpenAI model provider; the web-search library `ddgs` is MIT; `httpx` is BSD-3-Clause.
+
+:::note
+The agent generates Python scripts at run time that import CadQuery. Those scripts are run inside the pipeline container and are not distributed with VAMS.
+:::
+
+The pipeline's evaluation harness (`backendPipelines/genAi/cadStepAgent/evaluation/`) commits third-party STEP files as test data; none of them is part of the container image. Fixtures X1, X4 and X6, and the golden `fm6-x4-largest-body.step` derived from X4, come from [Adafruit_CAD_Parts](https://github.com/adafruit/Adafruit_CAD_Parts) under the MIT license, © 2016 Adafruit Industries; the license text is kept beside them as `fixtures/LICENSE-adafruit-MIT.txt`. Fixtures X2, X3 and X5, and the goldens `fm1-x2-four-corner-holes.stp`, `fm4-x3-centre-hole.stp`, `fm8-x7-edge-hole.stp` and `fm9-x9-solid-only.stp` derived from NIST files, come from the [NIST MBE PMI Validation and Conformance Testing](https://www.nist.gov/ctl/smart-connected-systems-division/smart-connected-manufacturing-systems-group/mbe-pmi-0) project's STEP files, a work of the U.S. Government in the public domain (17 U.S.C. §105). `fixtures/PROVENANCE.md` and `goldens/GOLDENS.md` record each file's source, license and SHA-256 digest.
+
+### Video SOP/BOM Extraction Pipeline Library Notice
+
+The Video SOP/BOM Extraction pipeline container installs the Debian trixie `ffmpeg` package (FFmpeg 7.1.x) at image build time to probe video streams, extract and encode audio (FLAC), and extract key frames; the package is not version-pinned, and `7:7.1.5-0+deb13u1` is the version observed in the reference build. Debian builds FFmpeg with `--enable-gpl`, so the `ffmpeg` and `ffprobe` binaries are distributed under the GNU General Public License version 2 or later (GPL-2.0-or-later). The pipeline runs them as separate processes and does not link against the FFmpeg libraries. The pipeline's Python dependencies — boto3 and botocore (Apache-2.0), jsonschema (MIT), and Pillow (HPND) — are permissively licensed; the exact versions are in the repository's `NOTICE.md`.
+
+:::warning
+GPL-2.0-or-later terms apply only when this optional pipeline is enabled (`app.pipelines.useGenAiVideoSopBom.enabled`). Review the license requirements with your legal team before enabling it. See the [Video SOP/BOM Extraction pipeline](../pipelines/video-sop-bom.md#third-party-library-licenses) page.
+:::
+
+### Isaac Lab Training Pipeline Library Notice
+
+The Isaac Lab training pipeline container is built on the NVIDIA Isaac Lab 3.0.0 image (`nvcr.io/nvidia/isaac-lab:3.0.0`, pinned by digest), which carries NVIDIA Isaac Sim 6.2. Isaac Sim is proprietary NVIDIA software under the NVIDIA Software License Agreement; see [NVIDIA License Notices](#nvidia-license-notices). The base image also ships the open-source libraries the pipeline runs: Isaac Lab (BSD-3-Clause, with parts under Apache-2.0), the Newton physics engine (Apache-2.0), MuJoCo-Warp and MuJoCo (Apache-2.0), NVIDIA Warp (Apache-2.0), RSL-RL (BSD-3-Clause) and PyTorch (BSD-3-Clause). The image build adds MoviePy (MIT) and `imageio-ffmpeg` (BSD-2-Clause) for evaluation video, and boto3 (Apache-2.0).
+
+`imageio-ffmpeg` bundles a static FFmpeg 7.0.2 binary, which the pipeline runs as a separate process to encode evaluation video and does not link against. The bundled binary is a GPL build of FFmpeg (configured with `--enable-gpl --enable-version3`), so it is distributed under the GNU General Public License version 3 or later (GPL-3.0-or-later). The exact versions are in the repository's `NOTICE.md`.
+
+:::warning
+These terms apply only when this optional pipeline is enabled (`app.pipelines.useIsaacLabTraining.enabled`, which also requires `acceptNvidiaEula: true`). Review the license requirements with your legal team before enabling it. See the [NVIDIA Isaac Lab pipeline](../pipelines/nvidia-isaac-lab.md) page.
 :::
 
 ### Gaussian Splat Toolbox Pipeline Model Notice
@@ -98,9 +168,17 @@ Some viewer plugins and processing pipelines require separate commercial license
 | Veerum 3D Viewer              | [Veerum](https://veerum.com/)                                 | Commercial      |
 | RapidPipeline 3D Processor    | [RapidPipeline](https://rapidpipeline.com/) (AWS Marketplace) | Commercial      |
 
+### EDH Workstations Add-on Notice
+
+The EDH Workstations add-on integrates with [EDH](https://github.com/awslabs/engineering-development-hub), an external platform licensed under Apache-2.0 that the operator deploys and manages separately. VAMS ships no EDH code. EDH, not VAMS, installs Amazon DCV, the desktop environment, and the NVIDIA GPU driver when a desktop first boots.
+
+The shipped AMI recipes under `backendAddons/edh/amiRecipes/` fetch their build-time components rather than redistributing them: operating system packages and updates from each distribution's own sources (`dnf`, `apt`, and Windows Update), the AWS CLI v2 from its AWS-published installer, the Python dependencies of the VAMS CLI from PyPI, and, in the `isaacsim` recipe, the Isaac Sim connector's Content window packages `grpcio` (Apache-2.0) and `protobuf` (BSD-3-Clause) from PyPI, at the versions the connector's `locks/storage/requirements.lock` pins. Each component is subject to its own license terms, which apply to the operator who builds the recipe.
+
+The `isaacsim` recipe (`backendAddons/edh/amiRecipes/isaacsim/`) downloads and installs NVIDIA Isaac Sim 6.2 and NVIDIA Omniverse Kit (bundled with Isaac Sim 6.2) at image build time. Both are proprietary NVIDIA software subject to the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). No proprietary NVIDIA software is redistributed with VAMS — the build fetches the standalone archive from NVIDIA's published download URL, which the recipe exposes as a parameter. The Isaac Sim connector does ship NVIDIA's Omniverse Storage API protocol definitions (from `NVIDIA-Omniverse/usd-content-workspace`, Apache-2.0, with their license) and the Python modules generated from them, which `NOTICE.md` lists. Operators accept the NVIDIA Software License Agreement by building this recipe; the build answers NVIDIA's first-run licence prompt non-interactively, which is a record of that acceptance, not a substitute for it. Desktops built from the recipe decline NVIDIA's data collection ([Data Collection & Usage](https://docs.isaacsim.omniverse.nvidia.com/latest/common/data-collection.html)) unless the operator sets the recipe's `isaacSimDataCollectionConsent` parameter to `Y`, which consents on behalf of every desktop user.
+
 ### NVIDIA License Notices
 
-**Isaac Lab Training Pipeline:** Uses NVIDIA Isaac Sim container images, which are subject to the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Users must accept the NVIDIA EULA by setting `acceptNvidiaEula: true` in the deployment configuration to use this pipeline.
+**Isaac Lab Training Pipeline:** Uses the NVIDIA Isaac Lab 3.0.0 container image, which carries NVIDIA Isaac Sim 6.2. NVIDIA Isaac Sim container images are subject to the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Users must accept the NVIDIA EULA by setting `acceptNvidiaEula: true` in the deployment configuration to use this pipeline.
 
 **NVIDIA Cosmos Predict Pipeline (v1 -- Predict1):** The v1 pipeline is not a deployable pipeline. Its container definition is retained under `backendPipelines/genAi/nvidia/cosmos/predict/containerv1/` as a reference implementation for anyone building an equivalent pipeline of their own, and there is no configuration key that deploys it — `app.pipelines.useNvidiaCosmos` provisions the v2.5 pipeline described below. The licence terms are recorded here because the container definition ships in the repository.
 
@@ -121,6 +199,100 @@ The Cosmos Predict, Cosmos Reason, Cosmos Transfer, Cosmos 3 and GR00T fine-tuni
 :::
 
 Applications using Cosmos models must include the attribution: **"Built on NVIDIA Cosmos"** (required under the NVIDIA Open Model License for Cosmos Predict, Reason, and Transfer, and under the [OpenMDW-1.1 License](https://openmdw.ai/license/1-1/) for Cosmos 3). See the full pipeline documentation ([Cosmos Predict](../pipelines/nvidia-cosmos-predict.md), [Cosmos Reason](../pipelines/nvidia-cosmos-reason.md), [Cosmos Transfer](../pipelines/nvidia-cosmos-transfer.md), [Cosmos 3](../pipelines/nvidia-cosmos-3.md)) for details.
+
+### Image to 3D Pipeline Model Licenses
+
+The [Image to 3D](../pipelines/image-to-3d.md) pipeline offers six selectable open-weight image-to-mesh models and one agentic path that builds the subject in Blender.
+
+:::caution[Some models need pre-approval before they can be used]
+A gated repository is a license gate, not just a download step. The account behind the deployment's
+HuggingFace token must accept the license and — for **Meta SAM 3D Objects** and the **Meta DINOv3**
+encoder that TRELLIS.2 conditions on — request access and wait for Meta to approve it. A pending
+request behaves exactly like a denied one. **BRIA RMBG-2.0** is granted on accepting BRIA's terms. The prompted
+background-removal backend uses `facebook/sam-vit-huge`, which is Apache-2.0 and ungated — deliberately, in
+preference to SAM 3, whose weights carry the same reviewed access request. Stable3DGen,
+TripoSR, Step1X-3D and Hunyuan3D-2 need no approval.
+
+Note that TRELLIS.2's own code and weights are MIT and ungated, so its license position looks clear while
+its gated dependency is not: a token that downloads `microsoft/TRELLIS.2-4B` is still refused for DINOv3.
+Obtain approval before deploying — the failure surfaces during the model download, after a GPU instance
+has been provisioned and the container image pulled.
+::: Each model is licensed separately, and only the models enabled in the deployment configuration are downloaded and built into container images. Review the license of each model you enable with your legal team, and accept the model license on HuggingFace before deployment.
+
+**Meta SAM 3D Objects (`sam3d`):** Distributed under the Meta SAM License (last updated 19 November 2025), which grants a non-exclusive, worldwide, non-transferable and royalty-free licence to use, reproduce, distribute and modify the materials. The grant carries no field-of-use limit, so commercial use is permitted, and there is no separate acceptable-use policy. Three obligations attach:
+
+-   **Redistribution under the same terms.** Distributing the materials or any derivative work to a third party is only permitted under this Agreement, and a copy of the Agreement must accompany them. A container image with the weights baked in is such a distribution, which is why this pipeline fetches the weights at run time from the gated repository instead.
+-   **Trade controls.** Use must comply with sanctions and export and import controls. The licence prohibits uses subject to the International Traffic in Arms Regulations and end uses related to military or warfare purposes, nuclear applications, espionage, and guns or illegal weapons. The licensee must not be a target of trade controls.
+-   **Acknowledgement in research publications.** Publishing research results produced with the materials requires acknowledging their use. The licence requires no attribution in product materials and grants no trademark rights.
+
+The licence also forbids reverse engineering or decompiling the materials. The repository is manually gated on HuggingFace, so access has to be requested and approved before the first download.
+
+SAM 3D Objects estimates depth through a second model its own pipeline configuration names: MoGe (`Ruicheng/moge-vitl`), under MIT and ungated. It is downloaded alongside the SAM weights and carries the MIT notice obligation, not the Meta SAM License terms.
+
+The SAM 3D Objects image does not carry `nvdiffrast`. Two of the upstream pipeline's optional stages — its mesh postprocessing and its texture baking — rasterize through a module that imports it, so both are declined: the mesh arrives carrying vertex colours, and the simplification and hole filling those stages would have performed are done by this pipeline's own cleanup ladder instead. The image does install NVIDIA's `kaolin`, so the redistribution question recorded for TRELLIS.2 still applies to it on that count.
+
+The SAM 3D Objects image also builds **Meta PyTorch3D** from source, for the upstream repository's `p3d` extra, from [facebookresearch/pytorch3d](https://github.com/facebookresearch/pytorch3d) at commit `75ebeeaea0908c5527e7b1e305fbc7681382db47`, the same commit the Step1X-3D image builds. The BSD-3-Clause obligations recorded for PyTorch3D under Step1X-3D below apply to this image as well.
+
+**Stable-X Stable3DGen / Hi3DGen (`stable3dgen`):** The inference code is distributed under the MIT license, and so are the geometry weights (`Stable-X/trellis-normal-v0-1`). The normal predictor it bridges through (`Stable-X/yoso-normal-v1-8-1`, with code from `hugoycj/StableNormal`) is Apache-2.0, and the background-removal model it falls back to when an image carries no alpha channel (`ZhengPeng7/BiRefNet`) is MIT. None of the four is gated on HuggingFace, so no access request or license acceptance is needed before deployment. The normal predictor's backbone, **Meta DINOv2**, is Apache-2.0 in code and weights; the image carries a checkout of its repository at a pinned commit and the `dinov2_vitl14_reg4_pretrain` checkpoint, both fetched at image build time from Meta's published sources rather than HuggingFace.
+
+Although Stable3DGen is derived from the TRELLIS architecture, it does **not** inherit TRELLIS's dependency on the NVIDIA ecosystem: kaolin, nvdiffrast and FlexiCubes are replaced by the repository's own marching-cubes implementation over scikit-image. Nothing in the image is built from NVIDIA source, so the redistribution question recorded for TRELLIS.2 below does not apply to it. This is the reason it is the default model.
+
+**Microsoft TRELLIS.2 (`trellis2`):** The TRELLIS.2 4B inference code and model weights are distributed under the MIT license, which imposes no copyleft obligations. The upstream repository declares optional rendering and voxelization dependencies from the NVIDIA ecosystem (for example, `nvdiffrast` and Kaolin) that carry NVIDIA source-code license terms restricting redistribution. Whether a given TRELLIS.2 code path pulls in those NVIDIA components remains an open question; confirm which optional dependencies your build installs, and review their terms separately from the MIT-licensed core before enabling this model in a redistributed product.
+
+**VAST-AI TripoSR (`triposr`):** Distributed under the MIT license, which permits commercial use, modification, and redistribution with attribution and no warranty, and imposes no copyleft obligations.
+
+**StepFun Step1X-3D (`step1x3d`):** Distributed under the Apache License, Version 2.0. In addition to the permissions granted by the MIT license, Apache-2.0 includes an express patent grant from each contributor and requires that modified files be marked as changed and that the license and any `NOTICE` file be carried forward in redistributions. For its texture stage, the image builds **Meta PyTorch3D** from source, from [facebookresearch/pytorch3d](https://github.com/facebookresearch/pytorch3d) at commit `75ebeeaea0908c5527e7b1e305fbc7681382db47`. PyTorch3D is distributed under the BSD-3-Clause license, which requires that its copyright notice, conditions and disclaimer be retained in source and binary redistributions and that the names of Meta and its contributors not be used to endorse derived products without permission; its repository's `LICENSE-3RD-PARTY` file also lists the MIT-licensed code from SRN, IDR and NeRF that it carries. The Step1X-3D container image additionally installs NVlabs nvdiffrast, which its upstream requirements list as a git dependency. nvdiffrast is distributed under the NVIDIA Source Code License (1-Way Commercial), whose Use Limitation reads "The Work and any derivative works thereof only may be used or intended for use non-commercially", with "non-commercially" defined as "for research or evaluation purposes only and not for any direct or indirect monetary gain". The carve-out permitting commercial use is NVIDIA's own. **An image built with Step1X-3D enabled is therefore limited to research and evaluation use, and not to any use for direct or indirect monetary gain.** The TRELLIS.2 image carries the same dependency and the same limitation. Neither model's own license says so -- Step1X-3D is Apache-2.0 and TRELLIS.2 is MIT -- so the limitation comes entirely from a transitive dependency, and the full dependency set of each image should be reviewed for other components under NVIDIA licenses. Stable3DGen depends on no NVIDIA-licensed component and is the model to choose where the deployment is commercial.
+
+**Tencent Hunyuan3D-2 (`hunyuan3d`):** Distributed under the Tencent Hunyuan 3D 2.0 Community License Agreement. Unlike the other models here, its restriction is territorial rather than field-of-use: the agreement grants a royalty-free licence "for any purpose and in any field of use", so commercial use is permitted, but only within a Territory defined as "the worldwide territory, excluding the territory of the European Union, United Kingdom and South Korea", and it states that "any such use outside the Territory is unlicensed and unauthorized".
+
+:::danger[Hunyuan3D-2 is not licensed in the European Union, the United Kingdom or South Korea]
+`getConfig()` rejects a configuration that enables this model in an AWS Region inside the excluded territory, including the EU Sovereign Cloud Region. That check reads the deployment Region, which is a proxy for where the use happens rather than a decision of it — a deployment in a permitted Region can still serve users in the excluded territory, and no synthesis-time check can see that. Confirm the licence applies to your deployment before enabling the model.
+:::
+
+Two further terms bind a deployment rather than a build. A deployment whose products or services exceed **one million monthly active users** in the preceding calendar month must request a separate licence from Tencent, which Tencent may grant at its sole discretion. And outputs may not be used to improve any AI model other than Hunyuan3D-2 itself or a derivative of it.
+
+Redistribution requires carrying a copy of the agreement, marking modified files as changed, and including the notice "Tencent Hunyuan 3D 2.0 is licensed under the Tencent Hunyuan 3D 2.0 Community License Agreement, Copyright © 2025 Tencent. All Rights Reserved. The trademark rights of 'Tencent Hunyuan' are owned by Tencent or its affiliate." The agreement is governed by the laws of the Hong Kong Special Administrative Region. The upstream source files carry an older "Tencent Hunyuan Non-Commercial License Agreement" header that the repository's own `LICENSE` file supersedes; review both.
+
+Unlike the other two textured models, the Hunyuan3D-2 image installs no `nvdiffrast` — its texture stage ships its own rasterizer — so it carries none of the NVIDIA Source Code License restrictions recorded above.
+
+**Blender agent (`blenderagent`):** This path carries no reconstruction model. Its container image installs **Blender** (GPL-2.0-or-later), **OpenAI Codex CLI** (Apache-2.0), **LiteLLM** (MIT) with the **OpenAI Python SDK** (Apache-2.0) the adapter checks it with, and **MoGe-2** (MIT in code and weights, `Ruicheng/moge-2-vitl-normal`, with a vendored DINOv2 under Apache-2.0) on **PyTorch** (BSD-3-Clause) and **utils3d** (MIT) for the scripted refit's depth estimate, and the agent reasons with a foundation model on Amazon Bedrock under Amazon Bedrock's terms for the configured model. Blender is a tool the agent runs as a separate process; the meshes and textures the agent writes are the agent's own output and are not derivatives of Blender, so the GPL attaches to redistributing the image rather than to the models it produces — the same position as the GPL-3.0 repair rungs installed in every Image to 3D image. Codex CLI is pinned to one release and used with no OpenAI account or key; the model is reached only through Amazon Bedrock, on the deployment's own IAM role. The same Codex CLI release ships **bubblewrap** (LGPL-2.0-or-later) as a separate binary, the sandbox Codex runs the agent's commands in on a kernel without Landlock; it runs as its own process, and the LGPL's source-availability terms attach to redistributing it with the image. **ripgrep** (MIT OR Unlicense) is installed from the Ubuntu package archive for the agent's file listing and search. Retain the Codex, bubblewrap, ripgrep, LiteLLM, MoGe-2, utils3d and PyTorch notices in redistributions. No `nvdiffrast` or other NVIDIA-licensed source is built into this image.
+
+**BRIA RMBG-2.0 (`BACKGROUND_REMOVAL=rmbg2`):** An optional background-removal backend, licensed under Creative Commons Attribution-NonCommercial 4.0 (CC BY-NC 4.0) for non-commercial use only; its model card states that commercial use is subject to a commercial agreement with BRIA. A run uses it only when its template sets `BACKGROUND_REMOVAL` to `rmbg2` or `TRELLIS2_PREPROCESS_IMAGE` to `true`, and the weights are downloaded at run time rather than built into an image. A commercial deployment needs the BRIA agreement before selecting it.
+
+**Container base images:** Each model's image is built on its own base. The `stable3dgen`, `triposr`, `step1x3d` and `hunyuan3d` images use `nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04`, the `blenderagent` image uses `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04`, and the `trellis2` image uses `nvidia/cuda:12.4.1-devel-ubuntu22.04`; all three are subject to the [NVIDIA Deep Learning Container License](https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license). The `sam3d` image uses `mambaorg/micromamba:1.5.8` (Apache-2.0, on Debian `bookworm-slim`, with micromamba under BSD-3-Clause), and the CUDA 12.1 toolkit packages that upstream's conda environment installs into it are subject to the [NVIDIA CUDA Toolkit End User License Agreement](https://docs.nvidia.com/cuda/eula/index.html).
+
+**Pinned versions:** each image checks its model's upstream repository (and StableNormal, in the `stable3dgen` image) out at a fixed commit and installs a fixed PyTorch build. `NOTICE.md` lists the commits and versions.
+
+### GPL-Licensed Mesh Repair Components
+
+The Image to 3D pipeline's print-readiness cleanup runs a ladder of mesh repair backends. Two of them — `trimesh` (MIT) and `manifold3d` (Apache-2.0) — are permissively licensed. The other two, **pymeshfix** (0.18.1) and **PyMeshLab** (2025.7.post1), are licensed under GPL-3.0. All four packages are installed in every Image to 3D container image, and the `REPAIR_BACKENDS` pipeline setting selects which of them a given run uses. That setting defaults to the full ladder, so the GPL-3.0 backends run whenever the permissively licensed rungs leave a mesh unrepaired, unless an operator narrows the selection to the permissively licensed backends.
+
+The SAM 3D Objects (`sam3d`) image also installs, through the SAM 3D Objects repository's own requirements, **bpy** and **point-cloud-utils** (GPL-3.0), **plyfile** (GPL-3.0-or-later), **igraph** (GPL-2.0-or-later) and **pdoc3** (AGPL-3.0-or-later). The SAM 3D Objects code imports plyfile and igraph.
+
+:::note
+Because **pymeshfix** and **PyMeshLab** are present in every Image to 3D container image, GPL-3.0 terms apply to those images regardless of which backends a run selects. GPL-3.0 is a strong copyleft license whose obligations differ materially from the MIT, Apache-2.0, and LGPL-2.1 terms elsewhere in VAMS, and they include source availability obligations if you redistribute the images. Review the license requirements with your legal team before deploying the Image to 3D pipeline, and leave the pipeline disabled where GPL-3.0 components cannot be accepted in your container images. This mirrors the copyleft considerations already noted for Blender (GPL-3.0) in the GenAI Metadata 3D Labeling pipeline and for the LGPL-2.1 CAD components.
+:::
+
+### Container Image Build Components
+
+-   **Image to 3D:** the TRELLIS.2 image builds the CuMesh and FlexGEMM CUDA extensions from source (both MIT); the TRELLIS.2 and Blender agent images install `opencv-python-headless` (packaging MIT, OpenCV Apache-2.0, bundled FFmpeg LGPL-2.1); and the Stable3DGen image installs `xformers` 0.0.34 (BSD-3-Clause).
+-   **Potree viewer:** the PDAL image builds on the conda-forge `condaforge/mambaforge` and `condaforge/miniforge3` base images (BSD-3-Clause), whose conda packages each carry their own license.
+
+See `NOTICE.md` for the versions.
+
+### Sample Assets in Documentation Screenshots
+
+The screenshots in this documentation use sample 3D models from the [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets) repository:
+
+| Model                                                                                                  | Author                     | Licence                                                       |
+| ------------------------------------------------------------------------------------------------------ | -------------------------- | ------------------------------------------------------------- |
+| [BoomBox](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/BoomBox)                 | Microsoft                  | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| [Avocado](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Avocado)                 | Microsoft                  | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| [WaterBottle](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/WaterBottle)         | Microsoft                  | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| [Lantern](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Lantern)                 | Microsoft                  | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
+| [IridescenceLamp](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/IridescenceLamp) | Eric Chadwick, Wayfair LLC | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)     |
+
+The USDZ model shown in the file viewer screenshots was created for this documentation. The models appear only in the screenshots; they are not distributed with VAMS.
 
 ---
 

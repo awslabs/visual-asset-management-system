@@ -3,7 +3,18 @@
 
 import json
 from customLogging.logger import safeLogger
-from common.validators import validate, normalize_userid, trim_name, relative_file_path_pattern, id_pattern, object_name_pattern, filename_pattern, bucket_existing_key_pattern
+from common.validators import (
+    bucket_existing_key_pattern,
+    filename_pattern,
+    id_pattern,
+    new_asset_id_regex,
+    normalize_userid,
+    object_name_pattern,
+    relative_file_path_pattern,
+    show_archived_model_value,
+    trim_name,
+    validate,
+)
 from typing import Dict, List, Optional, Literal, Union, Any
 from typing_extensions import Annotated
 from pydantic import Json, EmailStr, PositiveInt, Field
@@ -12,7 +23,7 @@ from aws_lambda_powertools.utilities.parser.models import (
     APIGatewayProxyEventV2Model
 )
 
-logger = safeLogger(service_name="AssetModelsV3")
+logger = safeLogger()
 
 # Default pagination sizes for the asset listing API. maxItems is the per-response
 # ceiling; callers retrieve additional assets by following the response NextToken.
@@ -42,12 +53,34 @@ MAX_PARTS_PER_FILE = 10000
 # Maximum number of files accepted in a single upload-initialize request.
 MAX_FILES_PER_UPLOAD_REQUEST = 1000
 # Maximum total parts across all files in a single upload-initialize request.
-# This bounds the init Lambda's time/memory AND keeps the presigned-URL response
-# payload under the AWS Lambda synchronous response limit (6 MB) and the API
-# Gateway payload limit: each part contributes one presigned URL to the response,
-# so this cap directly bounds the response size. Do not raise it without
-# re-checking the worst-case response-size math (parts x URL length).
-MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST = 5000
+# This bounds the init Lambda's time/memory AND the presigned-URL response payload,
+# which must stay under the AWS Lambda synchronous response limit (6 MB) and the API
+# Gateway payload limit: each part contributes one presigned URL to the response.
+# The cap alone does not bound the response, because each URL carries the file's S3
+# key percent-encoded, so initialize_upload also estimates the response from the
+# constants below and refuses a request over MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES.
+# With ordinary keys a request at this cap and MAX_FILES_PER_UPLOAD_REQUEST files is
+# about 4.5 MB; tests/models/test_assetsV3_upload_response_size.py holds that under
+# the budget. Do not raise it without re-checking that math.
+MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST = 1500
+
+# Budget for the serialized upload-initialize response (the Lambda proxy envelope with the JSON
+# body inside it). It leaves about 1 MB of headroom under the 6 MB Lambda response limit.
+MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES = 5 * 1024 * 1024
+# Bytes each part adds to the response, besides the S3 key its presigned URL carries: the
+# regional path-style host and bucket, the SigV4 query string (credential scope, date, expiry,
+# signature, session token, partNumber, uploadId) and the part's JSON wrapping. A
+# botocore-signed upload_part URL with a 1,300-character session token, a 63-character bucket,
+# a 256-character uploadId and a 7-day expiry measures at most 2,107 bytes this way, signed for
+# a Region of each partition (commercial, China, GovCloud, ISO). Rounded up so a longer session
+# token or uploadId stays inside it.
+UPLOAD_PART_URL_FIXED_OVERHEAD_BYTES = 2560
+# Bytes each file adds to the response besides its relativeKey: its JSON wrapping, numParts
+# and an uploadIdS3 of up to 256 characters (348 bytes measured), rounded up.
+UPLOAD_RESPONSE_FILE_OVERHEAD_BYTES = 512
+# Bytes the response carries once: the proxy envelope, its headers, the uploadId and the
+# message (351 bytes measured), rounded up.
+UPLOAD_RESPONSE_BASE_OVERHEAD_BYTES = 2048
 
 # Maximum file keys accepted in a single bulk download request. Each key
 # produces one presigned URL in the response, so this cap keeps the response
@@ -154,15 +187,21 @@ def validate_asset_identifiers(values: dict) -> dict:
 
 
 def validate_ascii_asset_id(value: str) -> str:
-    """Reject an asset id a caller chose that carries a non-ASCII or non-printable character.
+    """Reject an asset id a caller chose that the new-ID rule refuses: a non-ASCII
+    or non-printable character, or a last character the rest of the id does not
+    admit.
 
     Narrower than ASSET_ID on purpose, and applied only where a caller names a
-    NEW asset. ASSET_ID itself stays Unicode-tolerant because it is validated on
-    every read path — asset detail, file listing, download, workflow execute —
-    so an id an earlier release stored has to keep matching it to stay
-    addressable. The value is rejected rather than folded to an ASCII spelling:
-    the id is an S3 prefix component, so normalizing it would point the asset at
-    a different location than the caller asked for.
+    NEW asset. ASSET_ID itself stays Unicode-tolerant and keeps the broader last
+    character, because it is validated on every read path — asset detail, file
+    listing, download, workflow execute — so an id an earlier release stored has
+    to keep matching it to stay addressable. The value is rejected rather than
+    folded to an ASCII spelling: the id is an S3 prefix component, so normalizing
+    it would point the asset at a different location than the caller asked for.
+
+    The last-character check is the same rule the rest of the id follows: a new
+    id cannot end in '!', '#', '%', ')' or a symbol such as '™', while an id an
+    earlier release stored with one of those characters still matches ASSET_ID.
 
     The printable check is not covered by the ASCII one. The shared
     ``filename_pattern`` admits ``\\s``, so a tab or a newline inside an id
@@ -177,6 +216,11 @@ def validate_ascii_asset_id(value: str) -> str:
         raise ValueError(message)
     if not value.isprintable():
         message = "Asset identifier must contain only printable characters"
+        logger.error(message)
+        raise ValueError(message)
+    if not new_asset_id_regex.fullmatch(value):
+        message = ("Asset identifier must end with a letter, digit, underscore, "
+                   "comma, apostrophe or hyphen")
         logger.error(message)
         raise ValueError(message)
     return value
@@ -442,6 +486,38 @@ class UploadFileCompletionModel(BaseModel, extra='ignore'):
         # complete_upload derives the final S3 key from this value.
         return validate_asset_file_path('relativeKey', v, new_object=True, file_only=True)
 
+class GetUploadStatusRequestModel(BaseModel, extra='ignore'):
+    """Request model for GET /uploads/{uploadId} (path uploadId, query assetId and databaseId)"""
+    uploadId: str = Field(min_length=1, max_length=64, regex=r'^[A-Za-z0-9-]+$')
+    assetId: str = Field(min_length=1, max_length=256)
+    databaseId: str = Field(min_length=4, max_length=256)
+
+    _trim_ids = validator('assetId', 'databaseId', pre=True, allow_reuse=True)(trim_name)
+
+    @root_validator
+    def validate_fields(cls, values):
+        validate_asset_identifiers(values)
+        return values
+
+
+class UploadAsyncFileStatusModel(BaseModel, extra='ignore'):
+    """Outcome of one file of an upload that is ingested asynchronously"""
+    relativeKey: str
+    status: Literal["PENDING", "SUCCEEDED", "FAILED"]
+    error: Optional[str] = ""
+    updatedAt: Optional[str] = ""
+
+
+class UploadStatusResponseModel(BaseModel, extra='ignore'):
+    """Response model for GET /uploads/{uploadId}: the upload's status and, while or after files over
+    the asynchronous threshold are ingested, each such file's outcome"""
+    uploadId: str
+    databaseId: str
+    assetId: str
+    status: str
+    asyncFiles: List[UploadAsyncFileStatusModel] = []
+
+
 class CompleteUploadRequestModel(BaseModel, extra='ignore'):
     """Request model for completing a file upload"""
     assetId: str = Field(min_length=1, max_length=256)
@@ -498,6 +574,9 @@ class FileCompletionResult(BaseModel, extra='ignore'):
     success: bool
     error: Optional[str] = None
     largeFileAsynchronousHandling: bool = False
+    # Copy job ingesting this file asynchronously (workflow outputs over the async threshold, when the
+    # caller named an ingestion batch). Absent for every other file.
+    ingestionJobId: Optional[str] = None
 
 class ExternalFileModel(BaseModel, extra='ignore'):
     """Model for an external file in a completion request"""
@@ -522,11 +601,15 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
     workflowId: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)
     workflowExecutionId: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)
     changeUserId: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)
-    # Bucket the tempKey source files live in when it differs from the asset's own (destination)
-    # bucket. Workflow-execution outputs are staged in the VAMS default run bucket while the output
-    # asset can live in another bucket; the copy reads from sourceBucket and writes to the asset
-    # bucket. Empty/omitted => same as the asset bucket (the normal single-bucket upload path).
+    # Accepted and not used to choose a bucket: the handler resolves the bucket the tempKey files are
+    # read from itself (the VAMS default asset bucket for a workflow execution's write-back, else the
+    # asset's own bucket) and logs a value that differs. Still validated, since it is logged.
     sourceBucket: Optional[str] = Field(None, max_length=MAX_S3_BUCKET_NAME_LENGTH)
+    # Workflow output ingestion batch the caller waits on. When set, each file over the async
+    # threshold is ingested by a large object copy job in this batch (no queue, no synchronous
+    # fallback). Omitted: the large-file queue path as before.
+    ingestionBatchId: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)
+    workflowDatabaseId: Optional[str] = Field(None, max_length=MAX_FREE_TEXT_LENGTH)
 
     _trim_ids = validator('assetId', 'databaseId', pre=True, allow_reuse=True)(trim_name)
 
@@ -565,6 +648,23 @@ class CompleteExternalUploadRequestModel(BaseModel, extra='ignore'):
             # Functions assigns. The same validator the execution routes use keeps the provenance
             # field from accepting arbitrary text.
             (valid, message) = validate({'workflowExecutionId': {'value': values.get('workflowExecutionId'), 'validator': 'GUID'}})
+            if not valid:
+                logger.error(message)
+                raise ValueError(message)
+        if values.get('ingestionBatchId') is not None:
+            # A workflow output's ingestion batch is its execution: one batch per run, so a caller
+            # cannot place copy jobs in another execution's batch.
+            if values.get('ingestionBatchId') != values.get('workflowExecutionId'):
+                message = "ingestionBatchId must be the workflowExecutionId of the run"
+                logger.error(message)
+                raise ValueError(message)
+        if values.get('workflowDatabaseId') is not None:
+            # The database the running workflow is registered in. Every shipped pipeline registers
+            # a GLOBAL workflow, so the keyword is a valid value here, as it is on the execute
+            # route's workflowDatabaseId path parameter (executeWorkflow.py) and the execution
+            # models' databaseId fields (models/executions.py, allow_global=True).
+            (valid, message) = validate({'workflowDatabaseId': {'value': values.get('workflowDatabaseId'), 'validator': 'ID',
+                                                                'allowGlobalKeyword': True}})
             if not valid:
                 logger.error(message)
                 raise ValueError(message)
@@ -1112,7 +1212,17 @@ class AssetFileVersionItemModel(BaseModel, extra='ignore'):
 
     @validator('relativeKey')
     def validate_relative_key(cls, v):
-        return validate_asset_file_path('relativeKey', v)
+        v = validate_asset_file_path('relativeKey', v)
+        # The version stores the path without its leading slash (#1795), so a path made only of
+        # slashes names no file it could store.
+        if not v.lstrip('/'):
+            message = "relativeKey must name a file"
+            logger.error(message)
+            raise ValueError(message)
+        # Exactly one leading slash marks a path, so '//x' names the key with an empty segment after
+        # the asset's location ('{location}/x'), which the version handler resolves by the same rule
+        # (common.assetLocations.object_key_for_path) and stores as '//x' (#1977).
+        return v
 
 class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for creating a new asset version"""
@@ -1124,7 +1234,9 @@ class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
     # Free-form caller text trims its surrounding whitespace before the length check.
     _trim_text = validator('comment', pre=True, allow_reuse=True)(trim_name)
     
-    @root_validator
+    # Skipped when a field failed: the field's message is then the one answer, so a refused entry in
+    # `files` is not also reported as a missing file list.
+    @root_validator(skip_on_failure=True)
     def validate_fields(cls, values):
         # If not using latest files, ensure file list is provided
         if not values.get('useLatestFiles') and (not values.get('files') or len(values.get('files')) == 0):
@@ -1138,9 +1250,11 @@ class CreateAssetVersionRequestModel(BaseModel, extra='ignore'):
             logger.error(message)
             raise ValueError(message)
             
-        # Check for duplicate keys if files provided
+        # Check for duplicate keys if files provided. '/a.txt' and 'a.txt' name one file, which the
+        # version stores once (#1795); exactly one leading '/' marks a path, so '//a.txt' names another.
         if values.get('files'):
-            keys = [file.relativeKey for file in values.get('files')]
+            keys = [file.relativeKey[1:] if file.relativeKey.startswith('/') else file.relativeKey
+                    for file in values.get('files')]
             if len(keys) != len(set(keys)):
                 message = "Duplicate relative keys are not allowed"
                 logger.error(message)
@@ -1188,6 +1302,7 @@ class UpdateAssetVersionRequestModel(BaseModel, extra='ignore'):
 class GetAssetVersionRequestModel(BaseModel, extra='ignore'):
     """Request model for getting a specific asset version"""
     assetVersionId: str = Field(min_length=1)  # The version ID to get
+    showArchived: Optional[bool] = Field(default=False)  # Also resolve an archived asset
 
 class GetAssetVersionsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing asset versions"""
@@ -1195,6 +1310,8 @@ class GetAssetVersionsRequestModel(BaseModel, extra='ignore'):
     pageSize: Optional[int] = Field(default=1000, ge=1, le=MAX_VERSION_LIST_PAGE_SIZE)
     startingToken: Optional[str] = Field(default=None, max_length=MAX_PAGINATION_TOKEN_LENGTH)
     showArchived: Optional[bool] = Field(default=False)
+
+    _parse_show_archived = validator('showArchived', pre=True, allow_reuse=True)(show_archived_model_value)
 
 class AssetVersionFileModel(BaseModel, extra='ignore'):
     """Model for a file in an asset version response"""
@@ -1385,6 +1502,9 @@ class AssetUploadTableModel(BaseModel, extra='ignore'):
     # relativeKeys the upload was initialized with. Completion accepts only these; a record
     # without the attribute predates the binding and is completed without the membership check.
     files: Optional[List[str]] = None
+    # "perUpload" (UPLOAD_STAGING_LAYOUT_PER_UPLOAD) when the files stage per upload; a record without
+    # it was initialized before per-upload staging, and only such an upload uses the legacy staging key.
+    stagingLayout: Optional[str] = None
     
     def to_dict(self):
         """Convert model to dictionary for DynamoDB storage"""
@@ -1408,5 +1528,189 @@ class AssetUploadTableModel(BaseModel, extra='ignore'):
             result["UserId"] = self.UserId
         if self.files is not None:
             result["files"] = self.files
+        if self.stagingLayout:
+            result["stagingLayout"] = self.stagingLayout
             
         return result
+
+
+######################## Download as Zip API Models ##########################
+# Request and response models of Download as Zip (handlers/assets/zipDownloadService.py). Error
+# text never echoes a caller-supplied value (#1134): a refusal names the field and the rule, not the
+# value.
+
+ZIP_MAX_SELECTION_ENTRIES = 1000
+ZIP_MAX_RELATIVE_PATH_CHARS = 1024
+
+# An S3 VersionId is URL-safe ([A-Za-z0-9._-], plus the literal "null" on an unversioned object);
+# the same charset as models.executions.ExecuteInputFileModel.versionId.
+ZIP_VERSION_ID_PATTERN = r"^[A-Za-z0-9._\-]+$"
+ZIP_ASSET_VERSION_ID_PATTERN = r"^[A-Za-z0-9._\-]+$"
+
+
+def _zip_has_control_characters(text: str) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text)
+
+
+class ZipSelectionEntryModel(BaseModel, extra='ignore'):
+    """One requested entry: a file, a folder (path ends with '/'), or the whole asset ('/')."""
+    type: Literal["file", "folder", "asset"]
+    relativePath: str = Field(..., min_length=1, max_length=ZIP_MAX_RELATIVE_PATH_CHARS)
+    versionId: Optional[str] = Field(None, min_length=1, max_length=256, regex=ZIP_VERSION_ID_PATTERN)
+
+    @root_validator(skip_on_failure=True)
+    def validate_entry(cls, values):
+        path = values.get("relativePath") or ""
+        entry_type = values.get("type")
+        if not path.startswith("/"):
+            raise ValueError("relativePath must be asset-relative and begin with '/'")
+        if "\\" in path:
+            raise ValueError("relativePath must not contain backslashes")
+        if _zip_has_control_characters(path):
+            raise ValueError("relativePath must not contain control characters")
+        if any(segment in ("..", ".") for segment in path.split("/")):
+            raise ValueError("relativePath must not contain '.' or '..' segments")
+        if "//" in path:
+            raise ValueError("relativePath must not contain empty segments")
+        if entry_type == "asset" and path != "/":
+            raise ValueError("an asset entry must have relativePath '/'")
+        if entry_type == "folder" and (path == "/" or not path.endswith("/")):
+            raise ValueError("a folder entry must end with '/' and must not be the asset root")
+        if entry_type == "file" and path.endswith("/"):
+            raise ValueError("a file entry must not end with '/'")
+        if values.get("versionId") and entry_type != "file":
+            raise ValueError("versionId is only allowed on file entries")
+        return values
+
+
+class CreateZipDownloadRequestModel(BaseModel, extra='ignore'):
+    """POST /database/{databaseId}/assets/{assetId}/download/zip.
+
+    Version pinning: either per-file ``versionId`` on file entries, or ONE asset-version pin
+    (``assetVersionId`` or ``assetVersionIdAlias``) that resolves every selected file, folder or the
+    whole asset to the file versions recorded in that asset version. The forms are mutually
+    exclusive."""
+    selection: List[ZipSelectionEntryModel] = Field(..., min_items=1, max_items=ZIP_MAX_SELECTION_ENTRIES)
+    assetVersionId: Optional[str] = Field(None, min_length=1, max_length=256,
+                                          regex=ZIP_ASSET_VERSION_ID_PATTERN)
+    assetVersionIdAlias: Optional[str] = Field(None, min_length=1, max_length=256)
+    archiveFormat: Literal["zip", "tar", "tar.gz"] = "zip"
+    compression: Literal["store", "deflate"] = "store"
+    archiveFileName: Optional[str] = Field(None, min_length=1, max_length=255)
+
+    # The archive name trims its surrounding whitespace before the length check (the sanitizer
+    # strips again when it builds the stored name).
+    _trim_names = validator("archiveFileName", pre=True, allow_reuse=True)(trim_name)
+
+    @validator("assetVersionIdAlias")
+    def validate_alias(cls, v):
+        if v is not None and _zip_has_control_characters(v):
+            raise ValueError("assetVersionIdAlias must not contain control characters")
+        return v
+
+    @validator("archiveFileName")
+    def validate_archive_file_name(cls, v):
+        if v is not None and _zip_has_control_characters(v):
+            raise ValueError("archiveFileName must not contain control characters")
+        return v
+
+    @root_validator(skip_on_failure=True)
+    def validate_request(cls, values):
+        selection = values.get("selection") or []
+        if any(e.type == "asset" for e in selection) and len(selection) > 1:
+            raise ValueError("a whole-asset selection must be the only entry")
+        if values.get("assetVersionId") and values.get("assetVersionIdAlias"):
+            raise ValueError("assetVersionId and assetVersionIdAlias are mutually exclusive")
+        pinned = bool(values.get("assetVersionId") or values.get("assetVersionIdAlias"))
+        if pinned and any(e.versionId for e in selection):
+            raise ValueError("per-file versionId cannot be combined with an asset version pin")
+        if values.get("compression") == "deflate" and values.get("archiveFormat") != "zip":
+            raise ValueError("compression 'deflate' applies to the zip format only")
+        # Collapse exact duplicates, keeping the first occurrence.
+        seen, unique = set(), []
+        for entry in selection:
+            marker = (entry.type, entry.relativePath, entry.versionId or "")
+            if marker not in seen:
+                seen.add(marker)
+                unique.append(entry)
+        values["selection"] = unique
+        return values
+
+
+class ListZipDownloadsQueryModel(BaseModel, extra='ignore'):
+    """Paging of the list routes (VAMS pagination pattern)."""
+    maxItems: int = Field(100, ge=1, le=1000)
+    pageSize: int = Field(100, ge=1, le=1000)
+    startingToken: Optional[str] = Field(None, min_length=1, max_length=4096)
+
+
+class DeleteZipDownloadQueryModel(BaseModel, extra='ignore'):
+    """Query of the DELETE request route. ``intent=cancel`` says the caller means a cancel: a job that
+    has already finished is then kept and answered ``ended`` instead of deleted (#1125 D23). Without
+    it the route keeps its behaviour (cancel an active job, delete a finished one)."""
+    intent: Optional[Literal["cancel"]] = None
+
+
+class ZipSelectionSummaryModel(BaseModel, extra='ignore'):
+    files: int = 0
+    folders: int = 0
+    wholeAsset: bool = False
+
+
+class ZipProgressModel(BaseModel, extra='ignore'):
+    filesDone: int = 0
+    filesTotal: int = 0
+    bytesDone: int = 0
+    bytesTotal: int = 0
+
+
+class ZipSelectionPreviewEntryModel(BaseModel, extra='ignore'):
+    type: str
+    relativePath: str
+    versionId: Optional[str] = None
+
+
+class ZipDownloadJobModel(BaseModel, extra='ignore'):
+    """One job as the API returns it (common.zipDownloads.to_job_item)."""
+    requestId: str
+    databaseId: str
+    assetId: str
+    assetName: str = ""
+    status: Literal["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]
+    archiveFormat: str
+    compression: str
+    archiveFileName: str
+    archiveSizeBytes: Optional[int] = None
+    selectionSummary: ZipSelectionSummaryModel
+    selectionPreview: List[ZipSelectionPreviewEntryModel] = []
+    assetVersionId: Optional[str] = None
+    progress: ZipProgressModel
+    errorMessage: Optional[str] = None
+    cancelledBy: Optional[str] = None
+    createdAt: str
+    startedAt: Optional[str] = None
+    completedAt: Optional[str] = None
+    expiresAt: str = ""
+
+
+class ZipDownloadListResponseModel(BaseModel, extra='ignore'):
+    Items: List[ZipDownloadJobModel] = []
+    NextToken: Optional[str] = None
+
+
+class ZipDownloadUrlResponseModel(BaseModel, extra='ignore'):
+    url: str
+    expiresIn: int
+    archiveFileName: str
+    archiveSizeBytes: Optional[int] = None
+
+
+class ZipDownloadDeleteResponseModel(BaseModel, extra='ignore'):
+    message: str
+    # "ended": a cancel of a job that ended before the cancel was recorded (#1125 D22), or a DELETE
+    # with intent=cancel of a job that had already finished (#1125 D23). The job is kept with its
+    # outcome and nothing is deleted. ``status`` is set only with "ended": the job's final status
+    # (SUCCEEDED or FAILED), or "" when the job was removed meanwhile. A cancel of a job that is
+    # already CANCELLED answers "cancelled" (a repeated cancel).
+    action: Literal["cancelled", "deleted", "ended"]
+    status: Optional[str] = None

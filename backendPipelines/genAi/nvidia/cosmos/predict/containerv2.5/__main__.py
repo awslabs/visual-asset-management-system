@@ -26,6 +26,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 from inference import INFERENCE_SAMPLE_NAME, generate_preview_gif, run_inference
+import manifest_io
 from manifest_io import fetch_input_configuration, InputConfigurationError
 from model_manager import S3_HF_CACHE_PREFIX, ensure_models_cached
 
@@ -133,7 +134,24 @@ def parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
     return bucket, key
 
 
-def download_from_s3(s3_uri: str, local_path: Path) -> None:
+# The error text the AWS CLI prints when the requested version no longer exists: NoSuchVersion on a
+# GET, 404/405 for a deleted key or a delete marker. Any other failure (a 400 such as a wrong Region
+# or a 403) is reported with the CLI's own message.
+_MISSING_VERSION_MARKERS = ("NoSuchVersion", "NoSuchKey", "(404)", "(405)", "MethodNotAllowed")
+
+
+def input_download_command(s3_uri: str, local_path: Path, version_id: str = "") -> list:
+    """The AWS CLI command that downloads the input file. With a version it reads that exact version
+    (`aws s3 cp` cannot take one); without one it is the plain copy of the current object. The key is
+    everything after the bucket, exactly as `aws s3 cp` reads it."""
+    if not version_id:
+        return ["aws", "s3", "cp", s3_uri, str(local_path), *manifest_io.s3_region_args(s3_uri)]
+    bucket, _, key = s3_uri[len("s3://"):].partition("/")
+    return ["aws", "s3api", "get-object", "--bucket", bucket, "--key", key, "--version-id", version_id,
+            str(local_path), *manifest_io.s3_region_args(s3_uri)]
+
+
+def download_from_s3(s3_uri: str, local_path: Path, version_id: str = "") -> None:
     """
     Download file from S3 using AWS CLI.
 
@@ -145,10 +163,14 @@ def download_from_s3(s3_uri: str, local_path: Path) -> None:
 
     logger.info(f"Downloading from S3: {s3_uri} -> {local_path}")
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "cp", s3_uri, str(local_path)],
+        input_download_command(s3_uri, local_path, version_id),
         capture_output=True, text=True
     ) # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
+        if version_id and any(marker in (result.stderr or "") for marker in _MISSING_VERSION_MARKERS):
+            raise RuntimeError(
+                f"The input file {s3_uri} at version {version_id} no longer exists; it was deleted "
+                f"after the run started.")
         raise RuntimeError(f"S3 download failed: {result.stderr}")
     logger.info(f"Downloaded {local_path.stat().st_size} bytes from S3")
 
@@ -163,7 +185,7 @@ def upload_to_s3(local_path: Path, s3_uri: str) -> None:
     """
     logger.info(f"Uploading to S3: {local_path} -> {s3_uri}")
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "cp", str(local_path), s3_uri],
+        ["aws", "s3", "cp", str(local_path), s3_uri, *manifest_io.s3_region_args(s3_uri)],
         capture_output=True, text=True
     ) # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
@@ -171,11 +193,14 @@ def upload_to_s3(local_path: Path, s3_uri: str) -> None:
     logger.info(f"Uploaded {local_path.stat().st_size} bytes to S3")
 
 
-def compute_relative_subdir(input_s3_path: str, asset_id: str) -> str:
+def compute_relative_subdir(input_s3_path: str, asset_id: str, relative_path: str = "") -> str:
     """
-    Extract relative path between assetId and filename in S3 key.
+    The input's subdirectory within its asset: the folder of its manifest ``relativePath`` when the
+    definition names one, else the key segments between the asset ID and the filename.
 
     Example:
+        relative_path: /test/pump.mp4 -> "test/"
+    Example (no relative_path):
         input_s3_path: s3://bucket/xd130a6d6.../test/pump.mp4
         asset_id: xd130a6d6...
         -> "test/"
@@ -183,10 +208,14 @@ def compute_relative_subdir(input_s3_path: str, asset_id: str) -> str:
     Args:
         input_s3_path: Full S3 URI of input file
         asset_id: Asset ID
+        relative_path: The input's manifest relativePath ("" when the definition names none)
 
     Returns:
         Relative subdirectory path (with trailing slash, or empty string)
     """
+    relative = (relative_path or "").strip("/")
+    if relative:
+        return relative.rsplit("/", 1)[0] + "/" if "/" in relative else ""
     _, key = parse_s3_uri(input_s3_path)
     parts = key.split("/")
 
@@ -272,6 +301,8 @@ def main():
         logger.info("=" * 80)
 
         definition = load_pipeline_definition()
+        # Each asset bucket's Region, so every S3 command below addresses the bucket where it is.
+        manifest_io.register_bucket_regions(definition.get("bucketRegions"))
         logger.info(f"Pipeline definition loaded: {describe_definition(definition)}")
 
         # Extract required fields
@@ -282,6 +313,8 @@ def main():
         cosmos_prompt = definition.get("cosmosPrompt")
         input_parameters_prompt = definition.get("inputParametersPrompt")
         input_s3_asset_file_path = definition.get("inputS3AssetFilePath")
+        # The S3 version the input file is read at, recorded at launch; "" reads the current object.
+        input_version_id = definition.get("inputVersionId") or ""
         output_s3_asset_files_path = definition.get("outputS3AssetFilesPath")
         asset_id = definition.get("assetId")
 
@@ -365,10 +398,18 @@ def main():
         logger.info("Step 1: Ensuring models are cached")
         logger.info("=" * 80)
 
+        # The repository this run needs, so the cache check can tell a warm cache for THIS variant
+        # from a warm cache for another one. Serving several variants from a single cache directory,
+        # a check that only asks whether any weights are present reports a hit on the wrong variant,
+        # skips the restore from S3, and downloads the right weights during inference instead.
+        # A distilled variant ships inside its base size's repository under a subpath, so the
+        # size's leading token is what names the repository.
+        model_repo = f"nvidia/Cosmos-Predict2.5-{model_size.split('-')[0]}"
         ensure_models_cached(
             hf_home=hf_home,
             s3_bucket=s3_model_bucket,
-            invalidate=invalidate_models
+            invalidate=invalidate_models,
+            repos=(model_repo,)
         )
 
         # Step 2: Download input file (for video2world)
@@ -386,7 +427,7 @@ def main():
             input_filename = Path(parse_s3_uri(input_s3_asset_file_path)[1]).name
             input_file_path = INPUT_DIR / input_filename
 
-            download_from_s3(input_s3_asset_file_path, input_file_path)
+            download_from_s3(input_s3_asset_file_path, input_file_path, input_version_id)
 
         # Step 3: Run inference
         logger.info("=" * 80)
@@ -436,7 +477,8 @@ def main():
 
         if model_type == "video2world":
             # Preserve relative path and input filename from the input file
-            relative_subdir = compute_relative_subdir(input_s3_asset_file_path, asset_id)
+            relative_subdir = compute_relative_subdir(input_s3_asset_file_path, asset_id,
+                                                      definition.get("inputRelativePath") or "")
             input_filename_stem = Path(parse_s3_uri(input_s3_asset_file_path)[1]).stem
 
             output_filename = f"{input_filename_stem}_CosmosPredictV2Video2World_{timestamp}.mp4"
@@ -493,7 +535,7 @@ def main():
         logger.info("=" * 80)
         try:
             from model_manager import backup_cache_to_s3
-            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket)
+            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket, repos=(model_repo,))
         except Exception as backup_err:
             logger.warning(f"Failed to backup HF cache to S3 (non-fatal): {backup_err}")
 

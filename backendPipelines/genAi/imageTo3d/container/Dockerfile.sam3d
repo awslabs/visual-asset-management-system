@@ -1,0 +1,400 @@
+# syntax=docker/dockerfile:1.7
+
+# VAMS Image to 3D Pipeline Container -- Meta SAM 3D Objects
+# Upstream: https://github.com/facebookresearch/sam-3d-objects
+# Weights: https://huggingface.co/facebook/sam-3d-objects (gated)
+# Licence: Meta SAM License. Commercial use is permitted, but redistribution of the model, its weights
+# or a derivative is only allowed under the same terms and with a copy of the agreement supplied, and
+# the licence carries trade-control obligations. The weights are therefore fetched at run time from the
+# gated repository rather than baked in, so this image is not itself a redistribution of them.
+#
+# This model is built on its OWN toolchain, which is not the one the other models in this pipeline
+# share. Upstream pins a conda environment (Python 3.11.0 plus the CUDA 12.1 toolchain and compilers)
+# and installs its Python dependencies on top with pip; reproducing that is what makes the build
+# work, so the environment is upstream's, package for package (locks/sam3d/conda-explicit.txt), rather
+# than approximated with pip alone.
+#
+# Its dependency set also reintroduces NVIDIA's kaolin, the component the Stable3DGen model was chosen
+# to avoid. Review kaolin's terms against the deployment before distributing an image built from this
+# file.
+
+FROM mambaorg/micromamba:1.5.8@sha256:475730daef12ff9c0733e70092aeeefdf4c373a584c952dac3f7bdb739601990
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# Non-root runtime user (the #327 design), created first so HOME is /home/vams for every step below:
+# anything a build step writes under HOME (git-lfs's .gitconfig, tool caches) lands where uid 10000 can
+# reach it at run time.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams
+
+# The upstream repo is pinned to a reviewed commit so the image is reproducible. Override with
+# --build-arg to move the pin; a full 40-character commit id is required, since the rev-parse check
+# below rejects a branch or tag name (both of which move).
+ARG SAM3D_COMMIT=f91db411c50efee93d8db7aeb323885650f6f722
+ARG SAM3D_REPO_URL="https://github.com/facebookresearch/sam-3d-objects.git"
+# The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects
+# which rungs it walks through the template's REPAIR_BACKENDS setting.
+ARG ENABLE_GPL_MESH_REPAIR=true
+
+# Resolve names over IPv4 only. This image is the only one in the pipeline on a Debian base rather than
+# an Ubuntu CUDA base, and its resolver hands back the PyPI CDN as IPv6 -- measured in the base image,
+# `getent hosts files.pythonhosted.org` returns 2a04:4e42:f000::223 and nothing else, while the A record
+# 167.82.48.223 is there for the asking. The build VPC has no IPv6 route, so pip spent its entire retry
+# budget on unreachable addresses and failed with "Max retries exceeded ... files.pythonhosted.org", and
+# intermittently "Name or service not known". Five builds died this way.
+#
+# RES_OPTIONS is set as environment rather than written into /etc/resolv.conf because the container
+# runtime regenerates that file at start, discarding anything baked into the image. A gai.conf precedence
+# rule is NOT sufficient on its own: it only reorders results when both families are returned, and here
+# only AAAA comes back, so there is nothing to reorder.
+#
+# `no-aaaa` requires glibc 2.36, which this base provides (Debian 12); on an older base it is ignored
+# silently, so check `ldd --version` before moving the base image. The step below prints the address the
+# CDN resolves to, which is the behaviour that matters and costs one lookup to confirm.
+ENV RES_OPTIONS=no-aaaa
+RUN echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf && \
+    echo "resolving the PyPI CDN with RES_OPTIONS=no-aaaa:" && \
+    getent hosts files.pythonhosted.org | head -1
+
+# Give pip a longer retry budget than its default of 5 attempts. This is set as environment rather than
+# as flags because the failures came from pip's ISOLATED build-dependency subprocess, which builds its
+# own command line and inherits only the environment.
+ENV PIP_RETRIES=10
+ENV PIP_DEFAULT_TIMEOUT=60
+
+# System dependencies. The GL/EGL libraries back trimesh's rendering paths and pymeshlab's plugins;
+# git-lfs is needed for the upstream checkout.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+    build-essential \
+    curl \
+    git \
+    git-lfs \
+    libegl1 \
+    xvfb \
+    libgl1 \
+    libopengl0 \
+    libglu1-mesa \
+    libgles2 \
+    libglib2.0-0 \
+    unzip \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git lfs install
+
+# Install AWS CLI v2 at a fixed version, checked against its SHA-256 before it is installed. A
+# --build-arg that moves the version has to move the digest with it.
+ARG AWS_CLI_VERSION=2.36.39
+ARG AWS_CLI_SHA256=2b337174417c159f8fd825637841f5425308108bd6f99681664409fb0d7ebe01
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
+    echo "${AWS_CLI_SHA256}  awscliv2.zip" | sha256sum -c - && \
+    unzip -q awscliv2.zip && \
+    ./aws/install && \
+    rm -rf aws awscliv2.zip
+
+# Every package of this image is installed from locks/sam3d (#1726): the same versions, from the same files, on every
+# build, and nothing is resolved at build time. The conda environment comes from conda-explicit.txt, upstream's
+# environment with a SHA-256 on every package; the Python set from hashed exports of locks/sam3d/uv.lock. The image's
+# own installs used to resolve upstream's open requirements on build day, and on 2026-11-24 that resolution no longer
+# finished (pip gave up with ResolutionTooDeep after upstream releases of 2026-11-22), so the image did not build.
+COPY locks/sam3d/conda-explicit.txt /opt/locks/sam3d/
+
+# Upstream's environment: Python 3.11.0, the CUDA 12.1 toolchain and the compilers the source-built extensions need,
+# the 212 packages environments/default.yml pins. Python 3.11 is not a free choice -- bpy 4.3.0, pinned in upstream's
+# requirements, publishes cp311 wheels only.
+#
+# micromamba checks each file against the `#sha256:` checksum on its line and refuses one that differs; a line without
+# a checksum it would install unchecked, so every package line must carry one, or the build stops here.
+RUN set -eu; \
+    f=/opt/locks/sam3d/conda-explicit.txt; \
+    bad=$(grep -v -E '^(#.*|@EXPLICIT|https://conda\.anaconda\.org/conda-forge/(linux-64|noarch)/[A-Za-z0-9._+-]+\.(conda|tar\.bz2)#sha256:[0-9a-f]{64})$' "$f" || true); \
+    if [ -n "$bad" ]; then echo "conda-explicit.txt: a line that is not a conda-forge package with a #sha256: checksum: $bad"; exit 1; fi; \
+    micromamba create -y -n sam3d-objects -f "$f"; \
+    micromamba clean --all --yes
+ENV MAMBA_ROOT_PREFIX=/opt/conda
+ENV CONDA_PREFIX=/opt/conda/envs/sam3d-objects
+ENV PATH="/opt/conda/envs/sam3d-objects/bin:$PATH"
+RUN python -c "import sys; print('python', sys.version)" && \
+    python -c "import sys; assert sys.version_info[:3] == (3, 11, 0), sys.version"
+
+COPY locks/sam3d/requirements-build.lock locks/sam3d/requirements.lock locks/sam3d/requirements-gpl.lock locks/sam3d/out-of-lock.json /opt/locks/sam3d/
+COPY locks/sam3d/upstream /opt/locks/sam3d/upstream
+COPY locks/tools/check_installed_set.py locks/tools/check_upstream_requirements.py /opt/locks/tools/
+
+# Clone the upstream repo. The check right after the clone fails the build when one of upstream's requirement files
+# or its environment file differs from the copy the locks were made from (locks/sam3d/upstream), so a moved commit
+# cannot leave a lock that no longer describes what upstream asks for.
+RUN git clone "$SAM3D_REPO_URL" /opt/sam3d && \
+    cd /opt/sam3d && \
+    git checkout --detach ${SAM3D_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${SAM3D_COMMIT}" && \
+    git rev-parse HEAD > /opt/sam3d/VAMS_UPSTREAM_COMMIT && \
+    python /opt/locks/tools/check_upstream_requirements.py \
+        --recorded /opt/locks/sam3d/upstream --clone /opt/sam3d \
+        requirements.txt requirements.dev.txt requirements.inference.txt requirements.p3d.txt environments/default.yml
+WORKDIR /opt/sam3d
+
+# The conda environment supplies the CUDA toolkit, but torch's extension builder finds its headers
+# through CUDA_HOME. Without it a source-built extension is compiled with no CUDA include path, and
+# fails on cuda_runtime_api.h -- or, worse, quietly produces a CPU-only build, which is the "compiled
+# without GPU support" fault upstream's setup notes warn about for pytorch3d. Set before any extension
+# is built so every one of them picks it up.
+#
+# conda-forge places the headers under targets/<arch>/include rather than directly in the prefix, so
+# the location is discovered rather than assumed and linked where CUDA_HOME expects it. The assertion
+# is what stops a missing header turning into a silent CPU-only image.
+ENV CUDA_HOME=/opt/conda/envs/sam3d-objects
+ENV CUDA_PATH=/opt/conda/envs/sam3d-objects
+RUN set -eux; \
+    header=$(find "$CUDA_HOME" -name cuda_runtime_api.h -print -quit); \
+    test -n "$header"; \
+    echo "cuda headers found at $header"; \
+    include_dir=$(dirname "$header"); \
+    mkdir -p "$CUDA_HOME/include"; \
+    if [ "$include_dir" != "$CUDA_HOME/include" ]; then \
+        cp -rsf "$include_dir"/. "$CUDA_HOME/include/"; \
+    fi; \
+    test -f "$CUDA_HOME/include/cuda_runtime_api.h"; \
+    nvcc --version | tail -2
+
+# Every GPU family the pipeline can schedule onto has to be in this list, or a source-built extension
+# compiles for the wrong architecture and fails at runtime with "no kernel image is available for
+# execution on the device". Ampere (8.6) covers g5 / A10G, Ada (8.9) covers g6 / L4 and g6e / L40S,
+# and Hopper (9.0) covers H100.
+ENV TORCH_CUDA_ARCH_LIST="8.6;8.9;9.0"
+# pytorch3d and gsplat are built from source here. Left unbounded, nvcc runs one job per core and the
+# build container is killed for exceeding memory -- the failure mode that stopped the TRELLIS.2 image.
+ENV MAX_JOBS=2
+
+# pip, the build tools and the hatchling backend SAM 3D's own package builds with, from their own lock; then every
+# other package with --require-hashes --no-deps: pip refuses a file whose hash is not in the lock and installs nothing
+# the lock does not name. Build isolation is off, so the few packages published only as source build with the
+# setuptools the build lock installed and download nothing. torch, torchvision, torchaudio and xformers are the
+# CUDA 12.1 builds from the PyTorch index (the lock pins them to +cu121 and the hashes are those files'); the default
+# index stays in place for everything else, since the PyTorch index does not carry every NVIDIA runtime wheel torch
+# pins.
+#
+# The credential is mounted at /run/secrets/pipconf and pip is pointed at it with PIP_CONFIG_FILE: the general index
+# is the CodeArtifact cache the mounted pip.conf names. PIP_CONFIG_FILE is set per command instead of as an image ENV
+# so nothing at run time looks for a file that exists only during the build. pypi.ngc.nvidia.com is not used: it does
+# not resolve from the build subnet, and nothing in the lock comes from it (nvidia-pyindex, whose only effect is to add
+# that index to pip's configuration, is left out of the lock).
+#
+# The prebuilt flash-attn wheel in the lock is the one for torch's C++ ABI as the pip torch wheels have it
+# (cxx11abiFALSE): the wrong variant imports cleanly and then fails on a missing symbol at run time, so the build
+# checks the ABI here.
+RUN --mount=type=secret,id=pipconf,target=/run/secrets/pipconf export PIP_CONFIG_FILE=/run/secrets/pipconf; \
+    pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/sam3d/requirements-build.lock
+RUN --mount=type=secret,id=pipconf,target=/run/secrets/pipconf export PIP_CONFIG_FILE=/run/secrets/pipconf; \
+    pip install --no-cache-dir --require-hashes --no-deps --no-build-isolation \
+    --extra-index-url https://download.pytorch.org/whl/cu121 \
+    -r /opt/locks/sam3d/requirements.lock && \
+    python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda); \
+assert torch.version.cuda and torch.version.cuda.startswith('12.1'), torch.version.cuda; \
+assert not torch._C._GLIBCXX_USE_CXX11_ABI, 'this torch has the C++11 ABI; the locked flash-attn wheel is cxx11abiFALSE'" && \
+    python -c "import flash_attn; print('flash_attn', flash_attn.__version__)"
+
+# kaolin, a published wheel from NVIDIA's index for this torch and CUDA (no compile). PyPI does not carry it, so it is
+# not in the lock: the wheel is checked against its SHA-256 (out-of-lock.json records the same value) and installed
+# with --no-deps; its dependencies are in the lock. Upstream's inference extra names it.
+ARG KAOLIN_WHEEL_URL=https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121/kaolin-0.17.0-cp311-cp311-linux_x86_64.whl
+ARG KAOLIN_WHEEL_SHA256=eefd56fe9403fb2c193c0125e456d6f39b540a87dc0f9ef05e02950fb7975971
+RUN mkdir -p /tmp/kaolin && \
+    curl -fsSL -o /tmp/kaolin/kaolin-0.17.0-cp311-cp311-linux_x86_64.whl "$KAOLIN_WHEEL_URL" && \
+    echo "${KAOLIN_WHEEL_SHA256}  /tmp/kaolin/kaolin-0.17.0-cp311-cp311-linux_x86_64.whl" | sha256sum -c - && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/kaolin/kaolin-0.17.0-cp311-cp311-linux_x86_64.whl && \
+    rm -rf /tmp/kaolin && \
+    python -c "import torch; import kaolin; print('kaolin', kaolin.__version__)"
+
+# The four packages upstream names as git requirements are built here from clones at the commits upstream pins, with
+# build isolation OFF (so each compiles against the torch and numpy installed above and downloads nothing) and
+# --no-deps (their dependencies are in the lock). out-of-lock.json records each. Each source tree is deleted in the
+# layer that builds it.
+#
+# pytorch3d (upstream's p3d extra). FORCE_CUDA=1 is required, not optional: pytorch3d decides at build time whether to
+# compile its CUDA kernels by asking torch for a GPU, and the build container has none, so without it the extension
+# builds CPU-only -- the "compiled without GPU support" fault upstream's setup notes warn about. No wheel is published
+# for Python 3.11 against this torch, so it compiles; MAX_JOBS above keeps it inside the build container's memory.
+#
+# torch is imported first in the check, and has to be: pytorch3d's compiled extension links against libtorch and its
+# own package does not import torch, so loading _C on its own fails with "libc10.so: cannot open shared object file"
+# even though the extension built correctly.
+ARG PYTORCH3D_COMMIT=75ebeeaea0908c5527e7b1e305fbc7681382db47
+RUN git clone https://github.com/facebookresearch/pytorch3d.git /tmp/pytorch3d && \
+    cd /tmp/pytorch3d && \
+    git checkout --detach ${PYTORCH3D_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${PYTORCH3D_COMMIT}" && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/pytorch3d.VAMS_UPSTREAM_COMMIT && \
+    cd / && \
+    FORCE_CUDA=1 pip install --no-cache-dir --no-build-isolation --no-deps /tmp/pytorch3d && \
+    rm -rf /tmp/pytorch3d && \
+    python -c "import torch; import pytorch3d; from pytorch3d import _C; \
+print('pytorch3d', pytorch3d.__version__, 'compiled extension loaded against torch', torch.__version__)"
+
+# gsplat (upstream's inference extra), with the glm headers its submodule pins.
+ARG GSPLAT_COMMIT=2323de5905d5e90e035f792fe65bad0fedd413e7
+RUN git clone https://github.com/nerfstudio-project/gsplat.git /tmp/gsplat && \
+    cd /tmp/gsplat && \
+    git checkout --detach ${GSPLAT_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${GSPLAT_COMMIT}" && \
+    git submodule update --init --recursive && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/gsplat.VAMS_UPSTREAM_COMMIT && \
+    cd / && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/gsplat && \
+    rm -rf /tmp/gsplat && \
+    python -c "import torch; import gsplat; print('gsplat', gsplat.__version__)"
+
+# MoGe (upstream's base requirements), and the utils3d commit MoGe's own pyproject.toml pins. utils3d is hash-checked:
+# the clone must be at UTILS3D_COMMIT, and the SHA-256 over its tracked files (the digest of the sorted `sha256sum`
+# lines of `git ls-files`) must equal UTILS3D_TREE_SHA256, recorded in out-of-lock.json too. Both are pure Python.
+ARG MOGE_COMMIT=a8c37341bc0325ca99b9d57981cc3bb2bd3e255b
+# pragma: allowlist nextline secret
+ARG UTILS3D_COMMIT=3913c65d81e05e47b9f367250cf8c0f7462a0900
+ARG UTILS3D_TREE_SHA256=204b7c79b4d369499fa5bad73d90a4bf7798c74c86a2efe1d1670eb23ab4279d
+RUN git clone https://github.com/microsoft/MoGe.git /tmp/moge && \
+    cd /tmp/moge && \
+    git checkout --detach ${MOGE_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${MOGE_COMMIT}" && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/moge.VAMS_UPSTREAM_COMMIT && \
+    cd / && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/moge && \
+    rm -rf /tmp/moge
+RUN git clone https://github.com/EasternJournalist/utils3d.git /tmp/utils3d && \
+    cd /tmp/utils3d && \
+    git checkout --detach ${UTILS3D_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${UTILS3D_COMMIT}" && \
+    { test "$(git ls-files -z | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" = "${UTILS3D_TREE_SHA256}" || \
+        { echo "utils3d at ${UTILS3D_COMMIT} does not match UTILS3D_TREE_SHA256: the files are not the ones that were reviewed"; exit 1; }; } && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/utils3d.VAMS_UPSTREAM_COMMIT && \
+    cd / && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/utils3d && \
+    rm -rf /tmp/utils3d && \
+    python -c "import torch; import utils3d; from moge.model.v1 import MoGeModel; print('MoGe and utils3d import')"
+
+# SAM 3D's own package, editable as upstream installs it. Its hatchling metadata hook (hatch-requirements-txt) reads
+# the requirement files, and both come from the build lock, so with isolation off nothing is downloaded; --no-deps,
+# because everything it declares is installed above.
+RUN pip install --no-cache-dir --no-build-isolation --no-deps -e /opt/sam3d && \
+    python -c "import importlib.util as u; s = u.find_spec('sam3d_objects'); assert s is not None; print('sam3d_objects at', s.origin)"
+
+# Upstream patches an unmerged hydra fix into the installed package. Its own script asserts the hydra
+# version before replacing the file, so a version bump fails here rather than at run time.
+RUN python /opt/sam3d/patching/hydra && \
+    python -c "import hydra; print('hydra', hydra.__version__, 'patched')"
+
+# The generator's image encoder is DINOv2, which upstream loads through torch.hub from GitHub
+# ("facebookresearch/dinov2", source github) with its pretrained weights. Left to run time, every job
+# downloaded the repository's default-branch code and a 1.2 GB checkpoint into a HOME nothing keeps.
+# The checkout is baked in at a pinned commit, under the directory name torch.hub uses for that repo's
+# main branch so it is used as it is, and the checkpoint is checked against its SHA-256.
+# pragma: allowlist nextline secret
+ARG DINOV2_COMMIT=7764ea0f912e53c92e82eb78a2a1631e92725fc8
+ARG DINOV2_CHECKPOINT_SHA256=36e4deffbaef061a2576705b0c36f93621e2ae20bf6274694821b0b492551b51
+ENV TORCH_HOME=/opt/torchhome
+RUN mkdir -p /opt/torchhome/hub/checkpoints && \
+    git clone https://github.com/facebookresearch/dinov2.git /opt/torchhome/hub/facebookresearch_dinov2_main && \
+    cd /opt/torchhome/hub/facebookresearch_dinov2_main && \
+    git checkout --detach ${DINOV2_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${DINOV2_COMMIT}" && \
+    git rev-parse HEAD > /opt/torchhome/hub/facebookresearch_dinov2_main/VAMS_UPSTREAM_COMMIT
+RUN curl -fsSL -o /opt/torchhome/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth \
+    https://dl.fbaipublicfiles.com/dinov2/dinov2_vitl14/dinov2_vitl14_reg4_pretrain.pth && \
+    echo "${DINOV2_CHECKPOINT_SHA256}  /opt/torchhome/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth" | sha256sum -c -
+
+# GPL-3.0 mesh-repair rungs. Both VAMS build paths pass ENABLE_GPL_MESH_REPAIR=true, so every image
+# carries them; only a hand-run build that sets it to false leaves them out.
+RUN --mount=type=secret,id=pipconf,target=/run/secrets/pipconf export PIP_CONFIG_FILE=/run/secrets/pipconf; if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
+        echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
+        pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/sam3d/requirements-gpl.lock; \
+    else \
+        echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
+    fi
+
+# The upstream package and its notebook inference module are imported by the adapter's driver, which
+# runs with the repo root as its working directory; adding it to PYTHONPATH keeps the imports working.
+ENV PYTHONPATH="/opt/sam3d:${PYTHONPATH}"
+
+# The installed set is exactly the lock plus the six packages installed above from out-of-lock.json: this fails the
+# build on any package that is missing, extra or at another version than locks/sam3d names (the GPL pair only when it
+# was requested). Nothing installs after the extensions, so the numpy pytorch3d and gsplat were compiled against is
+# the numpy the image ships; the numpy restore step this image used to need, because a second install of the shared
+# requirements could move it, is gone. pip check confirms the declared dependencies of what is installed, with these
+# exceptions, each of which the image has always had:
+#   - SAM 3D's own requirements pin pymeshfix 0.17.0 and xatlas 0.0.9; the image installs the GPL group's pymeshfix
+#     0.18.1 and the shared pipeline pin xatlas 0.0.11 instead, as the shared requirements and the GPL step always did.
+#   - decord 0.6.0, bitsandbytes 0.43.0 and bpy 4.3.0 are reported "not supported on this platform": their wheels'
+#     dist-info WHEEL files carry no tag pip check can match (decord's names cp36; bitsandbytes' puts its tag after a
+#     blank line), although pip installed each file by its file name's tags, which match.
+#   - SAM 3D's own requirements name nvidia-pyindex, which the lock leaves out (locks/sam3d/pyproject.toml).
+# Any other unmet requirement fails the build.
+RUN set -eu; \
+    python /opt/locks/tools/check_installed_set.py --dir /opt/locks/sam3d --gpl "$ENABLE_GPL_MESH_REPAIR"; \
+    pip check > /tmp/pip-check.txt || true; \
+    unexpected=$(grep -v -E \
+        -e '^sam3d-objects 0\.0\.1 has requirement (pymeshfix==0\.17\.0, but you have pymeshfix 0\.18\.1|xatlas==0\.0\.9, but you have xatlas 0\.0\.11)\.$' \
+        -e '^(decord 0\.6\.0|bitsandbytes 0\.43\.0|bpy 4\.3\.0) is not supported on this platform$' \
+        -e '^sam3d-objects 0\.0\.1 requires nvidia-pyindex, which is not installed\.$' \
+        /tmp/pip-check.txt || true); \
+    cat /tmp/pip-check.txt; \
+    rm -f /tmp/pip-check.txt; \
+    if [ -n "$unexpected" ]; then echo "pip check: $unexpected"; exit 1; fi
+
+# Import the COMPILED extensions once the dependency set is final. Each is a binary linked against both
+# torch and numpy, so this is the step that catches an ABI break at build time rather than on a GPU
+# instance. torch is imported first because these extensions do not import it themselves.
+RUN python -c "import torch, numpy, trimesh, manifold3d; \
+from pytorch3d import _C as p3d_c; \
+import kaolin, gsplat; \
+assert torch.version.cuda and torch.version.cuda.startswith('12.1'), torch.version.cuda; \
+print('extensions import against torch', torch.__version__, 'and numpy', numpy.__version__, '; trimesh', trimesh.__version__)"
+
+# Import upstream's inference module the way the adapter's driver does (the repo root as the working directory and
+# notebook on sys.path). It pulls in the whole upstream stack -- lightning, hydra, spconv, kaolin, pytorch3d, pyvista,
+# the model code -- so a package the lock lacks, or one at a version that cannot be imported (lightning 2.3.3 needs
+# setuptools' pkg_resources), fails the BUILD rather than a GPU job. Nothing is downloaded and no GPU is needed.
+RUN cd /opt/sam3d && python -c "import sys; sys.path.append('notebook'); import inference; \
+print('upstream inference module imports:', inference.Inference.__name__)"
+
+# rembg resolves its segmentation weights under U2NET_HOME and downloads them on first use,
+# defaulting to a home directory nothing carries between jobs -- which had the preprocessing stage
+# re-fetching 176 MB on every run and taking longer than the reconstruction itself. Pointing the
+# variable at a baked-in copy removes the download entirely.
+ENV U2NET_HOME=/opt/rembg
+# Checked against its SHA-256; it is the same file rembg's own download checks by MD5.
+ARG U2NET_SHA256=8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491
+RUN mkdir -p /opt/rembg && \
+    curl -fsSL -o /opt/rembg/u2net.onnx \
+    https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx && \
+    echo "${U2NET_SHA256}  /opt/rembg/u2net.onnx" | sha256sum -c -
+
+# VAMS container code
+COPY __init__.py __main__.py model_manager.py preprocess.py framing.py generate.py benchmark.py meshcleanup.py printfeatures.py texturing.py export.py agent_broker.py config.json entrypoint.sh /opt/ml/code/
+COPY models /opt/ml/code/models
+COPY vams_utils /opt/ml/code/vams_utils
+COPY hfguard /opt/ml/code/hfguard
+# Strip CRLF line endings from entrypoint.sh in case the source was bundled from a Windows working
+# tree; otherwise the shebang becomes `/bin/bash\r` and the kernel returns ENOENT on exec.
+# COPY keeps the build host's mode bits, so a checkout made under umask 077 or 027 would leave files
+# the runtime user cannot read: a+rX normalizes them.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh && \
+    chmod -R a+rX /opt/ml/code
+# The upstream checkout is the working directory of the model's process, and an upstream tool may
+# create files relative to it. Group vams and mode 1775 let the runtime user add entries while the
+# sticky bit keeps the root-owned sources as they are. HOME belongs to the runtime user.
+# torch.hub creates $TORCH_HOME/hub/trusted_list on first use when it is missing, and the runtime user
+# cannot write the root-owned hub directory, so the image carries the empty file. facebookresearch is a
+# trusted owner, so torch.hub never writes to it.
+RUN chgrp vams /opt/sam3d && chmod 1775 /opt/sam3d && chown -R vams:vams /home/vams && \
+    touch /opt/torchhome/hub/trusted_list
+# Every HuggingFace download in this image is held to its pinned commit (hfguard/hf_pins.py). Checked
+# at build time, so an image whose huggingface_hub lacks what the guard wraps fails here rather than
+# on its first run.
+RUN cd /opt/ml/code && python -c "from hfguard import hf_pins; assert hf_pins.install(), 'huggingface_hub is missing'"
+
+WORKDIR /opt/ml/code
+USER 10000:10000
+ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

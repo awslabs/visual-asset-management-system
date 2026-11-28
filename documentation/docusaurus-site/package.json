@@ -21,8 +21,8 @@
         "@mdx-js/react": "^3.0.0",
         "clsx": "^2.0.0",
         "prism-react-renderer": "^2.3.0",
-        "react": "^19.2.7",
-        "react-dom": "^19.2.7"
+        "react": "^19.3.1",
+        "react-dom": "^19.3.1"
     },
     "devDependencies": {
         "@docusaurus/module-type-aliases": "3.10.2",
@@ -44,7 +44,7 @@
     },
     "engines": {
         "node": ">=22.0",
-        "npm": ">=11.10.0"
+        "npm": ">=11.10.0 <12"
     },
     "overrides": {
         "serialize-javascript": ">=7.0.3",

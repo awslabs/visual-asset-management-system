@@ -1,0 +1,305 @@
+# VAMS Image to 3D Pipeline Container -- Microsoft TRELLIS.2 (4B)
+# Upstream: https://github.com/microsoft/TRELLIS.2 (MIT)
+# Weights: https://huggingface.co/microsoft/TRELLIS.2-4B (MIT)
+#
+# Built on the toolchain upstream's setup.sh pins -- Python 3.10 and torch 2.6.0 for CUDA 12.4 -- which
+# is not the toolchain the other models in this pipeline share. Ubuntu 22.04 supplies Python 3.10 as its
+# system interpreter, so the pin is met without a conda layer.
+#
+# LICENSING: the model's own code and weights are MIT, but the structured-latent decoder renders through
+# nvdiffrast, which carries NVIDIA source-code licence terms restricting redistribution. Review those
+# terms against the deployment before distributing an image built from this file. The Stable3DGen model
+# reaches a comparable result with no NVIDIA-licensed component and is the default for that reason.
+
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04@sha256:da6791294b0b04d7e65d87b7451d6f2390b4d36225ab0701ee7dfec5769829f5
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# Non-root runtime user (the #327 design), created first so HOME is /home/vams for every step below:
+# anything a build step writes under HOME (git-lfs's .gitconfig, tool caches) lands where uid 10000 can
+# reach it at run time.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams
+
+# The upstream repo is pinned to a reviewed commit so the image is reproducible; each clone below fails
+# the build if HEAD is anything other than its pin.
+# pragma: allowlist nextline secret
+ARG TRELLIS2_COMMIT=75fbf0183001ed9876c8dbb35de6b68552ee08bd
+# The two out-of-tree CUDA extensions upstream builds from source, pinned for the same reason.
+# pragma: allowlist nextline secret
+ARG CUMESH_COMMIT=12289e1062f0603f2f0d0771b02e1395d247f26f
+# pragma: allowlist nextline secret
+ARG FLEXGEMM_COMMIT=6dd94a859c26ee8246888502eada3dd8ad85532e
+# nvdiffrast at the commit its v0.4.0 tag (the one upstream names) points at. A tag can be moved, so the
+# commit is what is checked.
+ARG NVDIFFRAST_COMMIT=253ac4fcea7de5f396371124af597e6cc957bfae
+# utils3d, which the model code imports, at the commit the image has always carried, and the SHA-256 over its tracked
+# files (see the build step below).
+# pragma: allowlist nextline secret
+ARG UTILS3D_COMMIT=9a4eb15e4021b67b12c460c7057d642626897ec8
+ARG UTILS3D_TREE_SHA256=7591516b4425089dee987cdb1f2b3f8cbbfc167952722573eb5c40ed3b82c03e
+# The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects which
+# rungs it walks through the template's REPAIR_BACKENDS setting.
+ARG ENABLE_GPL_MESH_REPAIR=true
+
+# Install system dependencies. The GL/EGL libraries back nvdiffrast's offscreen rendering and
+# pymeshlab's plugins; cmake and ninja build the CUDA extensions; libjpeg-dev backs the imaging stack.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+    build-essential \
+    cmake \
+    curl \
+    git \
+    git-lfs \
+    libegl1 \
+    xvfb \
+    libgl1 \
+    libopengl0 \
+    libglu1-mesa \
+    libgles2 \
+    libglib2.0-0 \
+    libjpeg-dev \
+    ninja-build \
+    python3 \
+    python3-dev \
+    python3-venv \
+    unzip \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git lfs install
+
+# Install AWS CLI v2 at a fixed version, checked against its SHA-256 before it is installed. A
+# --build-arg that moves the version has to move the digest with it.
+ARG AWS_CLI_VERSION=2.36.39
+ARG AWS_CLI_SHA256=2b337174417c159f8fd825637841f5425308108bd6f99681664409fb0d7ebe01
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
+    echo "${AWS_CLI_SHA256}  awscliv2.zip" | sha256sum -c - && \
+    unzip -q awscliv2.zip && \
+    ./aws/install && \
+    rm -rf aws awscliv2.zip
+
+# Ubuntu marks its system python as externally managed, so the pipeline and the upstream repo share one
+# virtualenv that fronts PATH. Ubuntu 22.04's interpreter is the 3.10 upstream pins.
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV VIRTUAL_ENV=/opt/venv
+# Every Python package of this image is installed from locks/trellis2, hashed exports of its uv.lock (#1726): the same
+# versions, from the same files, on every build. The lock holds the image's whole set (torch, the shared pipeline
+# dependencies, upstream's basic set, the DINOv3-compatible transformers, utils3d's dependencies and the prebuilt
+# flash-attn wheel), so nothing is resolved at build time and no later step can move a version. pip and the build tools
+# come first from their own lock, then the rest with --require-hashes --no-deps: pip refuses a file whose hash is not
+# in the lock and installs nothing the lock does not name. The extensions below compile AFTER this install, against the
+# numpy and torch the image ships, and nothing installs a package after them.
+COPY locks/trellis2/requirements-build.lock locks/trellis2/requirements.lock locks/trellis2/requirements-gpl.lock locks/trellis2/out-of-lock.json /opt/locks/trellis2/
+COPY locks/tools/check_installed_set.py /opt/locks/tools/
+RUN pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/trellis2/requirements-build.lock && \
+    python -c "import sys; assert sys.version_info[:2] == (3, 10), sys.version; print('python', sys.version)"
+
+# The torch build upstream pins, for CUDA 12.4, and every other package. Both indexes are needed: torch and torchvision
+# are the CUDA 12.4 builds from the PyTorch index (the lock pins them to +cu124 and the hashes are those files'), and
+# the PyTorch index does not carry every NVIDIA runtime wheel torch pins -- this torch requires nvidia-cudnn-cu12 9.1.0.70
+# exactly, which is published on PyPI and absent from the CUDA index -- so the default index stays in place and the
+# PyTorch index is added to it.
+#
+# The prebuilt flash-attn wheel in the lock is the one for torch's C++ ABI as the pip torch wheels have it (cxx11abiFALSE):
+# the wrong variant imports cleanly and then fails on a missing symbol at run time, so the build checks the ABI here.
+RUN pip install --no-cache-dir --require-hashes --no-deps \
+    --extra-index-url https://download.pytorch.org/whl/cu124 \
+    -r /opt/locks/trellis2/requirements.lock && \
+    python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda); \
+assert torch.version.cuda and torch.version.cuda.startswith('12.4'), torch.version.cuda; \
+assert not torch._C._GLIBCXX_USE_CXX11_ABI, 'this torch has the C++11 ABI; the locked flash-attn wheel is cxx11abiFALSE'" && \
+    python -c "import flash_attn; print('flash_attn', flash_attn.__version__)"
+
+# Every GPU family the pipeline can schedule onto has to be in this list, or an extension compiles for
+# the wrong architecture and fails at runtime with "no kernel image is available for execution on the
+# device". Ampere (8.6) covers g5 / A10G, Ada (8.9) covers g6 / L4 and g6e / L40S, Hopper (9.0) covers
+# H100.
+ENV TORCH_CUDA_ARCH_LIST="8.6;8.9;9.0"
+# Four extensions are built from source here. Left unbounded, nvcc runs one job per core and the build
+# container is killed for exceeding memory.
+ENV MAX_JOBS=2
+# torch's extension builder finds its CUDA headers through CUDA_HOME. Without it a build either fails on
+# cuda_runtime_api.h or quietly produces a CPU-only extension.
+ENV CUDA_HOME=/usr/local/cuda
+RUN test -f "$CUDA_HOME/include/cuda_runtime_api.h" && nvcc --version | tail -2
+
+# transformers is held to 4.56.x by the lock even though upstream leaves it open, because the model's feature extractor
+# reaches into DINOv3's internals rather than calling forward(): it iterates `self.model.layer` on a DINOv3ViTModel.
+# 4.56 holds that ModuleList directly on the model, and a later release moved it into a nested DINOv3ViTEncoder, so the
+# blocks live at `model.model.layer`. With the newer layout the run reaches the GPU, loads all 415 weight tensors, and
+# only then dies on "'DINOv3ViTModel' object has no attribute 'layer'" four minutes in.
+#
+# Assert the DINOv3 layout the feature extractor depends on, so a transformers bump fails the BUILD
+# rather than a GPU job. Checked on the class, which needs no weights and no GPU.
+RUN python -c "\
+from transformers.models.dinov3_vit import modeling_dinov3_vit as m; \
+import inspect, transformers; \
+src = inspect.getsource(m.DINOv3ViTModel.__init__); \
+assert 'self.layer' in src, \
+    'DINOv3ViTModel no longer holds its blocks as self.layer in transformers ' + transformers.__version__ \
+    + ', which is what trellis2/modules/image_feature_extractor.py iterates'; \
+print('transformers', transformers.__version__, 'exposes DINOv3ViTModel.layer as the extractor expects')"
+
+# Clone TRELLIS.2. The o-voxel extension ships inside the repository, so the checkout comes first.
+RUN git clone --recurse-submodules https://github.com/microsoft/TRELLIS.2.git /opt/trellis2 && \
+    cd /opt/trellis2 && \
+    git checkout --detach ${TRELLIS2_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${TRELLIS2_COMMIT}" && \
+    git submodule update --init --recursive && \
+    git rev-parse HEAD > /opt/trellis2/VAMS_UPSTREAM_COMMIT
+WORKDIR /opt/trellis2
+
+# The four CUDA extensions upstream builds, each with build isolation off so they compile against the
+# torch installed above rather than pulling their own copy into an isolated environment, and with --no-deps so pip
+# resolves nothing: their dependencies are in the lock (out-of-lock.json records each of these packages).
+#
+# Each source tree is deleted in the SAME layer that builds it. A docker layer records what changed, so
+# removing a clone in a later step leaves its bytes in the image and on the builder's disk regardless --
+# and these are recursive clones with submodules plus their nvcc object files. Leaving them behind ran
+# the CodeBuild volume out of space at the last step of the build, and every byte also lands in the
+# image AWS Batch pulls before each job.
+RUN git clone --recursive https://github.com/JeffreyXiang/CuMesh.git /tmp/extensions/CuMesh && \
+    cd /tmp/extensions/CuMesh && \
+    git checkout --detach ${CUMESH_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${CUMESH_COMMIT}" && \
+    git submodule update --init --recursive && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/CuMesh.VAMS_UPSTREAM_COMMIT && \
+    cd / && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/extensions/CuMesh && \
+    rm -rf /tmp/extensions/CuMesh
+
+RUN git clone --recursive https://github.com/JeffreyXiang/FlexGEMM.git /tmp/extensions/FlexGEMM && \
+    cd /tmp/extensions/FlexGEMM && \
+    git checkout --detach ${FLEXGEMM_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${FLEXGEMM_COMMIT}" && \
+    git submodule update --init --recursive && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/FlexGEMM.VAMS_UPSTREAM_COMMIT && \
+    cd / && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/extensions/FlexGEMM && \
+    rm -rf /tmp/extensions/FlexGEMM
+
+# o-voxel provides the GLB export path the adapter calls, so a missing one is not a degraded run but no
+# output at all.
+#
+# The check locates the module instead of importing it. o_voxel pulls in flex_gemm, whose Triton kernels
+# initialise an autotuner at import time; Triton resolves its active device driver to do that and raises
+# "0 active drivers" on a machine with no GPU. The build container has none, so importing it here fails
+# for a package that is installed correctly. find_spec confirms the install without executing it.
+RUN cp -r /opt/trellis2/o-voxel /tmp/extensions/o-voxel && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/extensions/o-voxel && \
+    python -c "import importlib.util as u; s = u.find_spec('o_voxel'); \
+assert s is not None, 'o_voxel is not installed'; print('o_voxel installed at', s.origin)" && \
+    rm -rf /tmp/extensions/o-voxel
+
+# nvdiffrast carries NVIDIA source-code licence terms; see the licensing note at the top of this file.
+RUN git clone https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast && \
+    cd /tmp/extensions/nvdiffrast && \
+    git checkout --detach ${NVDIFFRAST_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${NVDIFFRAST_COMMIT}" && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/nvdiffrast.VAMS_UPSTREAM_COMMIT && \
+    cd / && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/extensions/nvdiffrast && \
+    rm -rf /tmp/extensions/nvdiffrast
+
+# utils3d, which the model code imports. It is hash-checked: the clone must be at UTILS3D_COMMIT, and the SHA-256 over its
+# tracked files (the digest of the sorted `sha256sum` lines of `git ls-files`) must equal UTILS3D_TREE_SHA256, which
+# locks/trellis2/out-of-lock.json records too. A moved commit, or content that is not what was reviewed, fails the build.
+# Pure Python; its dependencies are in the lock.
+RUN git clone https://github.com/EasternJournalist/utils3d.git /tmp/extensions/utils3d && \
+    cd /tmp/extensions/utils3d && \
+    git checkout --detach ${UTILS3D_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${UTILS3D_COMMIT}" && \
+    { test "$(git ls-files -z | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)" = "${UTILS3D_TREE_SHA256}" || \
+        { echo "utils3d at ${UTILS3D_COMMIT} does not match UTILS3D_TREE_SHA256: the files are not the ones that were reviewed"; exit 1; }; } && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/utils3d.VAMS_UPSTREAM_COMMIT && \
+    cd / && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/extensions/utils3d && \
+    rm -rf /tmp/extensions/utils3d
+
+# The upstream checkout keeps its working tree (the package is imported from it through PYTHONPATH) but
+# not its git history, which is dead weight in every image pull.
+RUN rm -rf /opt/trellis2/.git && du -sh /opt/trellis2 && df -h /var/lib/docker 2>/dev/null || true
+
+# Fail the build here rather than on a GPU instance: a CPU-only torch or a missing extension would
+# otherwise surface only once a job has provisioned a GPU.
+#
+# The packages split into two groups by what they do at import. torch, flash_attn and nvdiffrast load on
+# a CPU-only machine and are imported, which is the stronger check. cumesh, flex_gemm, o_voxel and
+# trellis2 reach Triton's autotuner through flex_gemm and raise "0 active drivers" where no GPU exists,
+# so they are located rather than imported -- the build container has no GPU, and asserting an import
+# that cannot succeed here would fail a correct image. Their imports are exercised on the first job.
+#
+# The names below are the IMPORT names, which are not the repository names: FlexGEMM installs as
+# flex_gemm and o-voxel as o_voxel, so spelling either the way its repo is named reports a correctly
+# installed package as missing.
+RUN python -c "import torch, flash_attn, nvdiffrast; \
+assert torch.version.cuda, 'torch was resolved without CUDA support'; \
+print('torch', torch.__version__, 'flash_attn and nvdiffrast imported')" && \
+    python -c "import importlib.util as u; \
+names = ('cumesh', 'flex_gemm', 'o_voxel', 'trellis2'); \
+missing = [m for m in names if u.find_spec(m) is None]; \
+assert not missing, f'not installed: {missing}'; print('gpu-only packages installed:', ', '.join(names))"
+
+# GPL-3.0 mesh-repair rungs. Both VAMS build paths pass ENABLE_GPL_MESH_REPAIR=true, so every image
+# carries them; only a hand-run build that sets it to false leaves them out.
+RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
+        echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
+        pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/trellis2/requirements-gpl.lock; \
+    else \
+        echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
+    fi
+
+# The upstream package is imported by the adapter's driver script, which runs with the repo root as its
+# working directory; adding it to PYTHONPATH keeps the import working from anywhere.
+ENV PYTHONPATH="/opt/trellis2:${PYTHONPATH}"
+
+# The installed set is exactly the lock plus the five packages built above: this fails the build on any package that is
+# missing, extra or at another version than locks/trellis2 names (the GPL pair only when it was requested), and pip check
+# confirms the declared dependencies of what is installed. Nothing installs after the extensions, so the numpy they were
+# compiled against is the numpy the image ships; the numpy restore step this image used to need, because a second
+# install of the shared requirements could move it, is gone. The import check confirms the CUDA torch build survived
+# and the repair stack the pipeline's own code is written against is present.
+RUN python /opt/locks/tools/check_installed_set.py --dir /opt/locks/trellis2 --gpl "$ENABLE_GPL_MESH_REPAIR" && \
+    pip check
+RUN python -c "import trimesh, manifold3d, torch, numpy; \
+assert torch.version.cuda and torch.version.cuda.startswith('12.4'), torch.version.cuda; \
+print('trimesh', trimesh.__version__, 'torch', torch.__version__, 'numpy', numpy.__version__)"
+
+# rembg resolves its segmentation weights under U2NET_HOME and downloads them on first use,
+# defaulting to a home directory nothing carries between jobs -- which had the preprocessing stage
+# re-fetching 176 MB on every run and taking longer than the reconstruction itself. Pointing the
+# variable at a baked-in copy removes the download entirely.
+ENV U2NET_HOME=/opt/rembg
+# Checked against its SHA-256; it is the same file rembg's own download checks by MD5.
+ARG U2NET_SHA256=8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491
+RUN mkdir -p /opt/rembg && \
+    curl -fsSL -o /opt/rembg/u2net.onnx \
+    https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx && \
+    echo "${U2NET_SHA256}  /opt/rembg/u2net.onnx" | sha256sum -c -
+
+# VAMS container code
+COPY __init__.py __main__.py model_manager.py preprocess.py framing.py generate.py benchmark.py meshcleanup.py printfeatures.py texturing.py export.py agent_broker.py config.json entrypoint.sh /opt/ml/code/
+COPY models /opt/ml/code/models
+COPY vams_utils /opt/ml/code/vams_utils
+COPY hfguard /opt/ml/code/hfguard
+# Strip CRLF line endings from entrypoint.sh in case the source was bundled from a Windows working
+# tree; otherwise the shebang becomes `/bin/bash\r` and the kernel returns ENOENT on exec.
+# COPY keeps the build host's mode bits, so a checkout made under umask 077 or 027 would leave files
+# the runtime user cannot read: a+rX normalizes them.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh && \
+    chmod -R a+rX /opt/ml/code
+# The upstream checkout is the working directory of the model's process, and an upstream tool may
+# create files relative to it. Group vams and mode 1775 let the runtime user add entries while the
+# sticky bit keeps the root-owned sources as they are. HOME belongs to the runtime user.
+RUN chgrp vams /opt/trellis2 && chmod 1775 /opt/trellis2 && chown -R vams:vams /home/vams
+# Every HuggingFace download in this image is held to its pinned commit (hfguard/hf_pins.py). Checked
+# at build time, so an image whose huggingface_hub lacks what the guard wraps fails here rather than
+# on its first run.
+RUN cd /opt/ml/code && python -c "from hfguard import hf_pins; assert hf_pins.install(), 'huggingface_hub is missing'"
+
+WORKDIR /opt/ml/code
+USER 10000:10000
+ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

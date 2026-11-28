@@ -19,16 +19,18 @@ the base; a chosen template's `overrides` replaces, per key, only `inputFileArit
 
 import fnmatch
 
-from common.workflows.executionRecords import metadata_input_enabled
+from common.workflows.executionRecords import metadata_input_enabled, normalize_file_key
 
 # Keys a template may override on the pipeline systemConfig.
 TEMPLATE_OVERRIDABLE_KEYS = ("inputFileArity", "metadataInputs", "assetScope", "inputFileFilters")
 
-_METADATA_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata")
+_METADATA_KEYS = ("assetMetadata", "fileMetadata", "fileAttributes", "databaseMetadata",
+                  "assetFileMetadata", "metadataSchema")
 
 # The metadata keys scoped to an input FILE. assetMetadata and databaseMetadata describe an entity, so
-# they are collectable regardless of arity; these two have nothing to describe without an input file.
-_FILE_SCOPED_METADATA_KEYS = ("fileMetadata", "fileAttributes")
+# they are collectable regardless of arity; these have nothing to describe without an input file
+# (assetFileMetadata expands a whole-asset or folder SELECTION, which arity 'none' never has).
+_FILE_SCOPED_METADATA_KEYS = ("fileMetadata", "fileAttributes", "assetFileMetadata")
 
 # A stored metadataInputs map may omit keys, so every read of one resolves an absent key to its builder
 # default (METADATA_INPUT_DEFAULTS) rather than to False — the execute path collects on the same rule,
@@ -335,6 +337,35 @@ def arity_none_metadata_warnings(system_config, label=""):
     ]
 
 
+def inert_asset_file_metadata_warnings(system_config, label="", workflow_gate=False):
+    """Warnings (never errors) for a systemConfig that asks for assetFileMetadata while turning off
+    both fileMetadata and fileAttributes. An expanded record carries one file's metadata and
+    attributes, so with both types off it carries neither.
+
+    What that means depends on whose gate it is. The run expands under its intake gate, which takes
+    the four metadata types from the workflow (executeWorkflow._intake_metadata_inputs and
+    _build_grouped_metadata): with the workflow's own file types both off, no files are expanded
+    (`workflow_gate=True`). A pipeline's gate only narrows what its step receives
+    (executionRecords.narrow_metadata_envelope), so when the workflow has assetFileMetadata and a
+    file type on, the run still expands and that step gets each expanded record with no metadata or
+    attributes. `label` prefixes the message ('' for an unlabeled single config)."""
+    metadata = (system_config or {}).get("metadataInputs") or {}
+    if not _metadata_enabled(metadata, "assetFileMetadata"):
+        return []
+    if _metadata_enabled(metadata, "fileMetadata") or _metadata_enabled(metadata, "fileAttributes"):
+        return []
+    prefix = f"{label} " if label else ""
+    if workflow_gate:
+        return [
+            f"{prefix}uses assetFileMetadata with fileMetadata and fileAttributes both off, so the "
+            "per-file records it adds would carry nothing and no files are expanded."
+        ]
+    return [
+        f"{prefix}uses assetFileMetadata with fileMetadata and fileAttributes both off, so the "
+        "per-file records it receives carry no metadata or attributes."
+    ]
+
+
 def _pipeline_label(pipeline_database_id, pipeline_id):
     """Message label for one pipeline, composite-keyed so same-id pipelines across databases are
     distinguishable."""
@@ -443,15 +474,51 @@ def workflow_selection_errors(workflow_system_config, selected_inputs, output_ta
     return errors
 
 
+def _later_step_selection_entries(inputs, input_file_filters):
+    """The selected entries a later step is certain to receive, one per input row the run stores.
+
+    A later step's manifest starts from the run's WorkflowExecutionInputs rows with each file's
+    asset-relative path normalized to a single leading slash. Two spellings of a key reach the step as
+    ONE entry, and so do two versions of one file once an earlier step's output shadows that path
+    (they then name the same object). Both are collapsed here, and the step's filters are applied to
+    the normalized key, so the count never exceeds what the transition is certain to see."""
+    entries = {}
+    for item in inputs or []:
+        key = normalize_file_key(item.get("relativeFileKey", ""))
+        identity = (item.get("databaseId", ""), item.get("assetId", ""), key)
+        entries.setdefault(identity, {**item, "relativeFileKey": key})
+    return apply_input_file_filters(list(entries.values()), input_file_filters)
+
+
 def _evaluate(workflow_system_config, pipeline_effective_configs, selected_inputs, output_target):
     """Core evaluation shared by execute-time and save-time. Returns (errors, warnings, filtered).
 
-    Two-stage by design: the workflow's own inputFileFilters narrow the selection FIRST, and every
+    Two-stage by design: the workflow's own inputFileFilters narrow the selection FIRST, and each
     pipeline is then judged against that narrowed list rather than against the raw selection. The
     workflow gate is the outer boundary of what an execution may carry, so a file it excludes is not
     available to any pipeline and must not count toward one's arity or filters. Judging a pipeline on
     the raw list can both invent errors (a pipeline blamed for a file the workflow already dropped)
-    and hide them (a pipeline's arity satisfied by a file that never reaches it)."""
+    and hide them (a pipeline's arity satisfied by a file that never reaches it).
+
+    Only the FIRST step (first in workflow order, whatever its arity) is judged on filters and arity
+    here, because only its inputs are known at launch: they are the selection itself. From the second
+    step on, a step receives the selection overlaid by every earlier step's output, narrowed by its own
+    filters and arity-checked when the run reaches it (interimPipelineTracking.
+    narrow_next_pipeline_inputs, which fails the run with a named reason). Judging a later step
+    against the selection alone would refuse a valid chain — a step that reads only the type an
+    earlier step writes. An arity-'none' first step still counts as the first step: it writes outputs
+    a later step can read, so no later step's inputs are knowable either.
+
+    One later-step failure is certain at launch and is refused here: two or more selected files
+    passing a single-file ('one') step's filters. The overlay only adds entries or replaces one at the
+    same path, so that step receives at least those files whatever the earlier steps write. The step
+    is judged on the same effective config the transition reads (executeWorkflow sends each step's
+    merged filters and arity as stepInputFilters / stepInputArity), and the selection is counted the
+    way the run stores it (_later_step_selection_entries).
+
+    The checks that do not depend on which files a step ends up with still run for every step: the
+    disabled/archived gate, and the step's own assetScope against the selection entries that reach it
+    (they pass its filters, and the run hands every later step the full selection before narrowing)."""
     errors = []
     warnings = []
     filtered = {}
@@ -461,7 +528,7 @@ def _evaluate(workflow_system_config, pipeline_effective_configs, selected_input
     workflow_inputs = apply_input_file_filters(
         selected_inputs, (workflow_system_config or {}).get("inputFileFilters"))
 
-    for pipeline in pipeline_effective_configs or []:
+    for position, pipeline in enumerate(pipeline_effective_configs or []):
         pid = pipeline.get("pipelineId", "")
         pdb = pipeline.get("pipelineDatabaseId", "")
         label = _pipeline_label(pdb, pid)
@@ -484,6 +551,21 @@ def _evaluate(workflow_system_config, pipeline_effective_configs, selected_input
         # Filter the WORKFLOW-ADMITTED inputs down to what this pipeline accepts.
         pipeline_inputs = apply_input_file_filters(workflow_inputs, psc.get("inputFileFilters"))
         filtered[pid] = pipeline_inputs
+
+        # A later step: only its assetScope is judged here, against the selection entries that reach
+        # it. Its filters and arity are judged at its own transition, against what it actually gets —
+        # except the one arity failure the selection already proves (below).
+        if position > 0:
+            errors.extend(_scope_errors(
+                psc.get("assetScope"), pipeline_inputs, label, declared_only=True))
+            if arity == "one":
+                reaching = _later_step_selection_entries(workflow_inputs, psc.get("inputFileFilters"))
+                if len(reaching) > 1:
+                    errors.append(
+                        f"{label} accepts a single input file, but {len(reaching)} selected input "
+                        "files pass its input-file filters, so the selection alone already gives it "
+                        "more files than it takes.")
+            continue
 
         # A file-requiring pipeline left with nothing is a hard error. Which filter emptied the list
         # decides the message: naming the workflow's filters when they are the cause points at the
@@ -521,7 +603,9 @@ def validate_execution(
     """Execute-time cross-entity validation. Returns (errors, per_pipeline_filtered_inputs).
 
     - workflow_system_config: WorkflowRecordV2['systemConfig'].
-    - pipeline_effective_configs: ordered list; each {pipelineId, pipelineDatabaseId, enabled,
+    - pipeline_effective_configs: list in workflow step order (the first entry is step 1, the only one
+      judged on filters and arity, apart from a single-file later step the selection alone overfills;
+      see _evaluate); each {pipelineId, pipelineDatabaseId, enabled,
       archived, systemConfig{...}} with the chosen template's overrides already merged
       (resolve_effective_pipeline_config).
     - selected_inputs: execute-request inputFiles[] ({databaseId, assetId, relativeFileKey, versionId}).
@@ -544,10 +628,12 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
       - metadata mismatch: a pipeline needs a metadata type the workflow gate has off,
       - inert file-scoped metadata: arity 'none' with fileMetadata/fileAttributes asked for,
       - arity mismatch: workflow multi vs pipeline single,
-      - filter shadowing: workflow filters that would exclude everything a pipeline needs,
+      - filter shadowing: workflow filters that would exclude everything the FIRST step needs (a
+        later step also receives earlier steps' output, which the workflow's filters never narrow),
       - trigger-default sanity: a default template whose required tags are not all defaulted.
 
-    pipeline_configs: list of {pipelineId, pipelineDatabaseId, enabled, archived, systemConfig}.
+    pipeline_configs: list of {pipelineId, pipelineDatabaseId, enabled, archived, systemConfig}, in
+      workflow step order.
     trigger: optional {undefaultedRequiredTagsByTemplateId: {templateId: [tagKey, ...]}} for the
       trigger-default check. The workflow save path passes no trigger; trigger saves run the hard
       equivalent in common/workflows/triggerTemplateValidation.
@@ -560,8 +646,9 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
     wf_filters = wsc.get("inputFileFilters") or {}
 
     warnings.extend(arity_none_metadata_warnings(wsc, "the workflow"))
+    warnings.extend(inert_asset_file_metadata_warnings(wsc, "the workflow", workflow_gate=True))
 
-    for pipeline in pipeline_configs or []:
+    for position, pipeline in enumerate(pipeline_configs or []):
         pid = pipeline.get("pipelineId", "")
         pdb = pipeline.get("pipelineDatabaseId", "")
         label = _pipeline_label(pdb, pid)
@@ -584,6 +671,7 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
 
         # File-scoped metadata a pipeline asks for that its own arity leaves nothing to collect from.
         warnings.extend(arity_none_metadata_warnings(psc, label))
+        warnings.extend(inert_asset_file_metadata_warnings(psc, label))
 
         # Arity mismatch (surfaces the execute matrix's multi-vs-single case at save time).
         if wf_arity == "multi" and _arity(psc) == "one":
@@ -592,7 +680,12 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
                 "multi-file executions may fail this pipeline."
             )
 
-        # Filter shadowing, two independent ways a workflow can starve a pipeline of its input:
+        # Filter shadowing, two independent ways a workflow can starve a pipeline of its input. Both
+        # describe the FIRST step only: the workflow's filters bound the run's selection, and from the
+        # second step on a step also receives every earlier step's output, which those filters never
+        # narrow — a later step reading only the type an earlier step writes is a valid chain.
+        if position > 0:
+            continue
         p_filters = psc.get("inputFileFilters") or {}
         p_allow = p_filters.get("allow") or []
 

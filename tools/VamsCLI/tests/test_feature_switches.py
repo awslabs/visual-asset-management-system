@@ -835,5 +835,79 @@ class TestFeaturesCommandsIntegration:
         assert 'example-location' in result.output
 
 
+def _profile_reading(mock_profile_manager, auth_profile):
+    """Answer the mock's switch queries with ProfileManager's own logic over `auth_profile`."""
+    from vamscli.utils.profile import ProfileManager
+
+    real = ProfileManager.__new__(ProfileManager)
+    real.load_auth_profile = lambda: auth_profile
+    mock_profile_manager.has_feature_switch.side_effect = real.has_feature_switch
+    mock_profile_manager.get_feature_switches_info.side_effect = real.get_feature_switches_info
+
+
+class TestRequiresFeatureSwitchesNotRead:
+    """A gated command tells an unread switch record apart from a switch that is off."""
+
+    UNREAD = "Could not read this environment's feature switches for the signed-in user"
+
+    def test_secure_config_refused_at_login_names_the_access_problem(self, cli_runner, features_command_mocks):
+        """Sign-in saved no switch record (`/secure-config` answered 403 for a user with no role)."""
+        with features_command_mocks as mocks:
+            _profile_reading(mocks['profile_manager'], {'user_id': 'norole@example.com'})
+
+            result = cli_runner.invoke(cli, ['features', 'example-location'])
+
+            assert result.exit_code == 1
+            assert self.UNREAD in result.output
+            assert "vamscli auth login" in result.output
+            assert "ask an administrator" in result.output
+            assert "Location services are not enabled" not in result.output
+
+    def test_empty_switch_record_is_treated_as_unread(self, cli_runner, features_command_mocks):
+        with features_command_mocks as mocks:
+            _profile_reading(mocks['profile_manager'], {
+                'user_id': 'user@example.com',
+                'feature_switches': {'raw': '', 'enabled': [], 'fetched_at': '2026-10-30T00:00:00Z'},
+            })
+
+            result = cli_runner.invoke(cli, ['features', 'example-location'])
+
+            assert result.exit_code == 1
+            assert self.UNREAD in result.output
+
+    def test_switches_read_without_the_feature_keeps_the_not_enabled_message(self, cli_runner, features_command_mocks):
+        with features_command_mocks as mocks:
+            _profile_reading(mocks['profile_manager'], {
+                'user_id': 'user@example.com',
+                'feature_switches': {
+                    'raw': 'CLOUDFRONTDEPLOY,AUTHPROVIDER_COGNITO',
+                    'enabled': ['CLOUDFRONTDEPLOY', 'AUTHPROVIDER_COGNITO'],
+                    'fetched_at': '2026-10-30T00:00:00Z',
+                },
+            })
+
+            result = cli_runner.invoke(cli, ['features', 'example-location'])
+
+            assert result.exit_code == 1
+            assert "Location services are not enabled for this environment." in result.output
+            assert self.UNREAD not in result.output
+
+    def test_switches_read_with_the_feature_runs_the_command(self, cli_runner, features_command_mocks):
+        with features_command_mocks as mocks:
+            _profile_reading(mocks['profile_manager'], {
+                'user_id': 'user@example.com',
+                'feature_switches': {
+                    'raw': 'CLOUDFRONTDEPLOY,LOCATIONSERVICES',
+                    'enabled': ['CLOUDFRONTDEPLOY', 'LOCATIONSERVICES'],
+                    'fetched_at': '2026-10-30T00:00:00Z',
+                },
+            })
+
+            result = cli_runner.invoke(cli, ['features', 'example-location'])
+
+            assert result.exit_code == 0
+            assert 'Location services feature is enabled' in result.output
+
+
 if __name__ == '__main__':
     pytest.main([__file__])

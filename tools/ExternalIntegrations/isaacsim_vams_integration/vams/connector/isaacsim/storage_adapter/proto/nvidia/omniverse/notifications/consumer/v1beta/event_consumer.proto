@@ -1,0 +1,874 @@
+//SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+//SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package nvidia.omniverse.notifications.consumer.v1beta;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nvidia/omniverse/notifications/consumer/v1beta";
+option java_multiple_files = true;
+option java_outer_classname = "EventConsumerProto";
+option java_package = "com.nvidia.omniverse.notifications.consumer.v1beta";
+
+// EventConsumerService provides APIs for consuming events from the notification system.
+// This service provides APIs for consuming events
+service EventConsumerService {
+  // Deprecated: Use ConsumeDurableEventsWithAcks instead. This RPC acks
+  // messages automatically after a short delay, which still has a window
+  // for message loss on disconnect. It will be removed in a future release.
+  //
+  // ConsumeDurableEvents starts a streaming session to receive events
+  // using a durable queue.
+  //
+  // This means any events that occurred since the queue was created
+  // with a call to the CreateDurableQueue RPC will be received,
+  // even if the events occur while the client is disconnected.
+  //
+  // Buffering across a disconnect is bounded: a durable queue that goes without
+  // an attached consumer for the broker's configured idle window (24 hours by
+  // default; operator-tunable) is deleted by the broker along with any messages
+  // it still holds, and this RPC then returns NOT_FOUND. Recover by calling
+  // CreateDurableQueue again with the same "queue_id" and the queue's filter
+  // groups, which the client must therefore persist.
+  //
+  // The broker may also cancel this stream's consumer, or kill the channel the
+  // consumer lives on -- an acknowledgement timeout on a slow consumer and a
+  // broker-side leader change are the common causes. The stream then ends with
+  // INTERNAL and the message "Internal Server Error: The broker cancelled this
+  // stream's consumer. Reconnect to resume consuming." Reconnect and resume; do
+  // not recreate the queue. The durable queue normally survives with everything
+  // buffered in it, and messages that were in flight unacknowledged are
+  // redelivered once the client reconnects. If the queue itself is gone the
+  // stream ends with NOT_FOUND instead, and the CreateDurableQueue recovery
+  // described above applies. INTERNAL does not by itself confirm that the
+  // queue survived: if it no longer exists, the reconnect returns NOT_FOUND,
+  // and the same recovery applies. The server checks for a lost consumer while
+  // the stream is idle, so either error can arrive up to the deployment's
+  // liveness-check interval (15 seconds by default) after the loss.
+  //
+  // Messages are automatically acknowledged by the server after a short delay.
+  // For explicit client-controlled acknowledgment, use ConsumeDurableEventsWithAcks.
+  //
+  // A RESOURCE_EXHAUSTED status code may be returned if a given k8s pod has an exhausted channel
+  // pool, and the client should automatically try to reconnect until they
+  // get a pod with available channels.
+  //
+  // At any time while streaming events, a PERMISSION_DENIED or UNAUTHENTICATED
+  // status code could be returned,
+  // for example, if a token becomes expired while streaming.
+  // The client must handle these errors and reconnect with a valid token.
+  //
+  // Clients should implement automatic reconnection on UNAVAILABLE errors because
+  // cloud load balancers (AWS NLB/ALB, Azure Load Balancer) may terminate idle
+  // connections based on their idle timeout settings (typically 60 seconds to 4 minutes).
+  // These load balancers operate at Layer 4 (TCP) and do not recognize HTTP/2 PING
+  // frames (gRPC keep-alive) as activity, so they may close idle streams even when
+  // gRPC keep-alive is configured. The exact timeout depends on the deployment
+  // environment and infrastructure configuration.
+  rpc ConsumeDurableEvents(ConsumeDurableEventsRequest) returns (stream ConsumeDurableEventsResponse) {
+    option deprecated = true;
+  }
+
+  // ConsumeDurableEventsWithAcks starts a bidirectional streaming session to
+  // receive events using a durable queue, with explicit client acknowledgment.
+  //
+  // This means any events that occurred since the queue was created
+  // with a call to the CreateDurableQueue RPC will be received,
+  // even if the events occur while the client is disconnected.
+  //
+  // Buffering across a disconnect is bounded: a durable queue that goes without
+  // an attached consumer for the broker's configured idle window (24 hours by
+  // default; operator-tunable) is deleted by the broker along with any messages
+  // it still holds, and this RPC then returns NOT_FOUND. Recover by calling
+  // CreateDurableQueue again with the same "queue_id" and the queue's filter
+  // groups, which the client must therefore persist.
+  //
+  // The broker may also cancel this stream's consumer, or kill the channel the
+  // consumer lives on -- an acknowledgement timeout on a slow consumer and a
+  // broker-side leader change are the common causes. The stream then ends with
+  // INTERNAL and the message "Internal Server Error: The broker cancelled this
+  // stream's consumer. Reconnect to resume consuming." Reconnect and resume; do
+  // not recreate the queue. The durable queue normally survives with everything
+  // buffered in it, and messages that were in flight unacknowledged are
+  // redelivered once the client reconnects. If the queue itself is gone the
+  // stream ends with NOT_FOUND instead, and the CreateDurableQueue recovery
+  // described above applies. INTERNAL does not by itself confirm that the
+  // queue survived: if it no longer exists, the reconnect returns NOT_FOUND,
+  // and the same recovery applies. The server checks for a lost consumer while
+  // the stream is idle, so either error can arrive up to the deployment's
+  // liveness-check interval (15 seconds by default) after the loss.
+  //
+  // The client must acknowledge received messages by sending their delivery
+  // tags back in subsequent requests, and may negatively acknowledge (nack) a
+  // message it failed to process by sending that message's delivery tag in
+  // "nack_delivery_tags" instead. A nacked message is requeued and redelivered
+  // immediately, possibly on this same stream. An unacknowledged message is
+  // redelivered once the client reconnects.
+  //
+  // Every redelivery increments the message's delivery count, whichever way it
+  // was requeued -- by a nack, by a disconnect, or by the broker closing the
+  // channel. The count is cumulative over the message's whole lifetime and is
+  // never reset, so it is a lifetime budget for the message rather than a
+  // per-nack one. The server moves a message to a dead-letter queue rather
+  // than redelivering it indefinitely once its delivery count exceeds the
+  // deployment's delivery limit (10 attempts as shipped, applied by an
+  // operator-tunable broker policy), it outlives the queue's configured
+  // message TTL, or it is evicted when the queue reaches its configured
+  // maximum length.
+  //
+  // A RESOURCE_EXHAUSTED status code may be returned if a given k8s pod has an exhausted channel
+  // pool, and the client should automatically try to reconnect until they
+  // get a pod with available channels.
+  //
+  // At any time while streaming events, a PERMISSION_DENIED or UNAUTHENTICATED
+  // status code could be returned,
+  // for example, if a token becomes expired while streaming.
+  // The client must handle these errors and reconnect with a valid token.
+  //
+  // Clients should implement automatic reconnection on UNAVAILABLE errors because
+  // cloud load balancers (AWS NLB/ALB, Azure Load Balancer) may terminate idle
+  // connections based on their idle timeout settings (typically 60 seconds to 4 minutes).
+  // These load balancers operate at Layer 4 (TCP) and do not recognize HTTP/2 PING
+  // frames (gRPC keep-alive) as activity, so they may close idle streams even when
+  // gRPC keep-alive is configured. The exact timeout depends on the deployment
+  // environment and infrastructure configuration.
+  rpc ConsumeDurableEventsWithAcks(stream ConsumeDurableEventsWithAcksRequest) returns (stream ConsumeDurableEventsWithAcksResponse) {}
+
+  // ConsumeNonDurableEvents starts a streaming session to receive events
+  // using a non-durable queue. This means that only events that occur while
+  // connected will be consumed.
+  //
+  // This is stream-stream, so that additional
+  // ConsumeNonDurableEventsRequest objects may be sent to change
+  // filtering while consuming events of a given set of types.
+  //
+  // A server that sets "supports_filter_update_acks" on the responses of this
+  // stream sends one ConsumeNonDurableEventsResponse carrying a
+  // "filter_update_ack" for each filter update it processes, after any bind
+  // and unbind calls that update required have returned. An update whose
+  // "filter_groups" equal its "previous_filter_groups" as the client sent
+  // them changes no bindings and is acknowledged too, with "unchanged" set.
+  // The acknowledgement echoes the filter groups of the request being
+  // acknowledged, so a client always knows which of the updates it sent the
+  // server has processed. The first response on the stream carries an
+  // acknowledgement too when the opening request named a filter set: a
+  // fresh connect, which names "filter_groups" and no "reconnect_token",
+  // and a reconnect that names "filter_groups" and "previous_filter_groups"
+  // together, which is a filter update applied before the stream yields
+  // anything. A reconnect that carries only a "reconnect_token" names no
+  // set: the server issues no bind or unbind calls and sends no
+  // acknowledgement, because it keeps no filter state and cannot report a
+  // set it was not told. A reconnect that names "filter_groups" without
+  // "previous_filter_groups" is not a resume either: it is an incomplete
+  // filter update and is rejected with INVALID_ARGUMENT, so filter groups the
+  // server does not apply are never acknowledged as applied. Two kinds of
+  // mid-stream request are never acknowledged: one that names neither
+  // "filter_groups" nor "previous_filter_groups", which is ignored, and one
+  // that is rejected, which ends the stream with INVALID_ARGUMENT. Nor is an
+  // update still in flight when the stream ends with a terminal error, as it
+  // does when the broker cancels the consumer (below): the stream ends and
+  // the update is never acknowledged. Acknowledgements are interleaved with
+  // event responses in no guaranteed order, but acknowledgements are ordered
+  // with respect to one another, in the order the updates were sent.
+  //
+  // The broker may cancel this stream's consumer, or kill the channel the
+  // consumer lives on. The stream then ends with a terminal error, and two
+  // outcomes are distinguished so the client knows which recovery to take.
+  // INTERNAL, with the message "Internal Server Error: The broker cancelled
+  // this stream's consumer. Reconnect to resume consuming.", means the
+  // consumer was lost: reconnect with the "reconnect_token", and the queue
+  // normally survives with its buffered backlog. INTERNAL does not by itself
+  // confirm that the queue survived; if it no longer exists, the reconnect
+  // returns NOT_FOUND. NOT_FOUND means the queue is gone -- a non-durable
+  // queue outlives its consumer only for the deployment's reconnect-grace
+  // window (20 seconds by default), and once that window lapses a
+  // "reconnect_token" reconnect returns NOT_FOUND again, so start a fresh
+  // stream with filter groups and no reconnect token instead. The server checks
+  // for a lost consumer while the stream is idle, so either error can arrive up
+  // to the deployment's liveness-check interval (15 seconds by default) after
+  // the loss.
+  //
+  // A RESOURCE_EXHAUSTED status code may be returned if a given k8s pod has an exhausted channel
+  // pool, and the client should automatically try to reconnect until they
+  // get a pod with available channels.
+  //
+  // At any time while streaming events, a PERMISSION_DENIED or UNAUTHENTICATED
+  // status code could be returned,
+  // for example, if a token becomes expired while streaming.
+  // The client must handle these errors and reconnect using the reconnect_token
+  // returned by the initial ConsumeNonDurableEventsResponse to ensure messages
+  // are not lost. Reconnecting with the token alone resumes the queue with the
+  // bindings it already holds, so it preserves the buffered backlog only when
+  // the client's filter set still matches the last set the server
+  // acknowledged. A client that changes filters mid-stream must therefore
+  // track which of its updates were acknowledged (see
+  // "supports_filter_update_acks" and
+  // "filter_update_ack" on ConsumeNonDurableEventsResponse) and, after
+  // reconnecting with the token, re-send in order each update it sent but did
+  // not see acknowledged, each naming in "previous_filter_groups" the set it
+  // replaced. Replaying more than one unacknowledged update walks the queue
+  // back through each intermediate filter set in turn, and applying a set
+  // unbinds every resource that set drops, so an event published for a
+  // resource that an earlier replayed update unbinds is lost until a later
+  // replayed update binds it again -- no-loss is best-effort during replay.
+  // This recipe also assumes exactly one client changes filters on a given
+  // queue: other clients sharing the "reconnect_token" may consume from it,
+  // but must not send filter updates, because each client names in
+  // "previous_filter_groups" the set it believes it replaced, computed from
+  // acknowledgements that describe only its own updates, and two clients
+  // updating one queue walk its bindings to a set neither asked for.
+  // Against a server that does not acknowledge filter updates there is no
+  // safe way to do this at all, so such a client should open a fresh stream
+  // with "filter_groups" and no "reconnect_token" instead.
+  //
+  // Clients should implement automatic reconnection on UNAVAILABLE errors because
+  // cloud load balancers (AWS NLB/ALB, Azure Load Balancer) may terminate idle
+  // connections based on their idle timeout settings (typically 60 seconds to 4 minutes).
+  // These load balancers operate at Layer 4 (TCP) and do not recognize HTTP/2 PING
+  // frames (gRPC keep-alive) as activity, so they may close idle streams even when
+  // gRPC keep-alive is configured. The exact timeout depends on the deployment
+  // environment and infrastructure configuration.
+  rpc ConsumeNonDurableEvents(stream ConsumeNonDurableEventsRequest) returns (stream ConsumeNonDurableEventsResponse) {}
+
+  // CreateDurableQueue is used to create a durable queue which will immediately begin
+  // receiving and queuing up messages for later consumption.
+  // The durable queue exists until it is explicitly deleted with a call to
+  // DeleteDurableQueue, or until it has gone without an attached consumer for
+  // the broker's configured idle window (24 hours by default; operator-tunable),
+  // at which point the broker deletes it along with any messages it still holds.
+  // Only an attached consumer keeps a durable queue alive -- publishing to it and
+  // re-declaring it do not. Consuming from a queue reaped this way returns
+  // NOT_FOUND; the client recovers by calling this RPC again with the same
+  // "queue_id" (ensure-exists, below), so a client must persist BOTH the
+  // "queue_id" AND the filter groups the queue was created with -- the bindings
+  // are rebuilt from the filters.
+  //
+  // When building a service that uses the Notification APIs,
+  // this will typically be called outside of the code base
+  // of that service, and then the "queue_id" value
+  // retrieved will be used as configuration for that service.
+  //
+  // This is not required for non-durable events.
+  // E.g., when ConsumeNonDurableEvents is called, the client will only
+  // receive events that occur while the client is connected.
+  //
+  // A config object will be returned that includes an ID that
+  // must be reused as an argument in all future ConsumeDurableEvents calls.
+  //
+  // A RESOURCE_EXHAUSTED status code may be returned if a given k8s pod has an exhausted channel
+  // pool, and the client should automatically try to reconnect until they
+  // get a pod with available channels.
+  //
+  // Callers may supply an optional "queue_id" to request a specific durable
+  // queue identifier. This RPC has ensure-exists (create-if-absent) semantics:
+  // if a queue with the supplied "queue_id" already exists the call is a no-op
+  // and the existing queue is returned unchanged. The "created" field in the
+  // response indicates whether a new queue was created by this call.
+  //
+  // A client-supplied "queue_id" must be unique across the whole deployment.
+  // Queue ids share a single namespace, so a call that supplies an id already
+  // in use attaches to that existing queue regardless of who created it or
+  // which "filter_groups" are supplied, and the queue is returned with its
+  // existing filters and "created" set to false. Two callers that pick the
+  // same id therefore share one queue: each receives the other's events, and
+  // either can delete it. Use a UUID, or a namespaced convention such as
+  // "<service-name>-<purpose>"; never a bare generic word such as "events".
+  //
+  // Per-queue isolation is not enforced. The three durable-queue permissions
+  // are deployment-wide rather than per-queue: a principal granted
+  // "consume-durable-queues" can consume from any durable queue whose id it
+  // knows, one granted "delete-durable-queues" can delete any of them, and
+  // "create-durable-queues" authorizes both creating a queue and updating the
+  // filters of any existing one. Operators should therefore grant these
+  // permissions deliberately, to service accounts rather than to broad user
+  // groups.
+  //
+  // An INVALID_ARGUMENT status code is returned if a supplied "queue_id" fails
+  // validation against the documented "^[A-Za-z0-9._-]{1,200}$" pattern.
+  rpc CreateDurableQueue(CreateDurableQueueRequest) returns (CreateDurableQueueResponse) {}
+
+  // DeleteDurableQueue is called if a durable consumer queue was created and used, and it is no
+  // longer required, a delete queue call must be made to free up resources.
+  // This typically only happens if the consumer client is being taken
+  // down permanently.
+  //
+  // A RESOURCE_EXHAUSTED status code may be returned if a given k8s pod has an exhausted channel
+  // pool, and the client should automatically try to reconnect until they
+  // get a pod with available channels.
+  rpc DeleteDurableQueue(DeleteDurableQueueRequest) returns (DeleteDurableQueueResponse) {}
+
+  // UpdateDurableQueue is used to update the filtering on an existing durable queue that was
+  // created using CreateDurableQueue.
+  //
+  // The filters will be updated without losing messages.
+  // This may be preferable to deleting and re-creating the
+  // durable queue, which may result in lost messages.
+  //
+  // A RESOURCE_EXHAUSTED status code may be returned if a given k8s pod has an exhausted channel
+  // pool, and the client should automatically try to reconnect until they
+  // get a pod with available channels.
+  rpc UpdateDurableQueue(UpdateDurableQueueRequest) returns (UpdateDurableQueueResponse) {}
+
+  // ManageDeadLetteredEvents starts a bidirectional streaming session for an
+  // operator to inspect and triage dead-lettered events across the deployment.
+  //
+  // The dead-letter queue is global rather than scoped to a single durable
+  // queue: messages land there once they exceed the redelivery limit, outlive
+  // the queue's configured message TTL, or are evicted when the queue reaches
+  // its configured maximum length. The server streams each dead-lettered
+  // message to the client (a dead_lettered_event arm of the response), and the
+  // client replies with per-message actions keyed by a session-scoped delivery
+  // tag. For each action the server streams back an action_outcome arm that
+  // reports the result, so the operator can observe the outcome of every
+  // ACTION_REPLAY, ACTION_DISCARD, or ACTION_LEAVE rather than relying on server-side logs alone.
+  //
+  // This RPC requires the event-consumer-service:inspect-and-replay-all-dlq
+  // permission. A caller that lacks this permission is denied with a
+  // PERMISSION_DENIED status code at stream open, before any dead-lettered
+  // event is streamed.
+  //
+  // This no-store bidirectional RPC is the permanent baseline DLQ-management
+  // surface. It works with no extra datastore beyond the message broker itself,
+  // and it is the forward-compatible floor for dead-letter management. Future
+  // additive unary store-backed RPCs (for example, listing dead-lettered events
+  // with a server-side cursor, filtering them, replaying a specific event by
+  // id, or reporting aggregate statistics) must be addable without changing or
+  // removing this RPC and without renumbering any of its fields.
+  //
+  // The broker may cancel this stream's consumer, or kill the channel the
+  // consumer lives on. The stream then ends with INTERNAL and the message
+  // "Internal Server Error: The broker cancelled this stream's consumer.
+  // Reconnect to resume consuming." Reconnect to resume triage: the dead-letter
+  // queue and everything in it normally survive, and dead-lettered messages
+  // that were in flight unacknowledged are redelivered once the client
+  // reconnects. NOT_FOUND, on the stream or on the reconnect, means the
+  // deployment's dead-letter queue is missing on the broker, which is an
+  // operator condition rather than something the caller can recover from. The
+  // server checks for a lost consumer while the stream is idle, so either error
+  // can arrive up to the deployment's liveness-check interval (15 seconds by
+  // default) after the loss.
+  //
+  // A RESOURCE_EXHAUSTED status code may be returned if a given k8s pod has an exhausted channel
+  // pool, and the client should automatically try to reconnect until they
+  // get a pod with available channels.
+  //
+  // At any time while streaming events, a PERMISSION_DENIED or UNAUTHENTICATED
+  // status code could be returned,
+  // for example, if a token becomes expired while streaming.
+  // The client must handle these errors and reconnect with a valid token.
+  //
+  // Clients should implement automatic reconnection on UNAVAILABLE errors because
+  // cloud load balancers (AWS NLB/ALB, Azure Load Balancer) may terminate idle
+  // connections based on their idle timeout settings (typically 60 seconds to 4 minutes).
+  // These load balancers operate at Layer 4 (TCP) and do not recognize HTTP/2 PING
+  // frames (gRPC keep-alive) as activity, so they may close idle streams even when
+  // gRPC keep-alive is configured. The exact timeout depends on the deployment
+  // environment and infrastructure configuration.
+  rpc ManageDeadLetteredEvents(stream ManageDeadLetteredEventsRequest) returns (stream ManageDeadLetteredEventsResponse) {}
+}
+
+// ConsumeDurableEventsResponse contains a batch of events consumed from a durable queue.
+message ConsumeDurableEventsResponse {
+  // events is a list of consumed events.
+  repeated Event events = 1;
+}
+
+// ConsumeDurableEventsWithAcksResponse contains an event consumed from a
+// durable queue, along with a delivery tag that must be acknowledged.
+message ConsumeDurableEventsWithAcksResponse {
+  // events is a list of consumed events.
+  repeated Event events = 1;
+
+  // Delivery tag for settling this message. The client sends this tag back in
+  // a subsequent ConsumeDurableEventsWithAcksRequest: in "ack_delivery_tags"
+  // to acknowledge the message, or in "nack_delivery_tags" to negatively
+  // acknowledge it and have it requeued for immediate redelivery.
+  // Settle promptly: an unacknowledged message is redelivered once the client
+  // reconnects, and every redelivery increments the message's cumulative
+  // delivery count. Once that count exceeds the deployment's delivery limit
+  // the server moves the message to a dead-letter queue rather than
+  // redelivering it indefinitely.
+  int64 delivery_tag = 2;
+}
+
+// ConsumeNonDurableEventsResponse contains a batch of events consumed from a non-durable stream.
+message ConsumeNonDurableEventsResponse {
+  // events is a list of consumed events.
+  repeated Event events = 1;
+
+  // Token for reconnecting to the same queue after a disconnection OR
+  // for using the same queue between multiple simultaneous clients to
+  // consume in parallel from a single queue. When several clients share a
+  // queue this way, at most one of them may change its filters, and that
+  // client alone can follow the acknowledgement-driven replay recipe
+  // described on ConsumeNonDurableEvents.
+  string reconnect_token = 2;
+
+  // True on every response of a stream served by a server that acknowledges
+  // the filter sets its requests name. It is a statement about the server
+  // serving this stream, not about this particular response: a client reads
+  // it from any response it receives, and from the first one as soon as the
+  // stream opens. A server that sets it sends one response carrying a
+  // "filter_update_ack" for every request it acts on that names a filter
+  // set, including a request that required no bind or unbind call because it
+  // named the set the client had already asked for. A server that does not
+  // set it may still act on the filter sets its requests name, but never
+  // reports doing so, so a client cannot know which of its requests took
+  // effect.
+  bool supports_filter_update_acks = 3;
+
+  // Present on a response that acknowledges a request whose filter set the
+  // server acted on, and absent on every other response. See FilterUpdateAck.
+  FilterUpdateAck filter_update_ack = 4;
+}
+
+// FilterUpdateAck reports that the server acted on the filter set named by a
+// request the client sent on a ConsumeNonDurableEvents stream. Receiving it
+// means the server is done with that request: any bind and unbind calls the
+// request led to have returned. It does not report how many calls that was,
+// and the answer may be none.
+message FilterUpdateAck {
+  // A verbatim copy of the "filter_groups" of the request being acknowledged.
+  // The server holds no filter state and cannot read a queue's bindings back
+  // from the broker, so this echoes what the client sent rather than
+  // reporting what the broker holds.
+  repeated FilterGroup applied_filter_groups = 1;
+
+  // True when the acknowledged request's "filter_groups" equalled its
+  // "previous_filter_groups" as the client sent them, so the server issued
+  // no bind or unbind call. False means they differed as sent, or that the
+  // request named no previous set at all, as a fresh connect does. This is
+  // a statement about the request the server received, not about the queue:
+  // it does not confirm that the queue's bindings match
+  // "applied_filter_groups", and a false value does not promise that any
+  // bind or unbind call was issued -- a request that re-sends the same
+  // groups reordered, or with a group repeated, differs as sent and still
+  // changes no bindings.
+  bool unchanged = 2;
+}
+
+// ConsumeDurableEventsRequest specifies the durable queue from which to consume events.
+message ConsumeDurableEventsRequest {
+  // The queue_id which was created with a call to CreateDurableQueue,
+  // and identifies the queue used for consuming durable events.
+  //
+  // queue_ids share one deployment-wide namespace, so this must be the id of a
+  // queue that was created by (or for) your client; see CreateDurableQueueRequest.queue_id.
+  //
+  // A queue_id that does not match "^[A-Za-z0-9._-]{1,200}$" is rejected with
+  // INVALID_ARGUMENT before the broker is contacted.
+  string queue_id = 1;
+}
+
+// ConsumeDurableEventsWithAcksRequest is sent by the client to consume events
+// and settle previously received messages, either by acknowledging them or by
+// negatively acknowledging (nacking) them for redelivery.
+//
+// The first message in the stream must include queue_id to identify the
+// durable queue. Subsequent messages carry ack_delivery_tags to acknowledge
+// receipt of previously delivered events, and nack_delivery_tags to request
+// redelivery of events the client failed to process. One request may carry
+// both fields; acks are processed first, so a tag appearing in both is
+// acknowledged.
+message ConsumeDurableEventsWithAcksRequest {
+  // The queue_id which was created with a call to CreateDurableQueue,
+  // and identifies the queue used for consuming durable events.
+  // Required on the first request; ignored on subsequent requests.
+  //
+  // queue_ids share one deployment-wide namespace, so this must be the id of a
+  // queue that was created by (or for) your client; see CreateDurableQueueRequest.queue_id.
+  //
+  // A queue_id that does not match "^[A-Za-z0-9._-]{1,200}$" is rejected with
+  // INVALID_ARGUMENT before the broker is contacted.
+  string queue_id = 1;
+
+  // Delivery tags to acknowledge. These correspond to delivery_tag values
+  // received in ConsumeDurableEventsWithAcksResponse messages. Acknowledging
+  // a message confirms the client has received and processed it, and the
+  // server drops it from the queue. An unacknowledged message is redelivered
+  // once the client reconnects; every redelivery increments the message's
+  // cumulative delivery count, and once that count exceeds the deployment's
+  // delivery limit the server moves the message to a dead-letter queue rather
+  // than redelivering it indefinitely. Unknown or already-settled tags are
+  // skipped without terminating the stream.
+  repeated int64 ack_delivery_tags = 2;
+
+  // Delivery tags to negatively acknowledge (nack). These correspond to
+  // delivery_tag values received in ConsumeDurableEventsWithAcksResponse
+  // messages. Nacking a message tells the server the client failed to
+  // process it: the server requeues it for redelivery. Redelivery is
+  // immediate and may arrive on this same stream -- clients wanting a retry
+  // delay must implement backoff before nacking.
+  //
+  // Each redelivery increments the message's delivery count. That count is
+  // cumulative over the message's whole lifetime and is never reset: a nack,
+  // a disconnect and a broker channel close all requeue the message and all
+  // add to the same count, so it is a lifetime budget for the message rather
+  // than a per-nack one. A message whose delivery count exceeds the
+  // deployment's delivery limit (10 attempts as shipped, applied by an
+  // operator-tunable broker policy rather than by a queue argument) is moved
+  // to the dead-letter queue rather than redelivered forever.
+  //
+  // A tag appearing in both ack_delivery_tags and nack_delivery_tags in one
+  // request is treated as acknowledged (acks process first). Unknown or
+  // already-settled tags are skipped without terminating the stream.
+  repeated int64 nack_delivery_tags = 3;
+}
+
+// ConsumeNonDurableEventsRequest specifies filter groups for consuming non-durable events.
+// This can be sent multiple times on the stream to update filters.
+message ConsumeNonDurableEventsRequest {
+  // filter_groups defines sets of filters to apply to the events based
+  // on the event type of the messages, and optionally the resource id of the messages.
+  //
+  // If using a reconnect_token to reconnect, then this field should be omitted unless
+  // trying to change the filters from previous values.
+  //
+  // NOTE: If you are using this ConsumeNonDurableEventsRequest to change which
+  //       filters are being used, you must also include the previous filter groups in
+  //       the "previous_filter_groups" field.
+  repeated FilterGroup filter_groups = 1;
+
+  // Optional token for reconnecting to the same queue after a disconnection OR
+  // for using the same queue between multiple simultaneous clients to
+  // consume in parallel from a single queue. When several clients share a
+  // queue this way, at most one of them may change its filters, and that
+  // client alone can follow the acknowledgement-driven replay recipe
+  // described on ConsumeNonDurableEvents.
+  //
+  // Pass back a token the server issued, verbatim. A token longer than 200
+  // characters is rejected with INVALID_ARGUMENT; the tokens this service
+  // issues are well inside that limit.
+  //
+  // NOTE: the queues have a TTL that is configurable and has a 20 second default.
+  optional string reconnect_token = 2;
+
+  // Optional. If this ConsumeNonDurableEventsRequest is being used to update which
+  // filters are being used, in addition to specifying the new filter groups with the
+  // "filter_groups" field, this field must be included and should contain
+  // the previous filter groups.
+  repeated FilterGroup previous_filter_groups = 3;
+}
+
+// CreateDurableQueueRequest defines the initial filters for a new durable queue.
+message CreateDurableQueueRequest {
+  // filter_groups defines sets of filters to apply to the events based
+  // on the resource id of the messages.
+  //
+  // If omitted or empty, all events for an event type are
+  // added to the queue for later consumption.
+  repeated FilterGroup filter_groups = 1;
+
+  // Optional. A client-specified identifier for the durable queue. If omitted
+  // or empty, the server generates a uuid for the queue.
+  //
+  // A supplied id must be unique across the whole deployment. Queue ids share
+  // a single namespace, so supplying an id that is already in use attaches the
+  // call to that existing queue regardless of who created it or which
+  // "filter_groups" are supplied, and the queue is returned with its existing
+  // filters and "created" set to false. Two callers that pick the same id
+  // therefore share one queue: each receives the other's events, and either
+  // can delete it. Use a UUID, or a namespaced convention such as
+  // "<service-name>-<purpose>"; never a bare generic word such as "events".
+  //
+  // Per-queue isolation is not enforced. The three durable-queue permissions
+  // are deployment-wide rather than per-queue: a principal granted
+  // "consume-durable-queues" can consume from any durable queue whose id it
+  // knows, one granted "delete-durable-queues" can delete any of them, and
+  // "create-durable-queues" authorizes both creating a queue and updating the
+  // filters of any existing one. Operators should grant these permissions
+  // deliberately, to service accounts rather than to broad user groups.
+  string queue_id = 2;
+}
+
+// CreateDurableQueueResponse returns the ID of the newly created durable queue.
+// A queue_id is required for all durable type
+// ConsumeEvent calls, and is obtained by making a
+// call to CreateDurableQueue.
+message CreateDurableQueueResponse {
+  // The queue_id identifies the durable queue. This ID must be persisted
+  // somewhere and sent on all ConsumeDurableEvents calls.
+  string queue_id = 1;
+
+  // created indicates whether a new durable queue was created by this call.
+  // It is true when the queue was created by this call, and false when an
+  // existing queue with the supplied "queue_id" was found and returned
+  // unchanged (a no-op). This is best-effort under concurrent creates of the
+  // same "queue_id".
+  bool created = 2;
+}
+
+// DeleteDurableQueueRequest specifies the durable queue to be deleted.
+message DeleteDurableQueueRequest {
+  // The queue_id identifies the durable queue to delete. It was created
+  // with a call to the CreateDurableQueue RPC.
+  //
+  // queue_ids share one deployment-wide namespace, so this must be the id of a
+  // queue that was created by (or for) your client; see CreateDurableQueueRequest.queue_id.
+  //
+  // A queue_id that does not match "^[A-Za-z0-9._-]{1,200}$" is rejected with
+  // INVALID_ARGUMENT before the broker is contacted.
+  string queue_id = 1;
+}
+
+// UpdateDurableQueueRequest specifies how to update filters for an existing durable queue.
+message UpdateDurableQueueRequest {
+  // The id of the durable queue to update.
+  //
+  // queue_ids share one deployment-wide namespace, so this must be the id of a
+  // queue that was created by (or for) your client; see CreateDurableQueueRequest.queue_id.
+  //
+  // A queue_id that does not match "^[A-Za-z0-9._-]{1,200}$" is rejected with
+  // INVALID_ARGUMENT before the broker is contacted.
+  string queue_id = 1;
+
+  // The current filters in use on the existing durable queue.
+  // These will be replaced if new_filter_groups is provided.
+  repeated FilterGroup current_filter_groups = 2;
+
+  // The new filters to use on the existing durable queue.
+  // They will replace the existing filters.
+  repeated FilterGroup new_filter_groups = 3;
+}
+
+// DeleteDurableQueueResponse is an empty response indicating successful deletion of a durable queue.
+message DeleteDurableQueueResponse {}
+
+// UpdateDurableQueueResponse is an empty response indicating successful update of a durable queue.
+message UpdateDurableQueueResponse {}
+
+// ManageDeadLetteredEventsResponse is streamed from the server to the client
+// during a dead-letter management session. Each message carries exactly one
+// of two arms: a dead_lettered_event arm emitted while the server is browsing
+// the dead-letter queue, or an action_outcome arm emitted to report the result
+// of a client-requested ACTION_REPLAY, ACTION_DISCARD, or ACTION_LEAVE action.
+//
+// The payload oneof is additive and forward-compatible: existing fields are
+// never renumbered, and future unary store-backed RPCs remain addable without
+// changing this message.
+message ManageDeadLetteredEventsResponse {
+  // DeadLetteredEvent describes a single dead-lettered message presented to the
+  // operator for triage, including why it was dead-lettered and where it came
+  // from.
+  message DeadLetteredEvent {
+    // Reason enumerates why a message was dead-lettered. The values map to the
+    // RabbitMQ x-death reasons reported by the broker.
+    enum Reason {
+      // REASON_UNSPECIFIED is the default, unspecified dead-letter reason.
+      REASON_UNSPECIFIED = 0;
+      // REASON_DELIVERY_LIMIT indicates the message exceeded its redelivery limit.
+      // It maps to the x-death reason "delivery_limit".
+      REASON_DELIVERY_LIMIT = 1;
+      // REASON_EXPIRED indicates the message outlived the queue's configured message
+      // TTL. It maps to the x-death reason "expired".
+      REASON_EXPIRED = 2;
+      // REASON_MAXLEN indicates the message was evicted because the queue reached its
+      // configured maximum length. It maps to the x-death reason "maxlen".
+      REASON_MAXLEN = 3;
+    }
+
+    // The reason the message was dead-lettered.
+    Reason reason = 1;
+
+    // The name of the origin queue from which the message was dead-lettered.
+    string origin_queue = 2;
+
+    // The number of times the broker attempted to deliver the message before
+    // it was dead-lettered.
+    int64 delivery_count = 3;
+
+    // The time at which the message was dead-lettered.
+    google.protobuf.Timestamp dead_lettered_at = 4;
+
+    // The dead-lettered event itself, carrying its event_type,
+    // principal_identity, and payload. This is a single event, not a batch.
+    Event event = 5;
+
+    // The resource id associated with the dead-lettered event. The resource id
+    // is not carried on the Event message itself, so it is surfaced here
+    // explicitly for operator triage.
+    string resource_id = 6;
+
+    // The session-scoped delivery tag for this dead-lettered message. The
+    // client sends this tag back in a ManageDeadLetteredEventsRequest to act on
+    // the message. This tag is valid only within the live stream that produced
+    // it and must not be persisted or reused across reconnects.
+    int64 delivery_tag = 7;
+  }
+
+  // ActionOutcome reports the result of a single client-requested action,
+  // correlated to the request by delivery_tag, so the operator can observe what
+  // happened to each dead-lettered message.
+  message ActionOutcome {
+    // Outcome enumerates the possible results of a requested action.
+    enum Outcome {
+      // OUTCOME_UNSPECIFIED is the default, unspecified outcome.
+      OUTCOME_UNSPECIFIED = 0;
+      // OUTCOME_REPLAYED indicates the message was successfully republished to its
+      // origin queue and the dead-letter copy was removed after the publish
+      // confirm.
+      OUTCOME_REPLAYED = 1;
+      // OUTCOME_DISCARDED indicates the message was acknowledged and dropped from the
+      // dead-letter queue.
+      OUTCOME_DISCARDED = 2;
+      // OUTCOME_LEFT indicates the message was left in place in the dead-letter queue
+      // (nacked with requeue=true) for later triage.
+      OUTCOME_LEFT = 3;
+      // OUTCOME_ORIGIN_QUEUE_DELETED indicates the replay could not proceed because the
+      // origin queue no longer exists. This outcome is no-loss: the dead-letter
+      // copy is left in place exactly as for an ACTION_LEAVE action, so the message can
+      // still be triaged.
+      OUTCOME_ORIGIN_QUEUE_DELETED = 4;
+      // OUTCOME_REPLAY_FAILED indicates the replay could not be confirmed. This outcome
+      // is no-loss: the dead-letter copy is left in place exactly as for a
+      // ACTION_LEAVE action, so the message is never dropped on a failed replay.
+      OUTCOME_REPLAY_FAILED = 5;
+    }
+
+    // The session-scoped delivery tag identifying the dead-lettered message the
+    // outcome pertains to. It matches the delivery_tag the client sent in the
+    // corresponding action entry.
+    int64 delivery_tag = 1;
+
+    // The outcome of the requested action.
+    Outcome outcome = 2;
+
+    // A human-readable note providing additional context about the outcome,
+    // for example the name of the missing origin queue for an
+    // OUTCOME_ORIGIN_QUEUE_DELETED outcome.
+    string detail = 3;
+  }
+
+  // payload carries exactly one of the two response arms: a dead_lettered_event
+  // emitted while browsing, or an action_outcome reporting the result of a
+  // requested action.
+  oneof payload {
+    // A dead-lettered message presented for triage.
+    DeadLetteredEvent dead_lettered_event = 1;
+
+    // The reported result of a client-requested action.
+    ActionOutcome action_outcome = 2;
+  }
+}
+
+// ManageDeadLetteredEventsRequest is sent by the client during a dead-letter
+// management session. The first message opens the stream and carries no
+// queue_id because the dead-letter queue is global rather than scoped to a
+// single durable queue. Subsequent messages carry one or more action entries,
+// each pairing a session-scoped delivery tag with the action to take, so that
+// multiple dead-lettered messages can be actioned in a single request.
+message ManageDeadLetteredEventsRequest {
+  // Action enumerates the triage actions an operator may take on a
+  // dead-lettered message.
+  enum Action {
+    // ACTION_UNSPECIFIED is the default, unspecified action.
+    ACTION_UNSPECIFIED = 0;
+    // ACTION_REPLAY republishes the message to its origin queue. The dead-letter copy
+    // is removed only after the publish to the origin queue is confirmed, so a
+    // failed replay never drops the message.
+    ACTION_REPLAY = 1;
+    // ACTION_DISCARD acknowledges the message and drops it from the dead-letter queue.
+    ACTION_DISCARD = 2;
+    // ACTION_LEAVE leaves the message in place in the dead-letter queue (nacks with
+    // requeue=true) for later triage.
+    ACTION_LEAVE = 3;
+  }
+
+  // ActionEntry pairs a session-scoped delivery tag with the action to take on
+  // the corresponding dead-lettered message.
+  message ActionEntry {
+    // The session-scoped delivery tag of the dead-lettered message to act on,
+    // as received in a ManageDeadLetteredEventsResponse dead_lettered_event.
+    int64 delivery_tag = 1;
+
+    // The action to take on the message identified by delivery_tag.
+    Action action = 2;
+  }
+
+  // actions lists the per-delivery-tag triage actions to apply. It is empty on
+  // the first message that opens the stream and populated on subsequent
+  // messages to act on previously delivered dead-lettered messages.
+  repeated ActionEntry actions = 1;
+}
+
+// The event object that encapsulates all event data
+message Event {
+  // type of event - defined by the publisher
+  string event_type = 1;
+  // principal who published event
+  string principal_identity = 2;
+  // time at which event was generated
+  google.protobuf.Timestamp occurred_at = 3;
+  // time at which event was published
+  google.protobuf.Timestamp published_at = 4;
+  // body of event
+  google.protobuf.Struct message = 5;
+}
+
+// Allow groups of filters for filtering the events that will be consumed.
+message FilterGroup {
+  // Event type for this filter.
+  // Other services that publish events will define unique event types.
+  string event_type = 1;
+
+  // Optional: the filters for filtering on resource id (filters use OR logic).
+  // If no resource filters are supplied then messages
+  // will only be filtered by event_type.
+  repeated ResourceFilter filters = 2;
+}
+
+// Filters events based on their resource id as defined by the
+// publishing service.
+message ResourceFilter {
+  // FilterType specifies the matching strategy for the resource filter.
+  // How much of the resource_id needs to match
+  // the resource in the message for the filter
+  // to be successful.
+  enum FilterType {
+    // FILTER_TYPE_UNSPECIFIED is the default, unspecified filter type.
+    // This will default to FILTER_TYPE_EQ behavior
+    FILTER_TYPE_UNSPECIFIED = 0;
+    // FILTER_TYPE_EQ performs an exact match on the resource_id.
+    FILTER_TYPE_EQ = 1;
+    // FILTER_TYPE_STARTS_WITH_LAZY performs a "starts with" match (lazy).
+    // For example, a filter for "folder_1" would match "folder_1/file.txt" but not "folder_10/file.txt".
+    FILTER_TYPE_STARTS_WITH_LAZY = 2;
+    // FILTER_TYPE_STARTS_WITH_GREEDY performs a "starts with" match (greedy).
+    // For example, a filter for "folder_1" would match "folder_1/sub/file.txt".
+    FILTER_TYPE_STARTS_WITH_GREEDY = 3;
+  }
+
+  // filter_type specifies the type of filter to apply.
+  FilterType filter_type = 1;
+
+  // The path to filter the field by.
+  // A resource is a path like string with words separated by slashes.
+  //
+  // For example, if two messages were published
+  // for the following resources:
+  //
+  // "folder_1/folder_2/folder_3/astronaut.usd"
+  // "folder_1/astronaut.usd"
+  //
+  // then a filter with a resource_id of "folder_1" and
+  // filter_type = FILTER_TYPE_STARTS_WITH_GREEDY would match both messages.
+  //
+  // A filter with a resource_id of "folder_1"
+  // and a filter_type = FILTER_TYPE_STARTS_WITH_LAZY would only match the
+  // second message.
+  //
+  // If resource_id = "", then there are three possibilities
+  // depending on the value of filter_type:
+  //     1) FILTER_TYPE_STARTS_WITH_GREEDY: consume all messages
+  //        of the event_type with or without a resource_id,
+  //        regardless of what the value for resource_id in the message is
+  //     2) FILTER_TYPE_STARTS_WITH_LAZY: consume any message that doesn't have
+  //        a resource_id or has a resource_id="", AND any message with a
+  //        resource_id like “something” or “something/“, but not
+  //        “something/something-else”
+  //     3) FILTER_TYPE_EQ: generates an error response
+  string resource_id = 2;
+}

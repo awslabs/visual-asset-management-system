@@ -14,6 +14,7 @@ Every pipeline is covered by the same cases so the property holds for a new pipe
 existing one, which is how the loose form spread in the first place.
 """
 
+import contextlib
 import importlib.util
 import os
 import sys
@@ -32,12 +33,19 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 PIPELINES = (
     ("splatToolbox", "backendPipelines/3dRecon/splatToolbox",
      "infra/lib/nestedStacks/pipelines/3dRecon/splatToolbox/constructs/splatToolbox-construct.ts"),
+    ("cogConvert", "backendPipelines/conversion/cogConvert",
+     "infra/lib/nestedStacks/pipelines/conversion/cogConvert/constructs/cogConvert-construct.ts"),
+    # The Batch tier's launcher; its builder file holds the allow list the pipeline's schema also uses.
+    ("conversion3dBasic", "backendPipelines/conversion/3dBasic",
+     "infra/lib/nestedStacks/pipelines/conversion/3dBasic/lambdaBuilder/"
+     "conversion3dBasicLauncherFunctions.ts"),
     ("coordinateTransform", "backendPipelines/conversion/coordinateTransform",
      "infra/lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/"
      "coordinateTransform-construct.ts"),
-    ("metadata3dLabeling", "backendPipelines/genAi/metadata3dLabeling",
-     "infra/lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/"
-     "metadata3dLabeling-construct.ts"),
+    ("videoSopBom", "backendPipelines/genAi/videoSopBom",
+     "infra/lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct.ts"),
+    ("cadStepAgent", "backendPipelines/genAi/cadStepAgent",
+     "infra/lib/nestedStacks/pipelines/genAi/cadStepAgent/constructs/cadStepAgent-construct.ts"),
     ("modelOps", "backendPipelines/multi/modelOps",
      "infra/lib/nestedStacks/pipelines/multi/modelOps/constructs/modelOps-construct.ts"),
     ("rapidPipeline", "backendPipelines/multi/rapidPipeline",
@@ -48,9 +56,16 @@ PIPELINES = (
     ("pcPotreeViewer", "backendPipelines/preview/pcPotreeViewer",
      "infra/lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/"
      "pcPotreeViewer-construct.ts"),
+    ("systemGenAiMetadata", "backendPipelines/system/genAiMetadata",
+     "infra/lib/nestedStacks/pipelines/system/genAiMetadata/constructs/"
+     "systemGenAiMetadata-construct.ts"),
 )
 
 PIPELINE_IDS = [name for name, _, _ in PIPELINES]
+
+# Pipelines whose deployed allow list is the "*" wildcard: every file is taken, the classifier names the
+# class. Everything else deploys a finite list.
+ANY_FILE_PIPELINES = frozenset({"systemGenAiMetadata"})
 
 # The allow list every case runs against. Three members, so the joined string carries substrings that
 # name no format: prefixes of a member and spans crossing a comma.
@@ -67,7 +82,7 @@ _LISTED = (".stl", ".obj", ".glb", ".STL", ".Obj")
 _TOKEN = "tok-extension-gate"
 
 # customLogging is a per-pipeline package with an identical logger in each. Stubbed once so loading
-# seven handlers does not depend on which pipeline's copy sys.path resolves first.
+# eight handlers does not depend on which pipeline's copy sys.path resolves first.
 if "customLogging" not in sys.modules:
     _cl_pkg = types.ModuleType("customLogging")
     _cl_logger = types.ModuleType("customLogging.logger")
@@ -110,9 +125,12 @@ def _load(name, lambda_dir_rel, allowed=_ALLOWED):
     os.environ.update(overrides)
 
     module_name = f"{name}_openPipeline_undertest"
-    # manifestHelper is vendored per pipeline; drop any previously loaded copy so each handler
-    # imports its own rather than the first one cached.
-    sys.modules.pop("manifestHelper", None)
+    # manifestHelper is vendored per pipeline, and two pipelines ship their own computeTier; drop any
+    # previously loaded copy of a module this lambda directory holds, so each handler imports its own
+    # rather than the first one cached.
+    for entry in os.listdir(lambda_dir):
+        if entry.endswith(".py"):
+            sys.modules.pop(entry[:-3], None)
     sys.path.insert(0, lambda_dir)
     try:
         spec = importlib.util.spec_from_file_location(module_name, path)
@@ -159,9 +177,14 @@ def _invoke(mod, file_uri):
         "startDate": datetime.datetime(2026, 1, 1, 0, 0, 0),
     })
     send_failure = MagicMock()
-    with patch.object(mod.sfn, "start_execution", start), \
-            patch.object(mod.sfn, "send_task_failure", send_failure), \
-            patch.object(mod.events_client, "put_events", MagicMock()):
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch.object(mod.sfn, "start_execution", start))
+        stack.enter_context(patch.object(mod.sfn, "send_task_failure", send_failure))
+        stack.enter_context(patch.object(mod.events_client, "put_events", MagicMock()))
+        # A handler that reads the run's input configuration (3D Basic, for a forced compute tier)
+        # reads it from a stub, never from Amazon S3.
+        if hasattr(mod, "s3_client"):
+            stack.enter_context(patch.object(mod, "s3_client", MagicMock()))
         resp = mod.lambda_handler(_event(file_uri), MagicMock())
     return resp, start, send_failure
 
@@ -176,7 +199,8 @@ def _cdk_allow_list(construct_rel):
     assert os.path.isfile(path), path
     with open(path, encoding="utf-8") as fh:
         source = fh.read()
-    match = re.search(r"const allowed(?:Input)?(?:File)?Extensions\s*=\s*([^;]*);", source)
+    match = re.search(
+        r"const (?:allowed(?:Input)?(?:File)?Extensions|[A-Z0-9_]+_INPUT_FILE_EXTENSIONS)\s*=\s*([^;]*);", source)
     assert match, f"no allow-list declaration found in {path}"
     return "".join(re.findall(r'"([^"]*)"', match.group(1)))
 
@@ -232,12 +256,35 @@ class TestExtensionGate:
 
         This is what makes the substring hazard live rather than theoretical: a single-member list
         has no cross-comma substring, so the cases above would be exercising a shape the deployment
-        never has.
+        never has. The one exception is the system GenAI metadata pipeline, whose deployed value is
+        the "*" wildcard (it takes every file); the exact-membership cases above still run against the
+        finite list this suite supplies, and the wildcard's own behaviour is pinned below.
         """
         allowed = _cdk_allow_list(construct)
+        if name in ANY_FILE_PIPELINES:
+            assert allowed == "*", allowed
+            return
 
         assert "," in allowed, allowed
         members = [member.strip() for member in allowed.split(",")]
         assert len(members) >= 2
         for member in members:
             assert member.startswith("."), members
+
+    def test_the_wildcard_admits_every_file_only_where_deployed(self, name, lambda_dir, construct):
+        """A "*" member admits any extension and a file with none; a pipeline that is not deployed with
+        the wildcard must not grow it by accident, so the handler's acceptance is only asserted for the
+        pipeline whose construct declares it."""
+        if name not in ANY_FILE_PIPELINES:
+            return
+        mod = _load(name, lambda_dir, allowed="*")
+        for uri in ("s3://abkt/xidM/file.zzz", "s3://abkt/xidM/noext", "s3://abkt/xidM/model.glb"):
+            resp, start, send_failure = _invoke(mod, uri)
+            assert resp["statusCode"] == 200, uri
+            start.assert_called_once()
+            send_failure.assert_not_called()
+        # With a finite list the same handler still rejects an extension it does not name.
+        mod = _load(name, lambda_dir)
+        resp, start, _ = _invoke(mod, "s3://abkt/xidM/file.zzz")
+        assert resp["statusCode"] == 400
+        start.assert_not_called()

@@ -33,25 +33,32 @@ web/
   customInstalls/           # Per-viewer custom install scripts (one dir per viewer)
   e2e/                      # Playwright specs against a deployed stack — see e2e/CLAUDE.md (11.5)
   src/
-    App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table, lazyWithRetry, permission filtering
+    App.tsx                 # Root app shell, HashRouter, TopNavigation (Settings menu, profile menu)
+    routes.tsx              # Centralized route table (core + add-on + custom), lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
-    reportWebVitals.ts      # Web vitals reporting
     setupTests.ts           # Jest setup
 
     features/orchestration/ # Pipeline/workflow/execution management (React 18, Tailwind, Radix)
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
                             #   client.ts queries.ts triggerCache.ts
-      permissions/          # useAllowedRoutes.ts (Tier-1 gating)
+      permissions/          # useAllowedRoutes.ts (Tier-1 gating), routeDisabledReason.ts (disabledReason text),
+                            #   systemRecordReasons.ts (disabledReason text for system records)
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
                             #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, Dialog (+DialogFooter),
                             #   Callout, VirtualList (fixed-row-height windowed list), ...)
-                            #   RowActionsButton.tsx — three-dot SVG trigger for a row's ContextMenu
+                            #   DisabledReason.tsx — tooltip + button for a disabled control's reason (see 6.4)
                             #   BusyControls.tsx — BusyButton, BusyInput, openWhileBusy: a control whose own
-                            #     request is in flight keeps focus (aria-disabled, not disabled)
+                            #     request is in flight keeps focus (aria-disabled, not disabled); Dialog `busy`
+                            #     holds a dialog open while its footer's request runs
+                            #   LoadMoreButton.tsx, useFocusHandOff.ts — focus moves on, not to the page body,
+                            #     when the answer to a request removes the control that holds it
+                            #   useReturnFocus.ts — a dialog returns focus to its opener as it closes (Dialog
+                            #     and Drawer call it); rowActionsFor / rowActionsTrigger / controlNamed name
+                            #     a row-menu dialog's target (see 6.4)
+                            #   RowActionsButton.tsx — three-dot SVG trigger for a row's ContextMenu
                             #   ToastProvider.tsx — notifications for the whole module (see 6.5)
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
                             #   live under executionConfig.sqs / executionConfig.eventBridge),
@@ -68,6 +75,16 @@ web/
                             #   ExecutionQuickView.tsx ExecutionRowActions.tsx
                             #   ExecuteWorkflowButton.tsx ExecuteWorkflowModal.tsx logSearch.ts
                             #   SubProcessesSection.tsx StageTimeline.tsx (details Sub-processes + stages)
+                            #   ExecutionOutputTypeBadges.tsx ExecutionResultSurface.tsx (Result modal)
+                            #   ResultText.tsx (result text appended per page in bounded, memoized
+                            #   chunks — never one re-rendered string) ResultDownloadButton.tsx
+                            #   resourceTypeLabels.ts (sub-process type labels; unknown types render raw,
+                            #   with a not-abortable note when abortable === false)
+                            #   OutputIngestionProgress.tsx ("Ingesting outputs (n of m)" from the
+                            #   details' executionPhase/outputIngestion; IngestedBadge for output
+                            #   rows with ingestionStatus SUCCEEDED; display only)
+                            #   SkippedLaunchPanel.tsx (details `skip` block of a SKIPPED record; the
+                            #   blocking run is linked only when the API returned its id)
       wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
                             #   WorkflowPicker, WizardPipelineStage/WizardInputStage/WizardReviewStage,
                             #   railSteps.ts reviewBlockers.ts InputFileSelector, MetadataSourceSelector,
@@ -78,28 +95,94 @@ web/
 
     FedAuth/Auth.tsx        # Dual-mode auth orchestrator (Cognito OR External OAuth2)
     FedAuth/oauthSignInState.ts  # External OAuth: opaque state, same-origin return page, one-time values
+    FedAuth/allowedApiRoutesCache.ts  # Caches the API allowed-routes listing and tells the navigation
     authenticator/          # Cognito Authenticator UI components (Header, Footer, SignIn*)
 
-    services/               # API and data services (ONLY files that may import apiClient)
+    services/               # API and data services (may import apiClient — Rule 3 lists the other directories that may)
       APIService.ts         # Main API service (~3,500 lines, 110+ exports)
       AssetUploadService.ts # S3 multipart upload logic
       AssetVersionService.ts  # updateAssetVersion, archiveAssetVersion, unarchiveAssetVersion
       FileOperationsService.ts
       MetadataService.ts
       MetadataSchemaService.ts
+      ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
       apiClient.ts          # Custom fetch-based client, injects auth headers
+      networkFailure.ts     # NETWORK_FAILURE_MESSAGE, isNetworkFailure, requestFailureMessage (re-exported by apiClient)
       appCache.ts           # Replaces Amplify Cache for runtime config
-      webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx/Navigation
+      webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx, Navigation, profile menu
+      addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
+
+    addons/                 # Add-on web lane: addonRoutes.tsx, addonNavigation.ts, addonFeatures.ts (add-on feature-switch names)
+      edh/                  #   EDH Workstations add-on module (Tailwind + Radix, pages/ route shells) — see addons/edh/CLAUDE.md
+    custom/                 # FORK EXTENSION POINT (shipped empty, never edited upstream)
+      customRoutes.tsx      #   customRouteTable, appended to routeTable in routes.tsx
+      customNavigation.ts   #   customNavSections, appended by layout/navigationRegistry.ts
+      customFeatures.ts     #   names of the fork's feature switches
+      services/             #   fork API calls (may import apiClient)
+      pages/                #   fork pages
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
       AssetDetailContext.ts  # useReducer-based context
+      RuntimeConfigContext.ts # Live runtime config from Auth (useFeaturesEnabled); falls back to appCache outside the provider
 
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
-        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions,
+                              #   Compliance tabs, ZipDownloadsTab ("Download Queue", only with ZIPDOWNLOADS)
         versions/             # Asset version management (list, comparison, edit/archive modals)
-      common/ createupdate/ form/
+      common/ createupdate/
+      form/                   # DragDropFileUpload.tsx — the shared upload control (Add files, Add
+                                #   folder, drop zone) of Create Asset and Add Files; reports
+                                #   onAdd(roots: UploadRoot[]), never asset paths.
+                                #   uploadPaths.ts — the ONE upload path rule (planUploadPaths,
+                                #   normalizeDestination, root builders); see section 7.8.
+                                #   UploadPreview.tsx — final-path preview, single-folder override,
+                                #   referencing-format hint.
+      compliance/             # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
+                              #   rules: "Add rule" for all six types, the pipeline-rule input-file
+                              #   selector (mode / globs / explicit paths), the metadata-rule scope
+                              #   form (scope select, include/exclude paths, link direction + type),
+                              #   typed checks for fileStructure / versionCoverage / assetAttributes)
+                              #   + complianceSchemaRules.ts (pure pipelineRef fields/validation,
+                              #   rule-draft round-trip, example rule per type, metadata-scope
+                              #   switching/validation and check validators carrying the API's messages);
+                              #   ReasonModal.tsx (Cloudscape modal collecting a reason: mandatory to
+                              #   grant a quarantine exception or release from quarantine, `optional`
+                              #   to approve or reject a cascade); complianceStateBadge.tsx
+                              #   (shared compliance-state -> StatusIndicator map + Badge color accessor;
+                              #   `exception` renders as info/blue; schemaSourceLabel says a binding is
+                              #   inherited or set on the asset; EvaluationErrorIndicator flags a
+                              #   record whose lastEvaluationStatus is `error`);
+                              #   EvaluationHistoryModal.tsx (one asset's paged evaluation history with schema
+                              #   version and rule results, opened from the database overview);
+                              #   ExecutionFailureReasons.tsx (a failed pipeline rule's execution failure
+                              #   reason, under the rule result, the asset tab's state and the quarantine
+                              #   reason; the API returns it only to a caller who may read the execution);
+                              #   RevokeExceptionModal.tsx (the revoke confirmation shared by the asset tab
+                              #   and the database overview); bindingConfirmations.ts (what the
+                              #   confirmations of a database binding's Bind, Change and Remove say,
+                              #   shared by the database overview and the database editor);
+                              #   cascadeNodes.tsx (a cascade's node outcomes:
+                              #   cascadeProgress counts only verdict nodes as evaluated and the skipped ones
+                              #   by reason, CascadeNodeList / CascadeNodesModal list each node's outcome, the
+                              #   nodes the API returns only, paged and sorted in the browser;
+                              #   cascadeUnauthorizedNodes reads the API's
+                              #   unauthorizedNodes count, shown as "N nodes you cannot access", never named);
+                              #   rowActions.ts (ROW_ACTIONS_STICKY_COLUMNS: the
+                              #   compliance tables pin their inline-link Actions column last and wrap the rest);
+                              #   listingFilters.tsx (URL-backed filters, debounce, DatabaseFilter, and
+                              #   useUrlFilters(keys, pageRoute): a page reads and writes only its own
+                              #   route's URL, so a hash change to another page is not followed;
+                              #   useLatestRequest: every compliance page/dialog load drops a response that
+                              #   arrives after a later load began); listingStates.tsx (what an empty
+                              #   page of a compliance listing says: nothing recorded, nothing matches the
+                              #   filters, the page's rows not the reader's, or the end of the walk; and
+                              #   ListingLoadFailed + loadFailureMessage for a load that failed; the
+                              #   asset Compliance tab's state section shows loadFailureMessage in an
+                              #   inline error with Retry and clears the state read before);
+                              #   BreakableIdentifier.tsx (<wbr> at `_` and
+                              #   camelCase; `userId` also after `@` and `.`, for the audit Actor column)
       filemanager/            # Asset file manager (Cloudscape)
                                 #   EnhancedFileManager.tsx lazy-loads the orchestration execution
                                 #   quick view for a file's "View execution" provenance link.
@@ -110,18 +193,55 @@ web/
                                 #   one file / many) to workflow input files
                                 #   executionLinks.ts — workflow-execution provenance → execution
                                 #   detail route + the Tier-1 route the link is gated on
-      list/ loading/ metadata/ metadataSchema/ metadataV2/ modals/
-      search/                 # ModernSearchContainer.tsx - main search UI
+      list/                   # TableList.tsx (the standard list page: search + refresh left, filters
+                              #   right, collection-hooks filtering/sorting/paging); ListToolbar.tsx (that
+                              #   toolbar for a page with its own Table, 7.7); tableSorting.ts (column
+                              #   comparators byText/byDate/byNumber, useSortedItems for a page the server
+                              #   returned, useBrowserPagedItems for a whole list, PAGE_SORTING_NOTE)
+      loading/ metadata/ metadataSchema/ metadataV2/ modals/
+      search/                 # ModernSearchContainer.tsx - unified keyword / natural-language search
+                              #   (the body of the search page's "Search" view; see 8.1)
+                              #   SearchLayout/lockedDatabase.ts — trigger text of the Database filter
+                              #   a database route locks (names the database, not "All databases")
       searchSmall/ selectors/
       single/                 # Single-entity views (ViewFile, AssetIngestion, Metadata)
       table/
+      auditLogs/              # Audit Log Search: filter bar, results table, detail panel, export dialog,
+                              # URL state, validation, long-poll loop (see 'Audit Log Search' below)
+      zipDownloads/           # Download as Zip (Cloudscape): zipDownloads.ts (types, route templates,
+                                #   selection -> request entries, names, polling rule),
+                                #   CreateZipDownloadModal.tsx, ZipDownloadsTable.tsx (asset tab +
+                                #   global page; polls every 5 s only while a job is queued/running,
+                                #   the surface is active and the browser tab is visible)
 
     pages/                  # Thin page wrappers composing components
       AssetDownload.tsx AssetUpload/
-      auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update)
+      ZipDownloadsPage.tsx    # #/zipdownloads "My Download Queue" (profile-menu item only with ZIPDOWNLOADS)
+      auth/                   # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys (Create/Update),
+                              # AuditLogSearch (audit-log search; components/auditLogs/)
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
-      search/                 # SearchPage.tsx
+                            #   ListPage.tsx keys its body by the route's databaseId: the routes
+                            #   that share one page component keep it mounted (#1228)
+      search/                 # SearchPage.tsx — breadcrumbs + searchPlugin's SearchTabsHost (title row, views)
       Subscription/ Tag/
+
+      # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
+      # flag); each deploys unconditionally and the nav/routes filter hides them without access.
+      # A record action on them or on the asset Compliance tab (release, exception grant/revoke,
+      # Evaluate, bind/change/remove, cascade approve/reject) re-reads what the page shows after
+      # its outcome, success OR refusal (`finishAction`), and keeps the refusal in its own alert
+      # (`actionError`), apart from the load error each re-read clears (D162). A database binding
+      # change answers 202 and is applied in the background (D161): DatabaseCompliance.tsx shows
+      # the binding read's `apply` (short status label + ProgressBar), re-reads the binding with
+      # `bindingApplyPollDelay` backoff while it is `applying`, disables Bind/Change/Remove and
+      # Evaluate All while it is applying or stalled, and offers Resume (the same request) to a
+      # caller with the route for a stalled one; the API decides each request. Its evaluations
+      # phase (`evaluationStatus` queueing/stalled) shows its own line and holds no control.
+      # Bind, Change and Remove each open a confirmation first (bindingConfirmations.ts). Each
+      # page's toolbar is ListToolbar (7.7); every sortable column sorts, the server-paged lists
+      # the page shown (useSortedItems), the schemas page its whole list (useBrowserPagedItems).
+      ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
+      ComplianceAuditLog.tsx DatabaseCompliance.tsx
 
       # Orchestration route shells — each reads route params and renders the matching
       # features/orchestration component; keep the page logic in the feature module.
@@ -132,29 +252,46 @@ web/
 
     visualizerPlugin/       # 3D/media viewer plugin system — see CLAUDE.md there
       index.ts README.md
-      config/viewerConfig.json  # Plugin configuration
-      core/                     # PluginRegistry.ts, StylesheetManager.ts, types.ts
+      config/viewerConfig.json  # Plugin configuration (core); addonViewerConfig.json (add-on),
+                                #   customViewerConfig.json (fork extension point)
+      core/                     # PluginRegistry.ts, viewerSources.ts, StylesheetManager.ts, types.ts
       components/               # Shared viewer UI components
-      viewers/                  # Individual viewer plugins + manifest.ts
+      viewers/                  # Individual viewer plugins + manifest.ts, addonManifest.ts,
+                                #   custom/customManifest.ts
+
+    searchPlugin/           # Search page provider host (title row + view switch) — see 8.1
+      index.ts
+      config/searchProviderConfig.json  # Provider catalog (searchProviderConfig.test.ts guards it)
+      core/                     # SearchProviderRegistry.ts, providerAvailability.ts,
+                                #   useSearchProvidersReady.ts, types.ts
+      components/SearchTabsHost.tsx  # title row (h1, view switch, titleSlots) + active body
+      providers/                # manifest.ts + AssetListProvider/, UnifiedSearchProvider/
 
     common/                 # Shared utilities and helpers
       GlobalHeader.tsx common-components.tsx
+      cogRaster/              # Shared GeoTIFF/COG raster code of the GeoTIFF Map Viewer and the Search map's Show raster
+                              #   (rasterResolver.ts, cogProtocol.ts, placedImage.ts, RasterLayerManager.ts)
       constants/              # apiKeys.ts authRoutes.ts featuresEnabled.ts fileFormats.ts
       helpers/                # labels.ts tableCounterStrings.ts
-      utils/                  # utils.ts fileSize.ts
+      utils/                  # utils.ts fileSize.ts,
+                              #   maplibreWorker.ts (setWorkerUrl() for maplibre-gl's bundled worker; import for side effect before a map mounts)
 
     constants/uploadLimits.ts
-    hooks/                  # usePageTitle.ts, useThemeSettings.ts
-    layout/Navigation.tsx   # Left sidebar navigation
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts,
+                            #   useAssetPageAccess.ts (may the caller open an assets/asset page),
+                            #   useWebRouteAllowed.ts (does the POST /auth/routes decision allow a path)
+    layout/navigationRegistry.ts  # The one navigation registry: core + add-on + custom, side/profile placement
+    layout/Navigation.tsx   # Left sidebar navigation (side entries)
+    layout/useProfileMenuItems.ts # Top-bar profile menu items (profile entries, current page checked, then Sign out)
 
     utils/
       apiEndpoint.ts        # Resolves the API base URL
       chunkLoadRecovery.ts  # lazyWithRetry, chunk-failure detection, guarded one-time reload
-      authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
+      authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader, resolveExternalUserId
       sessionManager.ts     # Idle/expiry session handling
+      queryRetry.ts         # createAppQueryClient, shouldRetryQuery: a final 4xx is never retried
       fileExtensionValidation.ts
       fileHandleCompat.ts
-      maplibreWorker.ts     # setWorkerUrl() for maplibre-gl's bundled worker; import for side effect before a map mounts
 
     styles/                 # Global styles
       theme.css             # CSS custom properties for dark/light theming
@@ -169,6 +306,10 @@ web/
 ```
 
 ---
+
+`common/constants/fileFormats.ts` is the one definition of the formats and size the web shows as a file's own preview: `previewFileFormats` (mirrors the backend's `ALLOWED_PREVIEW_FILE_EXTENSIONS`; `.tga`, `.tif` and `.tiff` are never in it because browsers cannot display them), `PREVIEW_FILE_SIZE_LIMIT_BYTES` (5 MiB) and `isSelfPreviewable(fileName, size)` (extension in the list and size known and STRICTLY under the limit). The search thumbnail (`FilePreviewThumbnailCell.tsx`) and the file details panel call the helper instead of repeating the check, and the 3D thumbnail pipeline writes no preview for such a file. Drift tests pin the lists and the limit to the backend and the container.
+
+The file page (`components/single/ViewFile.tsx`) builds the viewer's single-file entry with `buildSingleViewerEntry` (`components/single/singleViewerEntry.ts`). On the Preview tab the entry carries the preview file's key and NO version ID: a preview file is its own S3 object, the source file's S3 version ID does not exist for it, and an empty version ID asks for its current version. Every viewer takes the entry from that one place; never pass the source version ID with a preview key. The Preview / File choices (`viewerOptions`) are derived with `useMemo` from the file the page holds (`singleFileInfo.previewFile`, multi-file mode) once the asset details have loaded; never build them inside the asset-details effect, because the file read can answer after it. A choice the options no longer offer falls back to the default, and `FileVersionsTable` carries the page's `previewFile` in the navigation state of a version it opens. Because a preview is requested without a version, it is the preview of the file's latest version, so for an older file version the tab shows the `OLDER_VERSION_PREVIEW_NOTICE` alert (`previewIsOfLatestVersionOnly`, decided from the file's version list, reusing the versions the direct-path load already read and asking once otherwise; no notice for the latest version, an asset-version view, or a link that names no version; when the latest version cannot be read and the link names a file version, the notice shows, so a possibly older version's preview is never presented as that version's).
 
 ## 3. Critical Rules
 
@@ -191,8 +332,9 @@ The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module
 
 -   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
 -   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
--   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**` plus the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**`). A new orchestration shell must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added, because scanning it is what makes the collision below possible.
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**`, each Tailwind add-on module under `src/addons/<addon>/**`, and the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**` or `src/addons/**`). A new orchestration shell or Tailwind add-on module must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added, because scanning it is what makes the collision below possible.
 -   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page. So a Cloudscape page that happens to use a class named like a Tailwind utility picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (verified present in the built CSS; the emitted set depends on what the orchestration module uses, so treat this as examples rather than a closed list). Outside the orchestration module, either use a VAMS-defined class or no class at all.
+-   **An add-on module's glob widens that global sheet on every deployment.** The utilities a Tailwind add-on module under `src/addons/<addon>/**` uses are emitted into the same stylesheet whether or not the add-on is enabled (the EDH module adds about 25), so the naming rule above covers them too.
 
     This is not hypothetical: `<div className="container">` wrapped the asset-view comment editor, and because VAMS defines no `.container` rule, the only match was Tailwind's `.container` utility with its responsive max-widths (640/768/1024/1280/1536px). It capped the comment box on any wide viewport. Nothing in the source pointed at it — the editor was filling its parent correctly, the parent was the clamped element — so the cause was only visible by measuring the rendered DOM. When a width or spacing problem has no explanation in the component's own styles, walk the ancestors' computed `max-width` in the browser before changing the component.
 
@@ -207,12 +349,14 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 // INCORRECT (barrel import — bundles entire library)
 import { Button, Table } from "@cloudscape-design/components";
 
-// CORRECT (orchestration module)
-import { Button } from "@radix-ui/themes";
-<div className="flex gap-2">...</div>;
+// CORRECT (orchestration module: Radix primitives styled with Tailwind, as in components/Dialog.tsx)
+import * as RadixDialog from "@radix-ui/react-dialog";
+<RadixDialog.Content className="rounded-md bg-white p-4 shadow-lg">...</RadixDialog.Content>;
 ```
 
 **Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size. In the orchestration module, use Tailwind utility classes and Radix primitives.
+
+This applies to new imports. A new file, or a Cloudscape component newly imported into an existing file, uses a subpath import, even in a file that already imports from the barrel. Existing barrel imports stay as they are; do not convert them.
 
 ### Rule 3: All API Calls Go Through Service Layer Files
 
@@ -228,7 +372,7 @@ import { apiClient } from "../../services/apiClient";
 const response = await fetch(`/api/database/${databaseId}/assets`);
 ```
 
-**Service files** (`src/services/` and `src/features/orchestration/api/`) are the ONLY files that may import `apiClient`:
+**Service files** (`src/services/`, `src/features/orchestration/api/`, an add-on module's own `api/` directory under `src/addons/<addon>/` and, in a fork, `src/custom/services/`) are the ONLY files that may import `apiClient`:
 
 -   `APIService.ts` — main API service (general CRUD, auth, search, subscriptions, tags, etc.)
 -   `AssetUploadService.ts` — S3 upload operations
@@ -236,13 +380,17 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
+-   `ComplianceService.ts` — compliance schemas, bindings, evaluations, quarantine, cascades, audit trail (paged listings return `nextToken`)
+-   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
+-   `addons/<addon>/api/*.ts` (under `src/`) — the services of an add-on that ships its own module, beside its types and query hooks
+-   `custom/services/*.ts` — the fork extension point for a fork's own API calls (shipped empty)
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper).
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper). An add-on's calls go in `services/addons/`, or in its module's `api/` directory when it ships a module of its own, never in `APIService.ts`.
 
 ### Rule 4: npm Only
 
-**Package manager:** npm 11.10.0+. Node 22.x ships with npm 10.9.x, which does **not** honor `min-release-age` (introduced in npm 11.10.0). Always pin npm before installing:
+**Package manager:** npm `>=11.10.0 <12`. Node 22.x ships with npm 10.9.x, which does **not** honor `min-release-age` (introduced in npm 11.10.0). npm 12 is **not** supported: it blocks dependency install scripts, among them those of `esbuild` and `@parcel/watcher` (locked in `web/` and `infra/`), unless an `allowScripts` entry approves them, and VAMS has not approved or tested any, so builds are supported on npm 11 only until that is done. `engines.npm` in the root, `web/`, `infra/` and `documentation/docusaurus-site/` `package.json` files caps the range, and `engine-strict` in their `.npmrc` files makes npm 10 and npm 12 stop with `EBADENGINE`; do not add `allowScripts` entries to make npm 12 work. npm 11.21 and later print an `install scripts not yet covered by allowScripts` warning for `esbuild` and `@parcel/watcher`; the warning is expected, and npm 11 still runs those scripts. Always pin npm before installing:
 
 ```bash
 # Pin npm to the required version first
@@ -256,6 +404,8 @@ npm run build
 # INCORRECT — NEVER use yarn
 yarn install
 ```
+
+The viewer installs the `postinstall` chain runs under `web/customInstalls/*` do not inherit `web/.npmrc`, because npm reads a project `.npmrc` only from the directory of the `package.json` it installs. Each viewer package directory therefore carries its own `.npmrc` (a copy of `web/.npmrc`), and an install inside a cloned upstream repository (SuperSplat, Potree, Needle USD) passes `--min-release-age=7` on the command line. `src/visualizerPlugin/config/customInstallsNpmIntake.test.ts` fails when a new viewer directory or clone install is not covered (#334).
 
 ### Rule 5: Keep the Platform-Specific Native Bindings in `optionalDependencies`
 
@@ -442,19 +592,10 @@ Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples. The
 export const fetchSomething = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/something`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return false;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -465,9 +606,12 @@ export const fetchSomething = async ({ databaseId }) => {
 Key patterns to follow:
 
 1. Use `apiClient` for all API calls (auth headers injected automatically)
-2. Error detection uses `response.message.indexOf("error") !== -1` (legacy pattern, maintain consistency)
-3. Return `[false, errorMessage]` on error, `[true, data]` on success, `false` for unknown failures
+2. Failure is decided by `response.success === false` or a thrown request (non-2xx), never by searching the message for "error": a success message can echo caller-chosen text such as an asset ID
+3. Return `[false, errorMessage]` on error and `[true, data]` on success
 4. Always log errors with `console.log` (NOT `console.error` -- match existing convention)
+5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`fetchAssetWithStatus`, `fetchFileInfo`, `downloadAsset`, `deleteAssetLink`, `deleteComment`)
+6. A request whose response the browser never saw (a network failure, or a cross-origin preflight a web ACL blocked) is not an API answer: `fetch` rejects with a `TypeError` whose text ("Failed to fetch") means nothing to a user. `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` in its place, with no status, so the page can say the service could not be reached and offer Retry rather than a "not found" or permission message (`fetchAssetWithStatus`, `fetchFileInfo`, `fetchFileVersions`, `fetchMetadata`, `downloadAsset`; the asset and file pages, and the viewers and previews through `downloadFailureMessage` and `downloadRefusalReason`). Both live in `services/networkFailure.ts`, re-exported by `apiClient.ts`, so a service whose tests mock `apiClient` still gets the real check; a `catch` that returns the thrown message uses `requestFailureMessage(error, fallback)` from the same file. The orchestration and EDH `toTuple`, the EDH mutations, the zip download service, `ComplianceService` and the asset page's comments, relationships and versions reads all word a no-response failure this way. A create or launch that got no reply may have reached the API, so it says the outcome is unknown and where to look before retrying (`LAUNCH_OUTCOME_UNKNOWN_MESSAGE` for an orchestration run and an EDH workstation, `ZIP_CREATE_OUTCOME_UNKNOWN_MESSAGE` for a zip download)
+7. A TanStack Query hook never retries a final answer. The app's query client (`createAppQueryClient` in `utils/queryRetry.ts`) retries a failed query once, except when the error carries a 4xx status other than 408 or 429: a 403 is the API's authorization decision and a 404 says the object is not there, so the page shows the error at once. `toTuple` / `toTupleWithWarnings` tag a failed tuple with the call's status (`failureStatus(result)`, non-enumerable, so the tuple still destructures and compares as `[false, message]`), and the hooks in `features/orchestration/api/queries.ts` throw through `callService`, which raises a `ServiceCallError` carrying it. A hook that throws on a tuple itself goes through `callService` too, or its 403 is re-sent (#1270). A service that rebuilds its tuple drops the status and keeps the old retry-once behaviour. The core services that are not TanStack hooks return the status as a visible third entry instead, `[false, message, status?]` (the zip download calls, `downloadAsset`, `fetchFileInfo`, `ComplianceService.getDatabaseBindings`), so a caller reads `result[2]`.
 
 ### 4.2 Consuming API Results
 
@@ -510,9 +654,10 @@ Backend API endpoints follow REST conventions:
 ```
 GET    /database/{databaseId}/assets              # List assets
 GET    /database/{databaseId}/assets/{assetId}     # Get single asset
-POST   /database/{databaseId}/assets               # Create asset
+POST   /assets                                      # Create asset
 PUT    /database/{databaseId}/assets/{assetId}      # Update asset
-DELETE /database/{databaseId}/assets/{assetId}      # Delete asset
+DELETE /database/{databaseId}/assets/{assetId}/archiveAsset  # Archive asset
+DELETE /database/{databaseId}/assets/{assetId}/deleteAsset   # Permanently delete asset
 POST   /database/{databaseId}/assets/{assetId}/download  # Download
 POST   /auth/routes                                 # Check allowed routes
 GET    /secure-config                               # Get runtime config
@@ -576,7 +721,7 @@ const header = await getDualAuthorizationHeader();
 -   `appCache` replaces Amplify Cache for runtime config storage
 -   Hub event names changed: `signIn` -> `signedIn`, `signOut` -> `signedOut`
 -   Every sign-out path awaits `revokeSession()` (`utils/sessionManager.ts`; Amplify `signOut()`, bounded at 5 s) BEFORE `clearStoredSession()` and `clearLocalStore()`. Amplify reads the stored tokens to revoke the refresh token, so clearing localStorage first skips the revocation.
--   External OAuth sign-in (`FedAuth/oauthSignInState.ts`) sends an opaque random `state`, never the page URL: an IdP that returns `state` without percent-encoding would cut a URL at `#`. The page to return to is stored under `auth_return_to`, followed only when it is on `window.location.origin` (otherwise the app root), and `auth_state`, `auth_return_to` and `code_verifier` are removed once the callback succeeds or fails. The callback is refused unless its `state` equals the stored one.
+-   External OAuth sign-in (`FedAuth/oauthSignInState.ts`) sends an opaque random `state`, never the page URL: an IdP that returns `state` without percent-encoding would cut a URL at `#`. The page to return to is stored under `auth_return_to`, followed only when it is on `window.location.origin` (otherwise the app root), and `auth_state`, `auth_return_to` and `code_verifier` are removed once the callback succeeds or fails, or when the authorize step fails. A page load with those values stored but no `code`, `error` or `state` in the URL (`isOAuthCallback`) is a sign-in left at the IdP: the values are removed and the sign-in page shows, with no error. The callback is refused unless its `state` equals the stored one.
 
 ### 5.4 User State
 
@@ -589,6 +734,16 @@ There is no separate `email` key. Nothing writes one and nothing reads one — t
 identity comes from the `user` entry above. Storing it a second time under its own key put a user
 identifier in `localStorage` for no consumer, and wrote the literal string `"undefined"` when there
 was no signed-in user.
+
+In external OAuth mode `user.username` is the user id the API authorizer resolves from the access
+token (`resolveExternalUserId` in `src/utils/authTokenUtils.ts`). With amplify-config
+`externalOAuthIdpUserIdClaim` set, a token without that claim opens no session: storing it throws
+`MissingUserIdClaimError` (sign-in, refresh, page load, amplify-config refresh), the app signs out,
+and the sign-in page names the claim from `MISSING_USER_ID_CLAIM_KEY`.
+
+amplify-config also carries `externalOAuthIdpAudienceClaims` (the claim names the authorizer reads
+the audience from). The web app does not read it: the API alone decides whether a token's audience
+is accepted, and `vams-mcp setup-remote` is its consumer.
 
 ---
 
@@ -603,7 +758,7 @@ This codebase uses NO global state library. State is managed through:
 3. **localStorage** for persistence across sessions
 4. **appCache** (`src/services/appCache.ts`) for runtime config and preferences
 5. **URL params** via React Router v7 `useParams()`
-6. **TanStack Query** for server state in the orchestration module (`features/orchestration/`) — caching, background refetch, smart polling (`computeRefetchInterval` keeps polling active only while non-terminal executions are visible)
+6. **TanStack Query** for server state in the Tailwind modules (`features/orchestration/` and the add-on modules under `addons/`) — caching, background refetch, smart polling (`computeRefetchInterval` keeps polling active only while non-terminal executions are visible); each module has its own `qk` key factory
 
 ### 6.2 Context Pattern
 
@@ -635,10 +790,11 @@ export const MyContext = createContext<MyContextType | undefined>(undefined);
 
 ### 6.3 Existing Contexts
 
-| Context              | File                            | Purpose                          |
-| -------------------- | ------------------------------- | -------------------------------- |
-| `AssetContext`       | `context/AssetContext.ts`       | Asset list state                 |
-| `AssetDetailContext` | `context/AssetDetailContext.ts` | Single asset detail with reducer |
+| Context                | File                              | Purpose                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AssetContext`         | `context/AssetContext.ts`         | Asset list state                                                                                                                                                                                                                                                                                                                                             |
+| `AssetDetailContext`   | `context/AssetDetailContext.ts`   | Single asset detail with reducer                                                                                                                                                                                                                                                                                                                             |
+| `RuntimeConfigContext` | `context/RuntimeConfigContext.ts` | The live runtime config, provided by `FedAuth/Auth.tsx` around the logged-in app; `useFeaturesEnabled()` re-evaluates when the secure config lands, so a feature-gated surface (a feature-restricted navigation entry, an add-on page) appears on a first login without a reload. Outside the provider both hooks fall back to `appCache.getItem("config")`. |
 
 The orchestration module (`features/orchestration/**`) holds its shared server state in TanStack Query (`features/orchestration/api/queries.ts`) rather than a React context, so a new pipeline/workflow/execution surface adds a query key there instead of a provider here.
 
@@ -652,9 +808,17 @@ const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent")
 <Button disabled={!canDelete}>Permanent Delete</Button>;
 ```
 
-**Admin-only actions** (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. **Tier-2 is not pre-checked client-side** — the backend filters lists to what the user can access, so inaccessible objects never appear. A per-object action that returns 403 surfaces a clean inline message.
+**Admin-only actions** (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. The trigger list (`TriggersEditor`, on the Triggers page and the builder's Triggers step) offers **Add**, **Edit** and **Retry** only to a role that may call the trigger `PUT` route and **Delete** only to one that may call its `DELETE`; the create flow's Triggers step is gated on the `PUT` as a whole. **Tier-2 is not pre-checked client-side** — the backend filters lists to what the user can access, so inaccessible objects never appear. A per-object action that returns 403 surfaces a clean inline message.
+
+The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the search page's Search and Asset list views (Create Asset, Delete Selected, and Unarchive Selected, gated on `PUT /database/{databaseId}/assets/{assetId}/unarchiveAsset` as the asset page's Unarchive is: `database-admin` reaches it through `starts_with /database`, `database-user` denies it and `database-readonly` has no `PUT`; `pages/search/SearchPage.tsx` computes the three reasons). The delete dialog both open (`modals/AssetDeleteModal.tsx`) offers its permanent-delete toggle only with `canPermanentlyDelete` (the `deleteAsset` route), and the search list disables Delete Selected for a selection with an archived row without that route, since such a selection can only be permanently deleted. The metadata editor (`metadataV2/MetadataContainer.tsx`) is editable with POST or PUT on the asset metadata route and offers row delete on a stored field only with `canDelete` (DELETE on that route); clearing a schema field and removing a field added in the same edit stay available. With `canDelete` false a bulk-edit CSV import also keeps every stored field the file leaves out, since a `replace_all` that removes stored keys needs the route's DELETE. The file metadata editor (`metadata/FileMetadata.tsx`, both file tabs) and the asset-link metadata editor pass `canDelete` from DELETE on their own routes (`.../metadata/file`, `/asset-links/{assetLinkId}/metadata`). The database metadata editor is not gated: the `database-user` template grants DELETE on `/database/{databaseId}/metadata` for its own database only, which the listing does not report (see below). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
 
 A **navigational surface** is the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer. Removing a tab from a strip makes the capability undiscoverable and reads as though the deployment has no logs at all, whereas an unavailable menu entry simply narrows a list of actions. Gate the panel's contents, not the tab.
+
+**System records** (`isSystem: true` on a pipeline or workflow, `types.ts`) are graded the same way, from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page (`PipelineForm`, `WorkflowBuilder`, `TemplateForm`, `TriggersEditor`), where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. View replaces Edit in the actions menu and is open to any role that may read the record, so on a pipeline or workflow View page **Enabled** and **Update**/**Save** follow the record's `PUT` route: a role without it sees them disabled with `routeDisabledReason` ("Your role does not allow changing this pipeline." / "… this workflow."). Every other action the API would refuse stays listed, disabled with its reason from `permissions/systemRecordReasons.ts`: **Archive** in the Pipelines and Workflows menus (`ContextMenu` `disabledReason`), **Create Template** and **Delete** on the Templates board, and **Add** and **Delete** in the trigger list (`DisabledReasonButton`). A run a system feature started (its server `triggerType` starts with `System-`) lists **Rerun** in the executions row menu disabled with `SYSTEM_RECORD_REASONS.rerunSystemRun`, since the rerun route refuses it. The route check runs first: an action the role may not call stays hidden whatever the record. A disabled control with a reason stays focusable (`aria-disabled`, not `disabled`), is announced with its reason (`aria-description`), and shows the reason on hover and focus (`DisabledReasonTooltip`, which opens above the control, stays inside the viewport at any width, and Escape dismisses); choosing it does nothing. This is presentation only; the backend guards in `common/workflows/systemRecords.py` are what enforce it.
+
+**System workflow runs** are hidden by the execution list APIs unless the request carries `includeSystem`. `ExecutionsBoard` (global page, workflow-scoped page and asset Executions tab) keeps the **Show system runs** choice in the URL query (`INCLUDE_SYSTEM_PARAM`, read and written with `useSearchParams`, other query keys preserved), sends it only when the user chose, and otherwise ticks the box from the response's `includeSystem` echo: the server alone decides the default (shown for a list scoped to one system workflow). Rows with `isSystem: true` carry the same **System** badge as system records.
+
+**Busy controls and focus.** A control whose own request is in flight is a `BusyButton` or `BusyInput` (`components/BusyControls.tsx`: `aria-disabled` and the busy look, not `disabled`, which drops keyboard focus to the page body), a dialog whose footer sent the request passes `busy`, a control the answer removes hands focus on (`LoadMoreButton`, `useFocusHandOff`), and a dialog returns focus to the control that opened it as it closes (`Dialog` and `Drawer` do this through `useReturnFocus`; a dialog opened from a row's menu passes `returnFocusTo`, naming the row's actions button or, once the action removed the row, a control the list keeps).
 
 ---
 
@@ -688,7 +852,7 @@ try {
 Rules:
 
 -   **Match the app's message convention**: a short header naming the outcome (`"Archive failed"`,
-    `"Pipeline archived"` — mirroring `"Search failed"` / `"Search completed"`), with the entity name
+    `"Pipeline archived"` — mirroring `"Search failed"` / `"Search cleared"`), with the entity name
     and the backend's message in the `description`. Do not put the entity name in the header.
 -   **Never leave a mutation's `catch` as `console.error` only, and never use `alert()`.** A silent
     failure is indistinguishable from success; a native `alert()` is a blocking modal.
@@ -791,6 +955,19 @@ export default MyComponent;
 
 ### 7.3 Page Template (New Page Wrapper)
 
+Every top-level page (a route in `src/routes.tsx`, `src/addons/addonRoutes.tsx` or `src/custom/customRoutes.tsx`) sets its own outer padding and heading. The `AppLayout` in `routes.tsx` runs with `disableContentPaddings` while the side navigation is open, so a page whose root is a bare `Table` or `Container` sits flush against the navigation and the header. A page opens with one of two page shells:
+
+-   **Cloudscape pages:** the root is `<Box padding={{ top: "m", horizontal: "l" }}>`; inside it, the page `h1` in a `TextContent` in its own `Grid` row, then the content (a `variant="container"` `Table` or a `Container`) in the next `Grid` row, then `<div style={{ paddingBottom: "20px" }} />`. References: `src/pages/auth/ApiKeys.tsx` (a list opened from the profile menu, with search, refresh and Load more), `src/pages/ListPageNoDatabase.tsx` (Roles, Constraints, Tags) and `src/pages/ZipDownloadsPage.tsx`. A page that opens with a breadcrumb uses a smaller top (`"s"`, or `"xs"` as on the asset page) and keeps `horizontal: "l"`.
+-   **Tailwind pages (orchestration module, add-ons):** the root element carries `className="orchestration-root orchestration-page ..."` (`src/styles/tailwind.css`, matched to the Cloudscape shell). Reference: `src/features/orchestration/pipelines/PipelinesPage.tsx`.
+
+The page also calls `usePageTitle`. A feature component that renders both as a page and inside an asset tab (such as `ZipDownloadsTable`) has no outer padding of its own; the page adds the shell around it. A list table searches like the other VAMS tables: a Cloudscape `TextFilter` in the table's `filter` slot with the refresh icon button beside it, not in the header actions (`ApiKeys.tsx`, `components/list/TableList.tsx`).
+
+**Table filter row:** a table's filter row has the search on the left, the refresh icon button right beside the search, and any view toggle or select (a `Toggle`, `SegmentedControl` or `Select` that changes which rows are listed, such as "Show archived" or "My jobs / Show all users") right-aligned. Put the search and refresh in the table's `filter` slot inside `<SpaceBetween direction="horizontal" size="xs">`, and the toggles in the table's `pagination` slot (in the same `SpaceBetween` when there are several, followed by the `Pagination` when the table has one). Cloudscape draws that slot in the right-aligned group of the filter row. Do not put toggles in the `filter` slot or the header actions, and do not build the row with hand-rolled flex styles. A toggle that depends on a permission renders only when the API's route listing allows its route. References: `src/components/asset/versions/components/AssetVersionList.tsx` (the Versions tab: search and refresh left, "Show archived" right) and `src/components/zipDownloads/ZipDownloadsTable.tsx` (the Download Queue tab: search and refresh left, "My jobs / Show all users" right).
+
+**Table width:** a table fits its container at 1280 px without sideways scrolling. Give no column a `minWidth` to stop wrapping; keep a status on one line with `<StatusIndicator wrapText={false}>`, let names and IDs with no spaces break anywhere (`overflowWrap: "anywhere"`), and put several row actions in icon buttons (`variant="icon"` with an `ariaLabel`, which Cloudscape also shows as the tooltip). `inline-link` and `link` buttons drop `disabledReason`, so do not use them for an action that can be greyed with a reason. Reference: `components/zipDownloads/ZipDownloadsTable.tsx` (#1125 D30).
+
+`src/pages/pageShell.test.ts` reads every routed page and the local modules it imports directly, and fails when none of them opens with a shell. Its `EXEMPT` map lists the pages with a layout of their own, each with its reason (the landing page); a list page never belongs there.
+
 ```tsx
 /*
  * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -798,10 +975,29 @@ export default MyComponent;
  */
 
 import React from "react";
+import Box from "@cloudscape-design/components/box";
+import Grid from "@cloudscape-design/components/grid";
+import TextContent from "@cloudscape-design/components/text-content";
 import MyComponent from "../components/myfeature/MyComponent";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 const MyPage: React.FC = () => {
-    return <MyComponent />;
+    usePageTitle("My Feature");
+    return (
+        <Box padding={{ top: "m", horizontal: "l" }}>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <div>
+                    <TextContent>
+                        <h1>My Feature</h1>
+                    </TextContent>
+                </div>
+            </Grid>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <MyComponent />
+            </Grid>
+            <div style={{ paddingBottom: "20px" }} />
+        </Box>
+    );
 };
 
 export default MyPage;
@@ -832,6 +1028,53 @@ const MyPage = lazyWithRetry(() => import("./pages/MyPage"));
 
 The route is automatically permission-filtered via `webRoutes()` API call. The backend must also allow the route.
 
+### 7.5 Adding Pages in a Fork
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream functionality goes in the add-on lane when it integrates an external solution, depends on an AWS service outside the tier-1 set, or implements a use-case lens for an industry; viewers and pipelines keep their own lanes, and a fork uses the custom lane. The tier-1 services, the exemptions and the toggle rule: root `CLAUDE.md` "Core, add-on and custom". Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+A fork adds pages without editing `routes.tsx` or `layout/navigationRegistry.ts`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavMainSections` for the main menu, placed after "Orchestrate & Automate"; `addonNavAdminSections` for the admin area, placed after the core "Admin - ..." sections), upstream-owned, hold an add-on's pages, and `src/addons/addonFeatures.ts` (`addonFeaturesEnabled`) names the add-ons' feature switches. An add-on route carries its add-on's switches in `featuresEnabledRestriction`, as its navigation entries do (see 7.6): without them `routeTableFor()` (`routes.tsx`) leaves it out, so its URL reaches the not-found panel, the web-route check is not sent it, and the Create Constraint editor does not offer it (`src/addons/addonFeatureRoutes.test.tsx`). `AppRoutes` runs the web-route check again when the switches change (they can land after the first check) and on Retry, and uses only the latest check's answer: an earlier check that answers or fails after it is ignored, and a successful latest check clears the could-not-check panel. The merge order is core, add-on, custom for the route table and, within each placement, for the navigation (`src/addons/addonLanes.test.tsx`), with the fork's entries after every core and add-on entry, so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `lazyWithRetry` rule), its navigation entry in `customNavSections` (`src/custom/customNavigation.ts`; side navigation by default, or `placement: "profile"` for the top-bar profile menu, see 7.6), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
+### 7.6 Navigation Placement
+
+Every page link is declared in one registry, `src/layout/navigationRegistry.ts`, which `allNavEntries()` composes from the core entries (`coreNavEntries()`, a function because `window.DISABLE_COGNITO` is read at runtime), the two add-on lists and `customNavSections`. A top-level entry's optional `placement` decides where it renders: `side` (the default) in the side navigation (`layout/Navigation.tsx`), `profile` in the top-bar profile menu (`layout/useProfileMenuItems.ts`, rendered by `App.tsx` before Sign out, which is always last). The side navigation runs core main menu, `addonNavMainSections`, divider, core admin sections, `addonNavAdminSections`, then the fork's entries; the profile menu runs the core profile entries, then the add-on entries of both lists, then the fork's. A profile entry is a `link` or a `section` of links (a menu group headed by its `text`); other shapes are skipped with a console warning. Any entry may carry `featuresEnabledRestriction: string[]`, the deployment's feature switches (`useFeaturesEnabled()`) that must all be on: an entry whose switches are off is dropped and its route is not checked, and both placements check again when the switches arrive after mount (only the latest check's answer is used). `entriesFor(placement, enabledFeatures)` returns one placement in registry order and strips the registry-only fields (`placement`, `requiresApiRoute`, `featuresEnabledRestriction`) before Cloudscape sees them.
+
+Both placements use the same `checkWebRoutesAllowed` check and share its one batched `auth/routes` call. They fail closed: the profile menu lists no page links while the check is loading or after it failed (it retries on the next `hashchange`, as the top bar sits outside the HashRouter and has no Retry), and Sign out always works. The page the user is on is shown as current: Cloudscape's public menu items have no current-page state or `aria-current`, so `toMenuItems(entries, currentHash)` keeps every page a link and gives the current one a `labelTag` of "Current page" and an accessible name ending ", current page" (not a checkbox item, which would be announced as a checked toggle). `isCurrentPage(href, hash)` matches the route path (`normaliseHref`, so a trailing slash does not matter) and every query parameter the entry's href sets, so `#/auth/api-keys/?mode=user` is current on the user view of the API keys page and not on its admin view; `pages/auth/ApiKeys.tsx` keeps `?mode=` on the view it resolved. The hook re-renders on every `hashchange`, so the mark follows navigation. It applies to every `placement: "profile"` entry (core, add-on and custom lanes). When the side navigation has no page beyond Home but profile pages are allowed, it says the pages are in the profile menu instead of "No Access". A link may also set `requiresApiRoute: { method, path }`: it is then shown only when the cached API allowed-routes listing (`isApiRouteAllowed`) allows that route, and hidden while the listing is unknown or failed. The auth flow fetches that listing on every load and renews it at half its TTL, and `cacheAllowedApiRoutes` (`FedAuth/allowedApiRoutesCache.ts`) dispatches `ALLOWED_API_ROUTES_CACHED_EVENT`, on which both placements render again, so such a link appears as soon as the listing lands. It is advisory; the API still enforces every call. Core uses it for Admin - Auth's "API Keys (all users)" (`#/auth/api-keys/?mode=admin`, needs `GET /auth/api-keys`), while the profile menu's "API Key Management" opens `?mode=user`; `pages/auth/ApiKeys.tsx` treats `?mode=` as a preference validated against the modes the listing allowed, so a URL never opens admin mode for a role the listing does not allow. `normaliseHref` drops a `?query` before the route check. A route's `active` href is static, so a page serving several views may override the highlighted side link with `useActiveNavHref(href)` (`layout/activeNavHref.tsx`; `null` keeps the route's value, `""` highlights nothing, cleared on unmount); `ApiKeys.tsx` passes the Admin - Auth href only when its resolved mode is admin.
+
+### 7.7 List Toolbar: Search, Refresh and Filters
+
+Every list page lays out the toolbar it passes as the Cloudscape Table's `filter` the same way: **the search field on the left with the refresh button right next to it, and the filter drop-downs aligned to the right of the table.** When the filters do not fit beside the search (on a narrow screen, or a page with many filters such as the compliance Audit Log), they wrap onto a line of their own and stay aligned to the right. The refresh is an icon button whose `ariaLabel` names what it reloads; it sits in the toolbar, not in the header actions, and a list without a search keeps it at the toolbar's left.
+
+`components/list/TableList.tsx` lays out its own filter slot this way. A page with its own `Table` uses `components/list/ListToolbar.tsx`, which has the same layout and keeps a wrapped filter line at the right:
+
+```tsx
+<Table
+    filter={
+        <ListToolbar
+            search={<TextFilterInput value={filters.text} onCommit={...} ariaLabel="Search ..." />}
+            onRefresh={loadData}
+            refreshing={loading}
+            refreshLabel={`Refresh quarantined ${Synonyms.assets}`}
+            filters={<DatabaseFilter value={filters.databaseId} onChange={...} />}
+        />
+    }
+    items={sortedItems}
+    {...sortingProps}
+/>
+```
+
+**Column sorting.** A column that offers sorting must sort. Wire `sortingColumn`, `sortingDescending` and `onSortingChange` with `components/list/tableSorting.ts`, or remove the column's `sortingField`. Keep the `sortingField` (the table matches the sorted column by it) and give the column a `sortingComparator` from the same module, so a date sorts by its value (`byDate`), a status by the label it shows (`byText` over the label) and text with case ignored and its numbers by value (`byText`).
+
+-   **A list the server pages** (token paging) sorts the page shown with `useSortedItems`. While more than one page exists, the table header's description says `PAGE_SORTING_NOTE` ("Column sorting applies to the page shown."). An order across the whole list is a server-side filter (the database compliance overview's **Sort by**), not a column header. Choosing such an order clears the column-header sort (`clearSorting` from `useSortedItems`), so the rows follow the order just chosen.
+-   **A list the API returns whole** is filtered, sorted and paged in the browser with `useBrowserPagedItems` (15 rows to a page, as `TableList` pages), so its filters and sorting cover the whole list. Call `toFirstPage()` when a filter changes.
+
+### 7.8 The Upload Control and the Upload Path Rule
+
+The Create Asset wizard (`pages/AssetUpload/AssetUpload.tsx`, `AssetFileInfo`) and the Add Files page (`pages/AssetUpload/ModifyAssetsUploads.tsx`) share one upload control, `components/form/DragDropFileUpload.tsx`: **Add files** (a plain multi-file input), **Add folder** (a `webkitdirectory` input in every browser; `showDirectoryPicker` is only an enhancement and falls back to the input on any error other than a cancel) and one drop zone for files and folders together. Its contract is `onAdd(roots: UploadRoot[])`: it reports what the user added, never asset paths.
+
+Every asset path comes from `components/form/uploadPaths.ts`. A page stores the roots (Create Asset in the wizard state, `UploadRoots` and `folderNameMode`, so they survive step changes) and derives the files with `planUploadPaths(roots, { flow, destination, folderNameMode })` over the whole selection each time, then maps them onto `FileUploadTableItem`s with `plannedToUploadItems` (`pages/AssetUpload/uploadSelection.ts`) right before the upload workflow. The rule (#1462, #1471): on Create Asset a single folder added on its own drops its name; on Add Files a single folder keeps it; either flow's single folder can be switched with the override; every other selection keeps every folder's name; loose files keep their file name; the destination (`normalizeDestination`, `/` or `/a/b/`) is joined with one slash. Duplicate final paths are errors on every affected row and block the upload; never skip or dedupe them. Pass the database's `restrictFileUploadsToExtensions` in the context: files it refuses, and preview files without a preview image extension, become row errors by the same rule as `validateFiles` (`extensionViolation`), so they count in the preview's errors, its Errors view and the blocking reason; do not add a separate invalid-files alert. Do not build, prefix or re-derive upload paths in a page, and do not add a second picker: extend the root builders in `uploadPaths.ts` so every way of adding items gives identical roots.
+
+`components/form/UploadPreview.tsx` shows the preview (final path, size, status, counters, filters, removal), the single-folder override, the folder-rule info line and the hint for loose files in a referencing format (`referencingFileExtensions` / `referencingFileNames` in `common/constants/fileFormats.ts`). Add Files keeps its destination in `?folder=` and marks files at existing or archived paths from the list-files API (`fetchExistingPaths`, prefix-scoped, capped at 10,000 keys). That mark is advisory: a refusal or failure shows "Could not check all existing files" and marks nothing, and the API still enforces the upload.
+
 ---
 
 ## 8. Viewer Plugin System
@@ -839,12 +1082,36 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 The 3D/media viewer system is a plugin-based architecture under `src/visualizerPlugin/`:
 
 -   **PluginRegistry** singleton at `visualizerPlugin/core/PluginRegistry.ts` manages all viewers
--   **Extension mapping** and per-viewer metadata (name, priority, category, `enabled`, `featuresEnabledRestriction`) live in `visualizerPlugin/config/viewerConfig.json`
--   **`viewers/manifest.ts`** exposes componentPath -> import paths so Vite can statically analyze dynamic imports
--   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats); the SuperSplat Editor is iframe-embedded under `public/viewers/supersplat/`
--   Per-viewer install steps live in `web/customInstalls/` and run via the `postinstall` chain in `web/package.json`
+-   **Extension mapping** and per-viewer metadata (name, priority, category, `enabled`, `featuresEnabledRestriction`) live in `visualizerPlugin/config/viewerConfig.json` (core), `addonViewerConfig.json` (add-on viewers: Physna and the licensed VNTANA and VEERUM viewers, which ship disabled) and `customViewerConfig.json` (fork extension point), merged by `core/viewerSources.ts` in that order
+-   **`viewers/manifest.ts`** exposes componentPath -> import paths so Vite can statically analyze dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` do the same for add-on and fork viewers
+-   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, Three.js CAD formats); the SuperSplat Editor and the Robotics Data Viewer are iframe-embedded under `public/viewers/supersplat/` and `public/viewers/robotics/`
+-   Per-viewer install steps live in `web/customInstalls/` and run via the `postinstall` chain in `web/package.json`, which ends with the fork-owned `customInstalls/custom/customInstall.js`
 
 For the current viewer catalog, plugin config field reference, and the step-by-step "adding a new viewer plugin" walkthrough, see `web/src/visualizerPlugin/CLAUDE.md` (auto-loaded when editing viewer-plugin code).
+
+### 8.1 Search Provider Registry
+
+The search page is a set of **search provider** views under `src/searchPlugin/`, built the same way as the viewer plugins: a JSON catalog (`config/searchProviderConfig.json`), a manifest (`providers/manifest.ts`) so Vite sees every provider chunk, a singleton `core/SearchProviderRegistry.ts` (lazy `import.meta.glob` loading; availability read from `appCache` config), a pure `core/providerAvailability.ts` Jest can import, `core/useSearchProvidersReady.ts`, and `components/SearchTabsHost.tsx`. The host renders the page title row, then the active provider's body, loaded through `lazyWithRetry` like a route page. The title row holds the one h1 ("Assets and Files", or "Assets for <databaseId>" on a database route, in the deployment's asset synonym; `searchPageTitle`) and, when more than one provider is available, the view switch on its right: a Cloudscape `SegmentedControl` labelled `Page view` (Cloudscape shows it as a select below 688 px). The active view is the `?tab=` hash query, written with `replace`; an unknown or absent value selects the default view. Only the active body is mounted, and it receives `databaseId`, `isActive`, `assetActionDisabledReasons` and `titleSlots`. A body renders no page heading of its own: it portals its title-row content into `titleSlots.info` (beside the h1, the Search view's result count) and `titleSlots.actions` (before the switch, **Clear all filters**), and the asset list passes `hidePageHeading` to `ListPage`. The switch sits outside the body, so the control the user pressed stays mounted and keeps focus across a switch. Availability is `{ "always": true }` or `{ "anyOf": [ { "featureEnabled": X } | { "featureDisabled": X } ] }` over `featuresEnabled`; the lowest priority number is the default view. There is no runtime registration API and no add-on or fork lane for providers: adding a provider is a source change in the three places `manifest.ts` lists, plus a row here. The catalog holds the core providers only, so the switch is always a segmented control.
+
+| ID               | Name       | Priority | Availability                                |
+| ---------------- | ---------- | -------- | ------------------------------------------- |
+| `asset-list`     | Asset list | 100      | always                                      |
+| `unified-search` | Search     | 10       | VECTORSEARCH enabled or NOOPENSEARCH absent |
+
+`config/searchProviderConfig.test.ts` fails when this table and the catalog disagree. The Search provider offers a `Keyword | Natural language` mode toggle when both engines are enabled, a reduced filter sidebar (database, file type, archived, **Search inside files**) when `NOOPENSEARCH` is present, and relevance as a percentage with a modality popover on natural-language hits. A finished search's count is not toasted (the toast stack sits over the title row's controls): `ModernSearchContainer` puts `Found N results` in a hidden Cloudscape `LiveRegion` for screen readers, and toasts only failures, **Search cleared** and row-action confirmations. The rare natural-language warnings show in a dismissible **Search notice** Alert above the results, derived from the answer on screen, and the live region reads their text after the count; `truncated:window` and `segments:window_full` raise no notice and are stated under the results instead. A keyword answer shows only its own codes there (`KEYWORD_WARNING_CODES`: `truncated:time`, a page the search time bound cut short, #1590). Pipeline, workflow, and trigger records with `isSystem: true` show a **System** badge and open read-only except for their `enabled` switches and template `configBody`/`tagSchema`.
+
+The Search view's answers follow these rules (`ModernSearchContainer.tsx`):
+
+-   **Newest search wins.** Each search takes the next number (`latestSearchRef`, through `startSearch`), and only the newest applies its answer, its error and the end of the loading state, so a page change, refresh or auto-refresh still running never replaces a newer answer. **Clear all filters** takes a number too and clears `answeredMode`, so no count shows until the reloaded list answers. Pass the number to `runSearch`; do not call the search API from a view.
+-   **Clear all filters only for a change from the defaults.** `hasActiveFilters({ databaseLocked })` asks `hasUserSearchCriteria` (`hooks/useSearchState.tsx`): a query, a metadata filter row, or a filter that narrows or changes the search. The record type, the result explanation preference and a database route's locked database never count, and **Keyword Search Scope** and **Search inside files** count only once cleared. `clearSearch(["str_databaseid"])` keeps the locked database.
+-   **One result and one dispatch for every view.** The table and the Map view both get `displayedResult` and `handleListDispatch`, so in natural-language mode both page through the answer held in the browser and a page change runs no search; the map's paginator sizes itself from `getPagedResultCount`.
+-   **The Map view scopes by request.** A keyword search on the map adds `HAS_LOCATION_FILTER` (`_exists_:geo_MD_location`, `hooks/searchRequestBuilders.ts`) through `executeSearch`'s `requireLocation` option. It never adds metadata filter rows or changes the metadata mode or operator, and entering or leaving the map runs the keyword search again from page 1; in natural-language mode a view switch runs no search. A natural-language asset hit's `MD_` holds only its asset's location keys (`hasLocationOnlyMetadata`, `utils/recordType.ts`), so neither the map popup nor the Metadata column lists them as metadata.
+-   **A 503 is a failed search, not a feature-off state.** `POST /search/nlp` answers 503 when OpenSearch cannot apply a metadata, tag or location filter, when Amazon Bedrock or Amazon DynamoDB is throttled or times out, or while the vector index is built, and `POST /search` when OpenSearch is enabled but unreachable. The page reports each as a **Search failed** toast with the API's message and keeps its controls; `opensearch:enrichment_failed` (sent only for a request with no such filter) is a Search notice.
+-   **A failed search with no answer on screen says so in the page (#1763).** When the newest search fails (any refusal, an API Gateway 504 timeout, a network failure) and the page holds no answer for the mode on screen (the first search of a page load, or the first in a mode), `ModernSearchContainer` shows a **Search did not finish** error alert above the results (`SEARCH_FAILED_NOTICE_HEADER` / `SEARCH_FAILED_NOTICE`, `data-testid="search-failed-notice"`) besides the toast, which closes after 8 s, and `SearchPageListView` (`state.searchFailed`) shows "No results to show" instead of "Loading.." or "No matches". An answer already on screen stays, with the toast only; the next search clears the alert.
+-   **Controls only in the mode that uses them.** **Keyword Search Scope** (`includeMetadataInKeywordSearch`) and **Show result explanation** (`showResultExplanation`) are not rendered in natural-language mode, which never sends them.
+-   **Filter panels.** The Database multiselect reads its selection through `selectedValues` (`hooks/searchRequestBuilders.ts`), because a database route locks the filter with `value` only, and the locked control names that database (`SearchLayout/lockedDatabase.ts`). Facet counts carry `+` when the count beside them is a minimum (`nlpCountsAreMinimums` in natural-language mode, `isTotalLowerBound` for a keyword answer). In a filtered search the type and tag lists keep the values of the last unfiltered search but show the current answer's counts, and none for a value it has no bucket for. A facet whose `sum_other_doc_count` is above 0 is cut (`isFacetCut`, `SearchLayout/BasicFiltersPanel.tsx`): the Database filter shows no count for a database without a bucket, and a type or tag list built from a cut facet (the answer's, or the cached unfiltered search's) shows `facetCutNote` under it.
+-   **Breadcrumb.** `pages/search/SearchPage.tsx` ends the trail with `searchPageTitle(databaseId)` and adds only **Databases** before it on a database route; no step links to the page itself.
+-   **"About this count".** The table header opens it from a Cloudscape `Button variant="inline-icon" iconName="status-info"` named "About this count", so the keyboard reaches and opens it.
 
 ---
 
@@ -867,8 +1134,10 @@ interface VAMSConfig {
 Configuration is loaded at startup in this order:
 
 1. `GET /api/amplify-config` --> Cached in appCache, configures Amplify v6
-2. `GET /api/secure-config` --> Additional config requiring auth
+2. `GET /secure-config` --> Additional config requiring auth
 3. Both are stored in `appCache.setItem("config", ...)` for runtime access
+
+When the cached config has no `featuresEnabled` (every sign-out clears it), `Auth.tsx` renders the deployment banner (`<GlobalHeader />`) and `<LoadingScreen />` instead of the app until secure-config has applied the feature switches, has given up after its last attempt, or has run past `SECURE_CONFIG_HOLD_MAX_MS` (10 seconds), because pages and the viewer registry read the switches once, when they mount.
 
 **Note:** `appCache` (from `src/services/appCache.ts`) replaces Amplify Cache:
 
@@ -888,11 +1157,28 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 }
 ```
 
+A surface that stays mounted across a login (the side navigation) or that gates whole pages reads the
+flags through `useFeaturesEnabled()` from `context/RuntimeConfigContext.ts` instead: the cached config
+carries no `featuresEnabled` until the secure config lands after the first login, and only the context
+re-renders a mounted consumer when it does.
+
+Any side-navigation entry (a section, link or group in the core, add-on or custom lists) may carry
+`featuresEnabledRestriction: string[]`, the field name and all-of meaning the viewer config uses:
+`layout/Navigation.tsx` drops the entry until every listed switch is enabled, re-runs the web-route
+check when the switches arrive, and strips the field before the items reach `SideNavigation`. An
+add-on's switch names live in `addons/addonFeatures.ts` (`addonFeaturesEnabled`), each one declared in
+`infra/common/addonAppFeatures.ts` (`addons/addonFeatures.test.ts`); a fork's live in
+`custom/customFeatures.ts`.
+
 Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval). The Three.js viewer opens USD (.usd/.usda/.usdc/.usdz) without it; with it, Needle and Three.js both match USD and the user picks.
+-   Three.js referenced files (textures, `.mtl`, USD layers) are fetched only through `ThreeJSViewerPlugin/utils/assetDependencyResolver.ts` (path rules, limits, URL modifier with placeholder); see "Three.js Referenced Files" in `web/src/visualizerPlugin/CLAUDE.md`.
+-   `VECTORSEARCH` -- Natural-language (vector) search: enables the NLP mode of the search page's Search view and `POST /search/nlp`; with `NOOPENSEARCH` also present the view runs in its reduced (NLP-only) form. The Executions board offers its `System-Reindex` trigger filter only with it (only the vector reindexer starts such runs)
+-   Add-on flags (`addons/addonFeatures.ts`) are described in each add-on module's own `CLAUDE.md`
+-   `ZIPDOWNLOADS` -- Download as Zip (`app.pipelines.useZipDownloads.enabled`). Read through `isZipDownloadsEnabled()` (`components/zipDownloads/zipDownloads.ts`). Without it the file manager's Export menus have no **Download as Zip**, the asset page has no **Download Queue** tab and the profile menu no **My Download Queue** link (the `navigationRegistry.ts` profile entry carries `featuresEnabledRestriction: [ZIPDOWNLOADS]` and takes its text from `DOWNLOAD_QUEUE_PAGE_TITLE`); `#/zipdownloads` states the feature is off, and the Executions board offers no `System-ZipDownload` trigger filter (only Download as Zip starts such runs). With it, the Export entry is still hidden when the asset is not distributable or archived (`transfersUnavailable`) and greyed with its reason when `useAllowedRoutes().can("POST", "/database/{databaseId}/assets/{assetId}/download/zip")` says no; Download, Cancel and Delete in the table are icon buttons (`variant="icon"`, named by `ariaLabel`, which is also their tooltip; the compact form that keeps `disabledReason`) greyed the same way from the URL and DELETE routes. No table column has a `minWidth`; long names and IDs break anywhere (`overflowWrap: anywhere`), so the table fits its container at 1280 px (#1125 D28, D30). A mixed file-and-folder selection, which has no other Export action, gets an Export menu with only this entry. Jobs belong to the signed-in user (the API keys them on the token), so no ownership rule lives in the client. The user-facing names (`DOWNLOAD_QUEUE_PAGE_TITLE` "My Download Queue", `DOWNLOAD_QUEUE_TAB_LABEL` "Download Queue") do not say "zip", so other kinds of download job can join the queue later; the `#/zipdownloads` route, the `zipDownloads` tab id, the API routes and the CLI and MCP names keep `zip`. Both lists search the rows already loaded (`filterZipJobs`: asset ID, asset name, request ID, archive name) with the refresh button beside the search; the API pages the list, so **Load more** adds older jobs, which the search then covers. The asset tab offers **Show all users** (a `SegmentedControl` right-aligned in the table's filter row through the `pagination` slot, default **My jobs**) only when `useAllowedRoutes().can("GET", ZIP_ROUTES.allUsers)` allows the all-users route; that view lists `fetchAssetZipDownloadsAllUsers` and shows **Download** and **Cancel**/**Delete** only from the row flags the API returns (`canDownload`, `canRemove`), never from a role or ownership rule in the client. The My jobs views (the asset tab's default and the **My Download Queue** page) get the same flags on their rows: a finished job with `canDownload: false` (a quarantined asset) offers no **Download**, and `canRemove: false` greys **Cancel**/**Delete**; the role's route decisions still gate the controls, and a response without the flags is read as before (#1125 D37). A created job's success message links to the asset's own **Download Queue** tab: `assetDownloadQueueLink()` sets the asset page's `?tab=zipDownloads` query (`ASSET_TAB_QUERY_PARAM`) and keeps its other parameters, and `ViewAsset` hands `?tab=` to `TabbedContainer` (`requestedTabId`), which switches tabs in place without remounting and reports a tab the user picks back to the query (`onTabChange`; File Manager drops it).
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
@@ -1006,7 +1292,7 @@ which the column is visible under the wrong declaration, and that is the one tha
 -   **Framework:** Jest 30 (`jsdom` environment via `jest-environment-jsdom`), `@testing-library/react`
 -   **Config:** `web/jest.config.js`; jest-dom matchers registered via `setupFilesAfterEnv` -> `src/setupTests.ts`
 -   **Cloudscape preset:** `@cloudscape-design/jest-preset` (transforms Cloudscape CSS/JS)
--   **Coverage thresholds:** Very low (~1%, set in `jest.config.js`) — raise as coverage grows
+-   **Coverage thresholds:** the suite's measured global coverage rounded down to a whole percent (statements, lines and branches 28%, functions 30%; set in `jest.config.js`). CI runs `npx jest --ci --coverage`, so a change that drops coverage below them fails the build — raise them as coverage grows
 -   **Run tests:** `npm test` (with coverage) or `npx jest` for a faster run
 
 ### 11.2 Test File Conventions
@@ -1123,11 +1409,12 @@ The dev server has no API proxy: `web/vite.config.ts` sets only port 3001 and th
 
 ```bash
 npm run build         # Production build (output: web/dist/)
+npm run typecheck     # Type-check only (tsc --noEmit); the Vite build does not type-check
 ```
 
 ### 12.3 Important: Postinstall Script
 
-The `postinstall` script runs custom viewer install scripts. If `npm install` fails, check:
+The `postinstall` script runs custom viewer install scripts, ending with the fork-owned no-op `customInstalls/custom/customInstall.js` (a fork's own install steps go there, not in `package.json`). If `npm install` fails, check:
 
 1. Individual viewer install scripts in `customInstalls/`
 2. Node.js version compatibility
@@ -1145,7 +1432,7 @@ Before modifying any code:
 
 ### 12.5 Post-change Checklist
 
-After modifying code, verify: no new TypeScript errors (`npm run build`), no broken imports, Cloudscape imported from subpaths (Rule 2), API calls go through `src/services/` (Rule 3), new routes are lazy-loaded in `routeTable` (Rule 7), and user-visible entity names use `Synonyms` (section 9.4).
+After modifying code, verify: no new TypeScript errors (`npm run typecheck`; `npm run build` does not type-check), no broken imports, Cloudscape imported from subpaths (Rule 2), API calls go through `src/services/` (Rule 3), new routes are lazy-loaded in `routeTable` (Rule 7), and user-visible entity names use `Synonyms` (section 9.4).
 
 ---
 
@@ -1210,17 +1497,17 @@ See section 9.4 for the full Synonyms rules.
 | ------------------------------- | -------------------- | ------------------------------------ |
 | `react`                         | 18.3                 | UI framework (upgraded from 17.0.2)  |
 | `typescript`                    | ^5.0.0               | Type system (upgraded from 4.4.4)    |
-| `vite`                          | ^8.0.0               | Build tooling (upgraded from ^6)     |
+| `vite`                          | ^8.0.16              | Build tooling (upgraded from ^6)     |
 | `aws-amplify`                   | v6 (latest)          | Auth integration (v6)                |
 | `@cloudscape-design/components` | ^3.0.196             | AWS Cloudscape UI (existing pages)   |
 | `@tanstack/react-query`         | v5                   | Server-state (orchestration module)  |
 | `@tanstack/react-table`         | v8                   | Headless tables (orchestration)      |
-| `tailwindcss`                   | latest               | Utility-first CSS (orchestration)    |
-| `@radix-ui/*`                   | latest               | Headless primitives (orchestration)  |
+| `tailwindcss`                   | ^3.4.14              | Utility-first CSS (orchestration)    |
+| `@radix-ui/*`                   | ^1.1.1 to ^2.2.2     | Headless primitives (orchestration)  |
 | `@rjsf/core`                    | v5                   | Dynamic tag forms (orchestration)    |
-| `@monaco-editor/react`          | latest               | Config editor (lazy-loaded)          |
+| `@monaco-editor/react`          | ^4.6.0               | Config editor (lazy-loaded)          |
 | `react-hook-form`               | v7                   | Form validation                      |
-| `zod`                           | latest               | Schema validation                    |
+| `zod`                           | ^3.23.8              | Schema validation                    |
 | `reactflow`                     | v11                  | DAG preview (replaced v9 EOL)        |
 | `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow            |
 | `react-router-dom`              | ^7.18.2              | Client-side routing                  |
@@ -1235,7 +1522,7 @@ See section 9.4 for the full Synonyms rules.
 
 ### 14.1 Key Service Files
 
--   **`src/services/apiClient.ts`** -- Custom fetch-based API client, injects auth headers automatically via `getDualAuthorizationHeader()`
+-   **`src/services/apiClient.ts`** -- Custom fetch-based API client, injects auth headers automatically via `getDualAuthorizationHeader()`; `isRequestBlocked(error)` recognizes a `403` the deployment's AWS WAF web ACL blocked, whose message `parseErrorResponse` extends with the request ID
 -   **`src/services/appCache.ts`** -- Replaces Amplify Cache for runtime config and preference storage
 
 ---
@@ -1256,12 +1543,17 @@ When in doubt about patterns, reference these well-structured files:
 | Viewer config        | `src/visualizerPlugin/config/viewerConfig.json`   |
 | Complex component    | `src/components/asset/ViewAsset.tsx`              |
 | Search UI            | `src/components/search/ModernSearchContainer.tsx` |
+| Search page views    | `src/searchPlugin/components/SearchTabsHost.tsx`  |
 | Upload service       | `src/services/AssetUploadService.ts`              |
 | File operations      | `src/services/FileOperationsService.ts`           |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |
 | Synonyms config      | `src/synonyms.tsx`                                |
+| Navigation registry  | `src/layout/navigationRegistry.ts`                |
 | Navigation           | `src/layout/Navigation.tsx`                       |
 | App shell            | `src/App.tsx`                                     |
+| List page and table  | `src/components/list/TableList.tsx`               |
+| List toolbar         | `src/components/list/ListToolbar.tsx`             |
+| Column sorting       | `src/components/list/tableSorting.ts`             |
 
 ---
 
@@ -1286,20 +1578,10 @@ import { apiClient } from "./apiClient";
 export const myServiceFunction = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/myendpoint`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            // For list endpoints, data is typically in a named property
-            return response;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -1315,9 +1597,10 @@ export const myServiceFunction = async ({ databaseId }) => {
 
 1. Create component in `src/components/myfeature/MyFeatureTable.tsx`
 2. Use `@cloudscape-design/collection-hooks` for filtering/sorting
-3. Create page wrapper in `src/pages/MyFeaturePage.tsx`
-4. Add lazy import + route in `src/routes.tsx`
-5. Add navigation item in `src/layout/Navigation.tsx`
+3. Lay out the toolbar and wire the column sorting per section 7.7
+4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
+5. Add lazy import + route in `src/routes.tsx`
+6. Add a navigation entry in `src/layout/navigationRegistry.ts` (`placement: "profile"` for a page of the signed-in user)
 
 ### Adding a new API call
 
@@ -1372,3 +1655,15 @@ Development targets: Latest Chrome, Firefox, Safari.
 ### 18.6 React Version
 
 This project uses **React 18.3** (upgraded from 17.0.2). The entry point (`index.tsx`) uses `createRoot` (React 18 style). React 18 APIs (`useId`, `useTransition`, `useDeferredValue`, automatic batching) are allowed in the orchestration module (`features/orchestration/`) but should be used sparingly elsewhere to maintain consistency with the existing codebase conventions.
+
+### Audit Log Search (`pages/auth/AuditLogSearch.tsx`, `components/auditLogs/`)
+
+Core page at `#/auth/audit-log-search/` (Admin - Auth), behind the `AUDITLOGSEARCH` feature switch (`featuresEnabled.AUDITLOGSEARCH`, in the feature list unless `app.auditLogging.search.enabled` is false; `components/auditLogs/auditSearchEnabled.ts` `isAuditLogSearchEnabled()` reads it). With the switch off the nav entry (`featuresEnabledRestriction`) and the Compliance Audit Log cross-link are hidden, and a direct URL shows the short state 'Audit Log Search is not enabled on this deployment' without any `/audit` call. The switch only avoids a dead page and grants nothing. With it on, the nav entry and the page appear only from the `POST /auth/routes` decision (the registry link and `routes.tsx` entry; a denied user gets `NoAccessPanel`). The Compliance Audit Log page links to it through `hooks/useWebRouteAllowed.ts`, which is false until that decision says yes, and only while the switch is on. The page derives no permission: log groups, actions, entity types, outcomes and limits come only from `GET /audit/log-groups` (`fetchAuditLogGroups`), and a 403 or an empty list shows a panel that names no group.
+
+-   **Request model.** `auditSearchUrl.ts` (filters <-> hash query, defensive reading, a link restores filters and never runs the search), `auditSearchValidation.ts` (the server's value classes and the `limits` object, advisory only), `auditSearchApiModel.ts` (`buildStartBody`, response readers for the contract: `logGroups`, `Items`, `NextToken`, `statistics`, `warnings`), `auditFilterQuery.ts` (filters <-> `PropertyFilter` tokens and the `DateRangePicker` value; the picker works in UTC), `auditPollLoop.ts` (the long-poll loop: sequential calls, floor between calls, stops at once on 400/403/404, retries a dropped connection, client deadline), `useAuditSearch.ts` (start, poll, stop, server paging by `NextToken`, order change re-reads page 1).
+-   **Query text is never sent.** The body holds named filters only; the server builds the query.
+-   **Record content is untrusted text.** Render it only as React text nodes through `visibleText` (control, bidi and zero-width characters shown as `\uXXXX`) or `AuditValueTree` (depth and node bounded). No HTML sink, no link from a record value except an asset link built from validated ids with `encodeURIComponent`. The API returns every record time as `2026-11-17T01:00:00.000Z` (UTC, one format for legacy and v1 records); a server may send `2026-11-17 01:00:00.000` (UTC, no zone), so read it with `auditTimeMs`, never `new Date(string)`.
+-   **Counts.** The page shows only what the API returns for the groups the caller may search. There is no count of rows the server removed on its recheck, and no "matched" figure (CloudWatch's raw match count would be that count): the progress text shows only records scanned. A stopped search shows no records (the API returns none), so `stop` reads no page. A link that brings other filters while results show drops the results and any running search (`reset`). The table shows one line per row (`OneLine` cells with a tooltip, column widths set, Wrap lines preference off by default).
+-   **Notices.** Warnings and errors are toasts through `useToast()` (`features/orchestration/components/ToastProvider.tsx`), raised once per search (a ref set cleared when a new search starts); incomplete-result warnings use a 10-minute backstop (`WARNING_TOAST_BACKSTOP_MS`) and the page dismisses them (by id) when a new search starts, the results are cleared (phase `idle`) and on unmount, since the toast stack is app-wide. Field validation (contains too short, group not allowed) stays an inline `FormField` error with Search disabled, deliberately not a toast: a toast would vanish while the problem stays. Control row: aligned to the filter input row (label row to label row), Stop is always present (disabled when idle) and Search has a fixed minimum width so the row never changes width when a search starts; the status sits on its own line (`width:0; min-width:100%`) under the controls inside a live region that exists before its text. A Log group token reads as the group label through the property's `format` operator. Information is an info icon (`AuditInfoPopover.tsx`: Cloudscape `Popover` with a `formAction="none"` icon button, because the icon sits inside the search form). Live progress and `Search stopped` are a `StatusIndicator` beside the Search button. The time range, order and Search sit right of the property filter (flex row, wraps below at narrow widths). Blocking states (no access, no groups) stay page content.
+-   **Export** joins the server's chunks (`csv`, `ndjson`) and downloads the file; the page rewrites no cell.
+-   **Tests.** Jest: `auditLogs/auditSearch.model.test.ts`, `pages/auth/AuditLogSearch.test.tsx`; e2e: `e2e/auth.auditlogsearch.spec.ts` with the scripted API in `e2e/support/auditSearchMocks.ts`.

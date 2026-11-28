@@ -6,9 +6,9 @@ import boto3
 import json
 import base64
 import uuid
-import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import timedelta
+from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
@@ -21,15 +21,27 @@ from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
-from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
+from handlers.assets.assetFiles import (
+    delete_s3_prefix_all_versions, aux_bucket_asset_file_base, S3PrefixDeleteIncomplete,
+    delete_files_metadata, delete_file_version_records, delete_auxiliary_files_of_keys,
+    record_invocation_context,
+)
 from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items
-from common.s3 import is_object_version_archived, list_all_object_versions
+from customLogging.auditLogging import audited_handler, log_action
+from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE, get_asset_record, asset_authorization_object, ARCHIVED_ASSET_DATABASE_SUFFIX
+from common.commentSubscriptionKeys import COMMENT_PARTITION_KEY, COMMENT_SORT_KEY, comment_partition, subscription_key
+from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
     VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
     normalize_history_file_path,
 )
+from common.assetProvenance import asset_edit_provenance
+from common.assetLocations import (
+    UNARCHIVE_LOCATION_IN_USE_REFUSAL, NestedLocations, contains, fill_location_attributes, held_objects,
+    is_folder_location, normalize_base_prefix, relative_path_in, unarchive_conflicts,
+)
+from common.fileAttribution import nested_locations_of_asset
 from common.assetHistory import (
     CHANGE_SOURCE_EDIT,
     CHANGE_SOURCE_ARCHIVE,
@@ -38,7 +50,7 @@ from common.assetHistory import (
     build_asset_snapshot,
     write_asset_history_record,
 )
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, VAMSAssetNotFoundResponse, validation_error_message
 from models.assetsV3 import (
     GetAssetRequestModel, GetAssetsRequestModel, UpdateAssetRequestModel,
     ArchiveAssetRequestModel, UnarchiveAssetRequestModel, DeleteAssetRequestModel, 
@@ -61,22 +73,12 @@ dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
 sns_client = boto3.client('sns', config=retry_config)
-s3 = boto3.client('s3', config=retry_config)
+s3 = region_routing_s3_client()
 logger = safeLogger(service_name="AssetService")
 
 # Worker pool size for per-object S3 operations (archive/unarchive loops);
 # bounds Lambda concurrency and matches the S3 client connection pool
 MAX_PARALLEL_S3_WORKERS = 10
-
-# BatchGetItem accepts at most 100 keys per call.
-BATCH_GET_CHUNK_SIZE = 100
-# Attempts spent re-requesting a BatchGetItem's UnprocessedKeys (throttling / a response that hit the
-# 16 MB size limit) before the remainder falls back to per-item reads. batch_get_item answers a
-# partially throttled request with HTTP 200 and an UnprocessedKeys map, which the botocore retry
-# config does not cover.
-BATCH_GET_MAX_RETRIES = 3
-# Base seconds for the exponential backoff between UnprocessedKeys retries.
-BATCH_GET_RETRY_BACKOFF_SECONDS = 0.05
 
 # Global variables for claims and roles
 claims_and_roles = {}
@@ -183,18 +185,13 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
@@ -211,11 +208,12 @@ def get_asset_bucket_details(asset):
 def enrich_asset_listing_page(items):
     """Attach version information and bucketName to one page of listed asset records.
 
-    Version rows are read with BatchGetItem (one call per BATCH_GET_CHUNK_SIZE assets) and bucket
-    details are resolved once per distinct bucketId for the page, so a page costs a handful of reads
-    rather than two per asset. Each returned record is identical to what the per-asset
-    enhance_asset_with_version_info + get_default_bucket_details pair produces. Records without a
-    bucketId are skipped so one malformed item cannot fail the whole listing, and a record whose bucket cannot be read is listed with bucketName None.
+    Version rows are read with BatchGetItem (one call per 100 assets, through the shared
+    common.dynamodb.batch_get_items) and bucket details are resolved once per distinct bucketId for
+    the page, so a page costs a handful of reads rather than two per asset. Each returned record is
+    identical to what the per-asset enhance_asset_with_version_info + get_default_bucket_details pair
+    produces. Records without a bucketId are skipped so one malformed item cannot fail the whole
+    listing, and a record whose bucket cannot be read is listed with bucketName None.
 
     Args:
         items: Asset dictionaries for the page, in response order
@@ -266,9 +264,16 @@ def send_subscription_email(database_id, asset_id):
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
 def _current_version_key(asset):
-    """Primary key of the asset's current-version row in the versions table"""
+    """Primary key of the asset's current-version row in the versions table.
+
+    An archived record is stored under "<databaseId>#deleted" while its versions stay keyed by
+    the original database id, so the suffix is removed from the key.
+    """
+    database_id = str(asset['databaseId'])
+    while database_id.endswith(ARCHIVED_ASSET_DATABASE_SUFFIX):
+        database_id = database_id[:-len(ARCHIVED_ASSET_DATABASE_SUFFIX)]
     return {
-        'databaseId:assetId': f"{asset['databaseId']}:{asset['assetId']}",
+        'databaseId:assetId': f"{database_id}:{asset['assetId']}",
         'assetVersionId': asset['currentVersionId']
     }
 
@@ -306,53 +311,16 @@ def get_current_version_info(asset):
     
     return None
 
-def _batch_get_version_rows(keys):
-    """BatchGetItem `keys` (full primary-key dicts) from the versions table.
-
-    Chunks at the DynamoDB per-call key limit and re-requests UnprocessedKeys with exponential
-    backoff, up to BATCH_GET_MAX_RETRIES. Returns (rows, unresolved_keys): the rows that came back,
-    and the keys whose read did not complete. A key absent from both is a row that does not exist,
-    which is a different answer from a read that failed -- the caller resolves unresolved keys with
-    the per-item read so a throttled batch never blanks version info. Never raises.
-    """
-    rows = []
-    unresolved = []
-    for start in range(0, len(keys), BATCH_GET_CHUNK_SIZE):
-        pending = keys[start:start + BATCH_GET_CHUNK_SIZE]
-        attempt = 0
-        while pending:
-            try:
-                response = dynamodb.batch_get_item(
-                    RequestItems={asset_versions_table_name: {'Keys': pending}}
-                )
-            except Exception as e:
-                logger.warning(f"Batch read of asset versions failed "
-                               f"(falling back to per-item reads): {e}")
-                break
-            rows.extend(response.get('Responses', {}).get(asset_versions_table_name, []))
-            pending = response.get('UnprocessedKeys', {}).get(
-                asset_versions_table_name, {}).get('Keys', [])
-            if not pending:
-                break
-            attempt += 1
-            if attempt > BATCH_GET_MAX_RETRIES:
-                logger.info(f"Batch read of asset versions left {len(pending)} keys unprocessed "
-                            f"after {BATCH_GET_MAX_RETRIES} retries; reading them individually")
-                break
-            # Must be the last comment line before the call -- semgrep attaches `nosemgrep`
-            # to the next line only.
-            # nosemgrep: arbitrary-sleep
-            time.sleep(BATCH_GET_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
-        unresolved.extend(pending)
-    return rows, unresolved
-
 def enhance_assets_with_version_info(assets):
     """Batched counterpart of enhance_asset_with_version_info for one listing page.
 
-    Reads every asset's current-version row with BatchGetItem instead of one get_item per asset.
-    Each enhanced copy is identical to what enhance_asset_with_version_info would return for that
-    asset: a key the batch could not resolve falls back to the per-item read, and an asset without a
-    currentVersionId (or whose version row does not exist) carries no currentVersion.
+    Reads every asset's current-version row through the shared common.dynamodb.batch_get_items
+    instead of one get_item per asset, calling it once per BATCH_GET_CHUNK_SIZE slice of the keys;
+    the helper owns the UnprocessedKeys re-requests. Each enhanced copy is identical to what
+    enhance_asset_with_version_info would return for that asset: a key the batch could not resolve
+    falls back to the per-item read, and an asset without a currentVersionId (or whose version row
+    does not exist) carries no currentVersion. The batch path never raises -- a failed call sends
+    only its own chunk's keys to per-item reads, and the other chunks keep their batched rows.
 
     Args:
         assets: Asset dictionaries, in response order
@@ -370,7 +338,23 @@ def enhance_assets_with_version_info(assets):
 
     versions_by_key = {}
     if keyed and asset_versions_table_name:
-        rows, unresolved = _batch_get_version_rows(list(keyed.values()))
+        # (rows, unresolved): a key absent from both is a row that does not exist, a key in
+        # `unresolved` is a read that did not complete -- only the latter takes the per-item read
+        all_keys = list(keyed.values())
+        rows, unresolved = [], []
+        for start in range(0, len(all_keys), BATCH_GET_CHUNK_SIZE):
+            chunk = all_keys[start:start + BATCH_GET_CHUNK_SIZE]
+            try:
+                chunk_rows, chunk_unresolved = batch_get_items(dynamodb, asset_versions_table_name, chunk)
+            except Exception as e:
+                logger.warning(f"Batch read of {len(chunk)} asset versions failed "
+                               f"(falling back to per-item reads for that chunk): {e}")
+                chunk_rows, chunk_unresolved = [], chunk
+            rows.extend(chunk_rows)
+            unresolved.extend(chunk_unresolved)
+        if unresolved:
+            logger.info(f"Batch read of asset versions left {len(unresolved)} keys unprocessed; "
+                        f"reading them individually")
         for row in rows:
             row_key = (row.get('databaseId:assetId'), row.get('assetVersionId'))
             try:
@@ -478,12 +462,21 @@ def mark_file_as_archived(key, bucket):
         Key=key
     )
 
-def delete_assetAuxiliary_files(databaseId, assetLocation):
+def nested_locations_for(asset, bucket_name):
+    """The stored locations of other assets nested in this asset's location, read for an archive, unarchive
+    or permanent delete of the asset (``fileAttribution.nested_locations_of_asset``, destructive): the files
+    they hold belong to those assets and are left alone."""
+    return nested_locations_of_asset(asset_table, buckets_table, asset, bucket_name, destructive=True,
+                                     asset_table_name=asset_database)
+
+
+def delete_assetAuxiliary_files(databaseId, assetLocation, nested: NestedLocations = None):
     """Delete auxiliary files for an asset
 
     Args:
         databaseId: The database ID owning the asset
         assetLocation: The asset location object with Key (dict or AssetLocationModel)
+        nested: The locations of other assets nested in the asset's location; their auxiliary data is kept
     """
     # Convert to AssetLocationModel if it's a dictionary
     if isinstance(assetLocation, dict):
@@ -513,7 +506,8 @@ def delete_assetAuxiliary_files(databaseId, assetLocation):
         paginator = s3.get_paginator('list_object_versions')
         for page in paginator.paginate(Bucket=s3_assetAuxiliary_bucket, Prefix=key):
             entries = [{'Key': entry['Key'], 'VersionId': entry['VersionId']}
-                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])]
+                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])
+                       if not nested or nested.keep_aux(databaseId, entry['Key'])]
             for i in range(0, len(entries), 1000):  # DeleteObjects takes at most 1000 entries
                 batch = entries[i:i + 1000]
                 response = s3.delete_objects(
@@ -551,7 +545,7 @@ def build_asset_archive_history_record(database_id, asset_id, relative_file_path
         "filePath": relative_file_path,
         "changeSource": VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
         "changeUserId": user_id or "SYSTEM_USER",
-        "recordCreated": datetime.utcnow().isoformat() + "Z",
+        "recordCreated": utc_now().isoformat() + "Z",
         "s3LastModified": "",
     }
 
@@ -590,7 +584,8 @@ def get_asset_archive_marker_versions(database_id, asset_id):
     return markers
 
 
-def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, user_id=None):
+def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, user_id=None,
+                             nested: NestedLocations = None):
     """Archive all files in a multi-file asset
 
     Each created delete marker is recorded in the file version history with
@@ -604,6 +599,7 @@ def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, 
         database_id: The database ID (for provenance records)
         asset_id: The asset ID (for provenance records)
         user_id: The acting user (for provenance records)
+        nested: The locations of other assets nested in this location; their files are not archived
     """
     # Convert to AssetLocationModel if it's a dictionary
     if isinstance(location, dict):
@@ -626,11 +622,14 @@ def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, 
     logger.info(f'Archiving folder with multiple files from bucket: {bucket}')
 
     paginator = s3.get_paginator('list_objects_v2')
-    files = []
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        if 'Contents' in page:
-            for obj in page.get('Contents', []):
-                files.append(obj['Key'])
+    # A single-file location is listed by its own prefixes (its object, its previews, its companion
+    # folder), so keys that only share its characters are never read; held_objects yields each held key once
+    def _list(list_prefix, cap):
+        for page in paginator.paginate(Bucket=bucket, Prefix=list_prefix,
+                                       PaginationConfig={'MaxItems': cap} if cap else {}):
+            yield from page.get('Contents', [])
+
+    files = [obj['Key'] for obj in held_objects(prefix, _list) if not nested or nested.keep(obj['Key'])]
 
     def _archive_one(key):
         try:
@@ -642,7 +641,7 @@ def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, 
             if (asset_file_version_history_table and database_id and asset_id
                     and not key.endswith('/')):
                 marker_version_id = response.get('VersionId')
-                relative_path = key[len(prefix):] if key.startswith(prefix) else key
+                relative_path = relative_path_in(prefix, key)
                 try:
                     asset_file_version_history_table.put_item(
                         Item=build_asset_archive_history_record(
@@ -705,7 +704,13 @@ def archive_file_preview(location, bucket):
         logger.exception(f"Error archiving file {key}: {e}")
     return
 
-def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, user_id=None):
+def _legacy_history_path(path: str) -> str:
+    """The file history path an earlier release recorded for ``path``: every leading ``/`` collapsed to one."""
+    return "/" + (path or "").lstrip("/")
+
+
+def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, user_id=None,
+                               nested: NestedLocations = None):
     """Selectively unarchive an asset's files by removing the delete markers
     that the asset archive created.
 
@@ -723,6 +728,7 @@ def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None
         database_id: The database ID (for provenance lookup/records)
         asset_id: The asset ID (for provenance lookup/records)
         user_id: The acting user (for provenance records)
+        nested: The locations of other assets nested in this location; their files are not restored
 
     Returns:
         Number of files restored.
@@ -764,10 +770,22 @@ def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None
                 if not delete_marker.get('IsLatest'):
                     continue
                 key = delete_marker['Key']
-                relative_path = normalize_history_file_path(
-                    key[len(prefix):] if key.startswith(prefix) else key
-                )
-                if delete_marker['VersionId'] in archive_markers.get(relative_path, set()):
+                if not contains(prefix, key) or (nested and not nested.keep(key)):
+                    continue
+                relative_path = normalize_history_file_path(relative_path_in(prefix, key))
+                candidates = [relative_path]
+                if not is_folder_location(prefix):
+                    # A single-file location's archive may be recorded relative to the bare file
+                    # key ('/' for the object, '/.previewFile.png' for a preview)
+                    candidates.append(normalize_history_file_path(key[len(prefix):]))
+                # An archive before 2.7.0 recorded a path with every leading '/' collapsed to one, so
+                # '{location}/x' ('//x') was recorded under '/x' (#1977). Its marker is still matched by
+                # its own VersionId, so another file's record under that path restores nothing here.
+                candidates += [_legacy_history_path(path) for path in candidates]
+                recorded = set()
+                for path in dict.fromkeys(candidates):
+                    recorded |= archive_markers.get(path, set())
+                if delete_marker['VersionId'] in recorded:
                     markers_to_remove.append((key, delete_marker['VersionId'], relative_path))
 
         def _remove_marker(marker):
@@ -1072,28 +1090,13 @@ def get_asset_details(databaseId, assetId, showArchived=False):
         The asset details or None if not found
     """
     try:
-        # If showArchived is False, we only look in the active assets table
-        # If showArchived is True, we first look in the active table, then try the archived suffix
-        db_id = databaseId
-        response = asset_table.get_item(Key={'databaseId': db_id, 'assetId': assetId})
-        item = response.get('Item')
-        
-        # If not found and showArchived is True, try with the archived suffix
-        if not item and showArchived:
-            archived_db_id = f"{databaseId}#deleted"
-            response = asset_table.get_item(Key={'databaseId': archived_db_id, 'assetId': assetId})
-            item = response.get('Item')
-            
-            # If found in archived, add status field if not present
-            if item and 'status' not in item:
-                item['status'] = 'archived'
-        
-        return item
+        # The live record first; with showArchived, the archived record when no live one exists
+        return get_asset_record(asset_table, databaseId, assetId, include_archived=showArchived)
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
-def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles):
+def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles, include_archived=False):
     """Tier-2 authorization for a single-asset operation, decided before existence and state.
 
     The verdict is reached before the caller learns anything about the asset, so a refusal
@@ -1110,6 +1113,8 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles)
         assetId: The asset ID from the request
         action: The Casbin action for the operation (GET / PUT / DELETE)
         claims_and_roles: User claims and roles for authorization
+        include_archived: The read also resolves archived assets, so a missing asset's stand-in
+            carries the archived database id
 
     Returns:
         True if the caller is authorized for the operation
@@ -1117,15 +1122,8 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles)
     if len(claims_and_roles["tokens"]) == 0:
         return False
 
-    if asset:
-        authorization_object = {**asset, 'object__type': 'asset'}
-    else:
-        authorization_object = {
-            'databaseId': databaseId,
-            'assetId': assetId,
-            'object__type': 'asset'
-        }
-
+    authorization_object = asset_authorization_object(asset, databaseId, assetId,
+                                                      include_archived=include_archived)
     return CasbinEnforcer(claims_and_roles).enforce(authorization_object, action)
 
 def get_assets(databaseId, query_params, showArchived=False):
@@ -1144,7 +1142,8 @@ def get_assets(databaseId, query_params, showArchived=False):
     if showArchived:
         db_ids.append(f"{databaseId}#deleted")
 
-    page_size = int(query_params['pageSize'])
+    # maxItems is the per-response ceiling and pageSize the per-query batch size
+    page_size = _listing_limit(query_params)
 
     # A token is the LastEvaluatedKey of one partition. The listing resumes in that partition,
     # and any partition before it was already read to the end.
@@ -1234,6 +1233,13 @@ def get_assets(databaseId, query_params, showArchived=False):
 
     return result
 
+def _listing_limit(query_params):
+    """Rows one listing response reads: pageSize, capped by maxItems when it is given."""
+    limit = int(query_params['pageSize'])
+    if query_params.get('maxItems'):
+        limit = min(limit, int(query_params['maxItems']))
+    return limit
+
 def get_all_assets(query_params, showArchived=False):
     """Get all assets across all databases
     
@@ -1251,7 +1257,7 @@ def get_all_assets(query_params, showArchived=False):
         # without showArchived they are filtered out; with it, every asset is returned.
         scan_params = {
             'TableName': asset_database,
-            'Limit': int(query_params['pageSize'])
+            'Limit': _listing_limit(query_params)
         }
         if not showArchived:
             scan_params['ScanFilter'] = {
@@ -1313,7 +1319,8 @@ def get_all_assets(query_params, showArchived=False):
         logger.exception(f"Error scanning all assets: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving all assets.")
 
-def update_asset(databaseId, assetId, update_data, claims_and_roles):
+
+def update_asset(databaseId, assetId, update_data, claims_and_roles, event=None):
     """Update an existing asset with new data
     
     Args:
@@ -1342,9 +1349,43 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
     # Update the fields
     logger.info(f"Updating asset {assetId} in database {databaseId}")
     
+    # The values the edit replaces, taken before the fields below are set on the read copy.
+    prior_values = {field: asset.get(field) for field in update_data if field in asset}
+
     # Update only the editable fields. `edited_attributes` accumulates exactly what this
-    # request changes, so the write below touches nothing else on the record.
+    # request changes, so the write below touches nothing else on the record but the change
+    # provenance. `stored_asset` is the row as read, before the edits below are applied to `asset`.
+    stored_asset = dict(asset)
     edited_attributes = {}
+
+    # A name and a tag list can carry object-level authority, so the check above, made against
+    # the stored record, is satisfied by the very values the edit replaces. A constraint matches
+    # its action exactly (`r.act == p.act`), and a rule that gates visibility is written as a GET
+    # rule while the edit itself is a PUT, so a PUT-only check never consults it. A change to
+    # either is therefore authorized for GET as well: the caller must already reach the asset they
+    # are renaming or retagging, and must still reach the record they are about to write. A name or
+    # tag that keeps the asset out of their reach can neither be dropped nor attached. The changed
+    # record differs from the stored one only in the changed name and tags, so the decision
+    # isolates the edit; PUT on the stored record is established above, and an edit that resubmits
+    # the stored name and tags is gated exactly once.
+    renamed = 'assetName' in update_data and update_data['assetName'] != stored_asset.get('assetName')
+    retagged = 'tags' in update_data and (
+        sorted(update_data['tags']) != sorted(stored_asset.get('tags') or []))
+    if renamed or retagged:
+        stored_record = {**stored_asset, 'object__type': 'asset'}
+        changed_record = dict(stored_record)
+        if renamed:
+            changed_record['assetName'] = update_data['assetName']
+        if retagged:
+            changed_record['tags'] = update_data['tags']
+        change_enforcer = CasbinEnforcer(claims_and_roles)
+        for enforced_asset, enforced_action in (
+            (stored_record, "GET"),
+            (changed_record, "GET"),
+            (changed_record, "PUT"),
+        ):
+            if not change_enforcer.enforce(enforced_asset, enforced_action):
+                raise AuthorizationDenied()
 
     if 'assetName' in update_data:
         asset['assetName'] = update_data['assetName']
@@ -1375,27 +1416,6 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         existing_tags = asset.get('tags') or []
         added_tags = [tag for tag in new_tags if tag not in existing_tags]
 
-        # A tag can carry object-level authority, so the check above — made against the stored
-        # tag list — is satisfied by the very tags a tag edit replaces. A constraint matches its
-        # action exactly (`r.act == p.act`), and a tag that gates visibility is written as a GET
-        # rule while the edit itself is a PUT, so a PUT-only check never consults it. A tag change
-        # is therefore authorized for GET as well: the caller must already reach the asset they are
-        # retagging, and must still reach the record they are about to write. A tag that keeps the
-        # asset out of their reach can neither be dropped nor attached. The two objects differ only
-        # in the tag list, so the decision isolates the tag change; PUT on the stored tag list is
-        # established above, and an unchanged tag list is still gated exactly once.
-        if sorted(new_tags) != sorted(existing_tags):
-            stored_asset = {**asset, 'object__type': 'asset'}
-            post_mutation_asset = {**stored_asset, 'tags': new_tags}
-            tag_change_enforcer = CasbinEnforcer(claims_and_roles)
-            for enforced_asset, enforced_action in (
-                (stored_asset, "GET"),
-                (post_mutation_asset, "GET"),
-                (post_mutation_asset, "PUT"),
-            ):
-                if not tag_change_enforcer.enforce(enforced_asset, enforced_action):
-                    raise AuthorizationDenied()
-
         # The shared validators raise ValueError, which this handler does not translate — it
         # would surface as a 500. Re-raised as VAMSGeneralErrorResponse so a rejected tag is a
         # 400 with its reason, matching the create path.
@@ -1415,11 +1435,19 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
 
     # Save the updated asset. Only the edited attributes are written, so a field another
     # writer changed between the read above and this write — an upload completion setting
-    # assetType or previewLocation, a version bump — is not reverted. Conditional on the
-    # record still existing so an asset archived mid-edit is not recreated.
+    # assetType or previewLocation, a version bump — is not reverted. An edit that changes the
+    # name, description or tags also records itself as the asset's latest change
+    # (`asset_edit_provenance`), which is what re-evaluates the asset's compliance. Conditional on
+    # the record still existing so an asset archived mid-edit is not recreated.
     try:
         if edited_attributes:
-            keys_map, values_map, expr = to_update_expr(edited_attributes)
+            provenance, removed_attributes = asset_edit_provenance(stored_asset, edited_attributes)
+            keys_map, values_map, expr = to_update_expr({**edited_attributes, **provenance})
+            if removed_attributes:
+                removed_names = {f"#r{index}": attribute
+                                 for index, attribute in enumerate(removed_attributes)}
+                keys_map.update(removed_names)
+                expr += " REMOVE " + ", ".join(removed_names)
             asset_table.update_item(
                 Key={'databaseId': databaseId, 'assetId': assetId},
                 UpdateExpression=expr,
@@ -1434,9 +1462,13 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
             claims_and_roles.get("tokens", ["SYSTEM_USER"])[0],
             build_asset_snapshot(asset)
         )
+        if event is not None:
+            log_action(event, "assetUpdate", database_id=databaseId, asset_id=assetId,
+                       changes=edited_attributes,
+                       previous={field: prior_values[field] for field in edited_attributes if field in prior_values})
 
         # Create response
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = utc_now().isoformat()
 
         #send email for asset file change
         send_subscription_email(databaseId, assetId)
@@ -1498,14 +1530,15 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
     
     try:
         # Update asset record with archived status
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
         # Archive asset files in S3, recording assetArchive provenance per file
         # so unarchive can selectively restore exactly these files
         if "assetLocation" in asset:
             archive_multi_assetFiles(asset['assetLocation'], bucket_name,
-                                     databaseId, assetId, username)
+                                     databaseId, assetId, username,
+                                     nested=nested_locations_for(asset, bucket_name))
 
         # Archive preview if exists
         if "previewLocation" in asset:
@@ -1522,8 +1555,8 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         archived_db_id = f"{databaseId}#deleted"
         asset['databaseId'] = archived_db_id
         
-        # Save to archived location
-        asset_table.put_item(Item=asset)
+        # Save to archived location (the whole row: it keeps or gains the location index attributes)
+        asset_table.put_item(Item=fill_location_attributes(asset, bucket_name))
 
         # Delete from original location
         asset_table.delete_item(Key={'databaseId': databaseId, 'assetId': assetId})
@@ -1555,6 +1588,10 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         logger.exception(f"Error archiving asset: {e}")
         raise VAMSGeneralErrorResponse(f"Error archiving asset.")
 
+UNARCHIVE_ID_IN_USE_MESSAGE = ("The database already holds a live asset with this ID. Archive or permanently "
+                               "delete that asset before unarchiving this one.")
+
+
 def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
     """Unarchive an asset (restore from soft delete)
     
@@ -1581,8 +1618,10 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         asset = get_asset_details(original_db_id, assetId, showArchived=True)
 
     # Check authorization before existence and archive state, so a refused caller cannot use
-    # the not-found or not-archived response to learn either
-    if not authorize_single_asset(asset, original_db_id, assetId, "PUT", claims_and_roles):
+    # the not-found or not-archived response to learn either. The read includes archived assets,
+    # so a missing asset is decided as an archived one would be.
+    if not authorize_single_asset(asset, original_db_id, assetId, "PUT", claims_and_roles,
+                                  include_archived=True):
         raise AuthorizationDenied()
 
     if not asset:
@@ -1599,15 +1638,33 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         logger.info(f"Database {original_db_id} for asset {assetId} has been deleted; not unarchiving")
         raise VAMSGeneralErrorResponse("The asset's database has been deleted. Re-create the database before unarchiving this asset.")
 
+    # Only while the database holds no live asset with the same id: restoring the archived row over
+    # it would replace that asset's record
+    live_row = asset_table.get_item(Key={'databaseId': original_db_id, 'assetId': assetId},
+                                    ConsistentRead=True).get('Item')
+    if live_row and live_row.get('databaseId') == original_db_id:
+        logger.info(f"Database {original_db_id} holds a live asset {assetId}; not unarchiving")
+        raise VAMSGeneralErrorResponse(UNARCHIVE_ID_IN_USE_MESSAGE)
+
     # Get bucket details for asset
     bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
+
+    # Not while another live asset is stored at exactly this asset's location: the unarchive would make the
+    # location shared again, and bucket sync could not attribute a new file there. A nested pair is no
+    # conflict (each key has one deepest owner). Read from the location index once it is ready, before
+    # anything is written; the response names neither asset.
+    conflicts = unarchive_conflicts(asset_table, asset, bucket_name, asset_table_name=asset_database)
+    if conflicts:
+        logger.info(f"Not unarchiving asset {assetId} in database {original_db_id}: {len(conflicts)} other live "
+                    "asset(s) are stored at its location")
+        raise VAMSGeneralErrorResponse(UNARCHIVE_LOCATION_IN_USE_REFUSAL)
 
     # Unarchive the asset record; file restoration is opt-in
     logger.info(f"Unarchiving asset {assetId} from database {archived_db_id}")
 
     try:
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         files_restored = 0
 
@@ -1618,7 +1675,8 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
             if "assetLocation" in asset:
                 files_restored = unarchive_multi_assetFiles(
                     asset['assetLocation'], bucket_name,
-                    original_db_id, assetId, username
+                    original_db_id, assetId, username,
+                    nested=nested_locations_for(asset, bucket_name)
                 )
 
             # Unarchive preview if exists
@@ -1640,8 +1698,15 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         # Move back to original database ID
         asset['databaseId'] = original_db_id
         
-        # Save to original location
-        asset_table.put_item(Item=asset)
+        # Save to original location (the whole row: it keeps or gains the location index attributes),
+        # conditional on no live row having appeared since the check above
+        try:
+            asset_table.put_item(Item=fill_location_attributes(asset, bucket_name),
+                                 ConditionExpression='attribute_not_exists(assetId)')
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+                raise VAMSGeneralErrorResponse(UNARCHIVE_ID_IN_USE_MESSAGE)
+            raise
 
         # Delete from archived location
         asset_table.delete_item(Key={'databaseId': archived_db_id, 'assetId': assetId})
@@ -1676,6 +1741,8 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
             operation="unarchive",
             timestamp=now
         )
+    except VAMSGeneralErrorResponse:
+        raise
     except Exception as e:
         logger.exception(f"Error unarchiving asset: {e}")
         raise VAMSGeneralErrorResponse("Error unarchiving asset")
@@ -1694,6 +1761,10 @@ def _delete_asset_links_for_permanent_deletion(databaseId: str, assetId: str, de
     -- the asset row is already gone by this point -- but the lookup itself is not swallowed,
     since a failed lookup here would leave every link behind while the deletion reported
     success.
+
+    The compliance trigger records each removed link on the asset at its other end from the link
+    table's stream (the deleted asset's own row is already gone, so only the survivor is stamped);
+    nothing is written for it here.
     """
     asset_key = f"{databaseId}:{assetId}"
     link_ids = {}
@@ -1715,6 +1786,72 @@ def _delete_asset_links_for_permanent_deletion(databaseId: str, assetId: str, de
                 f"{asset_links_table_name} (assetLinkId={asset_link_id})")
         except Exception as e:
             logger.warning(f"Error deleting asset link {asset_link_id} for asset {assetId}: {e}")
+            continue
+
+
+# The answer to a permanent delete Amazon S3 does not complete. Generic: it names no key or bucket.
+ASSET_DELETE_INCOMPLETE_MESSAGE = (
+    "Error permanently deleting asset: the asset's storage could not be fully deleted. Check that VAMS "
+    "can delete objects in the asset's storage bucket (its permissions and any object lock), then try "
+    "again. The asset and its remaining files were kept.")
+
+
+def _delete_asset_objects_for_permanent_deletion(asset, bucket_name, database_id, asset_id, deleted_items):
+    """Delete every object version and delete marker in the asset's file and preview locations.
+
+    Runs before any record of the asset is removed. The keys of another asset nested in the location,
+    and every key of a location another live asset also holds, are that asset's: they are neither
+    deleted nor reported. When S3 keeps a version or delete marker, the files whose every version is
+    gone lose their file records (metadata, attributes and version snapshot rows, as a file delete
+    removes) and their auxiliary data, the asset keeps everything else, and the delete raises so it can
+    be retried. Each key has its own asset-relative path, so a kept file keeps its records. The records
+    are removed in batches, not one file at a time.
+    """
+    location = None
+    removed_keys, kept_keys = [], []
+    files_complete, complete = True, True
+
+    if "assetLocation" in asset and "Key" in asset["assetLocation"]:
+        location = asset["assetLocation"]["Key"]
+        if location:
+            logger.info(f"Deleting S3 asset objects and all versions with prefix {location} from bucket {bucket_name}")
+            # The files of an asset nested in the location are that asset's and stay
+            nested = nested_locations_for(asset, bucket_name)
+            try:
+                removed_keys = delete_s3_prefix_all_versions(bucket_name, location, location=location,
+                                                             nested=nested)
+            except S3PrefixDeleteIncomplete as incomplete:
+                removed_keys, kept_keys = incomplete.deleted_keys, incomplete.failed_keys
+                files_complete = complete = False
+            deleted_items["s3_objects"].extend(removed_keys)
+
+            # Also delete any auxiliary files
+            if files_complete:
+                delete_assetAuxiliary_files(database_id, asset["assetLocation"], nested=nested)
+
+    if complete and "previewLocation" in asset and "Key" in asset["previewLocation"]:
+        prefix = asset["previewLocation"]["Key"]
+        if prefix:
+            logger.info(f"Deleting S3 preview objects and all versions with prefix {prefix} from bucket {bucket_name}")
+            try:
+                deleted_items["s3_objects"].extend(delete_s3_prefix_all_versions(bucket_name, prefix, location=prefix))
+            except S3PrefixDeleteIncomplete:
+                complete = False
+
+    if complete:
+        return
+
+    removed_files = [key for key in removed_keys if not key.endswith('/') and relative_path_in(location, key)]
+    removed_paths = [relative_path_in(location, key) for key in removed_files]
+    delete_files_metadata(database_id, asset_id, removed_paths)
+    delete_file_version_records(database_id, asset_id, removed_paths)
+    if not files_complete:
+        delete_auxiliary_files_of_keys(database_id, removed_files)
+
+    logger.error(f"Permanent delete of asset {asset_id} stopped with the asset kept: {len(removed_keys)} S3 "
+                 f"key(s) deleted, {len(kept_keys)} kept, {len(removed_paths)} file record(s) removed")
+    raise VAMSGeneralErrorResponse(ASSET_DELETE_INCOMPLETE_MESSAGE)
+
 
 def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles):
     """Permanently delete an asset from all systems
@@ -1739,12 +1876,14 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
     asset = get_asset_details(databaseId, assetId, showArchived=True)
 
     # Check authorization before existence, so a refused caller cannot use the not-found
-    # response to learn which assets exist
-    if not authorize_single_asset(asset, databaseId, assetId, "DELETE", claims_and_roles):
+    # response to learn which assets exist. The read includes archived assets, so a missing
+    # asset is decided as an archived one would be.
+    if not authorize_single_asset(asset, databaseId, assetId, "DELETE", claims_and_roles,
+                                  include_archived=True):
         raise AuthorizationDenied()
 
     if not asset:
-        raise VAMSGeneralErrorResponse("Asset not found in database")
+        raise VAMSAssetNotFoundResponse()
 
     #Get bucket details for asset
     bucketDetails = get_asset_bucket_details(asset)
@@ -1764,6 +1903,12 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             "dynamodb_tables": []
         }
 
+        original_db_id = databaseId.replace("#deleted", "")
+
+        # 1. Delete all S3 objects (assets files and preview) before any record, so a delete S3
+        #    refuses keeps the asset for a retry
+        _delete_asset_objects_for_permanent_deletion(asset, bucket_name, original_db_id, assetId, deleted_items)
+
         # Delete SNS topic if it exists
         if 'snsTopic' in asset and asset['snsTopic']:
             try:
@@ -1778,12 +1923,11 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         # Delete subscription record if it exists
         if subscription_table:
             try:
-                # Delete the subscription record where eventName is 'Asset Version Change' and entityName_entityId is 'Asset#{assetId}'
+                # The asset's own subscription row, keyed by its original database and asset id, so
+                # an asset with the same id in another database keeps its subscription
                 subscription_table.delete_item(
-                    Key={
-                        'eventName': 'Asset Version Change',
-                        'entityName_entityId': f'Asset#{assetId}'
-                    }
+                    Key=subscription_key('Asset Version Change', 'Asset',
+                                         databaseId.replace("#deleted", ""), assetId)
                 )
                 logger.info(f"Successfully deleted subscription record for asset {assetId}")
             except Exception as e:
@@ -1793,32 +1937,6 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         # Subscribers are notified when the asset is archived. A permanent delete sends no
         # email: its topic and subscription record are already gone at this point.
 
-        original_db_id = databaseId.replace("#deleted", "")
-
-        # 1. Delete all S3 objects (assets files and preview)
-        if "assetLocation" in asset and "Key" in asset["assetLocation"]:
-            prefix = asset["assetLocation"]["Key"]
-            if prefix:
-                # Get bucket from assetLocation or use default
-                logger.info(f"Deleting S3 asset objects and all versions with prefix {prefix} from bucket {bucket_name}")
-                
-                # Delete all objects and all versions with this prefix
-                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix)
-                deleted_items["s3_objects"].extend(deleted_keys)
-                
-                # Also delete any auxiliary files
-                delete_assetAuxiliary_files(original_db_id, asset["assetLocation"])
-
-        if "previewLocation" in asset and "Key" in asset["previewLocation"]:
-            prefix = asset["previewLocation"]["Key"]
-            if prefix:
-                # Get bucket from assetLocation or use default
-                logger.info(f"Deleting S3 preview objects and all versions with prefix {prefix} from bucket {bucket_name}")
-                
-                # Delete all objects and all versions with this prefix
-                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix)
-                deleted_items["s3_objects"].extend(deleted_keys)
-        
         # 2. Delete from asset table (both active and archived locations)
         # First try the original database ID
         asset_table.delete_item(Key={'databaseId': original_db_id, 'assetId': assetId})
@@ -1843,34 +1961,38 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         # 5. Delete from asset uploads table if available
         if asset_upload_table:
             try:
-                # Query using the GSI to find uploads for this asset
-                response = asset_upload_table.query(
+                # Query using the GSI to find uploads for this asset, every page: each row found is
+                # deleted, so a row past the first page would otherwise be left behind. A row is
+                # deleted only when it names this asset's database.
+                for item in query_all_items(
+                    asset_upload_table,
                     IndexName='AssetIdGSI',
                     KeyConditionExpression=Key('assetId').eq(assetId)
-                )
-                
-                for item in response.get('Items', []):
-                    if 'uploadId' in item:
+                ):
+                    if 'uploadId' in item and item.get('databaseId') in (databaseId, original_db_id):
                         asset_upload_table.delete_item(Key={'uploadId': item['uploadId'], 'assetId': assetId})
                         deleted_items["dynamodb_tables"].append(f"{asset_upload_table_name} (uploadId={item['uploadId']}, assetId={assetId})")
             except Exception as e:
                 logger.warning(f"Error deleting asset uploads: {e}")
         
-        # 6. Delete from comments table if available
+        # 6. Delete from comments table if available: the asset's live and soft-deleted comments, keyed
+        # by its original database and asset id, every page (as for the uploads above)
         if comment_table:
             try:
-                # Query to find all comments for this asset
-                response = comment_table.query(
-                    KeyConditionExpression=Key('assetId').eq(assetId)
-                )
-                
-                for item in response.get('Items', []):
-                    if 'assetVersionId:commentId' in item:
-                        comment_table.delete_item(Key={
-                            'assetId': assetId,
-                            'assetVersionId:commentId': item['assetVersionId:commentId']
-                        })
-                        deleted_items["dynamodb_tables"].append(f"{comment_table_name} (assetId={assetId}, assetVersionId:commentId={item['assetVersionId:commentId']})")
+                for deleted in (False, True):
+                    partition = comment_partition(original_db_id, assetId, deleted=deleted)
+                    for item in query_all_items(
+                        comment_table,
+                        KeyConditionExpression=Key(COMMENT_PARTITION_KEY).eq(partition)
+                    ):
+                        if COMMENT_SORT_KEY in item:
+                            comment_table.delete_item(Key={
+                                COMMENT_PARTITION_KEY: partition,
+                                COMMENT_SORT_KEY: item[COMMENT_SORT_KEY]
+                            })
+                            deleted_items["dynamodb_tables"].append(
+                                f"{comment_table_name} ({COMMENT_PARTITION_KEY}={partition}, "
+                                f"commentId={item[COMMENT_SORT_KEY]})")
             except Exception as e:
                 logger.warning(f"Error deleting asset comments: {e}")
         
@@ -1992,7 +2114,7 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         )
 
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return AssetOperationResponseModel(
             success=True,
             message=f"Asset {assetId} permanently deleted from all systems",
@@ -2000,6 +2122,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
             operation="delete",
             timestamp=now
         )
+    except VAMSGeneralErrorResponse:
+        raise
     except Exception as e:
         logger.exception(f"Error permanently deleting asset: {e}")
         raise VAMSGeneralErrorResponse(f"Error permanently deleting asset.")
@@ -2066,7 +2190,8 @@ def handle_get_request(event):
             # Check authorization before existence, so a refused caller cannot use the
             # not-found response to learn which assets exist
             if not authorize_single_asset(asset, path_parameters['databaseId'],
-                                          path_parameters['assetId'], "GET", claims_and_roles):
+                                          path_parameters['assetId'], "GET", claims_and_roles,
+                                          include_archived=show_archived):
                 return authorization_error()
 
             if not asset:
@@ -2079,6 +2204,8 @@ def handle_get_request(event):
             bucketDetails = get_asset_bucket_details(asset)
             enhanced_asset["bucketName"] = bucketDetails['bucketName']
 
+            log_action(event, "assetGet", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], request_parameters={"showArchived": show_archived})
             # Convert to AssetResponseModel for consistent response format
             return success(body=format_asset_response(enhanced_asset))
 
@@ -2125,6 +2252,9 @@ def handle_get_request(event):
 
             # Get the assets
             assets_result = get_assets(path_parameters['databaseId'], query_params, show_archived)
+            log_action(event, "assetList", database_id=path_parameters['databaseId'],
+                       item_count=len(assets_result.get('Items', [])),
+                       request_parameters={**query_params, "showArchived": show_archived})
 
             # Enhance the page with version information and bucket details (batched reads)
             enhanced_items = enrich_asset_listing_page(assets_result.get('Items', []))
@@ -2138,6 +2268,8 @@ def handle_get_request(event):
             }
             if 'NextToken' in assets_result:
                 response['NextToken'] = assets_result['NextToken']
+            if 'truncated' in assets_result:
+                response['truncated'] = assets_result['truncated']
                 
             return success(body=response)
         
@@ -2173,6 +2305,8 @@ def handle_get_request(event):
 
             # Get all assets
             assets_result = get_all_assets(query_params, show_archived)
+            log_action(event, "assetList", item_count=len(assets_result.get('Items', [])),
+                       request_parameters={**query_params, "showArchived": show_archived})
 
             # Enhance the page with version information and bucket details (batched reads)
             enhanced_items = enrich_asset_listing_page(assets_result.get('Items', []))
@@ -2186,6 +2320,8 @@ def handle_get_request(event):
             }
             if 'NextToken' in assets_result:
                 response['NextToken'] = assets_result['NextToken']
+            if 'truncated' in assets_result:
+                response['truncated'] = assets_result['truncated']
                 
             return success(body=response)
             
@@ -2260,6 +2396,8 @@ def handle_put_request(event):
                 request_model,
                 claims_and_roles
             )
+            log_action(event, "assetUnarchive", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], changes=request_model.dict(exclude_none=True))
             return success(body=result.dict())
         
         # Otherwise, handle regular update
@@ -2271,7 +2409,8 @@ def handle_put_request(event):
             path_parameters['databaseId'], 
             path_parameters['assetId'], 
             update_model.dict(exclude_unset=True, exclude_none=True),
-            claims_and_roles
+            claims_and_roles,
+            event=event
         )
 
         # Return success response
@@ -2355,6 +2494,8 @@ def handle_delete_request(event):
                 request_model,
                 claims_and_roles
             )
+            log_action(event, "assetArchive", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], changes=request_model.dict(exclude_none=True))
             return success(body=result.dict())
             
         elif API_DELETE_ASSET.matches(path):
@@ -2366,6 +2507,8 @@ def handle_delete_request(event):
                 request_model,
                 claims_and_roles
             )
+            log_action(event, "assetDelete", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], changes=request_model.dict(exclude_none=True))
             return success(body=result.dict())
             
         else:
@@ -2377,6 +2520,8 @@ def handle_delete_request(event):
                 request_model,
                 claims_and_roles
             )
+            log_action(event, "assetArchive", database_id=path_parameters['databaseId'],
+                       asset_id=path_parameters['assetId'], changes=request_model.dict(exclude_none=True))
             return success(body=result.dict())
 
     except AuthorizationDenied:
@@ -2384,6 +2529,8 @@ def handle_delete_request(event):
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except VAMSAssetNotFoundResponse:
+        return general_error(body={"message": "Asset not found"}, status_code=404, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -2391,9 +2538,12 @@ def handle_delete_request(event):
         logger.exception(f"Error handling DELETE request: {e}")
         return internal_error(event=event)
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset service APIs"""
     global claims_and_roles
+    record_invocation_context(context)
     claims_and_roles = request_to_claims(event)
     
     try:

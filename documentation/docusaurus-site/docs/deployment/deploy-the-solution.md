@@ -41,7 +41,7 @@ npm install
 npm run build
 ```
 
-Node.js 22 bundles npm 10, and the `package.json` files require npm 11.10.0 or later (`engine-strict`), so `npm install` fails with `EBADENGINE` until npm 11 is installed. nvm keeps a separate npm per Node.js version, so run `npm install -g npm@11` after `nvm use`. The install also clones viewer repositories from `github.com`; they are listed on the [Prerequisites](prerequisites.md#network-requirements) page.
+Node.js 22 bundles npm 10, and the `package.json` files accept npm `>=11.10.0 <12` with `engine-strict` on, so `npm install` fails with `EBADENGINE` under npm 10 or npm 12 until npm 11 is installed. npm 12 is not supported: it blocks dependency install scripts unless an `allowScripts` entry approves them, and VAMS has not approved or tested any (see [Prerequisites](prerequisites.md)). npm 11.21 and later print an `install scripts not yet covered by allowScripts` warning for `esbuild` and `@parcel/watcher`; the warning is expected, and npm 11 still runs those scripts. nvm keeps a separate npm per Node.js version, so run `npm install -g npm@11` after `nvm use`. The install also clones viewer repositories from `github.com`; they are listed on the [Prerequisites](prerequisites.md#network-requirements) page.
 
 The build output is written to `web/dist/`, which the CDK infrastructure references during deployment.
 
@@ -116,11 +116,19 @@ If you prefer to edit by hand, template files are provided as starting points:
 | AWS GovCloud                 | `infra/config/config.template.govcloud.json`    |
 | AWS European Sovereign Cloud | `infra/config/config.template.eusovereign.json` |
 
+:::note[Audit Log Search is off in the EU Sovereign Cloud template]
+Amazon CloudWatch Logs Insights is not currently supported in the AWS European Sovereign Cloud (`aws-eusc`), so audit log search is off there by default and `getConfig()` rejects `true` in `aws-eusc`. Audit recording is unaffected. The EU Sovereign Cloud template sets `app.auditLogging.search.enabled` to `false`, because Audit Log Search runs on Amazon CloudWatch Logs Insights, which is not available in that partition. Setting it to `true` there fails synthesis. The recording of audit events is not affected: the audit log groups are written and can be read in Amazon CloudWatch Logs. See the [configuration reference](configuration-reference.md#audit-logging-appauditlogging).
+:::
+
 Copy the appropriate template to `config.json` and customize it:
 
 ```bash
 cp config/config.template.commercial.json config/config.json
 ```
+
+:::note[Committing deployment settings]
+The tracked `config.json` ships as a copy of the commercial template, and an infra test (`npm test`) fails when the committed `config.json` differs from it. Editing `config.json` in your working copy does not trip it. If you commit deployment settings, such as in a fork, put them in `config/config.<name>.json` rather than `config.json` and select that file with `-c configFile=config.<name>.json` (see [Multiple deployments in the same account](#multiple-deployments-in-the-same-account)). Git ignores `config.<name>.json` files by default, so add yours with `git add -f`.
+:::
 
 **Minimum required fields to update:**
 
@@ -185,14 +193,16 @@ If you are using an alternative container engine such as [Finch](https://aws.git
 Run the CDK deploy command from the `infra/` directory:
 
 ```bash
-npx cdk deploy --all --require-approval never
+npx cdk deploy --all --require-approval never -c configFile=config.json
 ```
 
 This command synthesizes all AWS CloudFormation templates and deploys every nested stack. The `--require-approval never` flag auto-approves IAM and security-related changes.
 
 :::tip[Check account limits before deploying]
-Run `npm run check.quotas` from `infra/` before `cdk deploy`. It checks that the Region's Amazon API Gateway **Integration timeout** quota admits `app.api.apiGatewayRest.apiGatewayTimeoutTime`, and, when `app.addStackCloudTrailLogs` is `true`, that the Region has room for the stack's AWS CloudTrail trail (CloudTrail allows five trails per Region; a trail this stack already holds is counted as present). When the Region has fewer than five trails of its own but reaches five with multi-Region or organization trails homed elsewhere, it reports the check as not verified and names those trails, since whether AWS counts them against the Region is not settled. It exits `0` when every check passes, `1` when the deploy would fail, and `2` when a check could not run.
+Run `npm run check.quotas` from `infra/` (add `-- --config-file <name>` for another configuration file) before `cdk deploy`. It checks that the Region's Amazon API Gateway **Integration timeout** quota admits `app.api.apiGatewayRest.apiGatewayTimeoutTime`, and, when `app.addStackCloudTrailLogs` is `true`, that the Region has room for the stack's AWS CloudTrail trail (CloudTrail allows five trails per Region; a trail this stack already holds is counted as present). When the Region has fewer than five trails of its own but reaches five with multi-Region or organization trails homed elsewhere, it reports the check as not verified and names those trails, since whether AWS counts them against the Region is not settled. It exits `0` when every check passes, `1` when the deploy would fail, and `2` when a check could not run.
 :::
+
+The `configFile` context parameter names the configuration file to deploy and defaults to `config.json`; see [Selecting the configuration file](configuration-reference.md#selecting-the-configuration-file) for how the value resolves, and [Multiple deployments in the same account](#multiple-deployments-in-the-same-account) for keeping one file per deployment.
 
 :::warning[There is no dry run]
 `npm run deploy.dev --dry-run` and `npm run deploy.vams --dry-run` run a real deployment: `--dry-run` is consumed by npm and never reaches the AWS CDK CLI, which has no such option. To preview the changes a deployment would make, run `npx cdk diff`.
@@ -205,6 +215,7 @@ Run `npm run check.quotas` from `infra/` before `cdk deploy`. It checks that the
 3. An Amazon Cognito user account is created using the `adminEmailAddress` from your configuration.
 4. A temporary password is sent to the admin email address from `no-reply@verificationemail.com`.
 5. If WAF is enabled, the web ACL stacks are deployed first. A regional web ACL stack is always created in the deployment Region for the API Gateway stage (and the ALB on ALB deployments); it is named `{name}-waf-{baseStackName}-{region}` on ALB deployments and `{name}-waf-regional-{baseStackName}-{region}` on CloudFront deployments. A CloudFront deployment additionally creates the CloudFront web ACL stack, `{name}-waf-{baseStackName}-{region}`, in `us-east-1`.
+6. A CloudFront deployment first creates the `{name}-origin-verify-{baseStackName}-{region}` stack in the deployment Region, with or without WAF. It holds the AWS Secrets Manager secret whose value CloudFront adds to the API requests it forwards; the regional web ACL stack and the core stack both read it.
 
 :::warning[Wait for every stack to complete before using the deployment]
 The solution is usable only after `npx cdk deploy` reports success for every stack. Resource names -- Amazon DynamoDB tables, the auxiliary and artefacts Amazon S3 buckets, and the audit log groups -- are published to AWS Systems Manager Parameter Store by the `ResourceNamesBuilder` nested stack, which AWS CloudFormation creates after the storage stack. The Amazon S3 bucket-sync functions live in that storage stack and resolve their names from those parameters, so on a first deployment into an account an invocation that arrives before the parameters exist fails at initialization. Its Amazon SQS message returns to the queue and is retried, and the event is processed once the remaining stacks finish. Upload files and call the API after the deployment completes.
@@ -214,17 +225,19 @@ The solution is usable only after `npx cdk deploy` reports success for every sta
 
 ### Find your application URL
 
-The web application URL is displayed in the CDK deployment output.
+The web application URL is the `WebsiteEndpointURLOutput` value that `cdk deploy` prints for the VAMS core stack, in the form `<core stack name>.WebsiteEndpointURLOutput = <URL>`.
 
 **CloudFront deployments:**
 
-Look for the output key `WebAppCloudFrontDistributionDomainName` in the deployment output. The URL format is `https://dXXXXXXXXXXXXX.cloudfront.net`.
-
-If you configured a custom domain, also look for `CloudFrontCustomDomainUrl`.
+The URL format is `https://dXXXXXXXXXXXXX.cloudfront.net`. If you configured a custom domain, the value is `https://` followed by `app.useCloudFront.customDomain.domainHost`.
 
 **ALB deployments:**
 
-Look for the output key `webDistributionUrl` in the deployment output. This is the ALB domain you configured in `app.useAlb.domainHost`.
+The value is `https://` followed by the ALB domain you configured in `app.useAlb.domainHost`.
+
+### Point DNS at the API custom domain (optional)
+
+When `app.api.apiGatewayRest.customDomain` is enabled, the core stack outputs `ApiCustomDomainUrl` (the API base URL, `https://{api-domain}/api/`) and `ApiCustomDomainTarget` (the Regional domain name of the API Gateway custom domain). With `optionalHostedZoneId` set, VAMS creates Amazon Route 53 A and AAAA alias records for the host in that hosted zone. Otherwise, create a DNS record for `domainHost` that points at `ApiCustomDomainTarget` (a `CNAME`, or an alias record in Amazon Route 53) in the DNS service that hosts the domain. The web application uses the custom domain after its users sign out and sign in again, and each VamsCLI profile after `vamscli setup` is run again for it.
 
 ### Sign in
 
@@ -233,9 +246,13 @@ Look for the output key `webDistributionUrl` in the deployment output. This is t
 3. Sign in with the admin user ID and temporary password.
 4. You will be prompted to set a new password on first login.
 
+:::note[With SAML or OIDC federation]
+With `app.authProvider.useCognito.useSaml` or `useOidc` enabled, the login page shows only the **Login with \{displayName\}** button, which signs users in through your identity provider. The administrator is a native user pool account, so it cannot sign in on that page. Sign in as the administrator with [VamsCLI](../cli/getting-started.md) instead (`vamscli auth login -u <admin user ID>`, which asks for a new password on the first sign-in), and give federated users their roles from there (`vamscli role user create`) or through a default role (`app.authProvider.authorizerOptions.defaultUserRoleName`). A federated user's VAMS user ID is the username Amazon Cognito gives the user at the first sign-in, not the email address; see [role user create](../cli/commands/permissions.md#role-user-create).
+:::
+
 ### Create additional users (optional)
 
-After signing in as the administrator, you can create additional users through the web interface under **Admin - Auth > User Management** (when Amazon Cognito authentication is active). For detailed instructions, see the [Permissions Guide](../user-guide/permissions.md).
+After signing in as the administrator, you can create additional users through the web interface under **Admin - Auth > User Management** (when Amazon Cognito authentication is active). With SAML or OIDC federation, the administrator cannot use that page as the native administrator account: create native users with [`vamscli user cognito create`](../cli/commands/users-and-keys.md#user-cognito-create), or on that page after signing in as a federated user who holds an admin role. Federated users need no account in the pool; Amazon Cognito creates one at their first sign-in. For detailed instructions, see the [Permissions Guide](../user-guide/permissions.md).
 
 ## Multiple deployments in the same account
 
@@ -258,6 +275,20 @@ export AWS_REGION=us-west-2
 export STACK_NAME=staging
 npx cdk deploy --all --require-approval never
 ```
+
+You can also keep one configuration file per deployment in `infra/config/` and select it with the `configFile` context parameter:
+
+```bash
+cp config/config.template.commercial.json config/config.dev.json
+# edit config/config.dev.json: "baseStackName": "dev", "region": "us-west-2"
+npx cdk deploy --all --require-approval never -c configFile=config.dev.json
+```
+
+:::note[Use the same configuration file for every command]
+Each `cdk` command synthesizes from the file it is given. Pass the same `-c configFile=...` to `cdk synth`, `cdk diff`, `cdk deploy` and `cdk destroy` for a deployment, or the command targets the stacks named in `config.json`. `cdk bootstrap` run from `infra/` without an explicit `aws://ACCOUNT/REGION` environment also synthesizes the app, so pass the parameter there too. To check that deployment's account quotas before deploying, run `npm run check.quotas -- --config-file config.dev.json`.
+:::
+
+The parameter selects only the main configuration file. Every deployment from the same checkout shares the other files in `infra/config/` (`policy/*.json`, `saml-config.ts`, `oidc-config.ts`, `csp/cspAdditionalConfig.json`, `custom/customConfig.json`) and the `infra/.env` file; use separate checkouts when deployments need different values in those.
 
 Each deployment creates a fully isolated set of resources with unique stack names derived from the `baseStackName` and Region combination.
 
@@ -321,14 +352,16 @@ Both buckets hold only the built frontend files and its access logs, so deleting
 
 ## Uninstalling
 
-To remove VAMS and all associated resources:
+Before destroying the stack, complete the pre-uninstall steps in [Uninstall the solution](uninstall.md), including the [pre-uninstall steps of each enabled add-on](uninstall.md#pre-uninstall-add-ons). To remove VAMS and all associated resources:
 
 ```bash
 cd infra
 npx cdk destroy --all
 ```
 
-Some resources (Amazon S3 buckets, Amazon DynamoDB tables, pipeline stacks) may not be automatically deleted due to retention policies. Remove these manually through the AWS Management Console or AWS CLI.
+If the deployment was made with `-c configFile=<name>`, pass the same parameter (`npx cdk destroy --all -c configFile=<name>`); without it the command targets the stacks named in `config.json`.
+
+Some resources (Amazon S3 buckets, Amazon DynamoDB tables) may not be automatically deleted due to retention policies. Remove these manually through the AWS Management Console or AWS CLI; [Uninstall the solution](uninstall.md) lists the resources that remain and how to remove them.
 
 ## Next steps
 

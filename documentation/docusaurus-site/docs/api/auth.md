@@ -107,15 +107,15 @@ POST /auth/constraints/{constraintId}
 
 #### Request body
 
-| Field              | Type   | Required | Description                                                                                                                                                        |
-| ------------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `name`             | string | Yes      | Human-readable name for the constraint                                                                                                                             |
-| `description`      | string | Yes      | Description of the constraint's purpose                                                                                                                            |
-| `objectType`       | string | Yes      | Resource type this constraint applies to (e.g., `asset`, `database`, `pipeline`, `workflow`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`) |
-| `criteriaAnd`      | array  | No       | AND criteria for matching resources (all must match)                                                                                                               |
-| `criteriaOr`       | array  | No       | OR criteria for matching resources (at least one must match)                                                                                                       |
-| `groupPermissions` | array  | Yes      | Permissions granted to roles/groups                                                                                                                                |
-| `userPermissions`  | array  | No       | Permissions granted to specific users                                                                                                                              |
+| Field              | Type   | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`             | string | Yes      | Human-readable name for the constraint                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `description`      | string | Yes      | Description of the constraint's purpose                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `objectType`       | string | Yes      | Resource type this constraint applies to: a core type (`database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `complianceSchema`, `complianceEvaluation`, `complianceCascade`, `complianceBinding`, `auditLog`, `bucket`) or a permission object type the deployment registers. [List constraint permission objects](#list-constraint-permission-objects) returns the types a deployment accepts |
+| `criteriaAnd`      | array  | No       | AND criteria for matching resources (all must match)                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `criteriaOr`       | array  | No       | OR criteria for matching resources (at least one must match)                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `groupPermissions` | array  | Yes      | Permissions granted to roles/groups                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `userPermissions`  | array  | No       | Permissions granted to specific users                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 At least one of `criteriaAnd` or `criteriaOr` must contain an entry.
 
@@ -182,11 +182,11 @@ A constraint may define both `criteriaAnd` and `criteriaOr`. When both are prese
 
 #### Error responses
 
-| Status | Description                                                                                                                                                                                                                                                                                   |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, missing required criteria, or a role that does not exist; or the constraint's existing stored items could not be read or removed. In the last case the submitted definition is not stored and the constraint may still grant its earlier permissions; repeat the request. |
-| `403`  | Not authorized                                                                                                                                                                                                                                                                                |
-| `500`  | Internal server error                                                                                                                                                                                                                                                                         |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, missing required criteria, an object type the deployment does not offer (such as one of an add-on it has not enabled, which the message says), or a role that does not exist; or the constraint's existing stored items could not be read or removed. In the last case the submitted definition is not stored and the constraint may still grant its earlier permissions; repeat the request. |
+| `403`  | Not authorized                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `500`  | Internal server error                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ---
 
@@ -314,17 +314,19 @@ The request body is a permission template with a `variableValues` object added. 
 
 #### Error responses
 
-| Status | Description                                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid template: missing `ROLE_NAME`, a required variable without a value, an unknown object type or criteria field, or no constraints |
-| `403`  | Not authorized                                                                                                                          |
-| `500`  | Internal server error                                                                                                                   |
+| Status | Description                                                                                                                                                                                         |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid template: missing `ROLE_NAME`, a required variable without a value, an unknown object type or criteria field, an object type of an add-on the deployment has not enabled, or no constraints |
+| `403`  | Not authorized                                                                                                                                                                                      |
+| `500`  | Internal server error                                                                                                                                                                               |
 
 ---
 
 ### List constraint permission objects
 
 Retrieves the master mapping used when authoring constraints: the object types (with the fields valid on each), the criteria operators, the permissions (HTTP actions), and the permission types. The constraints editor and CLI use this as the authoritative source for `objectType`, criteria `field`, `operator`, `permission`, and `permissionType` values.
+
+`objectTypes` lists the core types first, then any permission object types the deployment registers in its add-on or fork constants files (see [Extending VAMS in a Fork](../developer/customizing-vams.md#permission-object-types)). A registered type is listed even though no constraint grants access to it yet; no role, admin included, has access to it until one does. An add-on's types are listed only while the deployment enables the add-on (or, for a type of an optional add-on feature, that feature); a constraint stored earlier with such a type is still returned by the constraint list and get operations, and can be deleted.
 
 ```
 GET /auth/constraints/permissionObjects
@@ -373,7 +375,7 @@ These endpoints expose the deployment's API route surface from the master route 
 
 ### List all API routes
 
-Retrieves the full list of VAMS API endpoint routes with their HTTP methods and categories.
+Retrieves the full list of VAMS API endpoint routes with their HTTP methods and categories. An add-on route is listed only when the deployment enables the add-on, or the optional add-on feature that registers the route.
 
 ```
 GET /auth/routes/api
@@ -405,7 +407,9 @@ GET /auth/routes/api
 
 ### List allowed API routes
 
-Retrieves the API routes (and the HTTP methods on each) that the requesting user is authorized to call, evaluated against the user's authorization constraints. Routes with no allowed methods are omitted.
+Retrieves the API routes (and the HTTP methods on each) that the requesting user is authorized to call, evaluated against the user's authorization constraints. Routes with no allowed methods are omitted. The routes of an add-on the deployment has not enabled are not evaluated, so they are neither listed nor recorded as denials.
+
+The route is itself authorized at the API tier. The web interface calls it to decide which actions to enable on pages such as Pipelines, Workflows, and Executions, and on the pages an add-on contributes, and treats a refused call as no allowed routes. A web-interface user therefore needs `GET` on it through one of their roles, for example through a `starts_with /auth/routes` criterion as in the `database-user.json` template.
 
 ```
 GET /auth/routes/api/allowed
@@ -488,13 +492,13 @@ POST /roles
 
 #### Request body
 
-| Field              | Type    | Required | Description                                                    |
-| ------------------ | ------- | -------- | -------------------------------------------------------------- |
-| `roleName`         | string  | Yes      | Unique role name                                               |
-| `description`      | string  | Yes      | Role description                                               |
-| `source`           | string  | No       | Role source (e.g. `INTERNAL_SYSTEM`)                           |
-| `sourceIdentifier` | string  | No       | Identifier associated with the source                          |
-| `mfaRequired`      | boolean | No       | When `true`, the role's constraints apply only to MFA sessions |
+| Field              | Type    | Required | Description                                                                                                                                                   |
+| ------------------ | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `roleName`         | string  | Yes      | Unique role name: 1-256 characters of letters, digits, spaces, `-`, `.`, and `_` (`^[a-zA-Z0-9\-._\s]{1,256}$`, checked after surrounding spaces are removed) |
+| `description`      | string  | Yes      | Role description                                                                                                                                              |
+| `source`           | string  | No       | Role source (e.g. `INTERNAL_SYSTEM`)                                                                                                                          |
+| `sourceIdentifier` | string  | No       | Identifier associated with the source                                                                                                                         |
+| `mfaRequired`      | boolean | No       | When `true`, the role's constraints apply only to MFA sessions                                                                                                |
 
 #### Request body example
 
@@ -711,7 +715,7 @@ GET /user/cognito
 
 #### Response
 
-`NextToken` is present only when more users remain; page until it is absent.
+`NextToken` is present only when more users remain; page until it is absent. `mfaEnabled` is `true` when the user has an MFA method set up in Cognito. It is read with one Cognito `AdminGetUser` call per listed user, so a page costs up to 60 extra lookups, and a failed lookup fails the request.
 
 ```json
 {
@@ -844,6 +848,10 @@ The `/auth/api-keys` routes are the administrative variant of these endpoints. T
 :::warning[Administrative routes]
 Because `POST /auth/api-keys` accepts any `userId`, including an administrator's, a role that can call it can issue a credential that acts as any user in the deployment. Access to the `/auth/api-keys` routes is therefore equivalent to full administrative access. Grant them only to administrator roles, and give other users the self-service `/auth/user/api-keys` routes for managing their own keys.
 :::
+
+A caller that authenticates with an API key cannot create an API key or change a key's expiration, in either scope and whatever its roles grant, so a leaked key cannot mint its successor or extend itself. `POST` answers `403` `API keys cannot be created with an API key. Sign in through your identity provider to create one.`, and a `PUT` whose body carries `expiresAt` (a clear with `""` on the administrative route included) answers `403` `An API key's expiration cannot be changed with an API key. Sign in through your identity provider to change it.` before the key is read, whether or not it exists. Nothing is written. Listing, reading and deleting keys, and a `PUT` that changes only `description` or `isActive`, follow the route's own authorization: reads, description changes, deactivation and reactivation stay allowed, so a key can still list and revoke itself, and a reactivated key still stops working at its stored `expiresAt`. A user signed in through the deployment's identity provider (Amazon Cognito, or the external OAuth identity provider) is unaffected: automation that rotates or extends keys signs in that way.
+
+API-key create and update — `POST` and `PUT` in both the administrative and the self-service scope — refuse a caller that authenticates with a temporary session key (an API key whose name starts with the reserved prefix `temporary-session-`, minted on a user's behalf by a VAMS component) with `403` `API keys cannot be created or updated with a temporary session key`, so a session credential cannot mint or extend a key. The refusal runs after the route's own authorization; a caller whose own key record cannot be read is answered the generic `500 Internal Server Error`, not that refusal. Because the prefix is reserved, a create request whose `apiKeyName` starts with `temporary-session-` is refused with `400` `API key names starting with the temporary session key prefix are reserved. Please choose a different name.`
 
 ### List API keys
 
@@ -1012,6 +1020,7 @@ The `/auth/user/api-keys` routes are the self-service variant of the API key end
 -   Created keys are always tied to the authenticated caller -- there is no `userId` field.
 -   An **expiration date is required** on creation and may be at most **365 days** from creation.
 -   Updates cannot clear the expiration and cannot set it beyond 365 days from the key's **original creation date**. After the window elapses, the user must create a new key (rotation).
+-   Creating a key and changing an expiration need a sign-in through the identity provider: a caller that authenticates with an API key is refused both with `403` (see [API keys](#api-keys)).
 
 The administrative routes ([`/auth/api-keys`](#api-keys)) cover every user's keys, accept a `userId` on creation, and treat the expiration date as optional. They are reserved for administrator roles.
 

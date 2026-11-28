@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState } from "react";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadFailureMessage } from "../../core/streamFailure";
 import { ViewerPluginProps } from "../../core/types";
 
 const HTMLViewerComponent: React.FC<ViewerPluginProps> = ({
@@ -82,7 +83,9 @@ const HTMLViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (response !== false && Array.isArray(response)) {
                     if (response[0] === false) {
                         console.error("Error downloading HTML file:", response);
-                        throw new Error("Failed to download HTML file");
+                        throw new Error(
+                            downloadFailureMessage(response, "Failed to download HTML file")
+                        );
                     } else {
                         // Fetch the bytes and frame them as a typed Blob rather than pointing the
                         // iframe at the presigned URL.
@@ -140,10 +143,18 @@ const HTMLViewerComponent: React.FC<ViewerPluginProps> = ({
                     alignItems: "center",
                     height: "100%",
                     fontSize: "16px",
-                    color: "#666",
                 }}
             >
-                Loading HTML document...
+                <div
+                    style={{
+                        background: "var(--vams-bg-primary)",
+                        color: "var(--vams-text-secondary)",
+                        padding: "12px 16px",
+                        borderRadius: "8px",
+                    }}
+                >
+                    Loading HTML document...
+                </div>
             </div>
         );
     }
@@ -157,10 +168,18 @@ const HTMLViewerComponent: React.FC<ViewerPluginProps> = ({
                     alignItems: "center",
                     height: "100%",
                     fontSize: "16px",
-                    color: "#d13212",
                 }}
             >
-                Error: {error}
+                <div
+                    style={{
+                        background: "var(--vams-bg-primary)",
+                        color: "var(--vams-color-error)",
+                        padding: "12px 16px",
+                        borderRadius: "8px",
+                    }}
+                >
+                    Error: {error}
+                </div>
             </div>
         );
     }

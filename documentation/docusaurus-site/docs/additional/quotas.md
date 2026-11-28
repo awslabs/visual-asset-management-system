@@ -1,6 +1,6 @@
 # Service Quotas and Limits
 
-This page documents the service quotas, default limits, and configurable thresholds for the Visual Asset Management System (VAMS). Some limits are inherent to AWS services, while others are configurable through the VAMS deployment configuration.
+This page documents the service quotas, default limits, and configurable thresholds for the Visual Asset Management System (VAMS). Some limits are inherent to AWS services, while others are configurable through the VAMS deployment configuration. An enabled add-on has limits of its own, listed on the add-on's page (see [Add-ons Overview](../developer/addons-overview.md)).
 
 ---
 
@@ -10,12 +10,12 @@ This page documents the service quotas, default limits, and configurable thresho
 
 VAMS uses Amazon API Gateway REST API with configurable rate limiting.
 
-| Parameter            | Default            | Configurable | Configuration Key                              |
-| -------------------- | ------------------ | ------------ | ---------------------------------------------- |
-| Global rate limit    | 50 requests/second | Yes          | `app.api.apiGatewayRest.globalRateLimit`       |
-| Global burst limit   | 100 requests       | Yes          | `app.api.apiGatewayRest.globalBurstLimit`      |
-| Integration timeout  | 29 seconds         | Yes (29–300) | `app.api.apiGatewayRest.apiGatewayTimeoutTime` |
-| Authorizer cache TTL | 30 seconds         | No           | Set in CDK authorizer construct                |
+| Parameter            | Default                                                                                                   | Configurable | Configuration Key                              |
+| -------------------- | --------------------------------------------------------------------------------------------------------- | ------------ | ---------------------------------------------- |
+| Global rate limit    | 50 requests/second                                                                                        | Yes          | `app.api.apiGatewayRest.globalRateLimit`       |
+| Global burst limit   | 100 requests                                                                                              | Yes          | `app.api.apiGatewayRest.globalBurstLimit`      |
+| Integration timeout  | 29 seconds                                                                                                | Yes (29–300) | `app.api.apiGatewayRest.apiGatewayTimeoutTime` |
+| Authorizer cache TTL | 30 seconds (900 on the anonymous routes; 0 with `app.authProvider.authorizerOptions.allowedIpRanges` set) | No           | Set in CDK authorizer construct                |
 
 :::tip
 The burst limit must be greater than or equal to the rate limit. Adjust both values in `infra/config/config.json` and redeploy to apply changes.
@@ -38,11 +38,11 @@ All VAMS Lambda functions share the same configuration:
 
 ### Authentication Limits
 
-| Parameter                | Default                   | Configurable | Configuration Key                                     |
-| ------------------------ | ------------------------- | ------------ | ----------------------------------------------------- |
-| Credential/token timeout | 3,600 seconds (1 hour)    | Yes          | `app.authProvider.useCognito.credTokenTimeoutSeconds` |
-| Presigned URL timeout    | 86,400 seconds (24 hours) | Yes          | `app.authProvider.presignedUrlTimeoutSeconds`         |
-| Upload initializations   | 20 per user per minute    | No           | Hardcoded rate limit                                  |
+| Parameter                | Default                   | Configurable                                  | Configuration Key                                     |
+| ------------------------ | ------------------------- | --------------------------------------------- | ----------------------------------------------------- |
+| Credential/token timeout | 3,600 seconds (1 hour)    | Yes, whole minutes from 300 to 86,400 seconds | `app.authProvider.useCognito.credTokenTimeoutSeconds` |
+| Presigned URL timeout    | 86,400 seconds (24 hours) | Yes                                           | `app.authProvider.presignedUrlTimeoutSeconds`         |
+| Upload initializations   | 20 per user per minute    | No                                            | Hardcoded rate limit                                  |
 
 `app.authProvider.presignedUrlTimeoutSeconds` takes a whole number from 1 to 604,800 seconds (7 days), the longest Amazon S3 allows for a presigned URL; synthesis warns about any other value. It is an upper bound: a presigned URL is signed with the Lambda function's temporary role credentials and stops working when they expire, which can be sooner than the configured timeout.
 
@@ -59,7 +59,7 @@ All VAMS DynamoDB tables use on-demand (pay-per-request) billing mode, which aut
 | Billing mode                | On-demand (PAY_PER_REQUEST)               |
 | Maximum item size           | 400 KB (DynamoDB service limit)           |
 | Metadata records per entity | 500                                       |
-| Table count                 | 46 tables (plus 7 retained for migration) |
+| Table count                 | 56 tables (plus 9 retained for migration) |
 
 :::info
 On-demand mode has no provisioned throughput to configure. Amazon DynamoDB automatically allocates capacity based on traffic patterns. For sustained high-throughput workloads, monitor your account-level DynamoDB service quotas.
@@ -71,11 +71,14 @@ On-demand mode has no provisioned throughput to configure. Amazon DynamoDB autom
 | -------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | Maximum object size        | 5 TB (Amazon S3 service limit)                                                                             |
 | Maximum object key length  | 1,024 bytes of UTF-8 (Amazon S3 service limit); an asset file key over this limit is rejected with a `400` |
+| Maximum uploaded file key  | 998 bytes of UTF-8, including the asset's location, at a bucket root; less the base prefix (see below)     |
 | Multipart upload threshold | 5 GB (parts required above this size)                                                                      |
 | Maximum parts per upload   | 10,000 (Amazon S3 service limit)                                                                           |
 | Part size range            | 5 MB to 5 GB                                                                                               |
 | VAMS upload part size      | 150 MB                                                                                                     |
 | Bucket encryption          | AWS KMS (when CMK enabled) or Amazon S3-managed                                                            |
+
+VAMS stages each upload at `{baseAssetsPrefix}temp-uploads/{upload tag}/{file key}`, with a 12-character tag per upload, before it copies the file to its key. That staging key must also fit the 1,024-byte limit, so a file key, including its asset location, may be at most 998 bytes of UTF-8 in a bucket registered at its root, and the length of the bucket's base prefix less than that otherwise. Upload initialization refuses a longer key with a `400` and the message `VAMS General Error: File key is too long to upload: a file key, including its asset location, may be at most N bytes`, where N is the bound for the asset's bucket.
 
 ### Amazon OpenSearch
 
@@ -114,15 +117,46 @@ The AWS Deadline Cloud execution type is available when the deployment sets
 
 ### Pipeline-Specific Limits
 
-| Pipeline               | Parameter               | Limit                        |
-| ---------------------- | ----------------------- | ---------------------------- |
-| 3D Preview Thumbnail   | Maximum input file size | 100 GB                       |
-| All ECS pipelines      | Metadata JSON input     | 8,000 characters             |
-| Gaussian Splat Toolbox | GPU instance required   | `g6e.2xlarge` or `g5.xlarge` |
-| Isaac Lab Training     | GPU instance required   | `g6e.2xlarge` or `g5.xlarge` |
-| RapidPipeline (EKS)    | Node instance type      | Configurable                 |
-| RapidPipeline (EKS)    | Job timeout             | Configurable                 |
-| RapidPipeline (EKS)    | Job backoff limit       | Configurable                 |
+| Pipeline                 | Parameter                                | Limit                                                                                                                    |
+| ------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 3D Preview Thumbnail     | Maximum input file size                  | Free space of the task's work volume (200 GiB), less 1 GiB                                                               |
+| 3D Preview Thumbnail     | Referenced files fetched per input       | 2,000 files, 50 GiB, 32 levels of nesting                                                                                |
+| 3D Preview Thumbnail     | STEP components / FBX models placed      | 1,000,000 (the run fails above it)                                                                                       |
+| 3D Preview Thumbnail     | 3MF / COLLADA nodes walked               | 1,000,000 (remaining placements are skipped)                                                                             |
+| 3D Preview Thumbnail     | FBX nesting depth                        | 256 levels                                                                                                               |
+| 3D Preview Thumbnail     | COLLADA file or 3MF model part           | 2 GiB                                                                                                                    |
+| 3D Preview Thumbnail     | Zip-based input (3MF, SOG, USDZ texture) | 100,000 members; 200:1 compression for a member above 64 MiB                                                             |
+| 3D Preview Thumbnail     | Texture read from a USDZ archive         | 512 MiB (a larger texture is skipped)                                                                                    |
+| 3D Preview Thumbnail     | Vertices drawn from one USD stage        | 30 million (remaining prims are skipped)                                                                                 |
+| 3D Preview Thumbnail     | PLY header                               | 1 MiB                                                                                                                    |
+| 3D Preview Thumbnail     | XGRIDS LCC / LCC2 scene description      | 64 MiB; 1,000,000 octree nodes                                                                                           |
+| 3D Preview Thumbnail     | Gaussian splat conversion time           | 30 minutes                                                                                                               |
+| 3D Preview Thumbnail     | Preview file size                        | 5 MiB                                                                                                                    |
+| 3D Preview Thumbnail     | Job run time                             | 1 hour (standard tier), 3 hours (large tier)                                                                             |
+| Media Preview Thumbnail  | Preview file size                        | Strictly under 5 MiB (every preview written)                                                                             |
+| Media Preview Thumbnail  | Image pixels decoded                     | From the task's memory: 16 million at least, 1 billion at most (a larger image fails with a message that names the type) |
+| Media Preview Thumbnail  | Animated GIF/WebP frames read            | 300 kept (evenly spaced), at most 5,000 walked, 120 seconds                                                              |
+| Media Preview Thumbnail  | Animated preview encodes                 | 10 size steps, 12 encodes, 60 seconds                                                                                    |
+| Media Preview Thumbnail  | Video frames sampled                     | 12 (at most 24), long edge 480 px, 10 minutes of decoding                                                                |
+| Media Preview Thumbnail  | TIFF compressions decoded                | None, LZW, Deflate, PackBits, Zstandard, LZMA, JPEG, LERC                                                                |
+| All ECS pipelines        | Metadata JSON input                      | 8,000 characters                                                                                                         |
+| Gaussian Splat Toolbox   | GPU instance required                    | `g6e.2xlarge` or `g5.xlarge`                                                                                             |
+| GenAI CAD STEP agent     | Script attempts per run (`MAX_ATTEMPTS`) | 1-10, default 4; a value outside the range is clamped                                                                    |
+| GenAI CAD STEP agent     | Run time bound (`maxRunSeconds`)         | 300-6,000 seconds, default 3,600                                                                                         |
+| GenAI CAD STEP agent     | Warm sessions (`warmSessionSlots`)       | 0-20 on the `agentcore` runtime, default 0                                                                               |
+| GenAI CAD STEP agent     | AgentCore Runtime container image size   | 2 GB (Amazon Bedrock AgentCore quota, not adjustable)                                                                    |
+| Isaac Lab Training       | GPU instance required                    | `g6e.2xlarge` or `g5.xlarge`                                                                                             |
+| RapidPipeline (ECS)      | Fargate task run time                    | 4 hours 44 minutes (`config.ts` constant)                                                                                |
+| RapidPipeline (ECS)      | Running tasks checked at a task timeout  | 100 (one `ListTasks` page; `config.ts` constant)                                                                         |
+| RapidPipeline (EKS)      | Node instance type                       | Configurable                                                                                                             |
+| RapidPipeline (EKS)      | Job timeout                              | Configurable                                                                                                             |
+| RapidPipeline (EKS)      | Job backoff limit                        | Configurable                                                                                                             |
+| Video SOP/BOM Extraction | Maximum videos per run                   | 4 (`limits.maxVideoFiles`, 1-4)                                                                                          |
+| Video SOP/BOM Extraction | Maximum size per video                   | 4 GB (`config.ts` constant)                                                                                              |
+| Video SOP/BOM Extraction | Maximum total input size                 | 16 GB (`config.ts` constant)                                                                                             |
+| Video SOP/BOM Extraction | Maximum total audio duration             | 240 minutes (`limits.maxTotalDurationMinutes`, 1-480)                                                                    |
+
+The Video SOP/BOM Extraction limits are enforced inside the pipeline: a run over a limit fails its pipeline step through the AWS Step Functions task token with a cause naming the observed value and the cap, rather than being rejected with a `400` as the template limits below are. See [Video SOP/BOM Extraction — Limits](../pipelines/video-sop-bom.md#limits).
 
 ### Pipeline Template and Tag-Schema Limits
 
@@ -208,6 +242,58 @@ entity. A tag value is generous at 64 KB because a tag may legitimately carry a 
 prompt.
 :::
 
+### Large Output Limits
+
+Workflow outputs over 1 GiB, and API uploads over 5 GiB, are copied into their asset by the large
+object copy engine: a Step Functions state machine that copies the file in parts with short AWS Lambda
+tasks. A task that times out or fails is retried and resumes at the next missing part, so there is no
+size limit below the Amazon S3 object limit of 5 TiB. A workflow execution whose outputs include such a
+file stays `RUNNING` until its copies finish, then ends `SUCCEEDED`, or `FAILED` with an error naming
+each file that did not land. A copy that fails discards its partial upload at once.
+
+The engine runs with fixed values; they are not deployment configuration.
+
+| Engine value                         | Value   | Effect                                                                                                         |
+| ------------------------------------ | ------- | -------------------------------------------------------------------------------------------------------------- |
+| API upload size that uses the engine | 5 GiB   | API uploads larger than this use the copy engine. Smaller uploads over 1 GiB keep the large-file queue's copy. |
+| Smallest part of a copy              | 256 MiB | Larger files use larger parts, so a copy has at most 9,000 parts.                                              |
+| Parts per Lambda task                | 16      | Parts one Lambda task copies, 8 of them at the same time.                                                      |
+| Lambda tasks per copy                | 10      | Lambda tasks one copy runs at the same time.                                                                   |
+| Maximum wait for large outputs       | 48 h    | How long a workflow execution waits for its large outputs before it fails.                                     |
+
+The copy engine function is unreserved: it draws on the account's unreserved Lambda concurrency, like
+the VAMS API functions. When the account runs out, a copy task is throttled, and throttling slows a copy
+rather than failing it. The same holds for a run's own calls to the copy engine (recording its copies, registering
+its wait, reading the outcomes): a throttled call waits, and the workflow step is retried if the throttle
+outlasts it, so a run with copies still alive never ends `FAILED` because of a throttle. A throttled task waits with jittered backoff, about 4 hours on average and at
+most about 8 hours, before its copy fails.
+
+| Parameter                                  | Value                          | Exceeding it                                   |
+| ------------------------------------------ | ------------------------------ | ---------------------------------------------- |
+| Size of one output or uploaded file        | 5 TiB (Amazon S3 object limit) | The file is refused and the execution names it |
+| Output files over 1 GiB from one execution | About 7,000                    | The output step fails                          |
+| Copies listed in the execution details     | 100 per execution              | Truncated, flagged (`filesTruncated`)          |
+
+The per-execution limit comes from the DynamoDB item size limit of 400 KB: the row that tracks an
+execution's large outputs keeps one copy id of about 55 bytes for each. Split such a run into several
+executions, or package the outputs into fewer files.
+
+### Download as Zip Limits
+
+Download as Zip (`app.pipelines.useZipDownloads`) builds each archive in the background. Three limits are configurable; see [Zip downloads](../deployment/configuration-reference.md#zip-downloads-apppipelinesusezipdownloads).
+
+| Parameter                                                     | Default | Allowed range   | Exceeding it                                       |
+| ------------------------------------------------------------- | ------- | --------------- | -------------------------------------------------- |
+| Files in one archive (`maxFilesPerRequest`)                   | 100,000 | 1 to 1,000,000  | The request is refused with `400`                  |
+| Total size of one archive's files (`maxTotalBytesPerRequest`) | 5 TiB   | 1 byte to 5 TiB | The request is refused with `400`                  |
+| Queued or running jobs per user (`maxActiveRequestsPerUser`)  | 5       | 1 to 100        | A new request is refused with `429` until one ends |
+
+Three limits are fixed:
+
+-   **Individually selected files: 2,000 per request.** A larger selection names folders or the whole asset instead; files inside a selected folder do not count toward this limit.
+-   **Archive size: 5 TiB.** An archive is one Amazon S3 object, so a selection whose archive, with its headers, would pass 5 TiB is refused.
+-   **Retention: 7 days.** A job and its archive expire 7 days after the job was created; an expired archive can no longer be downloaded. An archive the Zip Archive pipeline writes into an asset is an asset file and does not expire.
+
 ### Execution Detail and Log Limits
 
 Bounds on what a single API response returns for one execution. These are response-shaping limits, not
@@ -245,28 +331,36 @@ endpoint rather than the detail response.
 
 ### File Upload Restrictions
 
-| Parameter                 | Value                                                                                                                    |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Blocked file extensions   | `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat` |
-| Upload stage 1 rate limit | 20 initializations per user per minute                                                                                   |
-| File validation           | Extension and MIME type checks on API upload; extension check on the destination of a move, rename or copy               |
+| Parameter                 | Value                                                                                                                                                                                                     |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Blocked file extensions   | `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.dotm`, `.xlsm`, `.xltm`, `.xlam`, `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm`, `.vbs`, `.bat` |
+| Upload stage 1 rate limit | 20 initializations per user per minute                                                                                                                                                                    |
+| File validation           | Extension check on API upload and on the destination of a move, rename or copy; MIME type check on a stored object's content type (see below)                                                             |
 
 ### Blocked MIME Types
 
-The following MIME types are rejected during file upload validation:
+The following MIME types are refused when Amazon S3 reports one as a stored object's content type: when an upload completes, when a workflow output is ingested, when the large object copy engine copies a file into its asset, and when a file is downloaded, streamed, exported or added to a zip download. This list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
 
-| MIME Type                                          | Description                  |
-| -------------------------------------------------- | ---------------------------- |
-| `application/java-archive`                         | Java archive files           |
-| `application/x-msdownload`                         | Windows executables          |
-| `application/x-sh`                                 | Shell scripts                |
-| `application/x-php`                                | PHP scripts                  |
-| `application/javascript`                           | JavaScript files             |
-| `application/x-powershell`                         | PowerShell scripts           |
-| `application/vbscript`                             | VBScript files               |
-| `application/x-ms-dos-executable`                  | DOS executables              |
-| `application/x-bat-script`                         | Batch scripts                |
-| `application/vnd.ms-word.document.macroEnabled.12` | Macro-enabled Word documents |
+| MIME Type                                                    | Description                            |
+| ------------------------------------------------------------ | -------------------------------------- |
+| `application/java-archive`                                   | Java archive files                     |
+| `application/x-msdownload`                                   | Windows executables                    |
+| `application/x-sh`                                           | Shell scripts                          |
+| `application/x-php`                                          | PHP scripts                            |
+| `application/x-powershell`                                   | PowerShell scripts                     |
+| `application/vbscript`                                       | VBScript files                         |
+| `application/x-ms-dos-executable`                            | DOS executables                        |
+| `application/x-bat-script`                                   | Batch scripts                          |
+| `application/vnd.ms-word.document.macroEnabled.12`           | Macro-enabled Word documents           |
+| `application/vnd.ms-word.template.macroEnabled.12`           | Macro-enabled Word templates           |
+| `application/vnd.ms-excel.sheet.macroEnabled.12`             | Macro-enabled Excel workbooks          |
+| `application/vnd.ms-excel.template.macroEnabled.12`          | Macro-enabled Excel templates          |
+| `application/vnd.ms-excel.addin.macroEnabled.12`             | Excel add-ins                          |
+| `application/vnd.ms-powerpoint.presentation.macroEnabled.12` | Macro-enabled PowerPoint presentations |
+| `application/vnd.ms-powerpoint.template.macroEnabled.12`     | Macro-enabled PowerPoint templates     |
+| `application/vnd.ms-powerpoint.slideshow.macroEnabled.12`    | Macro-enabled PowerPoint slide shows   |
+| `application/vnd.ms-powerpoint.addin.macroEnabled.12`        | PowerPoint add-ins                     |
+| `application/vnd.ms-powerpoint.slide.macroEnabled.12`        | Macro-enabled PowerPoint slides        |
 
 ---
 
@@ -289,11 +383,11 @@ Amazon Cognito service quotas can be increased through the AWS Service Quotas co
 
 ## Network and VPC Limits
 
-| Parameter                                            | Value                      |
-| ---------------------------------------------------- | -------------------------- |
-| VPC endpoints per configuration                      | 1-11 per Availability Zone |
-| Availability Zones required (ALB)                    | 2 minimum                  |
-| Availability Zones required (OpenSearch Provisioned) | 2 or 3 (default 2)         |
-| Availability Zones required (Lambda in VPC)          | 1 minimum                  |
+| Parameter                                            | Value                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| VPC interface endpoints per configuration            | 9-23 created by the VPC stack (up to 21 in GovCloud), each in every Availability Zone the VPC uses; a private Amazon OpenSearch Serverless collection and the ALB web distribution add one each, and each other Region that holds an external asset bucket adds a cross-Region Amazon S3 endpoint when `addCrossRegionS3Endpoints` is enabled |
+| Availability Zones required (ALB)                    | 2 minimum                                                                                                                                                                                                                                                                                                                                     |
+| Availability Zones required (OpenSearch Provisioned) | 2 or 3 (default 2)                                                                                                                                                                                                                                                                                                                            |
+| Availability Zones required (Lambda in VPC)          | 1 minimum                                                                                                                                                                                                                                                                                                                                     |
 
 For detailed cost implications of VPC endpoint configurations, see the [cost estimates](../overview/costs.md).

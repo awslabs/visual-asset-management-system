@@ -6,6 +6,8 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import Dialog, { DialogFooter } from "../components/Dialog";
 import Callout from "../components/Callout";
+import { BusyButton } from "../components/BusyControls";
+import { useFocusHandOff } from "../components/useFocusHandOff";
 import { btnPrimary, btnSecondary, btnSuccess } from "../components/controlStyles";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
 import WizardInputStage from "./WizardInputStage";
@@ -27,6 +29,8 @@ import {
     usePrefetchPipelineTemplates,
 } from "../api/queries";
 import { resolvePipelineParams } from "./resolveTemplate";
+import { LAUNCH_OUTCOME_UNKNOWN_MESSAGE } from "../api/executions";
+import { assetFilePath } from "../../../utils/assetFilePath";
 import type {
     Workflow,
     WorkflowSystemConfig,
@@ -59,6 +63,8 @@ export interface ExecuteWizardBodyProps extends Omit<ExecuteWizardProps, "open">
     leadingSteps?: RailStep[];
     /** Receives a leading step's id when its rail row is clicked. */
     onJumpTo?: (stepId: string) => void;
+    /** Told whether the launch request is in flight, so the enclosing dialog stays open while it is. */
+    onLaunchingChange?: (launching: boolean) => void;
 }
 
 export interface PipelineStageData {
@@ -257,6 +263,27 @@ const arityViolation = (arity: string, count: number): string | null => {
     return null;
 };
 
+/**
+ * The selected entries a later step is certain to receive, one per input row the run stores. The run
+ * keeps one row per database, asset and normalized file key (a leading slash added when missing,
+ * executionRecords.normalize_file_key), and a later step's manifest starts from those rows, so two
+ * versions or two spellings of one file reach it as ONE entry; its filters are applied to the
+ * normalized key. "//x" (a key with an empty segment after the asset's folder) and "/x" are two files
+ * and stay two entries (#1977). Mirrors executionValidation._later_step_selection_entries.
+ */
+function laterStepSelectionEntries(
+    inputs: ExecuteInputFile[],
+    filters?: InputFileFilters
+): ExecuteInputFile[] {
+    const entries = new Map<string, ExecuteInputFile>();
+    for (const file of inputs) {
+        const key = assetFilePath(file.relativeFileKey);
+        const identity = JSON.stringify([file.databaseId, file.assetId, key]);
+        if (!entries.has(identity)) entries.set(identity, { ...file, relativeFileKey: key });
+    }
+    return applyInputFileFilters(Array.from(entries.values()), filters);
+}
+
 export interface PipelineInputConstraints {
     label: string;
     systemConfig?: PipelineSystemConfig;
@@ -269,7 +296,9 @@ export interface PipelineInputConstraints {
 /**
  * Workflow-level and per-pipeline checks on the selected input files. Returns the human-readable
  * errors the launch would otherwise fail on, plus the incomplete-row check the request model
- * enforces (an asset and a file must both be chosen).
+ * enforces (an asset and a file must both be chosen). `pipelineConstraints` must be in workflow step
+ * order: the first entry is the only step whose filters and arity are judged against the selection,
+ * apart from a single-file later step the selection alone already gives two or more files.
  */
 export function validateInputSelection(
     workflowSystemConfig: WorkflowSystemConfig | undefined,
@@ -317,13 +346,40 @@ export function validateInputSelection(
     const workflowInputs = applyInputFileFilters(inputs, wfFilters);
 
     // Per-pipeline effective config (the chosen template's overrides merged over the pipeline's).
-    pipelineConstraints.forEach(({ label, systemConfig, templateOverrides }) => {
+    // `pipelineConstraints` is in workflow step order. Only the FIRST step's filters and arity are
+    // judged against the selection, as _evaluate does: from the second step on, a step receives the
+    // selection plus every earlier step's output and is checked when the run reaches it, so a step
+    // that reads only an earlier step's output type is valid. An arity-'none' first step still counts
+    // as the first step — it writes outputs a later step can read. A later step's own assetScope is
+    // still judged against the selected entries that reach it, and a single-file later step is
+    // refused when two or more selected files already pass its filters.
+    pipelineConstraints.forEach(({ label, systemConfig, templateOverrides }, position) => {
         const effective = resolveEffectivePipelineConfig(systemConfig, templateOverrides);
         const arity = effective.inputFileArity || "one";
         // A 'none' pipeline never consumes files, whatever the workflow selected.
         if (arity === "none") return;
 
         const pipelineInputs = applyInputFileFilters(workflowInputs, effective.inputFileFilters);
+        if (position > 0) {
+            errors.push(...scopeErrors(effective.assetScope, pipelineInputs, label, true));
+            // The one later-step arity failure the selection already proves: two or more selected
+            // files passing a single-file step's filters. Earlier steps' outputs only add entries or
+            // replace one at the same path, so the step is certain to receive them all.
+            if (arity === "one") {
+                const reaching = laterStepSelectionEntries(
+                    workflowInputs,
+                    effective.inputFileFilters
+                );
+                if (reaching.length > 1) {
+                    errors.push(
+                        `${label} accepts a single input file, but ${reaching.length} selected ` +
+                            `input files pass its input-file filters, so the selection alone ` +
+                            `already gives it more files than it takes.`
+                    );
+                }
+            }
+            return;
+        }
         if (workflowInputs.length > 0 && pipelineInputs.length === 0) {
             errors.push(
                 `${label} requires input files but its input-file filters exclude all selected inputs.`
@@ -370,6 +426,7 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
     hidden,
     leadingSteps,
     onJumpTo,
+    onLaunchingChange,
 }) => {
     const toast = useToast();
     const { data: workflowData, isLoading: workflowLoading } = useWorkflow(
@@ -406,6 +463,18 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
     }, [allPipelines, pipelineIds, pipelineDbIds]);
 
     const executeWorkflow = useExecuteWorkflow();
+    const launching = executeWorkflow.isPending;
+    const onLaunchingChangeRef = useRef(onLaunchingChange);
+    onLaunchingChangeRef.current = onLaunchingChange;
+    useEffect(() => {
+        onLaunchingChangeRef.current?.(launching);
+    }, [launching]);
+    // A launch that closes the dialog unmounts the body before it can report the answer.
+    useEffect(() => () => onLaunchingChangeRef.current?.(false), []);
+    // A launch answered with warnings swaps the footer for Close; focus Launch or Back held moves there.
+    const closeRef = useRef<HTMLButtonElement>(null);
+    const launchRef = useFocusHandOff<HTMLButtonElement>(() => closeRef.current);
+    const backRef = useFocusHandOff<HTMLButtonElement>(() => closeRef.current);
 
     // Input stage data. When launched from an asset (presetAsset), seed the first input row with
     // that database+asset so the user only has to pick the file(s) — but the asset is NOT locked to
@@ -686,8 +755,10 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
     };
 
     // Rail rows and Review "Edit" links jump to one of this body's steps; a leading step belongs
-    // to the enclosing dialog.
+    // to the enclosing dialog. While the launch is in flight the wizard stays on Review: the rows
+    // and links are held like Back, and a jump that still arrives is ignored.
     const jumpTo = (stepId: string) => {
+        if (launching) return;
         if (steps.some((s) => s.id === stepId)) setCurrentStageId(stepId);
         else onJumpTo?.(stepId);
     };
@@ -770,6 +841,11 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
             // raise a toast, so it is visible even if the user has scrolled away from the banner.
             const message = toastErrorMessage(err, "Execution failed.");
             setLaunchError(message);
+            // A launch that got no reply may have started a run, so it is not reported as failed.
+            if (message === LAUNCH_OUTCOME_UNKNOWN_MESSAGE) {
+                toast.warning("Launch not confirmed", { description: message });
+                return;
+            }
             // The toast is a single line of text, so several reasons are joined with punctuation —
             // the line breaks the inline panel renders as list items would collapse to spaces here
             // and run the reasons together. The panel carries the readable form.
@@ -849,6 +925,7 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
                     offendingPipelines={offendingPipelines}
                     workflowBlockedReason={workflowBlockedReason}
                     onEdit={jumpTo}
+                    busy={launching}
                 />
             );
         }
@@ -892,15 +969,20 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
     // warnings the only remaining action is closing the dialog. Nothing renders into the footer
     // while another step of the enclosing dialog is showing.
     const footer = launched ? (
-        <button onClick={onClose} className={btnPrimary}>
+        <button ref={closeRef} onClick={onClose} className={btnPrimary}>
             Close
         </button>
     ) : (
         <>
             {currentIndex > 0 && (
-                <button onClick={handleBack} className={btnSecondary}>
+                <BusyButton
+                    ref={backRef}
+                    busy={launching}
+                    onClick={handleBack}
+                    className={btnSecondary}
+                >
                     Back
-                </button>
+                </BusyButton>
             )}
             {currentIndex < steps.length - 1 && (
                 <button onClick={handleNext} className={btnPrimary}>
@@ -908,13 +990,16 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
                 </button>
             )}
             {currentIndex === steps.length - 1 && (
-                <button
+                <BusyButton
+                    ref={launchRef}
                     onClick={handleLaunch}
-                    disabled={executeWorkflow.isPending || hasValidationErrors}
+                    busy={launching}
+                    busyLabel="Launching..."
+                    disabled={hasValidationErrors}
                     className={btnSuccess}
                 >
-                    {executeWorkflow.isPending ? "Launching..." : "Launch"}
-                </button>
+                    Launch
+                </BusyButton>
             )}
         </>
     );
@@ -945,12 +1030,24 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
                             steps={railSteps}
                             currentId={currentStageId}
                             onJumpTo={jumpTo}
+                            busy={launching}
                         />
                         <div className="min-w-0 flex-1 space-y-4">
                             {renderStage()}
                             {launchError && (
-                                <Callout tone="error" role="alert">
-                                    <strong>Execution failed:</strong>
+                                <Callout
+                                    tone={
+                                        launchError === LAUNCH_OUTCOME_UNKNOWN_MESSAGE
+                                            ? "warning"
+                                            : "error"
+                                    }
+                                    role="alert"
+                                >
+                                    <strong>
+                                        {launchError === LAUNCH_OUTCOME_UNKNOWN_MESSAGE
+                                            ? "Launch not confirmed:"
+                                            : "Execution failed:"}
+                                    </strong>
                                     {/* One entry per rejection reason — a multi-step launch is
                                         rejected per pipeline, and run together the reasons read as
                                         one sentence. */}
@@ -975,10 +1072,25 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
  * Executions board and the file manager compose `ExecuteWizardBody` behind a workflow picker in
  * `ExecuteWorkflowModal`.
  */
-const ExecuteWizard: React.FC<ExecuteWizardProps> = ({ open, onClose, workflow, ...rest }) => (
-    <Dialog open={open} onOpenChange={onClose} size="lg" title={`Execute ${workflow.workflowName}`}>
-        <ExecuteWizardBody onClose={onClose} workflow={workflow} hidden={false} {...rest} />
-    </Dialog>
-);
+const ExecuteWizard: React.FC<ExecuteWizardProps> = ({ open, onClose, workflow, ...rest }) => {
+    const [launching, setLaunching] = useState(false);
+    return (
+        <Dialog
+            open={open}
+            onOpenChange={onClose}
+            size="lg"
+            title={`Execute ${workflow.workflowName}`}
+            busy={launching}
+        >
+            <ExecuteWizardBody
+                onClose={onClose}
+                workflow={workflow}
+                hidden={false}
+                onLaunchingChange={setLaunching}
+                {...rest}
+            />
+        </Dialog>
+    );
+};
 
 export default ExecuteWizard;

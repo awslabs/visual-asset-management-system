@@ -9,6 +9,7 @@ import unicodedata
 from common.constants import STANDARD_JSON_RESPONSE
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 
 logger = safeLogger(service="SendEmail")
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -37,6 +38,7 @@ def sanitize_sns_subject(subject):
     return folded[:SNS_SUBJECT_MAX_LENGTH].rstrip()
 
 
+@audited_handler
 def lambda_handler(event, context):
 
     response = copy.deepcopy(STANDARD_JSON_RESPONSE)
@@ -72,7 +74,7 @@ def lambda_handler(event, context):
                 message = f'''
     Dear Subscriber,
 
-    We are excited to inform you that a change in a file or asset version of {asset_name} has occured. 
+    We are excited to inform you that a change in a file or asset version of {asset_name} has occurred. 
 
     Current Version Number: {currentVersionId}
 

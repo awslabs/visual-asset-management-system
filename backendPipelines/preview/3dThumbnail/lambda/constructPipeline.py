@@ -3,9 +3,65 @@
 
 import json
 import os
+import computeTier
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service="ConstructPipeline3dThumbnail")
+
+# The input's launch version travels as a second Batch command argument, {"inputVersions": {<stage
+# type>: <version id>}}, never inside the definition. An image built before the field parses the
+# definition into dataclasses that reject an unknown key at every level, but reads only the first
+# argument, so a run that reaches such an image during an upgrade still starts.
+INPUT_VERSIONS_KEY = "inputVersions"
+# The execution's results folder travels in the same second argument, for the same reason. That document
+# always carries INPUT_VERSIONS_KEY (empty when the run has no version): an image that reads only the
+# version accepts an empty one and ignores the other key, while it refuses a document without it.
+RESULTS_LOCATION_KEY = "outputResults"
+# Where the input sits in its asset, from its manifest entry, in the same second argument:
+# {"relativePath", "assetRootS3Key", "assetRootBucket"}. An older image ignores the key.
+INPUT_ASSET_KEY = "inputAsset"
+
+
+def input_asset(event) -> dict:
+    """The input's asset-relative path and asset root from the event, or None when the event names
+    neither (a payload without a manifest, or an event from an older Lambda)."""
+    location = {
+        "relativePath": event.get("inputRelativePath") or "",
+        "assetRootS3Key": event.get("inputAssetRootS3Key") or "",
+        "assetRootBucket": event.get("inputAssetRootBucket") or "",
+    }
+    return location if location["relativePath"] or location["assetRootS3Key"] else None
+
+
+def results_location(event) -> dict:
+    """The execution's results folder as ``{"bucketName", "objectDir"}`` from ``outputS3AssetResultsPath``,
+    or None when the event names none (a run outside a workflow, or an event from an older Lambda)."""
+    uri = event.get("outputS3AssetResultsPath") or ""
+    if not uri.startswith("s3://"):
+        return None
+    bucket, _, key = uri[len("s3://"):].partition("/")
+    if not bucket or not key:
+        return None
+    return {"bucketName": bucket, "objectDir": key if key.endswith("/") else key + "/"}
+
+
+def definition_command(definition, event) -> list:
+    """The Batch command for ``definition``: the definition, then, when the run has a launch version, a
+    results folder or an input asset location, one document naming them. With none it is the
+    one-element command written before those fields."""
+    command = [json.dumps(definition)]
+    version_id = event.get("inputVersionId") or ""
+    results = results_location(event)
+    asset = input_asset(event)
+    if version_id or results or asset:
+        extra = {INPUT_VERSIONS_KEY: {definition["stages"][0]["type"]: version_id} if version_id else {}}
+        if results:
+            extra[RESULTS_LOCATION_KEY] = results
+        if asset:
+            extra[INPUT_ASSET_KEY] = asset
+        command.append(json.dumps(extra))
+    return command
+
 
 def lambda_handler(event, context):
     """
@@ -22,14 +78,32 @@ def lambda_handler(event, context):
 
     return {
         "jobName": event.get("jobName"),
+        # The Batch state the state machine's Choice routes the job to
+        "computeTier": computeTier.submitted_tier(event.get("computeTier")),
         "currentStageType": definition["stages"][0]["type"],
-        "definition": [json.dumps(definition)],
+        "definition": definition_command(definition, event),
         # Forward the metadata + input-configuration S3 locations, not their content
         "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
         "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
         "status": "STARTING"
     }
+
+
+def bucket_regions(event) -> dict:
+    """Bucket name -> Region for the asset buckets this job reads and writes, from the Regions the
+    vamsExecute Lambda resolved from the manifest. The container signs each bucket's requests with a
+    client for that Region. A bucket in the deployment Region (an empty Region, or an event from an
+    older Lambda) is left out: requests for it use the container's default client, as do the
+    auxiliary bucket's."""
+    regions = {}
+    for path_key, region_key in (("inputS3AssetFilePath", "inputBucketRegion"),
+                                 ("outputS3AssetFilesPath", "outputBucketRegion"),
+                                 ("outputS3AssetResultsPath", "outputBucketRegion")):
+        uri, region = event.get(path_key) or "", event.get(region_key) or ""
+        if uri.startswith("s3://") and region:
+            regions[uri[len("s3://"):].split("/", 1)[0]] = region
+    return regions
 
 
 def construct_preview_3d_thumbnail_definition(event) -> dict:
@@ -63,6 +137,7 @@ def construct_preview_3d_thumbnail_definition(event) -> dict:
         "inputFile": {
             "bucketName": input_s3_asset_file_bucket,
             "objectKey": input_s3_asset_file_key,
+            # The launch version is not written here: it travels beside the definition (definition_command).
             "fileExtension": input_s3_asset_extension
         },
         "outputFiles": {
@@ -82,6 +157,7 @@ def construct_preview_3d_thumbnail_definition(event) -> dict:
     definition = {
         "jobName": event.get("jobName"),
         "stages": [preview_3d_thumbnail_stage],
+        "bucketRegions": bucket_regions(event),
         # The metadata + input-configuration S3 locations travel with the definition, not their content
         "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
         "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),

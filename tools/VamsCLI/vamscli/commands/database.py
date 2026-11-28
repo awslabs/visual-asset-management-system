@@ -70,7 +70,13 @@ def format_database_output(database_data: Dict[str, Any], json_output: bool = Fa
         output_lines.append(f"  Restrict File Uploads To Extensions: {file_extensions}")
     else:
         output_lines.append(f"  Restrict File Uploads To Extensions: (none)")
-    
+
+    # Compliance schema binding: both fields are absent (null) on a database with no binding.
+    if database_data.get('complianceSchemaName'):
+        output_lines.append(f"  Compliance Schema: {database_data['complianceSchemaName']}")
+    if database_data.get('complianceAutoEval') is not None:
+        output_lines.append(f"  Compliance Auto-Eval: {database_data['complianceAutoEval']}")
+
     return '\n'.join(output_lines)
 
 
@@ -721,8 +727,9 @@ def list_buckets(ctx: click.Context, page_size: Optional[int], max_items: Option
     """
     List available S3 bucket configurations.
     
-    This command lists all S3 bucket configurations available for use with
-    databases in VAMS.
+    This command lists the S3 bucket configurations available for use with
+    databases in VAMS that your role may read (a `bucket` permission
+    constraint). A role without one gets an empty list.
     
     Examples:
         # Basic listing (uses API defaults)
@@ -851,9 +858,20 @@ def list_buckets(ctx: click.Context, page_size: Optional[int], max_items: Option
             lines.append(f"ID: {bucket.get('bucketId', 'N/A')}")
             lines.append(f"Name: {bucket.get('bucketName', 'N/A')}")
             lines.append(f"Base Assets Prefix: {bucket.get('baseAssetsPrefix', 'N/A')}")
+            # A bucket may be in another Region (or account) than the deployment; a row that carries
+            # neither is in the deployment Region and account.
+            lines.append(f"Region: {bucket.get('bucketRegion') or 'deployment Region'}")
+            if bucket.get('bucketAccountId'):
+                lines.append(f"Account: {bucket.get('bucketAccountId')}")
+            # S3 Transfer Acceleration status; only a real true counts, so a row without the field is not accelerated.
+            lines.append(f"Accelerated: {'Yes' if bucket.get('isAccelerated') is True else 'No'}")
             # The default bucket houses pipeline template data and execution run I/O, so call it out
             # rather than leaving the operator to infer it.
             lines.append(f"VAMS Default Bucket: {'Yes' if bucket.get('isDefault') else 'No'}")
+            # Where the registration comes from (static: the deployment's configuration) and its state;
+            # a response from an earlier release carries neither.
+            lines.append(f"Source: {bucket.get('source') or 'static'}")
+            lines.append(f"Status: {bucket.get('status') or 'active'}")
             lines.append("-" * 80)
         
         # Show nextToken for manual pagination

@@ -19,6 +19,10 @@ import {
     buildPipelineEndFunction,
 } from "../lambdaBuilder/preview3dThumbnailFunctions";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
+import {
+    StateTimeoutBatchSubmitJob,
+    grantBatchStateTimeoutCleanup,
+} from "../../../constructs/stateTimeoutBatchSubmitJob";
 import { NagSuppressions } from "cdk-nag";
 import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -33,6 +37,11 @@ import {
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 
 export interface Preview3dThumbnailConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -43,6 +52,35 @@ export interface Preview3dThumbnailConstructProps extends cdk.StackProps {
     lambdaCommonBaseLayer: LayerVersion;
     importGlobalPipelineWorkflowV2FunctionName: string;
 }
+
+/**
+ * Attempt bounds of the two compute-tier Batch jobs, the Batch states' own bound and the state
+ * machine that encloses them. A tier's attempt clock starts when the job leaves the queue; the Batch
+ * state's bound counts the queue wait too, and its States.Timeout reaches pipelineEnd through the
+ * Catch. The state machine leaves 15 minutes past the Batch state for ConstructPipelineTask and
+ * PipelineEndTask (5-minute Lambdas each), and ends 15 minutes inside the registered pipeline's
+ * 14,400-second `taskTimeout` (vamsSchema/pipeline.json), which starts before the execution does.
+ */
+export const PREVIEW_3D_THUMBNAIL_STANDARD_TIER_TIMEOUT = Duration.hours(1);
+export const PREVIEW_3D_THUMBNAIL_LARGE_TIER_TIMEOUT = Duration.hours(3);
+export const PREVIEW_3D_THUMBNAIL_STATE_MACHINE_TIMEOUT = Duration.minutes(225);
+export const PREVIEW_3D_THUMBNAIL_BATCH_STATE_TIMEOUT = Duration.minutes(210);
+
+/**
+ * Media previews: the image and video extensions the "Media Preview Thumbnail" workflow accepts, the
+ * images the web shows as their own preview, and the size limit of a preview file. Each is a literal
+ * the container's drift tests read (backendPipelines/preview/3dThumbnail/container/tests): the first
+ * must equal the media vamsSchema filters and the container's handlers, the second the backend's
+ * ALLOWED_PREVIEW_FILE_EXTENSIONS (less .svg) and the web's previewFileFormats, and the limit the
+ * backend's PREVIEW_FILE_SIZE_LIMIT_BYTES and the web's constant. TGA and TIFF are never self-previewable.
+ */
+export const PREVIEW_MEDIA_INPUT_FILE_EXTENSIONS =
+    ".png,.jpg,.jpeg,.gif,.webp,.bmp,.tga,.tif,.tiff,.mp4,.m4v,.mov,.mkv,.webm,.avi,.wmv,.mpg,.mpeg,.mts,.m2ts";
+export const PREVIEW_SELF_PREVIEWABLE_FILE_EXTENSIONS = ".png,.jpg,.jpeg,.gif,.webp,.bmp";
+export const PREVIEW_FILE_SIZE_LIMIT_BYTES = 5 * 1024 * 1024;
+// The container reads this variable to decide whether to write a smaller JPEG for an image the web
+// already shows as its own preview (useMediaPreviews.downscaleSelfPreviewableImages).
+export const PREVIEW_DOWNSCALE_ENVIRONMENT_VARIABLE = "VAMS_DOWNSCALE_SELF_PREVIEWABLE_IMAGES";
 
 /**
  * Default input properties
@@ -204,12 +242,23 @@ export class Preview3dThumbnailConstruct extends NestedStack {
         /**
          * AWS Batch Job Definition & Compute Env for Preview 3D Thumbnail Container
          */
+        const computeTiers = props.config.app.pipelines.usePreview3dThumbnail.computeTiers;
+        // One deployment serves both workflows: the container, queue, state machine and Lambdas always
+        // carry the 3D and the media paths. The two flags only choose which workflow is registered.
+        const threeDEnabled = props.config.app.pipelines.usePreview3dThumbnail.enabled === true;
+        const mediaPreviews = props.config.app.pipelines.useMediaPreviews;
+        const mediaEnabled = mediaPreviews?.enabled === true;
+        const downscaleSelfPreviewableImages =
+            mediaPreviews?.downscaleSelfPreviewableImages === true;
         const batchPipeline = new BatchFargatePipelineConstruct(
             this,
             "BatchFargatePipeline_Preview3dThumbnail",
             {
-                // Matches the 1-hour state machine timeout that encloses this job.
-                attemptDuration: cdk.Duration.hours(1),
+                // The longest tier's bound; each tier's Batch state sets its own attempt duration.
+                attemptDuration: PREVIEW_3D_THUMBNAIL_LARGE_TIER_TIMEOUT,
+                // Registered sizing; each tier's Batch state overrides vCPU and memory.
+                cpu: computeTiers.standard.vcpu,
+                memoryMiB: Config.fargateMemoryMiB(computeTiers.standard.memoryGiB),
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
@@ -287,6 +336,10 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             props.pipelineSecurityGroups,
             props.storageResources.encryption.kmsKey
         );
+        // After a tier's Batch state bound fires, pipelineEnd ends the run's job.
+        grantBatchStateTimeoutCleanup(pipelineEndFunction, [
+            batchPipeline.batchJobQueue.jobQueueArn,
+        ]);
 
         const pipeLineEndTask = new tasks.LambdaInvoke(this, "PipelineEndTask", {
             lambdaFunction: pipelineEndFunction,
@@ -315,33 +368,71 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             resultPath: "$.error",
         });
 
-        // batch job Preview 3D Thumbnail
-        const preview3dThumbnailBatchJob = new tasks.BatchSubmitJob(
-            this,
-            "Preview3dThumbnailBatchJob",
-            {
+        // batch jobs Preview 3D Thumbnail, one per compute tier: the same job definition with the
+        // tier's vCPU, memory and attempt duration
+        const tierBatchJob = (
+            id: string,
+            tier: "standard" | "large",
+            sizing: { vcpu: number; memoryGiB: number },
+            timeout: Duration
+        ) =>
+            new StateTimeoutBatchSubmitJob(this, id, {
+                stateTimeout: PREVIEW_3D_THUMBNAIL_BATCH_STATE_TIMEOUT,
+                jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.preview3dThumbnail),
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: batchPipeline.batchJobDefinition.jobDefinitionArn,
                 jobQueueArn: batchPipeline.batchJobQueue.jobQueueArn,
+                taskTimeout: sfn.Timeout.duration(timeout),
                 containerOverrides: {
                     command: [...sfn.JsonPath.listAt("$.definition")],
+                    vcpus: sizing.vcpu,
+                    memory: cdk.Size.mebibytes(Config.fargateMemoryMiB(sizing.memoryGiB)),
                     environment: {
                         TASK_TOKEN: sfn.JsonPath.taskToken,
                         AWS_REGION: region,
+                        VAMS_COMPUTE_TIER: tier,
+                        // the task's memory, which a Fargate container cannot read from its cgroup
+                        VAMS_TASK_MEMORY_MIB: String(Config.fargateMemoryMiB(sizing.memoryGiB)),
+                        // Whether a smaller JPEG is written for an image the web already shows as its
+                        // own preview (useMediaPreviews.downscaleSelfPreviewableImages).
+                        [PREVIEW_DOWNSCALE_ENVIRONMENT_VARIABLE]: String(
+                            downscaleSelfPreviewableImages
+                        ),
                     },
                 },
-            }
-        )
-            .addCatch(handleBatchError, {
-                resultPath: "$.error",
             })
-            .next(pipeLineEndTask);
+                .addCatch(handleBatchError, {
+                    resultPath: "$.error",
+                })
+                .next(pipeLineEndTask);
+
+        // Construct ids are the ASL state names openPipeline registers the container log source under.
+        const preview3dThumbnailBatchJob = tierBatchJob(
+            "Preview3dThumbnailBatchJob",
+            "standard",
+            computeTiers.standard,
+            PREVIEW_3D_THUMBNAIL_STANDARD_TIER_TIMEOUT
+        );
+        const preview3dThumbnailLargeBatchJob = tierBatchJob(
+            "Preview3dThumbnailLargeBatchJob",
+            "large",
+            computeTiers.large,
+            PREVIEW_3D_THUMBNAIL_LARGE_TIER_TIMEOUT
+        );
+
+        // routes the job to the compute tier constructPipeline returns
+        const computeTierChoice = new sfn.Choice(this, "ComputeTierChoice")
+            .when(
+                sfn.Condition.stringEquals("$.computeTier", "large"),
+                preview3dThumbnailLargeBatchJob
+            )
+            .otherwise(preview3dThumbnailBatchJob);
 
         /**
          * SFN Definition
          */
         const sfnPipelineDefinition = sfn.Chain.start(
-            constructPipelineTask.next(preview3dThumbnailBatchJob)
+            constructPipelineTask.next(computeTierChoice)
         );
 
         /**
@@ -374,7 +465,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             "Preview3dThumbnailProcessing-StateMachine",
             {
                 definitionBody: sfn.DefinitionBody.fromChainable(sfnPipelineDefinition),
-                timeout: Duration.hours(1),
+                timeout: PREVIEW_3D_THUMBNAIL_STATE_MACHINE_TIMEOUT,
                 logs: {
                     destination: stateMachineLogGroup,
                     includeExecutionData: true,
@@ -383,6 +474,9 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 tracingEnabled: true,
             }
         );
+
+        // The job-tagging grant's wildcard resources (pipelineJobTags.ts).
+        suppressBatchJobTaggingNag(pipelineStateMachine);
 
         // Stopping the state machine cancels the .sync Batch task, which requires terminating the
         // running job; the BatchSubmitJob task grants only batch:SubmitJob. DescribeJobs has no resource
@@ -408,13 +502,14 @@ export class Preview3dThumbnailConstruct extends NestedStack {
 
         //Build Lambda Pipeline Resources to Open the Pipeline
         const allowedInputFileExtensions =
-            ".ply,.stl,.obj,.glb,.gltf,.fbx,.las,.laz,.e57,.ptx,.fls,.fws,.pcd,.drc,.stp,.step,.usd,.usda,.usdc,.usdz";
+            ".ply,.stl,.obj,.glb,.gltf,.fbx,.las,.laz,.e57,.ptx,.pts,.pcd,.drc,.off,.3mf,.dae,.stp,.step,.usd,.usda,.usdc,.usdz,.spz,.sog,.splat,.ksplat,.lcc,.lcc2";
         const openPipelineFunction = buildOpenPipelineFunction(
             this,
             props.lambdaCommonBaseLayer,
             props.storageResources.s3.assetAuxiliaryBucket,
             pipelineStateMachine,
-            allowedInputFileExtensions,
+            // The 3D and the media extensions: one deployment, both workflows
+            `${allowedInputFileExtensions},${PREVIEW_MEDIA_INPUT_FILE_EXTENSIONS}`,
             props.config,
             props.vpc,
             props.pipelineSubnets,
@@ -424,7 +519,15 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 jobDefinitionName: batchPipeline.batchJobDefinition.jobDefinitionName,
                 logGroup: containerLogGroup,
             },
-            props.storageResources.encryption.kmsKey
+            Math.round(
+                props.config.app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB * 1024 ** 3
+            ),
+            props.storageResources.encryption.kmsKey,
+            {
+                selfPreviewableFileExtensions: PREVIEW_SELF_PREVIEWABLE_FILE_EXTENSIONS,
+                previewFileSizeLimitBytes: PREVIEW_FILE_SIZE_LIMIT_BYTES,
+                downscaleSelfPreviewableImages,
+            }
         );
 
         //Build Lambda VAMS Execution Function (as an optional pipeline execution action)
@@ -440,8 +543,12 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 props.storageResources.encryption.kmsKey
             );
 
-        // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables).
-        if (props.config.app.pipelines.usePreview3dThumbnail.autoRegisterWithVAMS === true) {
+        // Auto-register the 3D workflow with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template
+        // tables), only when the 3D pipeline itself is enabled.
+        if (
+            threeDEnabled &&
+            props.config.app.pipelines.usePreview3dThumbnail.autoRegisterWithVAMS === true
+        ) {
             new VamsSchemaRegistration(this, "Preview3dThumbnailRegistration", {
                 importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
                 artefactsBucket: props.storageResources.s3.artefactsBucket,
@@ -469,6 +576,37 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 triggerEnabled:
                     props.config.app.pipelines.usePreview3dThumbnail
                         .autoRegisterAutoTriggerOnFileUpload === true,
+            });
+        }
+
+        // The "Media Preview Thumbnail" pipeline and workflow: images, TGA/TIFF and video on this same
+        // container and state machine (useMediaPreviews.enabled; a missing block is off).
+        if (mediaEnabled) {
+            new VamsSchemaRegistration(this, "PreviewMediaThumbnailRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "preview",
+                    "3dThumbnail",
+                    "vamsSchemaMedia"
+                ),
+                resourceOverrides: {
+                    lambdaName: preview3dThumbnailPipelineVamsExecuteFunction.functionName,
+                },
+                idOverrides: {
+                    pipelineId: "preview-media-thumbnail",
+                    workflowId: "preview-media-thumbnail",
+                },
+                triggerEnabled: mediaPreviews.autoRegisterAutoTriggerOnFileUpload === true,
             });
         }
 
@@ -598,7 +736,9 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
-                        `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                        },
                         { regex: "/^Resource::arn:.*:batch:.*:job/\\*$/g" },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",

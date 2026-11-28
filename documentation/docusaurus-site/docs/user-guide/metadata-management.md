@@ -64,16 +64,16 @@ To create multiple metadata entries at once:
 
 The bulk operation response indicates how many items succeeded and failed, with detailed error messages for any failures.
 
-![Asset detail page showing metadata section with key-value pairs](/img/view_asset_page_20260323_v2.5.png)
+![Asset detail page showing metadata section with key-value pairs](/img/view_asset_page_20261109_v2.7.png)
 
 ## Editing metadata
 
 VAMS supports two update modes for metadata:
 
-| Update mode          | Behavior                                                                                                                                                 |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **UPDATE** (default) | Updates only the specified metadata keys. Existing keys not included in the request are left unchanged.                                                  |
-| **REPLACE_ALL**      | Replaces the entire metadata set for the entity. All existing metadata keys not included in the request are deleted. Limited to 500 items per operation. |
+| Update mode          | Behavior                                                                                                                                                                                                                                                                                                          |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **UPDATE** (default) | Updates only the specified metadata keys. Existing keys not included in the request are left unchanged.                                                                                                                                                                                                           |
+| **REPLACE_ALL**      | Replaces the entire metadata set for the entity. All existing metadata keys not included in the request are deleted. Removing keys also requires delete permission on the metadata (the `DELETE` method on its route); without it the save is refused and nothing is written. Limited to 500 items per operation. |
 
 To edit a metadata entry:
 
@@ -82,10 +82,12 @@ To edit a metadata entry:
 3. Choose **Save** to persist the change.
 
 :::warning
-The `REPLACE_ALL` mode permanently removes any metadata keys not included in the update request. Use this mode with caution.
+The `REPLACE_ALL` mode permanently removes any metadata keys not included in the update request, and needs delete permission on the metadata to do so. Use this mode with caution.
 :::
 
 ## Deleting metadata
+
+Delete appears only for a role that may delete that metadata, on an asset, a file or an asset link. Another role can still add and change fields, and in Bulk Edit a CSV import keeps every stored field the file leaves out.
 
 ### Single deletion
 
@@ -109,6 +111,14 @@ Schemas are scoped to a specific database or to `GLOBAL`:
 | --------------------- | ------------------------------------------------------ |
 | **Database-specific** | Applies only to entities within that database          |
 | **GLOBAL**            | Applies to entities across all databases in the system |
+
+### Default schemas
+
+A deployment can seed four GLOBAL default schemas (`defaultAssetLinks`, `defaultDatabase`, `defaultAsset` and `defaultAssetFile3dModel`), each controlled by an `app.metadataSchema.autoLoadDefault*` setting. A default is written once, and later deployments refresh it only while no user has edited it, so a default you edit or disable keeps your changes. A seeded default carries no `dateCreated` or `dateModified`; an edit sets `dateModified`, and `dateCreated` stays unset. Turning a setting off leaves its schema in place. A deleted default stays deleted until its seed resource is created again: after a deployment with its setting off and the next with it on, or after a change to an earlier setting, because the seed resources are numbered by position. A replaced metadata schema table starts with no defaults. See [Metadata schema settings](../deployment/configuration-reference.md#metadata-schema-appmetadataschema).
+
+A fifth GLOBAL default, for file metadata, comes from the deployment-time file `infra/config/metadataSchema/defaultFileMetadataSchema.json`. It ships with no fields and seeds nothing until you add fields to it before deploying. See [Default file metadata schema file](../deployment/configuration-reference.md#default-file-metadata-schema-file).
+
+When a release adds a field to a default schema, its release notes name the schema ID and the field. If you edited that schema, add the field yourself on the **Metadata Schema** page or with `vamscli metadata-schema update`, sending the full field list.
 
 ### Schema entity types
 
@@ -135,7 +145,7 @@ Each schema targets one entity type:
 5. Add one or more schema fields.
 6. Choose **Create Schema**.
 
-![Metadata schema editor showing field definitions and value types](/img/edit_schema_management_20260323_v2.5.png)
+![Metadata schema editor showing field definitions and value types](/img/edit_schema_management_20261109_v2.7.png)
 
 ### File type restriction matching
 
@@ -144,7 +154,7 @@ A **File Type Restriction** is compared against the extension of the file's name
 -   Extensions are written with a leading dot (`.glb`). Saving a schema is rejected when an entry has no leading dot, is a bare `.`, has a second dot (`.tar.gz`), or contains `/` or `\`, because no file name can match it. An entry of that form already stored in a restriction matches no file, and the editor sends the stored list with every save, so correct the list when you next edit that schema.
 -   The extension is read from the file's name, not from the whole path. A dot in a folder name is not an extension, so `folder.v2/part.glb` matches a schema restricted to `.glb`.
 -   Matching is case-insensitive, and the last dot in the name decides the extension. `archive.tar.gz` matches `.gz`.
--   A file whose name carries no extension -- `LICENSE`, `Dockerfile`, `README` -- is matched by every enabled schema for its entity type, restricted schemas included. This is the same for a file at the root of an asset and for one under a folder whose name contains a dot.
+-   A file whose name carries no extension -- `LICENSE`, `Dockerfile`, `README` -- is validated only against schemas with no file type restriction. This is the same for a file at the root of an asset and for one under a folder whose name contains a dot.
 -   `.all` in the list applies the schema to all file types, as does leaving the restriction empty.
 
 ### Schema field definitions
@@ -179,6 +189,7 @@ Multiple schemas can apply to the same entity type within a database. When this 
 Schema enforcement applies under specific conditions:
 
 -   **Enforced on API create/update operations** -- When creating or updating metadata through the API, required fields defined in active schemas must be provided.
+-   **Value types and controlled lists are checked on the values a write sets** -- A create or update checks the value type and controlled list of each key it adds or changes. A value already stored on the record that the schema would refuse, such as one a pipeline wrote, does not block an edit of another field and passes when sent back unchanged in a bulk edit. Changing it is checked like any new value, and changing it to the type the schema declares is allowed.
 -   **Not enforced on pipeline output** -- Metadata written by processing pipelines is not validated against schemas. This allows pipelines to write arbitrary metadata without schema constraints.
 -   **Database setting** -- When a database has the **Restrict Metadata Outside Schemas** option enabled and at least one schema exists for the entity type, users cannot create metadata keys that are not defined in a schema.
 
@@ -191,6 +202,8 @@ VAMS supports bulk metadata editing through CSV files:
 3. **Import** -- Upload the modified CSV to apply changes in bulk.
 
 This workflow is useful for large-scale metadata updates across many fields.
+
+Import keeps schema fields at their current values. When a CSV row sets a schema field to a different value, that row is not applied, and after the import a notice lists each such row by key and CSV line number. Change those values in the bulk edit table before you choose **Save All**.
 
 ## Metadata versioning
 
@@ -207,6 +220,8 @@ Database administrators can enable the **Restrict Metadata Outside Schemas** set
 -   When enabled and at least one schema exists for the entity type, users cannot create metadata keys that are not defined in any active schema.
 -   This ensures all metadata follows the defined schema structure.
 -   The restriction applies only through the API and user interface, not to pipeline-generated metadata.
+-   A key already stored on the record, such as one a pipeline added, passes the restriction on later edits, including value changes. Only a new key outside the schema is refused.
+-   Asset link metadata is restricted when the database of either linked asset has the setting enabled. The restriction applies to both creating and updating asset link metadata, including **Save All** in bulk edit.
 
 For more information about managing databases and their settings, see [Asset Management](asset-management.md).
 

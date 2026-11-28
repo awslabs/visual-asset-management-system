@@ -22,6 +22,23 @@ ALL_WORKFLOWS_LIST_PARTITION = "workflow"
 # Trigger types (only fileUpload implemented now; typed for extensibility).
 TRIGGER_TYPES = ("fileUpload",)
 
+# Internal actions the workflow service serves to other VAMS Lambdas (never to an API route; see
+# workflowService.handle_internal_action). The pipeline service schedules a refresh of every workflow
+# referencing a changed pipeline; the execute handler asks for one workflow to be redeployed before
+# it launches it.
+INTERNAL_ACTION_KEY = "vamsInternalAction"
+INTERNAL_ACTION_REFRESH_PIPELINE_REFERENCES = "refreshPipelineReferences"
+INTERNAL_ACTION_REDEPLOY_WORKFLOW = "redeployWorkflow"
+
+
+def build_internal_action_event(action, payload):
+    """The direct-invoke event for a workflow-service internal action, as a SYSTEM_USER cross-call."""
+    return {
+        INTERNAL_ACTION_KEY: action,
+        "lambdaCrossCall": {"userName": "SYSTEM_USER"},
+        "payload": dict(payload or {}),
+    }
+
 
 def build_workflow_system_config(
     input_file_arity="one",
@@ -36,7 +53,7 @@ def build_workflow_system_config(
     """Workflow system-config block. Defaults match the create-when-unspecified defaults.
 
     - input_file_arity: none | one | multi
-    - concurrency_restriction: none | perAsset | perInputFile
+    - concurrency_restriction: none | perAsset | perInputFile | perInputFileVersion
     - output_target: {locationType: asset, allowOverride: bool}
     - allow_workflow_trigger_chaining: whether ANOTHER workflow's output may fire this workflow's
       triggers. Self-triggering is always blocked regardless, so an A->A loop cannot be enabled.
@@ -82,13 +99,16 @@ def build_workflow_record(
     specified_pipelines, system_config,
     workflow_arn="", asl_schema_version="", sub_dashboard_url="",
     enabled=True, archived=False, created_by="", modified_by="",
-    date_created="", date_modified="", job_names=None,
+    date_created="", date_modified="", job_names=None, is_system=False,
 ):
     """WorkflowStorageTableV2 row (database-scoped: PK databaseId, SK workflowId).
 
     job_names are the per-pipeline job names the ASL generator baked into the execution output S3
     paths (workflow order). The execute handler reads them to reconstruct the identical output
     prefixes — the parity contract mirrored from V1's workflow record jobNames.
+
+    `is_system` marks a record the deployment registered from a vamsSchema bundle and owns; the API
+    holds such a record read-only except for its enabled switch and its triggers' enabled switches.
     """
     now = iso_now()
     return {
@@ -107,6 +127,7 @@ def build_workflow_record(
         "subDashboardUrl": sub_dashboard_url or "",
         "enabled": bool(enabled),
         "archived": bool(archived),
+        "isSystem": bool(is_system),
         "dateCreated": date_created or now,
         "dateModified": date_modified or now,
         "createdBy": created_by or "",

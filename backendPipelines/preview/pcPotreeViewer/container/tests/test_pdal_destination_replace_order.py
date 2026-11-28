@@ -1,22 +1,17 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""The PDAL stage's destination is the Potree viewer directory, so what it removes there is the
-previous run's working viewer data.
+"""The PDAL stage uploads its ``.laz`` intermediate and removes nothing from its destination.
 
-Clearing that directory before uploading leaves a window in which the previous octree is gone and the
-replacement does not exist yet: an S3 upload that fails after the clear leaves the asset with neither.
-The clear therefore has to be a REPLACE -- upload first, then remove only what the new output did not
-overwrite.
-
-The same objects also feed the following POTREE stage, which downloads the ``.laz`` this stage writes,
-so the ordering is observable rather than cosmetic: this stage's destination is byte-identical to the
-POTREE stage's own output directory (``construct_pdal_definition`` gives both
-``{base}/preview/PotreeViewer/``).
+``construct_pdal_definition`` now points this stage at the run's own working folder (#1028). A
+definition built before that change -- one still in flight across an upgrade -- points it at the Potree
+viewer directory, which holds the previous octree. Removing what that directory held once the upload
+finished (the earlier behaviour) left the asset with no preview whenever the POTREE stage then failed,
+and removed another run's intermediate when two runs shared it. These tests use that pre-change
+destination, the case where a removal would do harm.
 
 The converter is a fake ``subprocess.Popen`` that writes the files a real run would, so PDAL does not
-have to be installed. The S3 helpers are patched and every call is recorded in one ordered log, which
-is what makes "after the upload" assertable rather than merely "both happened"."""
+have to be installed. The S3 helpers are patched and every call is recorded in one ordered log."""
 
 import os
 import sys
@@ -54,9 +49,16 @@ def fake_popen(returncode, writes=()):
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write("point cloud bytes")
+            self.returncode = None
 
         def wait(self):
+            self.returncode = returncode
             return returncode
+
+        def communicate(self, *args, **kwargs):
+            # The stage captures the converter's output to report it on a failure.
+            self.returncode = returncode
+            return "", None
 
     return _Popen
 
@@ -145,26 +147,25 @@ class TestTheDestinationIsReplacedNotClearedFirst:
         assert "Failed to upload" in result.errorMessage
         assert harness.removals() == [], harness.calls
 
-    def test_the_previous_objects_are_removed_only_after_the_upload_succeeded(self, tmp_path):
+    def test_a_successful_run_leaves_the_previous_viewer_objects_in_place(self, tmp_path):
+        """#1028: the octree is replaced only by the POTREE stage, once its own upload succeeded. When
+        this stage removed it, a POTREE failure after it left the asset with no preview."""
         harness = ReplaceHarness(tmp_path)
         writes = [os.path.join(harness.output_dir, "scan.laz")]
         result = harness.run(make_stage("xidM/scan.e57"), fake_popen(0, writes))
 
         assert result.status == PipelineStatus.COMPLETE
-        kinds = [call for call, _ in harness.calls]
-        assert "upload" in kinds, harness.calls
-        assert kinds.index("upload") < min(
-            i for i, kind in enumerate(kinds) if kind in ("delete", "delete_all")), harness.calls
+        assert harness.kind("upload"), harness.calls
+        assert harness.removals() == [], harness.calls
 
-    def test_the_superseded_objects_are_the_ones_removed(self, tmp_path):
-        """A positive control for the assertion above: the previous run's objects really are gone at
-        the end, so "removed after the upload" is not "never removed"."""
+    def test_the_destination_is_never_listed(self, tmp_path):
+        """With nothing to remove there is nothing to list; a listing would be the first step back
+        towards removing what another run, or the previous preview, left there."""
         harness = ReplaceHarness(tmp_path)
         writes = [os.path.join(harness.output_dir, "scan.laz")]
         harness.run(make_stage("xidM/scan.e57"), fake_popen(0, writes))
 
-        assert sorted(harness.removals()) == sorted(
-            key for key in PREVIOUS_RUN_OBJECTS if not key.endswith("scan.laz"))
+        assert harness.kind("list") == [], harness.calls
 
     def test_the_object_this_run_uploaded_is_never_removed(self, tmp_path):
         """The trap in moving the removal after the upload: the destination listing includes the key
@@ -178,14 +179,10 @@ class TestTheDestinationIsReplacedNotClearedFirst:
         for key in uploaded:
             assert key not in harness.removals(), (key, harness.removals())
 
-    def test_the_destination_listing_actually_returned_objects(self, tmp_path):
+    def test_the_destination_actually_holds_objects(self, tmp_path):
         """The corpus control. Every assertion above is about a destination that already holds
-        objects, and an empty listing would satisfy the removal assertions vacuously."""
+        objects, and an empty one would satisfy the removal assertions vacuously."""
         harness = ReplaceHarness(tmp_path)
-        writes = [os.path.join(harness.output_dir, "scan.laz")]
-        harness.run(make_stage("xidM/scan.e57"), fake_popen(0, writes))
-
-        assert harness.kind("list") == [OUTPUT_DIR_KEY], harness.calls
         assert harness._list("aux-bkt", OUTPUT_DIR_KEY), "the harness serves an empty destination"
 
     def test_an_empty_destination_removes_nothing(self, tmp_path):

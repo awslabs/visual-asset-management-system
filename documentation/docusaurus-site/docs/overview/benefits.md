@@ -35,13 +35,13 @@ VAMS leverages Amazon S3 as its storage layer, providing 99.999999999% (11 nines
 
 ## Interactive Visualization
 
-VAMS includes 20 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
+VAMS includes 25 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
 
 -   View 3D meshes (GLTF, GLB, OBJ, FBX, STL, and more) with the Three.js viewer, including scene graph navigation, material editing, and transform controls
 -   Explore point clouds (E57, LAS, LAZ) through the Potree viewer with octree-based streaming
 -   Visualize Gaussian splats with BabylonJS or PlayCanvas viewers, including WebXR support
 -   Render CAD files (STEP, IGES, BREP) via Three.js with WebAssembly-based loaders
--   Open USD scenes (USD, USDA, USDC, USDZ) through the Needle Engine WASM viewer
+-   Open USD scenes (USD, USDA, USDC, USDZ), including their referenced layers and textures, in the Three.js viewer, or in the Needle Engine WASM viewer where `allowUnsafeEvalFeatures` is enabled
 -   Play video, audio, and view images, PDFs, columnar data, and text files with dedicated viewers
 -   Plugin-based architecture allows adding custom viewers for proprietary or emerging formats
 
@@ -52,12 +52,15 @@ VAMS includes 20 built-in viewer plugins that allow users to visualize a wide ra
 VAMS provides a configurable pipeline and workflow system that automates common asset processing tasks. AWS Step Functions orchestrates the steps of a workflow, and each step reaches its processing backend through one of four execution types -- AWS Lambda, Amazon SQS, Amazon EventBridge, or AWS Deadline Cloud. Container-based processing runs on AWS Batch Fargate, with licensed pipelines also available on Amazon ECS and Amazon EKS.
 
 -   **3D Conversion** -- Convert between 3D file formats using Trimesh and Blender
--   **CAD/Mesh Metadata Extraction** -- Automatically extract geometric metadata from CAD and mesh files using CADQuery
 -   **Point Cloud Processing** -- Generate Potree octree representations for browser-based point cloud streaming
 -   **Gaussian Splat Generation** -- Create 3D Gaussian splats from media files using the 3D Reconstruction Toolkit
--   **3D Preview Thumbnails** -- Generate animated GIF or static image previews from 3D, point cloud, CAD, and USD files via headless rendering
--   **GenAI Metadata Labeling** -- Automatically generate metadata labels using Amazon Bedrock foundation models
+-   **3D Preview Thumbnails** -- Generate animated GIF or static image previews from 3D mesh, point cloud, CAD, USD, and Gaussian splat files via headless rendering
+-   **Media Previews** -- Generate JPEG previews for large images and for TGA and TIFF files, and animated GIF previews for video, on the same container (optional, off by default; requires the Global VPC)
+-   **GenAI Metadata Generation** -- Analyze every uploaded file: extract geometric and media attributes, describe it with Amazon Bedrock when the GenAI layer is on, write typed and descriptive file metadata, and embed each file version for natural-language search
+-   **Video SOP/BOM Extraction** -- Transcribe narrated teardown videos with Amazon Transcribe and derive a step-by-step procedure, a bill of materials, a lab summary, and verification key frames with Amazon Bedrock
+-   **GenAI CAD STEP Agent** -- Create or modify a CAD STEP file from a natural-language instruction with a Strands agent that writes, runs and checks CadQuery scripts
 -   **NVIDIA Isaac Lab Training** -- Run reinforcement learning training and evaluation workloads
+-   **Image to 3D** -- Generate a 3D mesh from a single photograph with a selectable open-weight model, with an optional print-readiness cleanup toward a watertight STL
 -   **RapidPipeline and VNTANA ModelOps** -- Licensed pipeline integrations for advanced spatial data optimization
 
 :::tip[Auto-Trigger]
@@ -68,17 +71,18 @@ Most pipelines support automatic triggering on file upload. Enable `autoRegister
 
 ## Intelligent Search
 
-VAMS integrates with Amazon OpenSearch Service to provide full-text and attribute-based search across assets and files. The search system indexes asset metadata, file attributes, tags, and custom metadata fields for rapid discovery.
+VAMS provides two complementary ways to find content. Amazon OpenSearch Service powers full-text and attribute-based search across assets and files, indexing asset metadata, file attributes, tags, and custom metadata fields. Natural-language search ranks files by what they show or contain, using Amazon Bedrock embeddings of the metadata, extracted text, and renders that the SYSTEM GenAI metadata pipeline produces, stored in a DynamoDB vector index.
 
 -   Full-text search across asset names, descriptions, metadata, and file attributes
+-   Natural-language queries such as "a rusted pump housing" or "drone footage of a bridge deck", ranked by semantic similarity and limited to the caller's accessible assets
 -   Dual-index architecture with separate indexes for assets and files, enabling targeted search scopes
--   Automatic index synchronization through Amazon SNS and Amazon SQS event-driven indexing
+-   Automatic index synchronization through Amazon SNS and Amazon SQS event-driven indexing, and a single vector indexer that tracks file versions, archives, and deletes
 -   Preview thumbnail display in search results for visual asset identification
 -   Support for both Amazon OpenSearch Serverless (zero operational overhead) and Amazon OpenSearch Provisioned (fine-grained configuration control)
--   Optional search re-indexing on deployment for full index refresh
+-   Optional search re-indexing on deployment for full index refresh, and an on-demand vector reindex
 
 :::note[OpenSearch Is Optional]
-VAMS can operate without Amazon OpenSearch. When disabled, the `NOOPENSEARCH` feature flag activates, and the web interface adjusts to hide search-dependent features. Basic asset browsing and management remain fully functional.
+VAMS can operate without Amazon OpenSearch. When disabled, the `NOOPENSEARCH` feature flag activates and the web interface hides keyword search, metadata filtering, and map view. Natural-language search does not depend on OpenSearch and remains available whenever vector search is enabled. Basic asset browsing and management remain fully functional in every configuration.
 :::
 
 ---
@@ -88,9 +92,9 @@ VAMS can operate without Amazon OpenSearch. When disabled, the `NOOPENSEARCH` fe
 VAMS implements a two-tier authorization model using Casbin policy enforcement, providing both API-level and data-level access control. This enables precise control over who can access which resources and what actions they can perform.
 
 -   **Tier 1 (API-level)** -- Controls which API endpoints and web routes a role can access
--   **Tier 2 (Object-level)** -- Controls which specific data entities (databases, assets, pipelines) a role can access
+-   **Tier 2 (Object-level)** -- Controls which specific data entities (databases, assets, pipelines, workflows, metadata schemas, tags, tag types, roles, user roles) a role can access
 -   Both tiers must independently authorize a request for access to succeed (defense-in-depth)
--   Pre-built permission templates for common profiles: database admin, database user, database read-only, global read-only, and deny-tagged-assets
+-   Pre-built permission templates for common profiles: database admin, database user, database read-only, database tag admin, global read-only, deny-tagged-assets, compliance admin, compliance read-only, and compliance global admin
 -   Bulk import of permission constraints via JSON templates with server-side variable substitution
 -   Support for Amazon Cognito user pools, SAML federation, or external OAuth2 identity providers
 -   API key management for application-to-application integration with user ID impersonation
@@ -104,7 +108,7 @@ VAMS is built from the ground up for deployment across AWS partitions and region
 
 -   Deploy to any AWS commercial region with Amazon CloudFront distribution
 -   Deploy to AWS GovCloud (US) regions with Application Load Balancer distribution, where Amazon API Gateway is FIPS-compliant by default and `useFips` adds the AWS KMS FIPS interface VPC endpoint
--   Deploy in air-gapped or VPC-isolated environments with VPC endpoints for all required AWS services. The GenAI and simulation pipelines are the exception: NVIDIA Cosmos, NVIDIA GR00T, and NVIDIA Isaac Lab download models or Omniverse content from third-party servers at runtime, so those pipelines need outbound internet access. See each pipeline's page under [Pipelines](../pipelines/overview.md) before enabling one on an isolated network.
+-   Deploy in air-gapped or VPC-isolated environments with VPC endpoints for all required AWS services. The GenAI and simulation pipelines are the exception: NVIDIA Cosmos, NVIDIA GR00T, and NVIDIA Isaac Lab download models or Omniverse content from third-party servers at runtime, and the GenAI CAD STEP agent's container has internet access for its research tools (public network mode on its `agentcore` runtime, NAT egress on `fargate`), so those pipelines need outbound internet access. See each pipeline's page under [Pipelines](../pipelines/overview.md) before enabling one on an isolated network.
 
 -   Import existing VPCs and subnets for integration with organizational network architectures
 -   Multiple VAMS deployments in the same account using unique stack names and regions
@@ -124,6 +128,6 @@ VAMS is designed as an open, extensible platform that development teams can cust
 -   Plugin-based viewer architecture for adding custom visualization capabilities
 -   Pipeline and workflow system for integrating custom processing logic
 -   REST API layer for building custom applications and integrations
--   Addon framework (e.g., Garnet Framework, Physna Sync) for connecting VAMS to external systems
+-   Addon framework (e.g., Garnet Framework, Physna Sync, EDH Workstations) for connecting VAMS to external systems
 -   CDK-based infrastructure for customizing deployment topology and AWS service configuration
 -   Configurable metadata schemas for adapting data models to domain-specific requirements

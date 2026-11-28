@@ -17,6 +17,8 @@ import {
     Icon,
     Spinner,
 } from "@cloudscape-design/components";
+import Alert from "@cloudscape-design/components/alert";
+import Badge from "@cloudscape-design/components/badge";
 import { useNavigate } from "react-router";
 import {
     createSubscription,
@@ -24,13 +26,28 @@ import {
     unsubscribeFromAsset,
     downloadAsset,
 } from "../../services/APIService";
+import {
+    fetchComplianceState,
+    onComplianceStateAnnounced,
+    ComplianceState,
+    liveDatabaseId,
+} from "../../services/ComplianceService";
+import {
+    complianceStateBadgeColor,
+    complianceStateIndicator,
+} from "../compliance/complianceStateBadge";
 import PreviewModal from "../filemanager/components/PreviewModal";
+import { downloadRefusalReason } from "../../visualizerPlugin/core/streamFailure";
 import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
 import Synonyms from "../../synonyms";
 import { readCachedTagTypes } from "../../common/utils/tagOptions";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
 import type { GridProps } from "@cloudscape-design/components/grid";
+
+// The API route the badge reads; the badge is fetched only when the caller may call it.
+const COMPLIANCE_STATE_API_ROUTE = "/compliance/state/{databaseId}/{assetId}";
 
 // Header columns (id + description | type + tags | version). Cloudscape's Grid breakpoints follow
 // the grid's container width: one column per row below xxs, two then a full-width third up to xs,
@@ -44,8 +61,17 @@ export const ASSET_HEADER_GRID: GridProps.ElementDefinition[] = [
 interface AssetDetailsPaneProps {
     asset: any;
     databaseId: string;
+    /** The asset id the route names; `asset` can still be the previous asset while it loads. */
+    assetId: string;
     onOpenUpdateAsset: () => void;
     onOpenDeleteModal: () => void;
+    /** Why Delete is unavailable to the signed-in role; Delete is enabled when undefined. */
+    deleteDisabledReason?: string;
+    /** The asset is archived: shown read-only, offering Unarchive and Delete permanently. */
+    isArchived?: boolean;
+    onOpenUnarchiveModal?: () => void;
+    /** Why Unarchive is unavailable to the signed-in role; enabled when undefined. */
+    unarchiveDisabledReason?: string;
     // Version selector props (passed through from ViewAsset)
     versions?: any[];
     versionsLoading?: boolean;
@@ -53,11 +79,32 @@ interface AssetDetailsPaneProps {
     onVersionChange?: (versionId: string | null) => void;
 }
 
+/** When and by whom the asset was archived; a missing or unreadable date is said to be unrecorded. */
+export function archivedSummary(asset: any): string {
+    const archivedAt = asset?.archivedAt ? new Date(asset.archivedAt) : null;
+    const by = asset?.archivedBy ? ` by ${asset.archivedBy}` : "";
+    if (archivedAt && !isNaN(archivedAt.getTime())) {
+        return `Archived ${archivedAt.toLocaleString()}${by}.`;
+    }
+    return `Archived${by} (date not recorded).`;
+}
+
+/** The asset's current version as "v<id>", or "none" when the record carries no version. */
+export function currentVersionLabel(asset: any): string {
+    const version = asset?.currentVersion?.Version;
+    return version !== undefined && version !== null && version !== "" ? `v${version}` : "none";
+}
+
 export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     asset,
     databaseId,
+    assetId,
     onOpenUpdateAsset,
     onOpenDeleteModal,
+    deleteDisabledReason,
+    isArchived = false,
+    onOpenUnarchiveModal,
+    unarchiveDisabledReason,
     versions = [],
     versionsLoading = false,
     selectedVersionId,
@@ -69,6 +116,54 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     const [isSubscribing, setIsSubscribing] = useState<boolean>(false);
     const [userName, setUserName] = useState<string>("");
 
+    // Compliance badge state
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canReadCompliance = canCallRoute("GET", COMPLIANCE_STATE_API_ROUTE);
+    // The badge is read for the asset the route names (`databaseId`, `assetId`), not for the loaded
+    // `asset`, which still holds the previous asset until the new one is fetched. It is kept with
+    // the ids it was read for and shown only while they are the route's, so after an in-app
+    // navigation the previous asset's state is neither requested nor shown, and a late response
+    // for it is dropped.
+    const [complianceBadge, setComplianceBadge] = useState<{
+        databaseId: string;
+        assetId: string;
+        state: ComplianceState;
+    } | null>(null);
+
+    useEffect(() => {
+        setComplianceBadge(null);
+        if (!canReadCompliance || !assetId || !databaseId) return;
+        let current = true;
+        fetchComplianceState(databaseId, assetId).then(([success, result]) => {
+            if (current && success && typeof result !== "string") {
+                setComplianceBadge({ databaseId, assetId, state: result });
+            }
+        });
+        // The Compliance tab re-reads the state after each of its actions (Evaluate Now, release,
+        // an exception) and shares it; the badge follows it for this asset only.
+        const stopFollowing = onComplianceStateAnnounced((announcedDb, announcedAsset, state) => {
+            if (current && announcedDb === databaseId && announcedAsset === assetId) {
+                setComplianceBadge({ databaseId, assetId, state });
+            }
+        });
+        return () => {
+            current = false;
+            stopFollowing();
+        };
+    }, [canReadCompliance, assetId, databaseId]);
+    // The header pairs the badge with the loaded record's name, so the badge also waits until that
+    // record is the route's asset; otherwise the previous asset's name would carry the new state.
+    const recordIsRouteAsset =
+        asset?.assetId === assetId &&
+        (!asset?.databaseId || liveDatabaseId(asset.databaseId) === databaseId);
+    const shownBadge =
+        recordIsRouteAsset &&
+        complianceBadge &&
+        complianceBadge.databaseId === databaseId &&
+        complianceBadge.assetId === assetId
+            ? complianceBadge.state
+            : null;
+
     // Asset preview thumbnail state
     const previewKey = asset?.previewLocation?.Key || asset?.previewLocation?.key || "";
     // The preview is served by the asset download API, which refuses a non-distributable asset, so
@@ -76,10 +171,13 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     // call that would fail are all skipped. A fetched record without the flag is not distributable,
     // as the API treats it; the empty placeholder passed before the fetch (no assetId) is not.
     const isNotDistributable = !!asset?.assetId && asset.isDistributable !== true;
-    const hasPreview = !!previewKey && !isNotDistributable;
+    // An archived asset's preview is archived with it, so it has none to show either.
+    const hasPreview = !!previewKey && !isNotDistributable && !isArchived;
     const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
     const [thumbnailLoading, setThumbnailLoading] = useState<boolean>(false);
     const [thumbnailError, setThumbnailError] = useState<boolean>(false);
+    // The API's own reason when it refused the preview (D166), shown in its place.
+    const [thumbnailRefusal, setThumbnailRefusal] = useState<string | null>(null);
     const [showPreviewModal, setShowPreviewModal] = useState<boolean>(false);
 
     // Load preview thumbnail when asset changes
@@ -93,6 +191,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
         let cancelled = false;
         setThumbnailLoading(true);
         setThumbnailError(false);
+        setThumbnailRefusal(null);
         setThumbnailUrl(null);
 
         (async () => {
@@ -109,6 +208,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                     setThumbnailUrl(response[1]);
                 } else {
                     setThumbnailError(true);
+                    setThumbnailRefusal(downloadRefusalReason(response));
                 }
             } catch {
                 if (!cancelled) setThumbnailError(true);
@@ -127,10 +227,11 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
         const user = JSON.parse(localStorage.getItem("user") || '{"username": ""}');
         setUserName(user.username);
 
-        if (asset?.assetId && user.username) {
+        // An archived asset offers no subscription, so its status is not asked for
+        if (asset?.assetId && user.username && !isArchived) {
             checkSubscriptionStatus(user.username);
         }
-    }, [asset?.assetId]);
+    }, [asset?.assetId, databaseId, isArchived]);
 
     // Check if user is subscribed to this asset
     const checkSubscriptionStatus = async (username: string): Promise<void> => {
@@ -140,6 +241,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
             const result = (await checkSubscription({
                 userId: username,
                 assetId: asset.assetId,
+                databaseId,
             })) as [boolean, any];
 
             if (result[0] && result[1] === "success") {
@@ -164,6 +266,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
             entityName: "Asset",
             subscribers: [userName],
             entityId: asset.assetId,
+            databaseId,
         };
 
         try {
@@ -228,29 +331,79 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                     <Header
                         variant="h2"
                         actions={
-                            <SpaceBetween direction="horizontal" size="xs">
-                                <Button onClick={onOpenDeleteModal}>Delete</Button>
-                                <Button onClick={onOpenUpdateAsset}>Edit</Button>
-                                {asset && (
+                            isArchived ? (
+                                <SpaceBetween direction="horizontal" size="xs">
                                     <Button
-                                        iconAlign="right"
-                                        iconUrl={subscribed ? BellIcon : ""}
-                                        variant={subscribed ? "normal" : "primary"}
-                                        onClick={handleSubscriptionToggle}
-                                        loading={isSubscribing}
+                                        onClick={onOpenDeleteModal}
+                                        disabled={!!deleteDisabledReason}
+                                        disabledReason={deleteDisabledReason}
                                     >
-                                        {subscribed ? "Subscribed" : "Subscribe"}
+                                        Delete permanently
                                     </Button>
-                                )}
-                            </SpaceBetween>
+                                    <Button
+                                        variant="primary"
+                                        onClick={onOpenUnarchiveModal}
+                                        disabled={!!unarchiveDisabledReason}
+                                        disabledReason={unarchiveDisabledReason}
+                                    >
+                                        Unarchive
+                                    </Button>
+                                </SpaceBetween>
+                            ) : (
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    <Button
+                                        onClick={onOpenDeleteModal}
+                                        disabled={!!deleteDisabledReason}
+                                        disabledReason={deleteDisabledReason}
+                                    >
+                                        Delete
+                                    </Button>
+                                    <Button onClick={onOpenUpdateAsset}>Edit</Button>
+                                    {asset && (
+                                        <Button
+                                            iconAlign="right"
+                                            iconUrl={subscribed ? BellIcon : ""}
+                                            variant={subscribed ? "normal" : "primary"}
+                                            onClick={handleSubscriptionToggle}
+                                            loading={isSubscribing}
+                                        >
+                                            {subscribed ? "Subscribed" : "Subscribe"}
+                                        </Button>
+                                    )}
+                                </SpaceBetween>
+                            )
                         }
                     >
-                        <span style={{ fontSize: "1.2em" }}>
-                            {asset?.assetName || `${Synonyms.Asset} Details`}
-                        </span>
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <span style={{ fontSize: "1.2em" }}>
+                                {asset?.assetName || `${Synonyms.Asset} Details`}
+                            </span>
+                            {shownBadge && (
+                                <Badge
+                                    color={complianceStateBadgeColor(shownBadge.complianceState)}
+                                >
+                                    {complianceStateIndicator(shownBadge.complianceState).label}
+                                </Badge>
+                            )}
+                        </SpaceBetween>
                     </Header>
                 }
             >
+                {isArchived && (
+                    <Box margin={{ bottom: "s" }}>
+                        <Alert type="info" header={`This ${Synonyms.asset} is archived`}>
+                            <SpaceBetween size="xxs">
+                                <span>{archivedSummary(asset)}</span>
+                                {asset?.archivedReason && (
+                                    <span>{`Reason: ${asset.archivedReason}`}</span>
+                                )}
+                                <span>
+                                    {`Its files, versions, metadata, relationships and ${Synonyms.comments} are read-only. Unarchive the ${Synonyms.asset} to change, download or view them.`}
+                                </span>
+                            </SpaceBetween>
+                        </Alert>
+                    </Box>
+                )}
                 <div style={{ marginBottom: "-10px" }}>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "20px" }}>
                         {/* Not-distributable notice. It sits in the slot the preview thumbnail would
@@ -294,6 +447,14 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             </div>
                         )}
 
+                        {/* A preview the API refused shows the API's reason in its place (D166). */}
+                        {hasPreview && !thumbnailLoading && thumbnailRefusal && (
+                            <div style={{ flexShrink: 0, maxWidth: "240px" }}>
+                                <Box color="text-status-error" fontSize="body-s">
+                                    {thumbnailRefusal}
+                                </Box>
+                            </div>
+                        )}
                         {/* Optional preview thumbnail — only takes the space it needs */}
                         {hasPreview && thumbnailUrl && (
                             <div
@@ -439,7 +600,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                                         Current Last Version
                                     </div>
                                     <div style={{ marginBottom: "16px" }}>
-                                        v{asset?.currentVersion?.Version}
+                                        {currentVersionLabel(asset)}
                                         {(() => {
                                             const currentVer = versions.find(
                                                 (v: any) =>

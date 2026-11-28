@@ -27,7 +27,16 @@ import {
 } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    configureLambdaBatchJobTagging,
+    pipelineJobTags,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 import { NagSuppressions } from "cdk-nag";
+import {
+    GPU_CONTAINER_UID,
+    GPU_CONTAINER_GID,
+} from "../../../genAi/nvidia/cosmos/constructs/gpuContainerUser";
 import * as path from "path";
 
 export interface IsaacLabTrainingConstructProps {
@@ -106,12 +115,62 @@ export class IsaacLabTrainingConstruct extends Construct {
             throughputMode: efs.ThroughputMode.BURSTING,
         });
 
+        // EFS Access Point for Isaac Lab checkpoints (issue #327)
+        // Enforces POSIX uid/gid 10000:10000 so non-root GPU containers can read/write checkpoints
+        // without permission errors. The path is "/checkpoints" (not "/"): EFS applies createAcl only
+        // when the access-point root directory does not already exist, and "/" always exists as
+        // root:root 0755, so with "/" the ACL is never applied and the squashed uid 10000 cannot
+        // makedirs under it. "/checkpoints" is created and owned by this uid/gid on first mount. Where it
+        // already exists (a deployment that trained before the container ran as this uid), the instance
+        // start-up script below hands it over instead. The
+        // access point is mounted at containerPath /mnt/efs/checkpoints, so the container sees this
+        // owned directory directly at the path __main__.py writes ("/mnt/efs/checkpoints/<job>").
+        const trainingEfsAccessPoint = new efs.AccessPoint(this, "TrainingEfsAccessPoint", {
+            fileSystem: trainingEfs,
+            path: "/checkpoints",
+            posixUser: {
+                uid: String(GPU_CONTAINER_UID),
+                gid: String(GPU_CONTAINER_GID),
+            },
+            createAcl: {
+                ownerUid: String(GPU_CONTAINER_UID),
+                ownerGid: String(GPU_CONTAINER_GID),
+                permissions: "755",
+            },
+        });
+
         // Allow NFS traffic from the security group to itself for EFS access
         props.pipelineSecurityGroups[0].addIngressRule(
             props.pipelineSecurityGroups[0],
             ec2.Port.tcp(2049),
             "Allow NFS for EFS access"
         );
+
+        // Instance start-up script: hands the checkpoint folder on the file system to the container
+        // user before a job runs. EFS applies the access point's createAcl only when /checkpoints
+        // does not exist yet, and a deployment that trained before the container ran as this uid
+        // already has it, owned by root with mode 0755, so the container could not create its run
+        // folder there. The host mounts the file system ROOT (the access point squashes every caller
+        // to the container uid, which cannot chown), creates the folder if it is missing, gives it and
+        // everything under it to the container uid/gid -- earlier runs' folders too, because
+        // evaluation writes beside a checkpoint -- and unmounts. find changes only entries not yet
+        // owned, so after the first boot a large checkpoint tree costs one walk and no writes. One
+        // command per line, and the outcome goes to the serial console, which outlives the instance
+        // ("Instance User Data on a Batch Compute Environment" in ../../CLAUDE.md).
+        const efsRootMount = "/mnt/vams-isaaclab-efs";
+        const userData = `MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
+
+--==MYBOUNDARY==
+Content-Type: text/x-shellscript; charset="us-ascii"
+
+#!/bin/bash
+yum install -y amazon-efs-utils
+mkdir -p ${efsRootMount}
+if mount -t efs -o tls ${trainingEfs.fileSystemId}:/ ${efsRootMount} && mountpoint -q ${efsRootMount}; then mkdir -p ${efsRootMount}/checkpoints; handed=$(find ${efsRootMount}/checkpoints \\( ! -uid ${GPU_CONTAINER_UID} -o ! -gid ${GPU_CONTAINER_GID} \\) -print -exec chown -h ${GPU_CONTAINER_UID}:${GPU_CONTAINER_GID} {} + | wc -l); echo "vams-isaaclab-checkpoints: gave $handed entries under /checkpoints to ${GPU_CONTAINER_UID}:${GPU_CONTAINER_GID}" | tee /dev/console; umount ${efsRootMount}; else echo "vams-isaaclab-checkpoints: could not mount the checkpoint file system; /checkpoints ownership unchanged" | tee /dev/console; fi
+
+--==MYBOUNDARY==--
+`;
 
         // Launch template with larger EBS volume for Isaac Lab container (10GB+)
         const launchTemplate = new ec2.LaunchTemplate(this, "IsaacLabLaunchTemplate", {
@@ -124,7 +183,11 @@ export class IsaacLabTrainingConstruct extends Construct {
                     }),
                 },
             ],
+            // The L2 template renders this as Fn::Base64, after token resolution.
+            userData: ec2.UserData.custom(userData),
         });
+
+        const isaacLabConfig = props.config.app.pipelines.useIsaacLabTraining;
 
         // Batch compute environment for GPU instances
         // Uses private subnets with NAT Gateway for internet access to download Omniverse assets
@@ -138,21 +201,18 @@ export class IsaacLabTrainingConstruct extends Construct {
                         ? { subnets: props.pipelineSubnets }
                         : undefined,
                 securityGroups: props.pipelineSecurityGroups,
-                instanceTypes: [
-                    // Priority 1: G6 instances (L4 GPU - best price/performance for Isaac Lab)
-                    ec2.InstanceType.of(ec2.InstanceClass.G6, ec2.InstanceSize.XLARGE2),
-                    ec2.InstanceType.of(ec2.InstanceClass.G6, ec2.InstanceSize.XLARGE4),
-                    ec2.InstanceType.of(ec2.InstanceClass.G6, ec2.InstanceSize.XLARGE12),
-                    // Priority 2: G6E instances (L40S GPU - higher performance)
-                    ec2.InstanceType.of(ec2.InstanceClass.G6E, ec2.InstanceSize.XLARGE2),
-                    ec2.InstanceType.of(ec2.InstanceClass.G6E, ec2.InstanceSize.XLARGE12),
-                    // Fallback: G5 instances (A10G GPU)
-                    ec2.InstanceType.of(ec2.InstanceClass.G5, ec2.InstanceSize.XLARGE2),
-                    ec2.InstanceType.of(ec2.InstanceClass.G5, ec2.InstanceSize.XLARGE4),
-                ],
+                // Only the configured GPU instance types, so no CPU-only class is added and every type
+                // can run the job (validated in getConfig()). The list is wide because AWS Batch can
+                // only find EC2 capacity among the types it is given.
+                useOptimalInstanceClasses: false,
+                instanceTypes: isaacLabConfig.instanceTypes.map(
+                    (instanceType) => new ec2.InstanceType(instanceType)
+                ),
                 maxvCpus: 256,
-                // Keep 1 warm instance (8 vCPUs for g6.2xlarge) when enabled to avoid cold start delays
-                minvCpus: props.config.app.pipelines.useIsaacLabTraining.keepWarmInstance ? 8 : 0,
+                // Keep one warm instance when enabled to avoid cold start delays. The floor is one job's
+                // vCPUs: every configured type has at least that many and can run the job, so the one
+                // instance Batch starts for it is able to take the job.
+                minvCpus: isaacLabConfig.keepWarmInstance ? Config.ISAAC_LAB_JOB_VCPUS : 0,
                 allocationStrategy: batch.AllocationStrategy.BEST_FIT_PROGRESSIVE,
                 launchTemplate: launchTemplate,
                 // NVIDIA-accelerated AMI for the GPU instance families above
@@ -162,6 +222,17 @@ export class IsaacLabTrainingConstruct extends Construct {
                     },
                 ],
             }
+        );
+
+        // Pin the environment to the launch template version that carries the start-up script. The
+        // L2 environment renders only the template id, and AWS Batch merges the template into its own
+        // copy only when the environment is created or updated, so without a version a new template
+        // version (this script, arriving on an upgrade) would reach no instance. The version change
+        // is an in-place update: the environment names no serviceRole (Batch uses its service-linked
+        // role), uses BEST_FIT_PROGRESSIVE and sets replaceComputeEnvironment false.
+        (computeEnvironment.node.defaultChild as batch.CfnComputeEnvironment).addPropertyOverride(
+            "ComputeResources.LaunchTemplate.Version",
+            launchTemplate.latestVersionNumber
         );
 
         // Enable Container Insights on the ECS cluster created by Batch
@@ -279,12 +350,37 @@ export class IsaacLabTrainingConstruct extends Construct {
             })
         );
 
+        // The EFS volume mounts with useJobRole (IAM auth), so jobRole needs mount/write on the
+        // training file system, scoped to the checkpoint access point (issue #327). TLS is required
+        // for IAM-authenticated mounts; the elasticfilesystem:AccessPointArn condition confines the
+        // grant to the checkpoint access point rather than the whole file system.
+        jobRole.addToPolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite"],
+                resources: [
+                    `arn:${ServiceHelper.Partition()}:elasticfilesystem:${region}:${account}:file-system/${
+                        trainingEfs.fileSystemId
+                    }`,
+                ],
+                conditions: {
+                    StringEquals: {
+                        "elasticfilesystem:AccessPointArn": `arn:${ServiceHelper.Partition()}:elasticfilesystem:${region}:${account}:access-point/${
+                            trainingEfsAccessPoint.accessPointId
+                        }`,
+                    },
+                },
+            })
+        );
+
         // Batch job definition using CDK-managed container image
         const jobDefinition = new batch.EcsJobDefinition(this, "IsaacLabJobDef", {
             container: new batch.EcsEc2ContainerDefinition(this, "Container", {
                 image: containerImageRef,
-                cpu: 8,
-                memory: cdk.Size.gibibytes(32),
+                cpu: Config.ISAAC_LAB_JOB_VCPUS,
+                memory: cdk.Size.mebibytes(Config.ISAAC_LAB_JOB_MEMORY_MIB),
+                // Keep equal to Config.ISAAC_LAB_JOB_GPUS, which the instance types are checked
+                // against; test/pipelines/isaacLabInstancePool.test.ts pins both.
                 gpu: 1,
                 jobRole: jobRole,
                 environment: {
@@ -295,19 +391,28 @@ export class IsaacLabTrainingConstruct extends Construct {
                     batch.EcsVolume.efs({
                         name: "training-efs",
                         fileSystem: trainingEfs,
-                        containerPath: "/mnt/efs",
+                        containerPath: "/mnt/efs/checkpoints",
+                        accessPointId: trainingEfsAccessPoint.accessPointId,
+                        // L2 prop names: the L1/CloudFormation names are transitEncryption /
+                        // authorizationConfig. enableTransitEncryption renders TransitEncryption:
+                        // ENABLED (mandatory when an access point is used); useJobRole renders
+                        // AuthorizationConfig.Iam: ENABLED so the mount authenticates with jobRole.
+                        enableTransitEncryption: true,
+                        useJobRole: true,
                     }),
                 ],
             }),
-            // AWS Batch's own bound on one attempt, counted from the attempt's start. It equals the
-            // training bundle's taskTimeout (28800 s) and executeBatchJobState's taskTimeout (8 h),
-            // so a training run gets the 8 hours the workflow allows; a lower value would stop the
-            // job while the workflow still waits and surface it as a heartbeat timeout. Both of those
-            // clocks start before the attempt (they include the RUNNABLE wait and the image pull), so
-            // the workflow times out first and its error handler terminates the registered job; this
-            // value is the backstop. Evaluation shares this job definition and is bounded by its own
-            // bundle's taskTimeout (7200 s). Keep it no lower than the training taskTimeout.
-            timeout: cdk.Duration.hours(8),
+            // AWS Batch's own bound on one attempt, counted from the attempt's start. This is the
+            // LARGEST mode's value: evaluation's 9 hours (its bundle taskTimeout, 32400 s). Each run
+            // narrows it to its own mode's bound (training 28800 s, evaluation 32400 s) through the
+            // `timeout` of the submit call (executeBatchJob.py), so this value only backstops a
+            // submission that carries none. The workflow clocks (the bundle taskTimeout and the
+            // batch task's TimeoutSecondsPath) start before the attempt (they include the RUNNABLE
+            // wait and the image pull), so the workflow times out first and its error handler
+            // terminates the registered job. Keep it no lower than the largest bundle taskTimeout: a
+            // lower value would stop a job the workflow still waits for and surface it as a
+            // heartbeat timeout.
+            timeout: cdk.Duration.hours(9),
         });
 
         // Lambda functions
@@ -321,6 +426,10 @@ export class IsaacLabTrainingConstruct extends Construct {
             batchJobQueue: jobQueue,
             batchJobDefinition: jobDefinition,
         });
+        configureLambdaBatchJobTagging(
+            lambdaFunctions.executeBatchJobFunction,
+            pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.isaacLabTraining)
+        );
 
         // Step Functions state machine
         const openPipelineState = new tasks.LambdaInvoke(this, "OpenPipelineState", {
@@ -344,6 +453,9 @@ export class IsaacLabTrainingConstruct extends Construct {
                 // here is unreachable downstream — and the batch task references it by path, which
                 // makes an omission a States.Runtime failure rather than a skipped registration.
                 "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
+                // The run's own time limit in seconds (training 28800, evaluation 32400), emitted by
+                // openPipeline from the run's mode. The batch task reads it as its TimeoutSecondsPath.
+                "taskTimeoutSeconds.$": "$.openResult.Payload.taskTimeoutSeconds",
             },
         });
 
@@ -365,9 +477,17 @@ export class IsaacLabTrainingConstruct extends Construct {
                 // sub-process: this pipeline submits under WAIT_FOR_TASK_TOKEN rather than the
                 // Batch .sync integration, so Step Functions does not stop the job on abort.
                 "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
+                // Becomes the Batch attempt's duration for this run's mode.
+                "taskTimeoutSeconds.$": "$.taskTimeoutSeconds",
             }),
             resultPath: "$.batchResult",
-            taskTimeout: sfn.Timeout.duration(cdk.Duration.hours(8)),
+            // Per mode, from openPipeline: 28800 s for training, 32400 s for evaluation, each equal to
+            // that mode's bundle taskTimeout. The parent's clock starts first (at the workflow step;
+            // vamsExecute, openPipeline and the Pass state run before this task is entered), so at the
+            // bound the parent's step timeout fires first and is what the execution records. The
+            // workflow's error handler then stops the registered sub-processes, this state machine and
+            // its Batch job, so the GPU is not left running.
+            taskTimeout: sfn.Timeout.at("$.taskTimeoutSeconds"),
             // The heartbeat clock starts when this task is ENTERED, but the only producer is the
             // container (first beat 5 minutes after it starts). Nothing beats while the Batch job sits
             // RUNNABLE waiting for GPU capacity or pulls its multi-gigabyte image, so this value is
@@ -437,12 +557,12 @@ export class IsaacLabTrainingConstruct extends Construct {
 
         const stateMachine = new sfn.StateMachine(this, "IsaacLabStateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(definition),
-            // ENVELOPES the task timeout (8h) rather than matching it. openPipelineState runs before
+            // ENVELOPES the longest task timeout (evaluation, 9h) rather than matching it. openPipelineState runs before
             // executeBatchJobState, so the task's deadline always falls after the execution's when the
             // two are equal — the task-level States.Timeout becomes unreachable and the execution-level
             // one fires instead. That bypasses every Catch, so the error handler writes no record and
             // closePipelineState never runs. Same invariant the Splat Toolbox state machine states.
-            timeout: cdk.Duration.hours(9),
+            timeout: cdk.Duration.hours(10),
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,

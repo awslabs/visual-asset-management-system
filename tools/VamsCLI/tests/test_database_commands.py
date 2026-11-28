@@ -890,7 +890,127 @@ class TestDatabaseListBucketsCommand:
             
             # Verify API call
             mocks['api_client'].list_buckets.assert_called_once_with({})
+
+    def test_list_buckets_shows_the_region_and_account(self, cli_runner, generic_command_mocks):
+        """A bucket in another Region (or account) is labelled with it; a row without a Region is in
+        the deployment Region."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [
+                    {'bucketId': 'bucket-uuid-1', 'bucketName': 'local-bucket',
+                     'baseAssetsPrefix': '/', 'isDefault': True, 'bucketRegion': 'us-west-2'},
+                    {'bucketId': 'bucket-uuid-2', 'bucketName': 'remote-bucket',
+                     'baseAssetsPrefix': 'team/', 'isDefault': False, 'bucketRegion': 'us-east-1',
+                     'bucketAccountId': '222222222222'},
+                    {'bucketId': 'bucket-uuid-3', 'bucketName': 'legacy-bucket',
+                     'baseAssetsPrefix': '/'},
+                ]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets'])
+
+            assert result.exit_code == 0
+            assert 'Region: us-west-2' in result.output
+            assert 'Region: us-east-1' in result.output
+            assert 'Account: 222222222222' in result.output
+            assert 'Region: deployment Region' in result.output
+            assert result.output.count('Account:') == 1
+
+    def test_list_buckets_json_output_carries_the_region_fields(self, cli_runner, generic_command_mocks):
+        """--json-output is what the MCP server and the connectors parse: the fields pass through."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [
+                    {'bucketId': 'bucket-uuid-2', 'bucketName': 'remote-bucket',
+                     'baseAssetsPrefix': 'team/', 'isDefault': False, 'bucketRegion': 'us-east-1',
+                     'bucketAccountId': '222222222222'},
+                ]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets', '--json-output'])
+
+            assert result.exit_code == 0
+            payload = json.loads(result.output)
+            assert payload['Items'][0]['bucketRegion'] == 'us-east-1'
+            assert payload['Items'][0]['bucketAccountId'] == '222222222222'
     
+    def test_list_buckets_shows_the_acceleration_status(self, cli_runner, generic_command_mocks):
+        """Accelerated reads Yes for true, No for false and for a row from an API without the field."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [
+                    {'bucketId': 'b1', 'bucketName': 'fast', 'baseAssetsPrefix': '/', 'isAccelerated': True},
+                    {'bucketId': 'b2', 'bucketName': 'slow', 'baseAssetsPrefix': '/', 'isAccelerated': False},
+                    {'bucketId': 'b3', 'bucketName': 'old', 'baseAssetsPrefix': '/'},
+                ]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets'])
+
+            assert result.exit_code == 0
+            lines = [l for l in result.output.splitlines() if l.startswith('Accelerated:')]
+            assert lines == ['Accelerated: Yes', 'Accelerated: No', 'Accelerated: No']
+
+    def test_list_buckets_counts_only_a_real_true_as_accelerated(self, cli_runner, generic_command_mocks):
+        """A stored string, 1 or None is not acceleration, matching the backend rule."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [
+                    {'bucketId': 'b1', 'bucketName': 'a', 'baseAssetsPrefix': '/', 'isAccelerated': 'true'},
+                    {'bucketId': 'b2', 'bucketName': 'b', 'baseAssetsPrefix': '/', 'isAccelerated': 1},
+                    {'bucketId': 'b3', 'bucketName': 'c', 'baseAssetsPrefix': '/', 'isAccelerated': None},
+                ]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets'])
+
+            assert result.exit_code == 0
+            lines = [l for l in result.output.splitlines() if l.startswith('Accelerated:')]
+            assert lines == ['Accelerated: No'] * 3
+
+    def test_list_buckets_json_output_carries_the_acceleration_flag(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [{'bucketId': 'b1', 'bucketName': 'fast', 'isAccelerated': True}]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets', '--json-output'])
+
+            assert result.exit_code == 0
+            assert json.loads(result.output)['Items'][0]['isAccelerated'] is True
+
+    def test_list_buckets_shows_the_source_and_status(self, cli_runner, generic_command_mocks):
+        """Source and Status (#1978) as the API returns them; a row from an earlier API reads static/active."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [
+                    {'bucketId': 'b1', 'bucketName': 'a', 'baseAssetsPrefix': '/', 'source': 'static',
+                     'status': 'active'},
+                    {'bucketId': 'b2', 'bucketName': 'b', 'baseAssetsPrefix': '/', 'source': 'runtime',
+                     'status': 'disabled'},
+                    {'bucketId': 'b3', 'bucketName': 'c', 'baseAssetsPrefix': '/'},
+                ]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets'])
+
+            assert result.exit_code == 0
+            lines = [l for l in result.output.splitlines() if l.startswith(('Source:', 'Status:'))]
+            assert lines == ['Source: static', 'Status: active', 'Source: runtime', 'Status: disabled',
+                             'Source: static', 'Status: active']
+
+    def test_list_buckets_json_output_carries_the_source_and_status(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].list_buckets.return_value = {
+                'Items': [{'bucketId': 'b1', 'bucketName': 'a', 'source': 'runtime', 'status': 'pending'}]
+            }
+
+            result = cli_runner.invoke(database, ['list-buckets', '--json-output'])
+
+            assert result.exit_code == 0
+            item = json.loads(result.output)['Items'][0]
+            assert (item['source'], item['status']) == ('runtime', 'pending')
+
     def test_list_buckets_empty(self, cli_runner, generic_command_mocks):
         """Test bucket listing with no buckets."""
         with generic_command_mocks('database') as mocks:
@@ -1148,6 +1268,47 @@ class TestDatabaseNewFieldsDisplay:
             assert result.exit_code == 0
             assert 'Restrict Metadata Outside Schemas: False' in result.output
             assert 'Restrict File Uploads To Extensions: (none)' in result.output
+            assert 'Compliance Schema' not in result.output
+            assert 'Compliance Auto-Eval' not in result.output
+
+    def test_get_displays_the_compliance_binding(self, cli_runner, generic_command_mocks):
+        """The database row carries its compliance schema binding; `get` prints both fields."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].get_database.return_value = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'dateCreated': '2024-01-01T00:00:00Z',
+                'assetCount': 5,
+                'defaultBucketId': 'bucket-uuid',
+                'restrictMetadataOutsideSchemas': False,
+                'restrictFileUploadsToExtensions': '',
+                'complianceSchemaName': 'engineering-asset-standard',
+                'complianceAutoEval': False,
+            }
+
+            result = cli_runner.invoke(database, ['get', '-d', 'test-database'])
+
+            assert result.exit_code == 0
+            assert 'Compliance Schema: engineering-asset-standard' in result.output
+            # False is a value, not an absence: auto-evaluation off must still be shown.
+            assert 'Compliance Auto-Eval: False' in result.output
+
+    def test_get_omits_the_compliance_binding_when_null(self, cli_runner, generic_command_mocks):
+        """An unbound database answers both fields as null; neither line is printed."""
+        with generic_command_mocks('database') as mocks:
+            mocks['api_client'].get_database.return_value = {
+                'databaseId': 'test-database',
+                'description': 'Test Database',
+                'defaultBucketId': 'bucket-uuid',
+                'complianceSchemaName': None,
+                'complianceAutoEval': None,
+            }
+
+            result = cli_runner.invoke(database, ['get', '-d', 'test-database'])
+
+            assert result.exit_code == 0
+            assert 'Compliance Schema' not in result.output
+            assert 'Compliance Auto-Eval' not in result.output
     
     def test_list_displays_new_fields(self, cli_runner, generic_command_mocks):
         """Test that list command displays new configuration fields."""

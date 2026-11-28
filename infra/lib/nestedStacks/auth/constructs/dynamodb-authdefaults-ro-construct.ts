@@ -14,6 +14,7 @@ import {
     PhysicalResourceId,
     PhysicalResourceIdReference,
 } from "aws-cdk-lib/custom-resources";
+import { SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT } from "../../../helper/seedCustomResource";
 import { Construct } from "constructs";
 import { Config } from "../../../../config/config";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -21,6 +22,11 @@ import { NagSuppressions } from "cdk-nag";
 import { kmsKeyPolicyStatementGenerator } from "../../../helper/security";
 import { Service } from "../../../../lib/helper/service-helper";
 import * as ServiceHelper from "../../../../lib/helper/service-helper";
+import {
+    addonReadOnlyApiRouteCriteria,
+    addonReadOnlyWebRouteCriteria,
+} from "../../addon/addonDefaultRoutes";
+import { addonReadOnlyDefaultConstraints } from "../../addon/addonDefaultConstraints";
 
 export interface DynamoDbAuthDefaultsROConstructStackProps extends cdk.StackProps {
     customResourceRole: iam.Role;
@@ -192,6 +198,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
             onCreate: awsSdkCallRoleRo,
             onUpdate: awsSdkCallRoleRo,
             role: props.customResourceRole,
+            serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
         });
 
         const initialConstraints = [
@@ -335,6 +342,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
+                        ...addonReadOnlyWebRouteCriteria(props.config, roleNameIDClean),
                     ],
                 },
                 description: {
@@ -651,26 +659,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
-                        ...(props.config.app.addons.usePhysnaSync.enabled
-                            ? [
-                                  {
-                                      M: {
-                                          field: {
-                                              S: "route__path",
-                                          },
-                                          id: {
-                                              S: `16_${roleNameIDClean}_api_paths`,
-                                          },
-                                          operator: {
-                                              S: "starts_with",
-                                          },
-                                          value: {
-                                              S: "/addon/physna/viewer", //Physna viewer proxy (per-asset authorization is enforced server-side)
-                                          },
-                                      },
-                                  },
-                              ]
-                            : []),
+                        ...addonReadOnlyApiRouteCriteria(props.config, roleNameIDClean),
                     ],
                 },
                 description: {
@@ -919,7 +908,10 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                     S: "equals",
                                 },
                                 value: {
-                                    S: "/database/[^/]+/assets/[^/]+/download", // Exactly the download route; a prefix/suffix pair would also match write routes ending in a path parameter
+                                    // The one route, whatever its path parameters are: a suffix
+                                    // match would also reach a write route whose last segment is
+                                    // a parameter set to "download".
+                                    S: "/database/[^/]+/assets/[^/]+/download",
                                 },
                             },
                         },
@@ -1483,6 +1475,134 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                     S: "api",
                 },
             },
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: `initial_${roleNameIDClean}_allow_export_api`,
+                },
+                constraintId: {
+                    S: `initial_${roleNameIDClean}_allow_export_api`,
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `0_${roleNameIDClean}_api_paths_export`,
+                                },
+                                operator: {
+                                    S: "equals",
+                                },
+                                value: {
+                                    // The one route, whatever its path parameters are: a suffix
+                                    // match would also reach a write route whose last segment is
+                                    // a parameter set to "export".
+                                    S: "/database/[^/]+/assets/[^/]+/export",
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow POST on the asset export route for basic user read only - the export lists the asset tree, its metadata and its files and can sign download links for them; the request body carries the export options and it changes nothing",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-export-api`,
+                                },
+                                permission: {
+                                    S: "POST",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: `${roleNameIDClean}-allow-export-api`,
+                },
+                objectType: {
+                    S: "api",
+                },
+            },
+            // Last of the core items: the custom resource ids are index-based, so a core item
+            // added here moves no earlier core resource (only the add-on items after it).
+            // Read of every asset bucket registration. The role holds no route that lists buckets,
+            // so it changes nothing today; a route granted later lists every bucket, as for admin.
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: `initial_${roleNameIDClean}_allow_all_buckets`,
+                },
+                constraintId: {
+                    S: `initial_${roleNameIDClean}_allow_all_buckets`,
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "bucketId",
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}_all_buckets`,
+                                },
+                                operator: {
+                                    S: "contains",
+                                },
+                                value: {
+                                    S: ".*",
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow GET on all asset bucket registrations for basic read only",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-get-all-buckets`,
+                                },
+                                permission: {
+                                    S: "GET",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: `${roleNameIDClean}-allow-all-buckets`,
+                },
+                objectType: {
+                    S: "bucket",
+                },
+            },
+            ...addonReadOnlyDefaultConstraints(props.config, roleName, roleNameIDClean),
         ];
 
         let i = 0;
@@ -1512,6 +1632,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                         onCreate: awsSdkCall,
                         onUpdate: awsSdkCall,
                         role: props.customResourceRole,
+                        serviceTimeout: SEED_CUSTOM_RESOURCE_SERVICE_TIMEOUT,
                     }
                 );
                 i++;

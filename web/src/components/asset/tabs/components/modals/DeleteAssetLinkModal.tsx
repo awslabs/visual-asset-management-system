@@ -102,7 +102,7 @@ export function DeleteAssetLinkModal({
                             {`Removing this ${Synonyms.asset} link will only break the connection between the current ${Synonyms.asset} and the selected ${Synonyms.asset}.`}
                         </div>
                         <div>
-                            It will <strong>not</strong> recursively delete any sub-relationships
+                            It will <strong>not</strong> recursively delete any sub-relationships{" "}
                             {`that may exist below the selected ${Synonyms.asset} in the hierarchy.`}
                         </div>
                         {isSubChild && parentAssetName && (

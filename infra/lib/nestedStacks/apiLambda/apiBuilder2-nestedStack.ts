@@ -12,10 +12,10 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as ssm from "aws-cdk-lib/aws-ssm";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
-import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
-import { generateUniqueNameHash } from "../../helper/security";
+import { addIamNagSuppressions, generateUniqueNameHash } from "../../helper/security";
 import { buildTagService, buildCreateTagFunction } from "../../lambdaBuilder/tagFunctions";
 import {
     buildTagTypeService,
@@ -25,7 +25,17 @@ import {
     buildAuthConstraintsFunction,
     buildAuthConstraintsTemplateFunction,
 } from "../../lambdaBuilder/authFunctions";
-import { buildAssetHistoryFunction } from "../../lambdaBuilder/assetFunctions";
+import {
+    buildAssetHistoryFunction,
+    buildLargeObjectCopyEngine,
+    grantLargeObjectCopyCoordination,
+    grantLargeObjectCopyProgressRead,
+    grantLargeObjectCopyViaEngine,
+    buildZipDownloadServiceFunction,
+    buildZipDownloadSweep,
+    grantZipDownloadLaunch,
+    ZIP_DOWNLOAD_ROUTES,
+} from "../../lambdaBuilder/assetFunctions";
 import {
     buildDeadlineCloudJobCallbackFunction,
     buildExecuteWorkflowV2Function,
@@ -34,17 +44,37 @@ import {
     buildWorkflowTriggerDispatchFunction,
     buildImportGlobalPipelineWorkflowFunction,
     buildExecutionServiceFunction,
+    buildExecutionDetailsFunction,
+    buildExecutionLogsFunction,
+    buildExecutionPermanentDeleteFunction,
     buildProcessWorkflowExecutionOutputFunction,
     buildInterimPipelineTrackingFunction,
     buildHandleExecutionErrorFunction,
     buildRegisterPipelineExecutionFunction,
+    buildWorkflowRole,
+    grantWorkflowServiceInternalInvoke,
+    buildWorkflowStatusChangeRule,
 } from "../../lambdaBuilder/workflowFunctions";
 import {
     buildPipelineServiceV2Function,
     buildPipelineTemplateServiceFunction,
 } from "../../lambdaBuilder/pipelineFunctions";
+import {
+    buildComplianceSchemaServiceFunction,
+    buildComplianceSchemaBindingServiceFunction,
+    buildComplianceEvaluateServiceFunction,
+    buildComplianceQuarantineServiceFunction,
+    buildComplianceCascadeExecutorFunction,
+    buildComplianceCascadeServiceFunction,
+    buildComplianceAuditServiceFunction,
+    buildComplianceTriggerFunction,
+    buildComplianceJobFunction,
+    buildComplianceWorkflowCallbackFunction,
+} from "../../lambdaBuilder/complianceFunctions";
+import { DynamoDbComplianceSchemaDefaultsConstruct } from "./constructs/dynamodb-complianceschema-defaults-construct";
 import { RouteRegistry, attachFunctionToApi } from "./apiRouteRegistry";
 import * as Config from "../../../config/config";
+import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 
 /**
  * Properties for the secondary API builder nested stack.
@@ -61,6 +91,8 @@ export interface ApiBuilder2NestedStackProps {
     // process-output to write outputs back to the asset).
     metadataServiceFunction: lambda.Function;
     uploadFileFunction: lambda.Function;
+    // Invoked by the large object copy engine built here once a large file has landed.
+    sendEmailFunction: lambda.Function;
 }
 
 /**
@@ -82,6 +114,12 @@ export class ApiBuilder2NestedStack extends NestedStack {
     // Name of the V2 vamsSchema import custom-resource lambda. Consumed by pipeline nested stacks to
     // register their built-in pipeline/workflow into the V2 tables at deploy (via VamsSchemaRegistration).
     public importGlobalPipelineWorkflowV2FunctionName = "";
+    // Name of the asset-less execute-workflow lambda. Consumed by the search nested stack's system-workflow
+    // launcher, which invokes it by a name-composed ARN so no function object crosses the stack boundary.
+    public executeWorkflowV2FunctionName = "";
+    // The Lambdas here that list permission object types and validate constraints and permission
+    // templates; the core stack tells them which add-ons are deployed (common/addonAppFeatures.ts).
+    public addonFeatureListingFunctions: lambda.Function[] = [];
 
     constructor(parent: Construct, name: string, props: ApiBuilder2NestedStackProps) {
         super(parent, name);
@@ -223,6 +261,10 @@ export class ApiBuilder2NestedStack extends NestedStack {
             method: apigateway.HttpMethod.POST,
             registry: registry,
         });
+        this.addonFeatureListingFunctions.push(
+            authConstraintsService,
+            authConstraintsTemplateService
+        );
 
         //Asset History Resources
         const assetHistoryFunction = buildAssetHistoryFunction(
@@ -260,8 +302,9 @@ export class ApiBuilder2NestedStack extends NestedStack {
             removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
 
-        // Execution service: asset-scoped + global list, details/traceability, paged detail
-        // metadata, logs, abort, abort-by-group, re-run, permanent delete.
+        // The execution service handler runs as four functions, each on a role holding only the calls
+        // its routes make (EXECUTION_SERVICE_ROUTES, workflowFunctions.ts). The execution service:
+        // asset-scoped + global list, abort, abort-by-group, re-run.
         const executionServiceFunction = buildExecutionServiceFunction(
             this,
             lambdaCommonBaseLayer,
@@ -287,22 +330,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
             method: apigateway.HttpMethod.DELETE,
             registry: registry,
         });
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/details",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/details/metadata",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        attachFunctionToApi(this, executionServiceFunction, {
-            routePath: "/workflows/executions/{executionId}/logs",
-            method: apigateway.HttpMethod.GET,
-            registry: registry,
-        });
-        // Global execution ops on the same handler: asset-less list, re-run, permanent delete.
+        // Global execution ops on the same handler: asset-less list, re-run.
         attachFunctionToApi(this, executionServiceFunction, {
             routePath: "/workflows/executions",
             method: apigateway.HttpMethod.GET,
@@ -313,7 +341,54 @@ export class ApiBuilder2NestedStack extends NestedStack {
             method: apigateway.HttpMethod.POST,
             registry: registry,
         });
-        attachFunctionToApi(this, executionServiceFunction, {
+        // Details/traceability and its paged metadata, files and results.
+        const executionDetailsFunction = buildExecutionDetailsFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            workflowsLogGroup,
+            config,
+            vpc,
+            subnets
+        );
+        for (const routePath of [
+            "/workflows/executions/{executionId}/details",
+            "/workflows/executions/{executionId}/details/metadata",
+            "/workflows/executions/{executionId}/details/files",
+            "/workflows/executions/{executionId}/details/results",
+        ]) {
+            attachFunctionToApi(this, executionDetailsFunction, {
+                routePath,
+                method: apigateway.HttpMethod.GET,
+                registry: registry,
+            });
+        }
+        // Execution logs.
+        const executionLogsFunction = buildExecutionLogsFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            workflowsLogGroup,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, executionLogsFunction, {
+            routePath: "/workflows/executions/{executionId}/logs",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        // Permanent delete runs the same handler on its own function and role, the only one that can
+        // delete execution rows.
+        const executionPermanentDeleteFunction = buildExecutionPermanentDeleteFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, executionPermanentDeleteFunction, {
             routePath: "/workflows/executions/{executionId}/permanent",
             method: apigateway.HttpMethod.DELETE,
             registry: registry,
@@ -350,6 +425,81 @@ export class ApiBuilder2NestedStack extends NestedStack {
             config,
             vpc,
             subnets
+        );
+
+        // Download as Zip: one function, the zip download service, serves the seven routes and the
+        // delayed sweep's passes. It deploys whatever app.pipelines.useZipDownloads.enabled says, so turning the
+        // feature off keeps existing jobs readable and the routes answering 404. Only with it on is
+        // it given the sweep state machine and granted its launch and abort cross-calls (below, once
+        // executeWorkflowV2 exists). It registers no terminal callback: a job follows its run by the
+        // stored execution id and the service's read-time reconcile.
+        const zipDownloadServiceFunction = buildZipDownloadServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        for (const route of ZIP_DOWNLOAD_ROUTES) {
+            attachFunctionToApi(this, zipDownloadServiceFunction, {
+                routePath: route.routePath,
+                method: route.method,
+                registry: registry,
+            });
+        }
+        if (config.app.pipelines.useZipDownloads.enabled) {
+            // The delayed sweep of a stopped job's archive upload (#1125 D16).
+            buildZipDownloadSweep(this, zipDownloadServiceFunction, storageResources, config);
+        }
+
+        // A run that ends outside VAMS (stopped from the console or API, timed out or failed at the
+        // state machine level) is reconciled when Step Functions reports it, through the execution
+        // service's read-path reconcile, so its execution row does not wait for a read. A feature that
+        // launched the run tracks it from that row by its stored workflowExecutionId.
+        buildWorkflowStatusChangeRule(this, executionServiceFunction, storageResources);
+
+        // Large object copy engine: copies workflow outputs over 1 GiB (and API uploads over the
+        // engine threshold) into their asset as resumable multipart copies. The output step waits
+        // on a run's copies and finalizes it; the abort route and the error handler stop them. Each
+        // of the three gets its grants as one managed policy (their inline policies are near the
+        // IAM quota).
+        const largeObjectCopyEngine = buildLargeObjectCopyEngine(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            props.sendEmailFunction,
+            processWorkflowExecutionOutputFunction,
+            config,
+            vpc,
+            subnets
+        );
+        // The output step's copy work (batch, task token, outcomes, cancel) is done by the engine.
+        grantLargeObjectCopyViaEngine(
+            this,
+            processWorkflowExecutionOutputFunction,
+            largeObjectCopyEngine.engineFunction,
+            config
+        );
+        // Each stopper hands the engine the copies it stopped whose outcome the engine's reconcile
+        // finishes.
+        grantLargeObjectCopyCoordination(handleExecutionErrorFunction, storageResources, config, {
+            handsOffTo: largeObjectCopyEngine.engineFunction,
+        });
+        // The abort route (and the status change push) stops a run's copies and hands the engine the
+        // ones it stopped. Since the execution routes run on four functions (#1255), the details
+        // read's backstop for a copy whose execution ended unreported is granted to the details
+        // function only (grantLargeObjectCopyProgressRead).
+        grantLargeObjectCopyCoordination(executionServiceFunction, storageResources, config, {
+            handsOffTo: largeObjectCopyEngine.engineFunction,
+            // Its abort grant already covers the copy executions (states:StopExecution on execution:*).
+            stopCoveredByCallerGrant: true,
+        });
+        grantLargeObjectCopyProgressRead(
+            executionDetailsFunction,
+            storageResources,
+            config,
+            largeObjectCopyEngine.engineFunction
         );
 
         // Pipeline sub-process registration lambda + its standing EventBridge rule on the
@@ -435,12 +585,23 @@ export class ApiBuilder2NestedStack extends NestedStack {
             });
         }
 
+        // SFN execution role every generated workflow state machine assumes. Built here rather than
+        // inside the workflow service builder so its ARN can be published to SSM below for externally
+        // owned pipeline bridges, which trust it for task-token callbacks.
+        const workflowRole = buildWorkflowRole(
+            this,
+            processWorkflowExecutionOutputFunction,
+            config,
+            storageResources.encryption.kmsKey
+        );
+
         // Workflow V2 resources: create (POST), update (PUT), list/get/delete, and the trigger
         // sub-resources — the whole workflow CRUD surface.
         const workflowServiceV2 = buildWorkflowServiceV2Function(
             this,
             lambdaCommonBaseLayer,
             storageResources,
+            workflowRole,
             processWorkflowExecutionOutputFunction,
             interimPipelineTrackingFunction,
             handleExecutionErrorFunction,
@@ -494,6 +655,7 @@ export class ApiBuilder2NestedStack extends NestedStack {
             method: apigateway.HttpMethod.POST,
             registry: registry,
         });
+        this.executeWorkflowV2FunctionName = executeWorkflowV2.functionName;
 
         // Wire the execution service's re-run path: it invokes executeWorkflowV2 (as the calling
         // user) to launch a fresh execution reconstructed from the stored records. A scoped
@@ -511,6 +673,22 @@ export class ApiBuilder2NestedStack extends NestedStack {
                 resources: [executeWorkflowV2.functionArn],
             })
         );
+
+        if (config.app.pipelines.useZipDownloads.enabled) {
+            grantZipDownloadLaunch(
+                zipDownloadServiceFunction,
+                executeWorkflowV2,
+                executionServiceFunction,
+                executionDetailsFunction
+            );
+        }
+
+        // Keep workflow state machines current with their pipelines: a pipeline save schedules an
+        // asynchronous redeploy of every referencing workflow, and a launch redeploys a stale workflow
+        // synchronously before starting it. Both invoke the workflow service, which holds the deploy
+        // permissions, so each caller gets only lambda:InvokeFunction on its exact function ARN.
+        grantWorkflowServiceInternalInvoke(pipelineServiceV2, workflowServiceV2);
+        grantWorkflowServiceInternalInvoke(executeWorkflowV2, workflowServiceV2);
 
         // File-upload trigger dispatcher (WB5b): orchestration-bus rule -> SQS buffer -> this lambda,
         // which matches fileUpload triggers and invokes executeWorkflowV2 per firing workflow.
@@ -567,6 +745,18 @@ export class ApiBuilder2NestedStack extends NestedStack {
         );
         this.importGlobalPipelineWorkflowV2FunctionName = importGlobalPipelineWorkflow.functionName;
 
+        // Publish the workflow role ARN and the import function name for externally owned pipeline
+        // bridge stacks. Created here rather than through the resource-name registry because this
+        // stack builds after the ResourceNames stack materializes the registry.
+        new ssm.StringParameter(this, "ResourceNameParamWorkflowExecutionRoleArn", {
+            parameterName: `${config.resourceNamesSSMParamPrefix}/${RESOURCE_PARAM_KEYS.integration.workflowExecutionRoleArn}`,
+            stringValue: workflowRole.roleArn,
+        });
+        new ssm.StringParameter(this, "ResourceNameParamImportGlobalPipelineWorkflow", {
+            parameterName: `${config.resourceNamesSSMParamPrefix}/${RESOURCE_PARAM_KEYS.lambdaFunctions.importGlobalPipelineWorkflow}`,
+            stringValue: importGlobalPipelineWorkflow.functionName,
+        });
+
         // Deadline Cloud job-callback lambda + its rules on the DEFAULT bus (Deadline
         // publishes job status events there). Resolves workflow task tokens for
         // DeadlineCloud pipeline task states and registers the job as the pipeline
@@ -582,25 +772,252 @@ export class ApiBuilder2NestedStack extends NestedStack {
             );
         }
 
+        // ---------------------------------------------------------------------------
+        // Compliance: schema management, bindings, evaluation, quarantine, cascades, audit.
+        // Route table: backend/backend/common/apiRoutes.py COMPLIANCE_ROUTES.
+        // ---------------------------------------------------------------------------
+        const complianceSchemaService = buildComplianceSchemaServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        for (const method of [apigateway.HttpMethod.GET, apigateway.HttpMethod.POST]) {
+            attachFunctionToApi(this, complianceSchemaService, {
+                routePath: "/compliance/schemas",
+                method,
+                registry: registry,
+            });
+        }
+        // Single schema: details (GET) + new version (PUT) + remove an unbound schema (DELETE).
+        for (const method of [
+            apigateway.HttpMethod.GET,
+            apigateway.HttpMethod.PUT,
+            apigateway.HttpMethod.DELETE,
+        ]) {
+            attachFunctionToApi(this, complianceSchemaService, {
+                routePath: "/compliance/schemas/{schemaName}",
+                method,
+                registry: registry,
+            });
+        }
+
+        const complianceSchemaBindingService = buildComplianceSchemaBindingServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        for (const method of [
+            apigateway.HttpMethod.GET,
+            apigateway.HttpMethod.PUT,
+            apigateway.HttpMethod.DELETE,
+        ]) {
+            attachFunctionToApi(this, complianceSchemaBindingService, {
+                routePath: "/compliance/bind/{databaseId}",
+                method,
+                registry: registry,
+            });
+        }
+        for (const method of [apigateway.HttpMethod.PUT, apigateway.HttpMethod.DELETE]) {
+            attachFunctionToApi(this, complianceSchemaBindingService, {
+                routePath: "/compliance/bind/{databaseId}/{assetId}",
+                method,
+                registry: registry,
+            });
+        }
+
+        // Evaluate on demand (one asset, or every tracked asset of a database), sweep a schema's
+        // bound assets, and read evaluations + state.
+        const complianceEvaluateService = buildComplianceEvaluateServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            executeWorkflowV2,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, complianceEvaluateService, {
+            routePath: "/compliance/evaluate/{databaseId}/{assetId}",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceEvaluateService, {
+            routePath: "/compliance/evaluate/{databaseId}",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceEvaluateService, {
+            routePath: "/compliance/sweep/{schemaName}",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceEvaluateService, {
+            routePath: "/compliance/evaluations/{databaseId}/{assetId}",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceEvaluateService, {
+            routePath: "/compliance/state/{databaseId}/{assetId}",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceEvaluateService, {
+            routePath: "/compliance/state/{databaseId}",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+
+        const complianceQuarantineService = buildComplianceQuarantineServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, complianceQuarantineService, {
+            routePath: "/compliance/quarantine",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceQuarantineService, {
+            routePath: "/compliance/quarantine/{databaseId}/{assetId}/release",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        // Exception: grant (POST) + revoke (DELETE).
+        for (const method of [apigateway.HttpMethod.POST, apigateway.HttpMethod.DELETE]) {
+            attachFunctionToApi(this, complianceQuarantineService, {
+                routePath: "/compliance/quarantine/{databaseId}/{assetId}/exception",
+                method,
+                registry: registry,
+            });
+        }
+
+        // The cascade executor runs a cascade out of band; the cascade API invokes it asynchronously
+        // and returns 202. The executor has no API route.
+        const complianceCascadeExecutor = buildComplianceCascadeExecutorFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets,
+            executeWorkflowV2
+        );
+        const complianceCascadeService = buildComplianceCascadeServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets,
+            complianceCascadeExecutor
+        );
+        for (const method of [apigateway.HttpMethod.GET, apigateway.HttpMethod.POST]) {
+            attachFunctionToApi(this, complianceCascadeService, {
+                routePath: "/compliance/cascades",
+                method,
+                registry: registry,
+            });
+        }
+        attachFunctionToApi(this, complianceCascadeService, {
+            routePath: "/compliance/cascades/{cascadeId}",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceCascadeService, {
+            routePath: "/compliance/cascades/{cascadeId}/approve",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceCascadeService, {
+            routePath: "/compliance/cascades/{cascadeId}/reject",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+
+        const complianceAuditService = buildComplianceAuditServiceFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        attachFunctionToApi(this, complianceAuditService, {
+            routePath: "/compliance/audit",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceAuditService, {
+            routePath: "/compliance/audit/{databaseId}/{assetId}",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+
+        // Event-driven: the asset/file indexer SNS topics feed the trigger; the compliance job queue
+        // feeds the job Lambda (a deleted database's move, a binding change applied in the
+        // background); the orchestration bus workflow-completion event feeds the callback. None has
+        // an API route.
+        buildComplianceTriggerFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            executeWorkflowV2,
+            config,
+            vpc,
+            subnets
+        );
+        buildComplianceJobFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            config,
+            vpc,
+            subnets
+        );
+        buildComplianceWorkflowCallbackFunction(
+            this,
+            lambdaCommonBaseLayer,
+            storageResources,
+            executeWorkflowV2,
+            config,
+            vpc,
+            subnets
+        );
+
+        if (config.app.compliance.autoLoadDefaultSchema) {
+            new DynamoDbComplianceSchemaDefaultsConstruct(this, "ComplianceSchemaDefaults", {
+                storageResources: storageResources,
+                config: config,
+                lambdaCommonBaseLayer: lambdaCommonBaseLayer,
+                vpc: vpc,
+                subnets: subnets,
+            });
+        }
+
         // Nag suppressions. Scoped with appliesTo so this does NOT blanket-waive every IAM5 wildcard
         // in the stack: it only covers the constraint/auth-table read wildcards and the CDK-generated
         // BucketNotifications/LogRetention custom-resource roles. Per-function log/S3 wildcards are
         // suppressed at their own builder (suppressCdkNagErrorsByGrantReadWrite(fun)).
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason:
-                        "Auth/constraint-table reads and CDK-generated custom-resource roles use " +
-                        "action/resource wildcards scoped to VAMS resources.",
-                    appliesTo: [
-                        { regex: "/Action::(dynamodb|logs|s3):.*/g" },
-                        { regex: "/^Resource::.*/g" },
-                    ],
-                },
-            ],
-            true
-        );
+        addIamNagSuppressions(this, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Auth/constraint-table reads and CDK-generated custom-resource roles use " +
+                    "action/resource wildcards scoped to VAMS resources.",
+                appliesTo: [
+                    { regex: "/Action::(dynamodb|logs|s3):.*/g" },
+                    { regex: "/^Resource::.*/g" },
+                ],
+            },
+        ]);
     }
 }

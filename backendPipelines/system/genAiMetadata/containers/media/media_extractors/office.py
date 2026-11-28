@@ -1,0 +1,505 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Office documents (.docx .pptx .xlsx): text and document properties through python-docx, python-pptx and
+openpyxl -> sys_document / sys_data, the text excerpt, and the full text with slide or sheet offsets for content
+chunking. Nothing is rasterised: the analysis model works from the text."""
+
+import csv
+import datetime
+import io
+import re
+import zipfile
+from typing import Dict, List, Optional, Tuple
+
+import docx
+from defusedxml import DefusedXmlException, ElementTree
+from defusedxml.ElementTree import ParseError
+from docx.opc.exceptions import PackageNotFoundError as DocxPackageNotFoundError
+from docx.table import Table
+from docx.text.paragraph import Paragraph
+from openpyxl.cell.text import Text
+from openpyxl.reader.excel import ExcelReader
+from openpyxl.utils.exceptions import InvalidFileException
+from openpyxl.xml.constants import SHARED_STRINGS, SHEET_MAIN_NS
+from pptx import Presentation
+from pptx.exc import PackageNotFoundError as PptxPackageNotFoundError
+
+from contentChunks import CONTENT_TEXT_MAX_CHARS
+
+from .common import (
+    CLASS_DATA,
+    CLASS_DOCUMENT,
+    DATA_CELL_MAX_CHARS,
+    DATA_MAX_COLUMNS,
+    DATA_SAMPLE_ROWS,
+    BranchResult,
+    ExtractContext,
+    ZipMemberTooLarge,
+    human_count,
+    read_zip_member,
+    truncate_text,
+)
+
+_WORD = re.compile(r"\w+", re.UNICODE)
+_PROPERTY_MAX_CHARS = 500
+_SHEET_NAMES_MAX = 50
+# Rows counted per sheet; the count stops here so a million-row workbook is not read to its end for a number.
+XLSX_MAX_ROWS_COUNTED = 200_000
+# The most of a workbook's shared-strings part (uncompressed bytes of the member) that is read. The part holds every
+# distinct text value in order of first use, so a sheet's header and first rows sit at its start; the part is read
+# as a stream only as far as the rows read need, and never past this bound, which also bounds the strings kept in
+# memory. A text cell whose string lies past the bound reads as blank, and sys_data says so (stringValues
+# "partial" with a note naming the strings read and the bound).
+XLSX_SHARED_STRINGS_READ_MAX_BYTES = 64 * 1024 * 1024
+_SHARED_STRING_TAG = "{%s}si" % SHEET_MAIN_NS
+XLSX_STRING_VALUES_PARTIAL = "partial"
+# Slides and sheets of the captured full text are joined with a blank line; page offsets point at each part's
+# first character.
+_PAGE_SEPARATOR = "\n\n"
+# The extended-properties part carries the page count the authoring application recorded when it saved the file.
+_APP_PROPERTIES_PART = "docProps/app.xml"
+_APP_PROPERTIES_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/extended-properties}"
+# What the three libraries raise for a file that is not a readable package.
+_OPEN_ERRORS = (DocxPackageNotFoundError, PptxPackageNotFoundError, InvalidFileException, zipfile.BadZipFile,
+                KeyError, ValueError, OSError)
+
+
+class _TextCollector:
+    """Assembles the captured full text part by part under CONTENT_TEXT_MAX_CHARS, recording each part's page
+    entry; a part that does not fit is cut and every later part is dropped."""
+
+    def __init__(self):
+        self.parts: List[str] = []
+        self.offsets: List[dict] = []
+        self.length = 0
+        self.truncated = False
+
+    def add(self, text: str, page: int, name: Optional[str] = None) -> None:
+        if self.truncated:
+            return
+        start = self.length + (len(_PAGE_SEPARATOR) if self.parts else 0)
+        room = CONTENT_TEXT_MAX_CHARS - start
+        if room <= 0:
+            self.truncated = True
+            return
+        if len(text) > room:
+            text, self.truncated = text[:room], True
+        entry = {"page": page, "start": start}
+        if name:
+            entry["name"] = name
+        self.offsets.append(entry)
+        self.parts.append(text)
+        self.length = start + len(text)
+
+    @property
+    def text(self) -> str:
+        return _PAGE_SEPARATOR.join(self.parts)
+
+
+def _iso(value) -> Optional[str]:
+    if not isinstance(value, datetime.datetime):
+        return None
+    if value.tzinfo is not None:
+        value = value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# Every text property an OPC core-properties part carries (python-docx/pptx/openpyxl expose the same set).
+_CORE_TEXT_PROPERTIES = ("title", "author", "subject", "keywords", "category", "comments", "content_status",
+                         "identifier", "language", "last_modified_by", "revision", "version")
+_CORE_DATE_PROPERTIES = (("created", "createdAt"), ("modified", "modifiedAt"), ("last_printed", "lastPrintedAt"))
+
+
+def _camel_property(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(part.title() for part in rest)
+
+
+def _core_properties(core) -> Dict[str, object]:
+    """Every stored core property of an OPC core-properties part: the text properties (title, author,
+    subject, keywords, category, comments, contentStatus, identifier, language, lastModifiedBy, revision,
+    version) and the dates as createdAt, modifiedAt and lastPrintedAt."""
+    properties: Dict[str, object] = {}
+    for key in _CORE_TEXT_PROPERTIES:
+        value = getattr(core, key, None)
+        if value not in (None, "", 0):
+            properties[_camel_property(key)] = str(value)[:_PROPERTY_MAX_CHARS]
+    for key, name in _CORE_DATE_PROPERTIES:
+        rendered = _iso(getattr(core, key, None))
+        if rendered:
+            properties[name] = rendered
+    return properties
+
+
+def app_page_count(path: str) -> Optional[int]:
+    """The ``Pages`` count of the package's extended properties, or None when the package records none, its
+    properties part is over the zip member read limit, or the part declares entities."""
+    try:
+        with zipfile.ZipFile(path) as package:
+            if _APP_PROPERTIES_PART not in package.namelist():
+                return None
+            root = ElementTree.fromstring(read_zip_member(package, _APP_PROPERTIES_PART))
+    except (zipfile.BadZipFile, ParseError, DefusedXmlException, ZipMemberTooLarge, KeyError, OSError):
+        return None
+    node = root.find(f"{_APP_PROPERTIES_NS}Pages")
+    try:
+        return int(node.text) if node is not None and node.text else None
+    except ValueError:
+        return None
+
+
+def _document_facts(result: BranchResult, section: Dict[str, object]) -> None:
+    for key in ("title", "author", "subject"):
+        if section.get(key):
+            result.facts[key] = str(section[key])
+    if section.get("createdAt"):
+        result.facts["created"] = str(section["createdAt"])
+
+
+def _unreadable(result: BranchResult, section_key: str, fmt: str, exc: Exception) -> BranchResult:
+    result.attributes[section_key] = {"format": fmt, "decodable": False}
+    result.warnings.append(f"{fmt} could not be opened: {exc}")
+    return result
+
+
+def _docx_text(document) -> Tuple[str, bool]:
+    """Paragraph texts and table rows (cells tab-separated) in document order, newline-joined and collected
+    only up to CONTENT_TEXT_MAX_CHARS: the line that crosses the cap is cut there, nothing after it is read,
+    and the second value records that cut."""
+    lines: List[str] = []
+    length = 0
+    truncated = False
+    for child in document.element.body.iterchildren():
+        tag = child.tag.rsplit("}", 1)[-1]
+        if tag == "p":
+            block = [Paragraph(child, document).text]
+        elif tag == "tbl":
+            block = ["\t".join(cell.text.strip() for cell in row.cells) for row in Table(child, document).rows]
+        else:
+            continue
+        for line in block:
+            if not lines and not line:
+                continue
+            room = CONTENT_TEXT_MAX_CHARS - length - (1 if lines else 0)
+            if room <= 0:
+                truncated = True
+                break
+            if len(line) > room:
+                line, truncated = line[:room], True
+            length += len(line) + (1 if lines else 0)
+            lines.append(line)
+        if truncated:
+            break
+    return "\n".join(lines).strip("\n"), truncated
+
+
+def extract_docx(path: str, ctx: ExtractContext) -> BranchResult:
+    result = BranchResult(file_class=CLASS_DOCUMENT)
+    try:
+        document = docx.Document(path)
+    except _OPEN_ERRORS as exc:
+        return _unreadable(result, "sys_document", "DOCX", exc)
+    text, truncated = _docx_text(document)
+    words = len(_WORD.findall(text))
+    sys_document: Dict[str, object] = {"format": "DOCX", "decodable": True, "wordCount": words, "hasText": words > 0}
+    pages = app_page_count(path)
+    if pages:
+        sys_document["pageCount"] = pages
+    sys_document.update(_core_properties(document.core_properties))
+    result.attributes["sys_document"] = sys_document
+    if pages:
+        result.facts["pages"] = human_count(pages, "page")
+    result.facts["words"] = human_count(words, "word")
+    _document_facts(result, sys_document)
+    result.text_excerpt = truncate_text(text, ctx.max_text_chars)
+    if ctx.capture_full_text:
+        # Word Open XML records page breaks only as rendering hints, so the full text carries no page entries.
+        result.full_text = text
+        result.full_text_truncated = truncated
+    return result
+
+
+def _slide_text(slide) -> str:
+    lines: List[str] = []
+    for shape in slide.shapes:
+        if getattr(shape, "has_text_frame", False) and shape.has_text_frame:
+            frame = shape.text_frame.text
+            if frame.strip():
+                lines.append(frame)
+        if getattr(shape, "has_table", False) and shape.has_table:
+            for row in shape.table.rows:
+                lines.append("\t".join(cell.text.strip() for cell in row.cells))
+    if slide.has_notes_slide:
+        notes = slide.notes_slide.notes_text_frame
+        if notes is not None and notes.text.strip():
+            lines.append("Notes: " + notes.text)
+    return "\n".join(lines)
+
+
+def extract_pptx(path: str, ctx: ExtractContext) -> BranchResult:
+    result = BranchResult(file_class=CLASS_DOCUMENT)
+    try:
+        presentation = Presentation(path)
+    except _OPEN_ERRORS as exc:
+        return _unreadable(result, "sys_document", "PPTX", exc)
+    slide_count = len(presentation.slides)
+    # Slides are collected in order until the cap; a slide beyond it is never read.
+    collector = _TextCollector()
+    for number, slide in enumerate(presentation.slides, start=1):
+        collector.add(_slide_text(slide), number)
+        if collector.truncated:
+            break
+    text = collector.text
+    words = len(_WORD.findall(text))
+    sys_document: Dict[str, object] = {
+        "format": "PPTX", "decodable": True, "slideCount": slide_count, "pageCount": slide_count,
+        "wordCount": words, "hasText": words > 0}
+    sys_document.update(_core_properties(presentation.core_properties))
+    result.attributes["sys_document"] = sys_document
+    result.facts["slides"] = human_count(slide_count, "slide")
+    result.facts["words"] = human_count(words, "word")
+    _document_facts(result, sys_document)
+    result.text_excerpt = truncate_text(text, ctx.max_text_chars)
+    if ctx.capture_full_text:
+        result.full_text = text
+        result.page_offsets = collector.offsets
+        result.full_text_truncated = collector.truncated
+    return result
+
+
+def _cell(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime.datetime):
+        return value.isoformat()
+    return str(value)[:DATA_CELL_MAX_CHARS]
+
+
+class _ReadBoundReached(Exception):
+    """The shared-strings stream was asked for bytes past its read bound."""
+
+
+class _BoundedRead:
+    """A read-only view of a zip member's uncompressed stream that hands out at most ``limit`` bytes: once they are
+    read, a further read returns end of stream when the member has no more bytes and raises _ReadBoundReached when
+    it has (one byte is read to tell the two apart). ``bytes_read`` counts what it handed out."""
+
+    def __init__(self, raw, limit: int):
+        self._raw = raw
+        self._limit = int(limit)
+        self.bytes_read = 0
+
+    def read(self, size: int = -1) -> bytes:
+        room = self._limit - self.bytes_read
+        if room <= 0:
+            if self._raw.read(1):
+                raise _ReadBoundReached()
+            return b""
+        if size is None or size < 0 or size > room:
+            size = room
+        data = self._raw.read(size)
+        self.bytes_read += len(data)
+        return data
+
+    def close(self) -> None:
+        self._raw.close()
+
+
+class _StreamedSharedStrings:
+    """A workbook's shared-strings table read as a stream, only as far as the highest index a cell has looked up
+    and never past XLSX_SHARED_STRINGS_READ_MAX_BYTES of the part: each `<si>` element's text is taken (as
+    openpyxl's own table reader takes it) and the element is cleared from the tree, so a sample of the first rows
+    reads the first few strings of the part, not the whole part. A lookup the read does not reach (past the bound,
+    past the part's end, or past a point it stops parsing at) is None, which the sheet reads as a blank cell;
+    ``bounded`` records that the bound stopped the read."""
+
+    def __init__(self, archive: zipfile.ZipFile, name: str, read_max_bytes: int):
+        self._archive = archive
+        self._name = name
+        self._read_max_bytes = read_max_bytes
+        self._strings: List[str] = []
+        self._source: Optional[_BoundedRead] = None
+        self._events = None
+        self._root = None
+        self.done = False
+        self.bounded = False
+        self.error: Optional[str] = None
+
+    def __getitem__(self, index: int) -> Optional[str]:
+        while index >= len(self._strings) and not self.done:
+            self._read_next()
+        return self._strings[index] if 0 <= index < len(self._strings) else None
+
+    def __len__(self) -> int:
+        return len(self._strings)
+
+    def _read_next(self) -> None:
+        if self._events is None:
+            self._source = _BoundedRead(self._archive.open(self._name), self._read_max_bytes)
+            self._events = ElementTree.iterparse(self._source, events=("start", "end"))
+        try:
+            for event, node in self._events:
+                if event == "start":
+                    if self._root is None:
+                        self._root = node
+                    continue
+                if node.tag == _SHARED_STRING_TAG:
+                    self._strings.append(Text.from_tree(node).content.replace("x005F_", ""))
+                    # The root keeps no finished element, so memory stays flat however far the part is read.
+                    self._root.clear()
+                    return
+        except _ReadBoundReached:
+            # Every element that ended inside the bytes read has been taken: iterparse hands out the events of
+            # the data it was fed before it asks the stream for more.
+            self.bounded = True
+        except (ParseError, DefusedXmlException) as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+        self.done = True
+        self.close()
+
+    def close(self) -> None:
+        if self._source is not None:
+            self._source.close()
+            self._source = None
+            self._events = None
+
+
+class _StreamingWorkbookReader(ExcelReader):
+    """openpyxl's read-only, values-only workbook reader (what ``load_workbook(read_only=True, data_only=True)``
+    builds), with the shared-strings table streamed on demand (_StreamedSharedStrings) instead of loaded whole:
+    openpyxl's own reader parses every string of the part into memory before the first sheet row is read."""
+
+    def __init__(self, path: str):
+        super().__init__(path, read_only=True, data_only=True)
+        self.shared_strings_bytes = 0
+
+    def read_strings(self) -> None:
+        part = self.package.find(SHARED_STRINGS)
+        if part is None:
+            return
+        name = part.PartName[1:]
+        self.shared_strings_bytes = self.archive.getinfo(name).file_size
+        self.shared_strings = _StreamedSharedStrings(self.archive, name, XLSX_SHARED_STRINGS_READ_MAX_BYTES)
+
+
+def _open_workbook(path: str) -> _StreamingWorkbookReader:
+    reader = _StreamingWorkbookReader(path)
+    try:
+        reader.read()
+    except BaseException:
+        reader.archive.close()
+        raise
+    return reader
+
+
+def _declared_data_rows(sheet) -> Optional[int]:
+    """The rows below the header that the sheet's `<dimension>` declares, or None when it declares none. A read-only
+    sheet yields its rows from row 1 to the declared last row (padding gaps with empty rows), so this is the number
+    a scan of the sheet would count, known before any row is read."""
+    max_row = sheet.max_row
+    return None if max_row is None else max(0, int(max_row) - 1)
+
+
+def extract_xlsx(path: str, ctx: ExtractContext) -> BranchResult:
+    """sys_data for a workbook: sheet names, the first sheet's columns, row count and sample rows, and the text of
+    each sheet when the context captures it. The read is bounded: the shared strings are streamed only as far as
+    the rows read need them and never past XLSX_SHARED_STRINGS_READ_MAX_BYTES of the part; a sheet's row count comes
+    from its declared dimension, or from a scan that stops at XLSX_MAX_ROWS_COUNTED; and a sheet is read only as
+    far as its sample rows, its count and its share of the text need."""
+    result = BranchResult(file_class=CLASS_DATA)
+    try:
+        reader = _open_workbook(path)
+    except _OPEN_ERRORS as exc:
+        return _unreadable(result, "sys_data", "XLSX", exc)
+    workbook = reader.wb
+    strings = reader.shared_strings
+    collector = _TextCollector()
+    first_columns: List[str] = []
+    first_sample: List[List[str]] = []
+    first_rows = 0
+    first_capped = False
+    try:
+        sheet_names = list(workbook.sheetnames)
+        for number, name in enumerate(sheet_names, start=1):
+            sheet = workbook[name]
+            declared = _declared_data_rows(sheet)
+            header: Optional[List[str]] = None
+            sample: List[List[str]] = []
+            if declared is None:
+                rows, capped = 0, False
+            else:
+                rows, capped = min(declared, XLSX_MAX_ROWS_COUNTED), declared > XLSX_MAX_ROWS_COUNTED
+            lines = [f"Sheet: {name}"]
+            line_chars = len(lines[0])
+            # The text this sheet may still add: the cap less what the earlier sheets used.
+            want_text = ctx.capture_full_text and not collector.truncated
+            text_budget = CONTENT_TEXT_MAX_CHARS - collector.length
+            for row in sheet.iter_rows(values_only=True):
+                cells = [_cell(value) for value in row[:DATA_MAX_COLUMNS]]
+                line = "\t".join(cells)
+                if header is None:
+                    header = cells
+                    lines.append(line)
+                    line_chars += len(line) + 1
+                    continue
+                if declared is None:
+                    if rows < XLSX_MAX_ROWS_COUNTED:
+                        rows += 1
+                    else:
+                        capped = True
+                if len(sample) < DATA_SAMPLE_ROWS:
+                    sample.append(cells)
+                if want_text and line_chars < text_budget:
+                    lines.append(line)
+                    line_chars += len(line) + 1
+                # One pass feeds the sample, the count and the text; it ends once none of them needs another row
+                # (a declared dimension has given the count already).
+                counted = declared is not None or capped
+                if counted and len(sample) >= DATA_SAMPLE_ROWS and (not want_text or line_chars >= text_budget):
+                    break
+            if number == 1:
+                first_columns, first_sample, first_rows, first_capped = header or [], sample, rows, capped
+            if want_text:
+                collector.add("\n".join(lines), number, name)
+    finally:
+        workbook.close()
+        if isinstance(strings, _StreamedSharedStrings):
+            strings.close()
+    sys_data: Dict[str, object] = {
+        "format": "XLSX",
+        "decodable": True,
+        "sheetCount": len(sheet_names),
+        "sheetNames": sheet_names[:_SHEET_NAMES_MAX],
+        "columnCount": len(first_columns),
+        "columns": first_columns,
+        "rowCount": first_rows,
+        "rowCountExact": not first_capped,
+        "sampleRows": first_sample,
+    }
+    if isinstance(strings, _StreamedSharedStrings) and strings.bounded:
+        read = len(strings)
+        note = (f"the shared-strings part is {reader.shared_strings_bytes:,} bytes uncompressed and its first "
+                f"{XLSX_SHARED_STRINGS_READ_MAX_BYTES:,} bytes (the read bound) were read, {read:,} strings: text "
+                f"cells after string {read:,} read as blank in the columns, the sample rows and the captured text; "
+                "the counts and the numeric values stand")
+        sys_data["stringValues"] = XLSX_STRING_VALUES_PARTIAL
+        sys_data["stringValuesNote"] = note
+        result.warnings.append(f"{ctx.file_name}: text cell values partly read: {note}")
+    elif isinstance(strings, _StreamedSharedStrings) and strings.error:
+        result.warnings.append(f"{ctx.file_name}: the shared-strings part stopped parsing after {len(strings):,} "
+                               f"strings ({strings.error}); later text cells read as blank")
+    result.attributes["sys_data"] = sys_data
+    result.facts["sheets"] = human_count(len(sheet_names), "sheet")
+    result.facts["columns"] = human_count(len(first_columns), "column")
+    result.facts["rows"] = human_count(first_rows, "row") + (" (counting stopped)" if first_capped else "")
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(first_columns)
+    writer.writerows(first_sample)
+    result.text_excerpt = truncate_text(buffer.getvalue(), ctx.max_text_chars)
+    if ctx.capture_full_text:
+        result.full_text = collector.text
+        result.page_offsets = collector.offsets
+        result.full_text_truncated = collector.truncated
+    return result

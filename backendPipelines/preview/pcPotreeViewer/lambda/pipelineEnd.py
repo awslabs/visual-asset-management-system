@@ -20,6 +20,73 @@ sfn = boto3.client(
     region_name=os.environ["AWS_REGION"],
     config=retry_config
 )
+batch = boto3.client(
+    'batch',
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
+)
+
+# Step Functions ends a .sync Batch job when the Batch state's own bound fires (States.Timeout); after
+# that timeout the run's job, still queued or running, is ended here as well, as a backup, so it
+# cannot start or go on after the run had failed. The queues are the PDAL and
+# Potree queues (BATCH_JOB_QUEUES); both states submit under the run's unique job name.
+STATE_TIMEOUT_ERROR = "States.Timeout"
+BATCH_JOB_QUEUES = [queue for queue in os.environ.get("BATCH_JOB_QUEUES", "").split(",") if queue]
+LIVE_BATCH_JOB_STATUSES = frozenset({"SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"})
+
+
+def end_batch_job_after_state_timeout(error, job_name):
+    """Terminate the run's Batch job when ``error`` is the Batch state's own timeout.
+
+    Returns how many jobs were ended. Best effort: a failed lookup or terminate is logged, and the
+    failure is still reported to the workflow."""
+    if not isinstance(error, dict) or error.get("Error") != STATE_TIMEOUT_ERROR or not job_name:
+        return 0
+    ended = 0
+    for queue in BATCH_JOB_QUEUES:
+        try:
+            response = batch.list_jobs(
+                jobQueue=queue, filters=[{"name": "JOB_NAME", "values": [job_name]}])
+            for job in response.get("jobSummaryList") or []:
+                if job.get("status") in LIVE_BATCH_JOB_STATUSES:
+                    batch.terminate_job(jobId=job["jobId"], reason="The pipeline's time limit was reached")
+                    ended += 1
+        except Exception as e:
+            logger.warning(f"Could not end the Batch job {job_name}: {e}")
+    return ended
+
+# SendTaskFailure caps `error` at 256 characters and `cause` at 32,768. A longer value is rejected, the
+# calling workflow's task is never told and waits out its timeout, so both are cut to fit.
+TASK_FAILURE_ERROR_MAX_CHARS = 256
+TASK_FAILURE_CAUSE_MAX_CHARS = 32768
+TASK_FAILURE_CAUSE_DEFAULT = 'See AWS cloudwatch logs for error cause.'
+TASK_FAILURE_ERROR_PREFIX = 'Pipeline Failure: '
+
+
+def _bounded(text, limit):
+    return text if len(text) <= limit else text[:limit - 3] + '...'
+
+
+def external_task_failure(error):
+    """The `error` and `cause` reported to the calling workflow for this run's caught error.
+
+    A failure the pipeline container reported itself already has its `error` prefixed with
+    "Pipeline Failure: ", so the prefix is added only to an error that lacks it (#1217). Only such a
+    container failure has its cause passed on: that cause is the container's own (the log pointer,
+    or its full message when the error had to be cut), and it never repeats the error. Any other
+    caught error (a Lambda or Batch fault, a timeout) keeps the generic cause, as its Step Functions
+    cause can carry stack traces and resource names."""
+    error_text = str(error.get("Error") or "")
+    from_container = error_text.startswith(TASK_FAILURE_ERROR_PREFIX.strip())
+    cause_text = str(error.get("Cause") or "") if from_container else ""
+    cause_text = cause_text or TASK_FAILURE_CAUSE_DEFAULT
+    if not from_container:
+        error_text = TASK_FAILURE_ERROR_PREFIX + error_text
+    return {
+        "error": _bounded(error_text, TASK_FAILURE_ERROR_MAX_CHARS),
+        "cause": _bounded(cause_text, TASK_FAILURE_CAUSE_MAX_CHARS),
+    }
+
 
 def lambda_handler(event, context):
     """
@@ -37,6 +104,7 @@ def lambda_handler(event, context):
     else:
         logger.error("Pipeline Failure")
         logger.error(event["error"])
+        end_batch_job_after_state_timeout(event["error"], event.get("jobName"))
 
     if (externalSfnTaskToken != None and externalSfnTaskToken != ""):
         if("error" not in event):
@@ -49,8 +117,7 @@ def lambda_handler(event, context):
             try:
                 sfn.send_task_failure(
                     taskToken=event['externalSfnTaskToken'],
-                    error='Pipeline Failure: ' + event["error"]["Error"],
-                    cause='See AWS cloudwatch logs for error cause.'
+                    **external_task_failure(event["error"])
                 )
                 logger.info("Sent external task token: error")
             except Exception as e:

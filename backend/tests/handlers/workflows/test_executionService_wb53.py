@@ -317,6 +317,23 @@ class TestRerunReconstruction:
         assert le._to_asset_relative_key("/custom/root/f.txt", "custom/root/") == "/f.txt"
         assert le._to_asset_relative_key("/x.glb", "") == "/x.glb"        # no root -> unchanged
 
+    @pytest.mark.parametrize("full_key,root,expected", [
+        # A subfolder named like the asset: its path, which the execute request reads back to the same key
+        ("/a1/a1/x.glb", "a1/", "/a1/x.glb"),
+        ("/vams/b1/vams/b1/x.glb", "vams/b1/", "/vams/b1/x.glb"),
+        # A single-file asset: the object, its own preview and a companion entry named like its file
+        ("/p/model.glb", "p/model.glb", "/"),
+        ("/p/model.glb.previewFile.png", "p/model.glb", "/model.glb.previewFile.png"),
+        ("/p/model.glb/model.glb", "p/model.glb", "/model.glb/model.glb"),
+        ("/p/model.glb/sub/x.obj", "p/model.glb", "/sub/x.obj"),
+    ])
+    def test_a_rerun_names_each_input_by_the_path_that_reads_back_to_its_key(self, full_key, root, expected):
+        """#1943: a re-run sends each input's path in the asset, never '/' followed by a full key."""
+        assert le._to_asset_relative_key(full_key, root) == expected
+        if expected != "/":
+            from common.assetLocations import object_key_for_request
+            assert object_key_for_request(root, expected) == full_key.lstrip("/")
+
     def test_reconstructs_template_less_override(self):
         # A template-less override run: no templateId; re-run must carry the raw (untruncated) override.
         with patch(f"{MOD}._query_all", side_effect=[
@@ -527,6 +544,68 @@ class TestAbortGroup:
         assert payload["message"]["skippedInaccessibleCount"] == 1
         assert [r["status"] for r in payload["message"]["results"]] == ["aborted", "aborted"]
 
+    @staticmethod
+    def _group_abort(member_bodies):
+        """Abort a group whose members' own abort responses are `member_bodies` (execution id ->
+        response body). A member named "secret" is inaccessible to the caller."""
+        members = [{"workflowExecutionId": eid, "executionStatus": "RUNNING"} for eid in member_bodies]
+
+        def _abort(_event, execution_id):
+            return {"statusCode": 200, "body": json.dumps(member_bodies[execution_id])}
+
+        with patch(f"{MOD}._executions_in_group", return_value=members), \
+             patch(f"{MOD}.authorize_abort", side_effect=lambda eid, _: (eid != "secret", "")), \
+             patch(f"{MOD}.abort_execution", side_effect=_abort):
+            resp = le.abort_group({}, "g1")
+        assert resp["statusCode"] == 200
+        return resp
+
+    SLURM_ENTRY = {"resourceType": "slurmJob", "label": "Mock Slurm job", "stageName": "MockTrain",
+                   "locator": "slurm-00001"}
+
+    def test_member_not_abortable_entries_carry_the_member_execution_id(self):
+        resp = self._group_abort({
+            "e1": {"message": "Execution aborted", "notAbortable": [dict(self.SLURM_ENTRY)]},
+            "e2": {"message": "Execution aborted"},
+            "secret": {"message": "Execution aborted", "notAbortable": [dict(self.SLURM_ENTRY)]},
+        })
+        payload = json.loads(resp["body"])
+        assert payload["notAbortable"] == [{"executionId": "e1", **self.SLURM_ENTRY}]
+        assert "warnings" not in payload
+        assert "secret" not in resp["body"]  # an inaccessible member is never aborted or reported
+
+    def test_mixed_group_reports_warnings_and_not_abortable_each_attributed_to_its_member(self):
+        resp = self._group_abort({
+            "e1": {"message": "Execution aborted", "warnings": ["Sub-process may still be running"]},
+            "e2": {"message": "Execution aborted", "notAbortable": [dict(self.SLURM_ENTRY)],
+                   "warnings": ["Sub-process of type 'slurmJob' (slurm-00001) could not be aborted"]},
+        })
+        payload = json.loads(resp["body"])
+        assert payload["warnings"] == [
+            "e1: Sub-process may still be running",
+            "e2: Sub-process of type 'slurmJob' (slurm-00001) could not be aborted",
+        ]
+        assert payload["notAbortable"] == [{"executionId": "e2", **self.SLURM_ENTRY}]
+        assert [r["status"] for r in payload["message"]["results"]] == ["aborted", "aborted"]
+
+    def test_clean_group_abort_carries_neither_array(self):
+        resp = self._group_abort({
+            "e1": {"message": "Execution aborted"},
+            "e2": {"message": "Execution aborted"},
+        })
+        payload = json.loads(resp["body"])
+        assert set(payload) == {"message"}
+
+    def test_a_failed_member_abort_contributes_no_entries(self):
+        members = [{"workflowExecutionId": "e1", "executionStatus": "RUNNING"}]
+        with patch(f"{MOD}._executions_in_group", return_value=members), \
+             patch(f"{MOD}.authorize_abort", return_value=(True, "")), \
+             patch(f"{MOD}.abort_execution", return_value={
+                 "statusCode": 500, "body": json.dumps({"notAbortable": [dict(self.SLURM_ENTRY)]})}):
+            payload = json.loads(le.abort_group({}, "g1")["body"])
+        assert set(payload) == {"message"}
+        assert payload["message"]["results"] == [{"executionId": "e1", "status": "error"}]
+
     def test_empty_group_404(self):
         with patch(f"{MOD}._executions_in_group", return_value=[]):
             resp = le.abort_group({}, "nope")
@@ -660,18 +739,22 @@ class TestGetExecutionLogsLiveFallback:
         assert "live line" in body["executionLog"]
         fls.assert_called_once()
 
-    def test_whole_execution_uses_stored_when_present(self):
+    def test_whole_execution_uses_stored_when_the_live_read_is_empty(self):
+        # The stored copy is served when the live read has nothing (e.g. the log group's retention
+        # has dropped the run's events); the live read is still made, since a stored copy taken as
+        # the run ended can hold less than CloudWatch does now.
         le.claims_and_roles = {"tokens": ["u1"]}
         main = {"workflowId": "wf", "workflowDatabaseId": "db", "executionLog": "stored text",
                 "executionError": "", "executionLogGroupArn": "arn:...:log-group:/g:*"}
         with patch(f"{MOD}.get_execution_main_row", return_value=main), \
              patch(f"{MOD}.authorize_execution_access", return_value=(True, "")), \
-             patch(f"{MOD}._full_log_search") as fls:
+             patch(f"{MOD}._full_log_search",
+                   return_value={"events": [], "nextToken": None}) as fls:
             resp = le.get_execution_logs({}, "e1000000000000000000000000000001", self._q(mode="truncated"))
         body = json.loads(resp["body"])["message"]
         assert body["logsSource"] == "stored"
         assert body["executionLog"] == "stored text"
-        fls.assert_not_called()
+        fls.assert_called_once()
 
     def test_pipeline_scope_falls_back_to_live_when_stored_empty(self):
         le.claims_and_roles = {"tokens": ["u1"]}
@@ -1249,6 +1332,64 @@ class TestPermanentDeleteExpiredHistory:
         assert resp["statusCode"] == 400
         assert "in progress" in json.loads(resp["body"])["message"].lower()
 
+    def _delete_with_failed_lookup(self, lookup_error):
+        """Permanent delete of a non-terminal row whose DescribeExecution raises lookup_error, with the
+        handler's logger and the row deletes spied on."""
+        le.claims_and_roles = {"tokens": ["u1"]}
+        with patch(f"{MOD}.get_execution_main_row", return_value=self._main_row()), \
+             patch(f"{MOD}.authorize_abort", return_value=(True, "")), \
+             patch(f"{MOD}._delete_all_rows") as m_delete_rows, \
+             patch(f"{MOD}.dynamodb") as m_dynamo, \
+             patch(f"{MOD}.logger") as m_logger, \
+             patch(f"{MOD}.sfn") as m_sfn:
+            m_sfn.describe_execution.side_effect = lookup_error
+            resp = le.permanent_delete_execution({}, "e1000000000000000000000000000001")
+        return resp, m_logger, m_delete_rows, m_dynamo
+
+    @pytest.mark.parametrize("code", ["ThrottlingException", "AccessDeniedException"])
+    def test_failed_lookup_logs_at_error_with_its_code(self, code):
+        # #1440: validation_error() logs the 400 at WARNING, so the handler's own line must be the
+        # ERROR an alarm or a log search for errors finds, and it names the Step Functions error code.
+        resp, m_logger, m_delete_rows, m_dynamo = self._delete_with_failed_lookup(self._client_error(code))
+        assert resp["statusCode"] == 400
+        assert json.loads(resp["body"]) == {
+            "message": "Execution is in progress; abort it before permanent delete."}
+        assert m_logger.error.call_count == 1
+        logged = m_logger.error.call_args.args[0]
+        assert code in logged
+        assert "e1000000000000000000000000000001" in logged
+        m_logger.info.assert_not_called()
+        m_delete_rows.assert_not_called()
+        m_dynamo.Table.return_value.delete_item.assert_not_called()
+
+    def test_unexpected_lookup_failure_logs_at_error_with_its_trace(self):
+        resp, m_logger, m_delete_rows, m_dynamo = self._delete_with_failed_lookup(RuntimeError("boom"))
+        assert resp["statusCode"] == 400
+        assert json.loads(resp["body"]) == {
+            "message": "Execution is in progress; abort it before permanent delete."}
+        assert m_logger.exception.call_count == 1
+        assert "e1000000000000000000000000000001" in m_logger.exception.call_args.args[0]
+        m_logger.info.assert_not_called()
+        m_delete_rows.assert_not_called()
+        m_dynamo.Table.return_value.delete_item.assert_not_called()
+
+    def test_expired_history_logs_no_error(self):
+        # The benign case (the execution's history is gone) stays at INFO and the delete goes ahead.
+        le.claims_and_roles = {"tokens": ["u1"]}
+        with patch(f"{MOD}.get_execution_main_row", return_value=self._main_row()), \
+             patch(f"{MOD}.authorize_abort", return_value=(True, "")), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[]), \
+             patch(f"{MOD}._delete_all_rows"), \
+             patch(f"{MOD}.dynamodb") as m_dynamo, \
+             patch(f"{MOD}.logger") as m_logger, \
+             patch(f"{MOD}.sfn") as m_sfn:
+            m_dynamo.Table.return_value = MagicMock()
+            m_sfn.describe_execution.side_effect = self._client_error("ExecutionDoesNotExist")
+            resp = le.permanent_delete_execution({}, "e1000000000000000000000000000001")
+        assert resp["statusCode"] == 200
+        m_logger.error.assert_not_called()
+        m_logger.exception.assert_not_called()
+
 
 @pytest.mark.unit
 class TestRerunEnforcesExecuteRoute:
@@ -1402,7 +1543,8 @@ class TestDetailsInputMetadataScopes:
         ])
         assert details["inputDatabaseMetadata"] == [
             {"databaseId": "src-db", "assetId": "", "filePath": "/", "scope": "database",
-             "metadata": {"program": "apollo"}, "attributes": {}, "pipelineId": "p1"}]
+             "metadata": {"program": "apollo"}, "attributes": {}, "expanded": False,
+             "pipelineId": "p1"}]
         # The asset row stays where a client already reads it, and the database row is NOT duplicated.
         assert [md["assetId"] for md in details["inputMetadata"]] == ["a1"]
 

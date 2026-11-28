@@ -1,0 +1,245 @@
+[project]
+name = "imageto3d-blenderagent"
+version = "0.1.0"
+description = "Image to 3D, Blender agent image: the whole Python set the image installs, locked per image (#1726)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # --- What the Dockerfile asks for, in the order it asks. ---
+    # Shared pipeline dependencies: the shared container/requirements.txt (retired in #1726) at the base commit, line for line.
+    "boto3",
+    "botocore",
+    "numpy",
+    "pillow",
+    "trimesh>=4.11,<5",
+    "manifold3d>=3.0,<4",
+    "networkx",
+    "fast-simplification",
+    "rembg",
+    "onnxruntime-gpu==1.22.0",
+    "scipy",
+    "xatlas==0.0.11",
+    # The Responses-to-Converse bridge, the OpenAI client the adapter uses to check it, and boto3, at the versions the
+    # Dockerfile has always pinned (LITELLM_VERSION in the Dockerfile).
+    "litellm[proxy]==1.100.0",
+    "openai==2.54.0",
+    "boto3==1.44.5",
+    # The scripted refit's depth model runs on the CUDA 12.8 torch (TORCH_VERSION in the Dockerfile).
+    "torch==2.7.1",
+    # What MoGe's model code imports besides torch, utils3d, SciPy and NumPy. MoGe itself is installed with --no-deps
+    # (out-of-lock.json), and the rest of its declared list serves its own demo apps.
+    "opencv-python-headless==5.1.0.95",
+    "huggingface_hub==2.4.0",
+    # utils3d's own dependencies (numpy and scipy are above). utils3d is built from a pinned clone with --no-deps, so the
+    # lock holds what its pyproject.toml declares.
+    "moderngl",
+    "matplotlib",
+]
+
+# The GPL-3.0 mesh-repair rungs, installed only when the ENABLE_GPL_MESH_REPAIR build argument is true.
+# requirements-gpl.lock is their export.
+[dependency-groups]
+gpl-repair = [
+    "pymeshfix==0.18.1",
+    "pymeshlab==2025.7.post1",
+]
+# The tools every pip step runs with and the source installs need, installed first from requirements-build.lock.
+build = [
+    "pip",
+    "setuptools",
+    "wheel",
+]
+
+# The Dockerfile installs the committed, hashed requirements*.lock files with `pip install --require-hashes
+# --no-deps`. They are exports of uv.lock (`uv export`, command in each header). uv is a development and CI tool
+# here and is not in the image.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+# Every package is held to the baseline version by the constraints below, so no new release can enter the lock;
+# the cutoff is the start of the baseline build (a relative "7 days" would reject baseline versions that were
+# younger than that when it was built).
+exclude-newer = "2026-11-23T22:10:30Z"
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+# The versions the image installed when it was built from development, one line per installed package. Kept equal
+# to frozen-set.txt by locks/tools/sync_constraints.py. Moving a version means re-freezing a build and
+# re-locking (locks/tools/relock.md).
+# BEGIN frozen-set constraints (locks/tools/sync_constraints.py)
+constraint-dependencies = [
+    "aiohappyeyeballs==2.7.1",
+    "aiohttp==3.14.5",
+    "aiosignal==1.4.0",
+    "annotated-doc==0.0.7",
+    "annotated-types==0.8.0",
+    "anyio==4.16.0",
+    "APScheduler==3.11.3",
+    "attrs==26.1.0",
+    "azure-core==1.41.0",
+    "azure-identity==1.27.0",
+    "azure-storage-blob==12.31.1",
+    "backoff==2.2.1",
+    "boto3==1.44.5",
+    "botocore==1.44.10",
+    "certifi==2026.11.20",
+    "cffi==2.1.1",
+    "charset-normalizer==3.5.3",
+    "click==8.5.1",
+    "coloredlogs==15.0.1",
+    "contourpy==1.4.0",
+    "croniter==7.0.0",
+    "cryptography==50.0.2",
+    "cycler==0.12.1",
+    "distro==1.9.0",
+    "dnspython==2.9.2",
+    "email-validator==2.4.0",
+    "Expression==5.8.0",
+    "fast_simplification==0.2.0",
+    "fastapi==0.165.0",
+    "fastapi-sso==0.23.0",
+    "fastuuid==0.14.0",
+    "filelock==4.3.1",
+    "flatbuffers==25.12.19",
+    "fonttools==4.68.0",
+    "frozenlist==1.8.0",
+    "fsspec==2026.9.0",
+    "glcontext==3.1.0",
+    "granian==2.8.9",
+    "gunicorn==23.0.0",
+    "h11==0.16.0",
+    "hf-xet==1.8.0",
+    "hiredis==3.5.0",
+    "httpcore==1.0.9",
+    "httpcore2==2.16.2",
+    "httpx==0.28.1",
+    "httpx-sse==0.4.3",
+    "httpx2==2.16.2",
+    "huggingface_hub==2.4.0",
+    "humanfriendly==10.0",
+    "idna==3.20",
+    "ImageIO==2.38.2",
+    "importlib_metadata==8.9.0",
+    "inquirerpy==0.3.4",
+    "isodate==0.7.2",
+    "Jinja2==3.1.6",
+    "jiter==0.19.0",
+    "jmespath==1.1.0",
+    "jsonschema==4.26.0",
+    "jsonschema-specifications==2025.9.1",
+    "kiwisolver==1.5.1",
+    "lazy-loader==0.6",
+    "litellm==1.100.0",
+    "litellm-enterprise==0.1.62",
+    "litellm-proxy-extras==0.4.91",
+    "llvmlite==0.50.0",
+    "manifold3d==3.5.5",
+    "markdown-it-py==4.3.0",
+    "MarkupSafe==3.0.4",
+    "matplotlib==3.11.2",
+    "mcp==1.30.0",
+    "mdurl==0.1.2",
+    "moderngl==5.13.0",
+    "mpmath==1.3.0",
+    "msal==1.39.0",
+    "msal-extensions==1.3.1",
+    "multidict==7.2.1",
+    "networkx==3.7",
+    "numba==0.68.1",
+    "numpy==2.5.5",
+    "nvidia-cublas-cu12==12.8.3.14",
+    "nvidia-cuda-cupti-cu12==12.8.57",
+    "nvidia-cuda-nvrtc-cu12==12.8.61",
+    "nvidia-cuda-runtime-cu12==12.8.57",
+    "nvidia-cudnn-cu12==9.7.1.26",
+    "nvidia-cufft-cu12==11.3.3.41",
+    "nvidia-cufile-cu12==1.13.0.11",
+    "nvidia-curand-cu12==10.3.9.55",
+    "nvidia-cusolver-cu12==11.7.2.55",
+    "nvidia-cusparse-cu12==12.5.7.53",
+    "nvidia-cusparselt-cu12==0.6.3",
+    "nvidia-nccl-cu12==2.26.2",
+    "nvidia-nvjitlink-cu12==12.8.61",
+    "nvidia-nvtx-cu12==12.8.55",
+    "oauthlib==4.0.1",
+    "onnxruntime-gpu==1.22.0",
+    "openai==2.54.0",
+    "opencv-python-headless==5.1.0.95",
+    "opentelemetry-api==1.45.2",
+    "orjson==3.13.0",
+    "packaging==26.4",
+    "pfzy==0.3.4",
+    "pillow==13.0.0",
+    "pip==26.3",
+    "platformdirs==4.14.8",
+    "polars==1.44.2",
+    "polars-runtime-32==1.44.2",
+    "pooch==1.9.0",
+    "prompt_toolkit==3.0.53",
+    "propcache==0.5.4",
+    "protobuf==7.36.2",
+    "pycparser==3.12",
+    "pydantic==2.14.4",
+    "pydantic-settings==2.16.3",
+    "pydantic_core==2.50.5",
+    "Pygments==2.21.0",
+    "PyJWT==2.15.1",
+    "PyMatting==1.1.16",
+    "pymeshfix==0.18.1",
+    "pymeshlab==2025.7.post1",
+    "PyNaCl==1.6.2",
+    "pyparsing==3.3.3",
+    "pyroscope-io==0.8.16",
+    "python-dateutil==2.9.0.post0",
+    "python-dotenv==1.2.4",
+    "python-multipart==0.0.34",
+    "PyYAML==6.0.4",
+    "redis==8.2.0",
+    "referencing==0.37.0",
+    "regex==2026.11.19",
+    "rembg==2.0.87",
+    "requests==2.34.2",
+    "RestrictedPython==8.5",
+    "rich==13.9.4",
+    "rpds-py==2026.9.1",
+    "rq==2.12.0",
+    "s3transfer==0.19.3",
+    "scikit-image==0.26.0",
+    "scipy==1.18.1",
+    "setuptools==84.2.1",
+    "six==1.17.0",
+    "sniffio==1.3.1",
+    "soundfile==0.14.0",
+    "sse-starlette==3.7.1",
+    "starlette==1.10.0",
+    "sympy==1.14.0",
+    "tifffile==2026.11.16",
+    "tiktoken==0.14.0",
+    "tokenizers==0.23.3",
+    "torch==2.7.1+cu128",
+    "tqdm==4.70.1",
+    "trimesh==4.12.2",
+    "triton==3.3.1",
+    "truststore==0.10.5",
+    "typing-inspection==0.4.5",
+    "typing_extensions==4.16.0",
+    "tzlocal==5.4.5",
+    "urllib3==2.8.0",
+    "uvicorn==0.54.0",
+    "uvloop==0.23.0",
+    "wcwidth==0.9.5",
+    "websockets==15.0.1",
+    "wheel==0.48.0",
+    "xatlas==0.0.11",
+    "yarl==1.25.1",
+    "zipp==4.1.2",
+]
+# END frozen-set constraints
+
+# torch comes from the CUDA 12.8 index, as the image installs it today. The index is explicit, so no other package
+# can be taken from it.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }

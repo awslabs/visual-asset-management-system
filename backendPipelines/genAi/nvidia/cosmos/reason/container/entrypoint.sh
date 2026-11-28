@@ -17,13 +17,16 @@ fi
 # Pick up the host-mounted NVIDIA driver libraries the container runtime injects.
 ldconfig 2>/dev/null || true
 
-# Ensure Python.h is findable for Triton JIT compilation.
-# The uv-managed Python stores headers in the venv, not /usr/include/.
+# Ensure Python.h is findable for Triton JIT compilation. The uv-managed Python stores headers in
+# the venv, not /usr/include/; the Dockerfile already installs python3-dev at build time (as root)
+# to provide /usr/include/python3.12/Python.h, so this is only a fallback and must never abort the
+# entrypoint — the runtime user (uid 10000) cannot write under /usr/include, so the ln is guarded
+# to no-op rather than fail under `set -e`.
 if [ ! -f /usr/include/python3.12/Python.h ]; then
     PYTHON_INCLUDE=$(python -c "import sysconfig; print(sysconfig.get_path('include'))" 2>/dev/null)
     if [ -n "$PYTHON_INCLUDE" ] && [ -f "$PYTHON_INCLUDE/Python.h" ]; then
-        echo "Symlinking Python headers: $PYTHON_INCLUDE -> /usr/include/python3.12"
-        ln -sf "$PYTHON_INCLUDE" /usr/include/python3.12
+        ln -sf "$PYTHON_INCLUDE" /usr/include/python3.12 2>/dev/null || \
+            echo "Python.h not linkable at runtime (expected: provided by python3-dev at build time)"
     fi
 fi
 

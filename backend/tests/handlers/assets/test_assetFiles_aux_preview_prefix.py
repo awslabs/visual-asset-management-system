@@ -74,8 +74,10 @@ class TestLifecycleUsesDatabaseScopedPrefix:
             response = af.delete_auxiliary_preview_asset_files("db1", "asset-1", "/scans/pump.e57", {})
 
         assert response.success is True
-        assert paginator.paginate.call_args.kwargs['Prefix'] == "db1/asset-1/scans/pump.e57/"
-        mock_delete.assert_called_once_with("db1/asset-1/scans/pump.e57/")
+        assert paginator.paginate.call_args.kwargs['Prefix'] == "db1/asset-1/scans/pump.e57/preview/"
+        mock_delete.assert_called_once()
+        assert mock_delete.call_args.args == ("db1/asset-1/scans/pump.e57/preview/",)
+        assert mock_delete.call_args.kwargs["keep"](aux_key)
 
     def test_revert_deletes_scoped_prefix(self):
         """Reverting a file version clears the aux data at the database-scoped prefix."""
@@ -99,7 +101,8 @@ class TestLifecycleUsesDatabaseScopedPrefix:
                 patch.object(af, 'send_subscription_email', MagicMock()):
             af.revert_file_version("db1", "asset-1", "/scans/pump.e57", "v1", {"tokens": ["alice"]})
 
-        mock_delete.assert_called_once_with("db1/asset-1/scans/pump.e57/")
+        mock_delete.assert_called_once()
+        assert mock_delete.call_args.args == ("db1/asset-1/scans/pump.e57/preview/",)
 
     def test_move_relocates_scoped_prefix(self):
         """Moving a file moves its aux data between database-scoped prefixes."""
@@ -123,10 +126,10 @@ class TestLifecycleUsesDatabaseScopedPrefix:
                 patch.object(af, 'process_preview_files', return_value=[]), \
                 patch.object(af, 'move_auxiliary_files') as mock_move, \
                 patch.object(af, '_copy_file_metadata_to_destination', return_value=0), \
-                patch.object(af, 'send_subscription_email', MagicMock()):
+                patch.object(af, 'send_subscription_email', MagicMock()), \
+                patch.object(af, 'nested_locations_for', lambda *a, **k: af.NestedLocations('asset-1/')):
             af.move_file("db1", "asset-1", "/scans/pump.e57", "/final/pump.e57", {"tokens": ["alice"]})
 
-        mock_move.assert_called_once_with(
-            "db1/asset-1/scans/pump.e57/",
-            "db1/asset-1/final/pump.e57/",
-        )
+        mock_move.assert_called_once()
+        assert mock_move.call_args.args == ("db1/asset-1/scans/pump.e57/preview/",
+                                            "db1/asset-1/final/pump.e57/preview/")

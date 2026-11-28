@@ -22,26 +22,40 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({ text, label = "More informati
     <Tooltip.Provider delayDuration={150}>
         <Tooltip.Root>
             <Tooltip.Trigger asChild>
-                <button
-                    type="button"
+                {/* A span, not a button: a disabled fieldset disables its buttons, and the help
+                    stays readable on a locked form. */}
+                <span
+                    role="button"
+                    tabIndex={0}
                     aria-label={label}
-                    className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-text-secondary text-text-secondary text-[10px] leading-none align-middle hover:bg-surface-secondary focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-text-secondary text-text-secondary text-[10px] leading-none align-middle cursor-default hover:bg-surface-secondary focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                     i
-                </button>
+                </span>
             </Tooltip.Trigger>
             <Tooltip.Portal>
                 <Tooltip.Content
                     side="top"
                     align="start"
                     sideOffset={4}
+                    collisionPadding={8}
                     // Portalled to body, so it is a SIBLING of any dialog it was opened from rather
                     // than a child — z-index alone decides the order, and Tailwind's z-50 painted
                     // this underneath the execute modal.
                     style={{ zIndex: Z.tooltip }}
                     className="max-w-xs rounded bg-gray-900 dark:bg-gray-700 px-3 py-2 text-xs text-white shadow-lg"
                 >
-                    {text}
+                    {/* No taller than the room on the side it opens (less the py-2 padding), so a long
+                        explanation scrolls on a narrow viewport instead of running off the screen. */}
+                    <div
+                        data-testid="info-tooltip-body"
+                        className="overflow-y-auto"
+                        style={{
+                            maxHeight: "calc(var(--radix-tooltip-content-available-height) - 16px)",
+                        }}
+                    >
+                        {text}
+                    </div>
                     <Tooltip.Arrow className="fill-gray-900 dark:fill-gray-700" />
                 </Tooltip.Content>
             </Tooltip.Portal>

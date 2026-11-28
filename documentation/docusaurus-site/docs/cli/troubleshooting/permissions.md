@@ -69,13 +69,13 @@ vamscli auth status
 
 ### Invalid Role Data
 
-**Symptoms:** `Invalid Role Data: roleName contains invalid characters`.
+**Symptoms:** `Invalid Role Data: Invalid role data: ...`, followed by the API's validation message naming `roleName` or `description`.
 
 **Cause:** The role data fails backend validation.
 
 **Resolution:**
 
--   Use only alphanumeric characters, hyphens, and underscores in role names. Avoid `@`, `#`, `$`, and other special characters.
+-   Use a role name of 1-256 characters made of letters, numbers, spaces, hyphens (`-`), periods (`.`), and underscores (`_`). Any other character, such as `@`, `#`, `$`, `/`, or `:`, is rejected. Spaces before and after the name are removed before it is checked and saved.
 -   Keep descriptions to 256 characters or fewer.
 
 ```bash
@@ -303,7 +303,7 @@ vamscli api-key update --api-key-id UUID --description "New description"
 
 **Symptoms:** API calls authenticated with a key return 401 or 403.
 
-**Cause:** The key is malformed, inactive, expired, or its bound user lost its roles.
+**Cause:** The two codes tell the causes apart. A `401` means the key is not accepted: it is malformed, unknown, inactive or expired. A `403` means the key is accepted but refused: its bound user has no roles, or the deployment restricts API access by source IP address.
 
 **Resolution:**
 
@@ -329,10 +329,23 @@ Work through the checks in order:
     vamscli role user create -u user@example.com --role-name viewer
     ```
 
-For an expired key, update the expiration (admin keys) or create a replacement.
+For an expired key, update the expiration (admin keys) or create a replacement, from a profile signed in through your identity provider (see [API Key Commands Refused When Signed In With a Key](#api-key-commands-refused-when-signed-in-with-a-key)).
 
 ```bash
 vamscli api-key update --api-key-id UUID --expires-at 2028-12-31T23:59:59Z
+```
+
+### API Key Commands Refused When Signed In With a Key
+
+**Symptoms:** `api-key create`, `api-key user create`, or an `update` with `--expires-at` fails with `Permission Denied: Access forbidden. API keys cannot be created with an API key. Sign in through your identity provider to create one.` or `Permission Denied: Access forbidden. An API key's expiration cannot be changed with an API key. Sign in through your identity provider to change it.`
+
+**Cause:** The profile is signed in with an API key. A request authenticated with an API key cannot create keys or change an expiration, whatever the user's roles grant, so a leaked key cannot renew itself.
+
+**Resolution:** Sign in through your identity provider and run the command again: `vamscli auth login -u <user>` on an Amazon Cognito deployment, or `vamscli auth login --user-id <user> --token-override-stdin` with a token from the external OAuth identity provider. Listing, getting, deleting, and updating only `--description` or `--is-active` still work with a key.
+
+```bash
+vamscli auth login -u user@example.com
+vamscli api-key user create --name "My Script v2" --description "Rotated key" --expires-at 2027-06-30T23:59:59Z
 ```
 
 ### Capturing the Key Value in Scripts
@@ -357,10 +370,12 @@ These errors apply to both role/constraint and API key management commands.
 
 **Symptoms:**
 
--   `Authentication Error: Access forbidden. You do not have permission to perform this action.`
+-   `Permission Denied: Access forbidden. Not Authorized`, or `Permission Denied: Access forbidden. You do not have permission to perform this action. Contact your administrator if you believe this is an error.`
 -   `Not Authorized` when managing roles, constraints, or API keys.
 
 **Cause:** Your account lacks API-level (Tier 1) authorization for the management endpoints — for example, the `/auth/api-keys` route for API key commands, or the roles and constraints routes.
+
+A `Request Blocked:` error is not a permission problem: the deployment's AWS WAF web ACL refused the request before VAMS evaluated your role. See [Request Blocked (AWS WAF)](general.md#request-blocked-aws-waf).
 
 **Resolution:**
 
@@ -372,7 +387,7 @@ vamscli auth status
 
 ### Token Expired
 
-**Symptoms:** `Authentication Error: Authentication token has expired.`
+**Symptoms:** `Token Expired: Authentication token has expired. Please run 'vamscli auth login' to re-authenticate.`, or `Token Expired: Override token has expired. ...` for an override token.
 
 **Cause:** Your session token expired. Cognito tokens auto-refresh; override tokens do not and fail immediately on 401.
 
@@ -383,6 +398,24 @@ Re-authenticate, or set a fresh override token for external auth.
 ```bash
 vamscli auth login -u your-username@example.com
 ```
+
+### Authentication Failed (HTTP 401)
+
+**Symptoms:** `Authentication Error: Authentication failed: the VAMS API did not accept the credential even after refreshing it (HTTP 401). Please run 'vamscli auth login' to re-authenticate.` In `--json-output` mode, `error_type` is `AuthenticationError`.
+
+**Cause:** The API answered `401` to every attempt, after the CLI refreshed the token and resent the request. The API's authorizer answers `401` when it does not accept the credential: the token is expired or invalid and cannot be refreshed, or an API key is unknown, disabled or expired. A refused request that the authorizer accepted the credential for answers `403` instead (see [Access Forbidden or Not Authorized](#access-forbidden-or-not-authorized)).
+
+**Resolution:**
+
+Sign in again. For an API key, check it as described in [API Key Returns 401 or 403](#api-key-returns-401-or-403).
+
+```bash
+vamscli auth login -u your-username@example.com
+```
+
+:::note
+A script that parses `error_type` to decide whether to sign in again should treat `AuthenticationError` the same as `TokenExpiredError`: both mean the session has to be signed in again.
+:::
 
 :::tip
 Run any command with `--verbose` to see API request and response detail, timing, and full error information when diagnosing permission or authentication problems.

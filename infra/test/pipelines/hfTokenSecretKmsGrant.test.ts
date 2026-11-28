@@ -66,7 +66,12 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
                     };
                     c.app.useGlobalVpc = { ...(c.app.useGlobalVpc ?? {}), enabled: true };
                     const pipelines = c.app?.pipelines ?? {};
-                    for (const key of ["useNvidiaCosmos", "useNvidiaCosmos3", "useNvidiaGr00t"]) {
+                    for (const key of [
+                        "useNvidiaCosmos",
+                        "useNvidiaCosmos3",
+                        "useNvidiaGr00t",
+                        "useImageTo3d",
+                    ]) {
                         if (pipelines[key]) {
                             pipelines[key].enabled = true;
                             pipelines[key].huggingFaceToken = "synth-only-token";

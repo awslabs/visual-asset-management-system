@@ -30,6 +30,11 @@ from .commands.industry import industry
 from .commands.user import user
 from .commands.roleUserConstraints import role
 from .commands.apiKey import api_key
+from .commands.zip_download import zip_download
+from .commands.compliance import compliance
+from .commands.audit import audit
+from .commands.addon import ADDON_COMMANDS
+from .commands.custom import CUSTOM_COMMANDS
 from .utils.profile import ProfileManager
 from .utils.exceptions import SetupRequiredError
 from .utils.global_exceptions import handle_global_exceptions
@@ -219,12 +224,40 @@ cli.add_command(industry)
 cli.add_command(user)
 cli.add_command(role)
 cli.add_command(api_key)
+cli.add_command(zip_download)
+cli.add_command(compliance)
+cli.add_command(audit)
 
 
 @cli.command()
 def version():
     """Show version information."""
     click.echo(f"VamsCLI version {get_version()}")
+
+
+# Commands the optional add-ons add (commands/addon/__init__.py). Registered after every core
+# command and before the custom commands, so a name that is already taken is refused rather than
+# replacing the command that holds it.
+for addon_command in ADDON_COMMANDS:
+    if addon_command.name in cli.commands:
+        raise RuntimeError(
+            f"vamscli: add-on command '{addon_command.name}' (vamscli/commands/addon) has the "
+            "name of a command that is already registered; core commands take precedence, so "
+            "rename the add-on command"
+        )
+    cli.add_command(addon_command)
+
+
+# Commands a fork adds (commands/custom/__init__.py, shipped empty). Registered after every core
+# command so a name that is already taken is refused rather than replacing the core command.
+for custom_command in CUSTOM_COMMANDS:
+    if custom_command.name in cli.commands:
+        raise RuntimeError(
+            f"vamscli: custom command '{custom_command.name}' (vamscli/commands/custom) has the "
+            "name of a command that is already registered; core commands take precedence, so "
+            "rename the custom command"
+        )
+    cli.add_command(custom_command)
 
 
 def _use_utf8_output():

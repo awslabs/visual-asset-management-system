@@ -228,6 +228,8 @@ def _wire(m, bucket_records=None, owned_records=(), prefix_exists=False, key_exi
     else:
         _stub_s3_versions(m, s3_entries)
     m.check_s3_key_exists = MagicMock(return_value=key_exists)
+    # Nothing at the key means nothing under it either, so a folder import cannot apply.
+    m.check_s3_folder_has_objects = MagicMock(return_value=key_exists)
     m.create_prefix_folder = MagicMock(return_value=True)
     m.create_initial_version_record = MagicMock(return_value="v0")
     m.create_sns_topic_for_asset = MagicMock(return_value="arn:sns")
@@ -292,11 +294,12 @@ class TestArchivedPrefixTakeoverDenied:
         # under the prefix for the S3 layer to see.
         m.check_s3_prefix_exists.assert_not_called()
 
-        # The pre-persist existence check really is blind to the victim's partition,
-        # which is why the ownership query is the only thing that can catch this.
-        m.asset_table.get_item.assert_called_once_with(
-            Key={"databaseId": _OWN_DB, "assetId": _VICTIM_ASSET_ID}
-        )
+        # The pre-persist existence check reads only the caller's own database (its live and its
+        # archived partition), so it really is blind to the victim's partition, which is why the
+        # ownership query is the only thing that can catch this.
+        read_keys = [c.kwargs["Key"] for c in m.asset_table.get_item.call_args_list]
+        assert {"databaseId": _OWN_DB, "assetId": _VICTIM_ASSET_ID} in read_keys
+        assert all(key["databaseId"] in (_OWN_DB, f"{_OWN_DB}#deleted") for key in read_keys)
 
         lookups = _ownership_lookup_calls(m)
         assert len(lookups) == 1
@@ -469,8 +472,8 @@ class TestOrdinaryCreatesStillSucceed:
             _request_model(m, asset_id="brand-new-asset"), {"tokens": ["user1"]})
 
         assert response.assetId == "brand-new-asset"
-        m.create_prefix_folder.assert_called_once_with(
-            _BUCKET_NAME, _BASE_PREFIX + "brand-new-asset/")
+        m.create_prefix_folder.assert_called_once()
+        assert m.create_prefix_folder.call_args.args[:2] == (_BUCKET_NAME, _BASE_PREFIX + "brand-new-asset/")
         m.save_asset_details.assert_called_once()
         saved = m.save_asset_details.call_args.args[0]
         assert saved["bucketId"] == _OWN_BUCKET_ID
@@ -516,7 +519,8 @@ class TestOrdinaryCreatesStillSucceed:
         response = m.create_asset(_request_model(m), {"tokens": ["user1"]})
 
         assert response.assetId == _VICTIM_ASSET_ID
-        m.create_prefix_folder.assert_called_once_with(_BUCKET_NAME, _VICTIM_KEY)
+        m.create_prefix_folder.assert_called_once()
+        assert m.create_prefix_folder.call_args.args[:2] == (_BUCKET_NAME, _VICTIM_KEY)
 
     def test_same_asset_id_at_a_non_overlapping_location_is_permitted(self):
         m = _load(fresh=True)
@@ -533,7 +537,8 @@ class TestOrdinaryCreatesStillSucceed:
         response = m.create_asset(_request_model(m), {"tokens": ["user1"]})
 
         assert response.assetId == _VICTIM_ASSET_ID
-        m.create_prefix_folder.assert_called_once_with(_BUCKET_NAME, _VICTIM_KEY)
+        m.create_prefix_folder.assert_called_once()
+        assert m.create_prefix_folder.call_args.args[:2] == (_BUCKET_NAME, _VICTIM_KEY)
 
 
 @pytest.mark.unit
@@ -831,7 +836,7 @@ class TestFolderMarkerFailureIsFatal:
         m.s3_client.put_object.side_effect = RuntimeError("AccessDenied")
 
         with pytest.raises(m.VAMSGeneralErrorResponse):
-            m.create_prefix_folder(_BUCKET_NAME, _VICTIM_KEY)
+            m.create_prefix_folder(_BUCKET_NAME, _VICTIM_KEY, _OWN_DB, _VICTIM_ASSET_ID)
 
     def test_create_is_abandoned_when_the_folder_marker_fails(self):
         m = _load(fresh=True)
@@ -1052,8 +1057,8 @@ class TestNonDerivedVictimKeyIsRejected:
             _request_model(m, asset_id="unrelated"), {"tokens": ["user1"]})
 
         assert response.assetId == "unrelated"
-        m.create_prefix_folder.assert_called_once_with(
-            _BUCKET_NAME, _BASE_PREFIX + "unrelated/")
+        m.create_prefix_folder.assert_called_once()
+        assert m.create_prefix_folder.call_args.args[:2] == (_BUCKET_NAME, _BASE_PREFIX + "unrelated/")
 
     def test_a_lookalike_sibling_prefix_still_creates(self):
         m = _load(fresh=True)
@@ -1071,8 +1076,8 @@ class TestNonDerivedVictimKeyIsRejected:
             _request_model(m, asset_id="legacy"), {"tokens": ["user1"]})
 
         assert response.assetId == "legacy"
-        m.create_prefix_folder.assert_called_once_with(
-            _BUCKET_NAME, _BASE_PREFIX + "legacy/")
+        m.create_prefix_folder.assert_called_once()
+        assert m.create_prefix_folder.call_args.args[:2] == (_BUCKET_NAME, _BASE_PREFIX + "legacy/")
 
     @pytest.mark.xfail(
         strict=True,
@@ -1457,8 +1462,8 @@ class TestAnAssetMayNotOwnThePrefixRoot:
         response = m.create_asset(_request_model(m), {"tokens": ["user1"]})
 
         assert response.assetId == _VICTIM_ASSET_ID
-        m.create_prefix_folder.assert_called_once_with(
-            _BUCKET_NAME, _BASE_PREFIX + _VICTIM_ASSET_ID + "/")
+        m.create_prefix_folder.assert_called_once()
+        assert m.create_prefix_folder.call_args.args[:2] == (_BUCKET_NAME, _BASE_PREFIX + _VICTIM_ASSET_ID + "/")
 
     def test_an_empty_supplied_key_is_refused_by_the_request_model(self):
         """An empty `bucketExistingKey` never reaches this rule, or either branch.

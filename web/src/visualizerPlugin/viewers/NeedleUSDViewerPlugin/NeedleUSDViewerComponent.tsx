@@ -8,13 +8,21 @@ import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { NeedleUSDDependencyManager } from "./dependencies";
 import { downloadAsset } from "../../../services/APIService";
-import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 import { MouseControls } from "./MouseControls";
 import NeedleUSDPanel from "./NeedleUSDPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import { useKeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
 import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { MaterialLibraryItem } from "./NeedleUSDMaterialLibrary";
+import {
+    isRequestableDependencyPath,
+    isZipPackage,
+    listZipEntryNames,
+    normalizePackagedPath,
+} from "./usdDependencyPaths";
+import { ApiRefusalError, isApiRefusalError } from "../../core/streamFailure";
+import { fetchPresignedFile } from "../../core/presignedFetch";
 
 const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
@@ -30,6 +38,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
     const [error, setError] = useState<string | null>(null);
+    // Whether `error` is the API's refusal of the file with its own reason (D170): shown alone.
+    const [errorIsRefusal, setErrorIsRefusal] = useState(false);
     const [fileErrors, setFileErrors] = useState<Array<{ file: string; error: string }>>([]);
     const [additionalDepsWarning, setAdditionalDepsWarning] = useState<{
         loaded: number;
@@ -45,6 +55,11 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     const mouseRef = useRef<any>(null);
     const initializationRef = useRef(false);
     const originalTransformsRef = useRef<Map<string, any>>(new Map());
+    // Scene tree height the user picked. Held here, as the panel unmounts the scene tree when it
+    // switches tabs or is hidden; cleared when the viewer is given other files
+    const keptTreeHeight = useKeptSceneTreeHeight(
+        JSON.stringify({ assetKey, multiFileKeys, assetId, databaseId, versionId, assetVersionId })
+    );
 
     // Loading cancellation flag
     const loadingCancelledRef = useRef(false);
@@ -456,7 +471,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         const extractFromText = (
             text: string,
             sourceFilePath: string,
-            dependencies: Set<string>
+            dependencies: Set<string>,
+            isPackaged: (path: string) => boolean = () => false
         ): void => {
             let match;
 
@@ -467,10 +483,11 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     !refPath.startsWith("http") &&
                     !refPath.startsWith("//") &&
                     refPath.length > 0 &&
-                    refPath !== "@@" // Skip empty asset references
+                    refPath !== "@@" && // Skip empty asset references
+                    !isPackaged(refPath) // Read by the USD runtime from inside the package
                 ) {
                     const resolved = resolveRelativePath(refPath, sourceFilePath);
-                    if (resolved && resolved.length > 0) {
+                    if (resolved && isRequestableDependencyPath(resolved)) {
                         dependencies.add(resolved);
                     }
                 }
@@ -548,7 +565,8 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         const extractFromBinary = (
             content: ArrayBuffer,
             sourceFilePath: string,
-            dependencies: Set<string>
+            dependencies: Set<string>,
+            isPackaged: (path: string) => boolean = () => false
         ): void => {
             const bytes = new Uint8Array(content);
 
@@ -620,9 +638,9 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
             // Process all found paths
             Array.from(foundPaths).forEach((path) => {
-                if (path && path.length > 0) {
+                if (path && path.length > 0 && !isPackaged(path)) {
                     const resolved = resolveRelativePath(path, sourceFilePath);
-                    if (resolved && resolved.length > 0) {
+                    if (resolved && isRequestableDependencyPath(resolved)) {
                         dependencies.add(resolved);
                         console.log(`    Binary extraction: ${path} -> ${resolved}`);
                     }
@@ -637,14 +655,29 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             const dependencies: Set<string> = new Set();
 
             try {
+                // A .usdz package carries the files it references; the USD runtime reads those
+                // from inside the package, so only references outside the package are requested.
+                let isPackaged: (path: string) => boolean = () => false;
+                if (isZipPackage(content)) {
+                    const packageEntries = listZipEntryNames(content);
+                    if (!packageEntries) {
+                        console.warn(
+                            `  Could not read the package directory of ${sourceFilePath}; ` +
+                                "its dependencies are left to the USD runtime"
+                        );
+                        return [];
+                    }
+                    isPackaged = (path: string) => packageEntries.has(normalizePackagedPath(path));
+                }
+
                 const format = detectUSDFormat(content);
                 console.log(`  USD format detected: ${format} for ${sourceFilePath}`);
 
                 if (format === "text") {
                     const text = new TextDecoder().decode(content);
-                    extractFromText(text, sourceFilePath, dependencies);
+                    extractFromText(text, sourceFilePath, dependencies, isPackaged);
                 } else {
-                    extractFromBinary(content, sourceFilePath, dependencies);
+                    extractFromBinary(content, sourceFilePath, dependencies, isPackaged);
                 }
             } catch (error) {
                 // Console logging only: a % specifier in the interpolated value can at most garble
@@ -744,51 +777,40 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         };
 
         /**
-         * Download a file from the streaming endpoint
+         * Download a file straight from S3 through a presigned URL that the authorized download
+         * route issues. The streaming route's 307 makes the browser send `Origin: null` to S3,
+         * which an external bucket's single-origin CORS rule rejects (#1630); nothing but the
+         * signed URL is sent to S3.
          */
         const downloadFile = async (
             fileKey: string,
-            authHeader: string,
             isMainFile = false,
             isSingleFile = false
         ): Promise<ArrayBuffer | null> => {
             try {
-                const pathSegments = fileKey.split("/");
-                const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
-                const encodedFileKey = encodedSegments.join("/");
-                let assetUrl = `${config.api}database/${databaseId}/assets/${encodeURIComponent(
-                    assetId
-                )}/download/stream/${encodedFileKey}`;
-
                 // Version resolution:
                 // - assetVersionId: used for ALL files (main + dependencies) to fetch from a specific asset version
                 // - versionId: S3 version ID, used only for the MAIN file (not dependencies)
-                if (assetVersionId) {
-                    assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
-                } else if (versionId && isSingleFile) {
-                    assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
-                }
-
                 // Created lazily on the first download of a load pass; cleanup aborts and clears it,
                 // so a remount gets a fresh controller.
                 if (!downloadAbortRef.current) {
                     downloadAbortRef.current = new AbortController();
                 }
-                const response = await fetch(assetUrl, {
-                    headers: { Authorization: authHeader },
-                    signal: downloadAbortRef.current.signal,
-                });
-
-                if (!response.ok) {
-                    if (isMainFile) {
-                        throw new Error(`Failed to load: ${fileKey} (${response.status})`);
-                    } else {
-                        console.warn(
-                            `Dependency not found (skipping): ${fileKey} (${response.status})`
-                        );
-                        return null;
-                    }
-                }
+                const fileName = fileKey.split("/").pop() || fileKey;
+                // A refused presign is the API's own answer (an ApiRefusalError carrying its
+                // reason); an S3 error status is worded as an unavailable link.
+                const response = await fetchPresignedFile(
+                    {
+                        databaseId,
+                        assetId,
+                        key: fileKey,
+                        assetVersionId: assetVersionId || undefined,
+                        versionId:
+                            !assetVersionId && versionId && isSingleFile ? versionId : undefined,
+                        signal: downloadAbortRef.current.signal,
+                    },
+                    `Failed to load: ${fileName}`
+                );
 
                 return await response.arrayBuffer();
             } catch (error) {
@@ -1109,7 +1131,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 //     // Download using existing streams API logic
                 //     console.log(`[urlModifier] On-demand download: ${relativePath}`);
-                //     const content = await downloadFile(relativePath, authHeader, false, false);
+                //     const content = await downloadFile(relativePath, false, false);
                 //     if (content) {
                 //         onDemandDownloads.set(relativePath, content);
                 //         console.log(`[urlModifier] Downloaded: ${relativePath} (${content.byteLength} bytes)`);
@@ -1148,10 +1170,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         : [];
                 if (filesToLoad.length === 0) throw new Error("No files specified");
 
-                const authHeader = await getDualAuthorizationHeader();
                 const loadedFiles = new Set<string>();
                 const failedDownloads = new Set<string>();
-                const errors: Array<{ file: string; error: string }> = [];
+                // `refusal`: the API refused the file with its own reason (an ApiRefusalError).
+                const errors: Array<{ file: string; error: string; refusal?: boolean }> = [];
 
                 // Store file info for driver creation
                 const fileInfos: Array<{
@@ -1184,12 +1206,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     try {
                         // Download main file
                         const isSingleFile = filesToLoad.length === 1;
-                        const arrayBuffer = await downloadFile(
-                            fileKey,
-                            authHeader,
-                            true,
-                            isSingleFile
-                        );
+                        const arrayBuffer = await downloadFile(fileKey, true, isSingleFile);
                         if (!arrayBuffer) throw new Error("Failed to download file");
 
                         // Store main file in WASM filesystem
@@ -1232,12 +1249,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                                         )
                                             return;
 
-                                        const content = await downloadFile(
-                                            depPath,
-                                            authHeader,
-                                            false,
-                                            false
-                                        );
+                                        const content = await downloadFile(depPath, false, false);
                                         if (content) {
                                             storeInWASM(depPath, content, USD, directory);
                                             loadedFiles.add(depPath);
@@ -1292,11 +1304,16 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         errors.push({
                             file: fileKey,
                             error: fileError?.message || "Unknown error",
+                            refusal: isApiRefusalError(fileError),
                         });
                     }
                 }
 
                 if (fileInfos.length === 0) {
+                    // When the API refused a file with its own reason (a quarantined asset with
+                    // the download block on), that reason is what the viewer shows (D172).
+                    const refused = errors.find((err) => err.refusal);
+                    if (refused) throw new ApiRefusalError(refused.error);
                     throw new Error("No files loaded successfully");
                 }
 
@@ -1390,7 +1407,10 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         capturedWASMErrorsRef.current
                     );
                     const newMissingAssets = missingAssets.filter(
-                        (asset) => !failedDownloads.has(asset.path) && !loadedFiles.has(asset.path)
+                        (asset) =>
+                            !failedDownloads.has(asset.path) &&
+                            !loadedFiles.has(asset.path) &&
+                            isRequestableDependencyPath(asset.path)
                     );
 
                     console.log(`Found ${newMissingAssets.length} new missing assets`);
@@ -1429,7 +1449,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                             console.log(
                                 `[Verification] Downloading: ${assetPath} for file_${fileIndex}`
                             );
-                            const content = await downloadFile(assetPath, authHeader, false, false);
+                            const content = await downloadFile(assetPath, false, false);
                             // console.log(
                             //     `[Verification] Download result for ${assetPath}: ${
                             //         content ? `${content.byteLength} bytes` : "null (404)"
@@ -1788,6 +1808,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
             } catch (error) {
                 console.error("Error loading USD assets:", error);
                 setError(error instanceof Error ? error.message : "Failed to load USD files");
+                setErrorIsRefusal(isApiRefusalError(error));
                 setIsLoading(false);
             }
         };
@@ -2396,9 +2417,21 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     };
 
     if (error) {
+        // Keyed apart from the viewer root below so React does not reuse the scene container for
+        // this panel: the renderer's canvas is appended to that container outside React, and a
+        // reused node would keep it above the message (D176). The message is centred in the panel
+        // and scrolls within it, so a narrow panel never clips it.
         return (
             <div
-                style={{ position: "relative", height: "100%", backgroundColor: "#f5f5f5" }}
+                key="usd-viewer-error"
+                style={{
+                    position: "relative",
+                    height: "100%",
+                    backgroundColor: "#f5f5f5",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}
                 id="usd-viewer-root"
             >
                 <div
@@ -2406,28 +2439,38 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         color: "#d13212",
                         fontSize: "1.4em",
                         lineHeight: "1.5",
-                        width: "100%",
-                        position: "absolute",
-                        top: "50%",
-                        left: "50%",
-                        transform: "translate(-50%, -50%)",
+                        maxWidth: "800px",
+                        maxHeight: "100%",
+                        overflowY: "auto",
+                        boxSizing: "border-box",
                         textAlign: "center",
+                        whiteSpace: "pre-line",
                         padding: "20px",
                     }}
                 >
                     {error}
-                    <br />
-                    <br />
-                    <span style={{ fontSize: ".9em", color: "#d13212" }}>
-                        Please ensure the file is a valid USD format (.usd, .usda, .usdz)
-                    </span>
+                    {/* The API's refusal names its own reason; a format hint would point at the
+                        file instead (D170). */}
+                    {!errorIsRefusal && (
+                        <>
+                            <br />
+                            <br />
+                            <span style={{ fontSize: ".9em", color: "#d13212" }}>
+                                Please ensure the file is a valid USD format (.usd, .usda, .usdz)
+                            </span>
+                        </>
+                    )}
                 </div>
             </div>
         );
     }
 
     return (
-        <div style={{ position: "relative", height: "100%", width: "100%" }} id="usd-viewer-root">
+        <div
+            key="usd-viewer"
+            style={{ position: "relative", height: "100%", width: "100%" }}
+            id="usd-viewer-root"
+        >
             <div
                 ref={containerRef}
                 style={{ width: "100%", height: "100%" }}
@@ -2577,6 +2620,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     onToggle3DSelection={setEnable3DSelection}
                     animationPaused={animationPaused}
                     onToggleAnimation={setAnimationPaused}
+                    keptTreeHeight={keptTreeHeight}
                 />
             )}
 

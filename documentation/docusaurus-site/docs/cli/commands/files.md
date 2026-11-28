@@ -28,21 +28,23 @@ Upload files or a directory to an asset with automatic chunking, multi-sequence 
 vamscli file upload [FILES_OR_DIRECTORY] [OPTIONS]
 ```
 
-| Option               | Type    | Required    | Description                                                                                 |
-| -------------------- | ------- | ----------- | ------------------------------------------------------------------------------------------- |
-| `FILES_OR_DIRECTORY` | PATH    | Conditional | One or more file paths or a single directory (omit when using `--directory`/`--json-input`) |
-| `-d`, `--database`   | TEXT    | Yes         | Database ID                                                                                 |
-| `-a`, `--asset`      | TEXT    | Yes         | Asset ID                                                                                    |
-| `--directory`        | PATH    | No          | Directory to upload (mutually exclusive with file arguments)                                |
-| `--asset-preview`    | FLAG    | No          | Upload as the asset preview (single file only; not valid with a directory)                  |
-| `--asset-location`   | TEXT    | No          | Base asset location (default: `/`)                                                          |
-| `--recursive`        | FLAG    | No          | Include subdirectories when uploading a directory                                           |
-| `--parallel-uploads` | INTEGER | No          | Maximum parallel part uploads (default: 10)                                                 |
-| `--retry-attempts`   | INTEGER | No          | Retry attempts per part (default: 3)                                                        |
-| `--force-skip`       | FLAG    | No          | Auto-skip failed parts after retries are exhausted                                          |
-| `--hide-progress`    | FLAG    | No          | Hide the upload progress display                                                            |
-| `--json-input`       | TEXT    | No          | JSON parameters as a string or `@file` path; overrides matching command-line options        |
-| `--json-output`      | FLAG    | No          | Output raw JSON response (implies `--hide-progress`)                                        |
+| Option               | Type    | Required    | Description                                                                                                                                           |
+| -------------------- | ------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FILES_OR_DIRECTORY` | PATH    | Conditional | One or more file paths or a single directory (omit when using `--directory`/`--json-input`)                                                           |
+| `-d`, `--database`   | TEXT    | Yes         | Database ID                                                                                                                                           |
+| `-a`, `--asset`      | TEXT    | Yes         | Asset ID                                                                                                                                              |
+| `--directory`        | PATH    | No          | Directory to upload (mutually exclusive with file arguments)                                                                                          |
+| `--asset-preview`    | FLAG    | No          | Upload as the asset preview (single file only; not valid with a directory; `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp` or `.bmp`, at most 5 MiB) |
+| `--asset-location`   | TEXT    | No          | Folder path in the asset to upload into, with a leading `/` (default: `/`)                                                                            |
+| `--recursive`        | FLAG    | No          | Include subdirectories when uploading a directory                                                                                                     |
+| `--parallel-uploads` | INTEGER | No          | Maximum parallel part uploads (default: 10)                                                                                                           |
+| `--retry-attempts`   | INTEGER | No          | Retry attempts per part (default: 3)                                                                                                                  |
+| `--force-skip`       | FLAG    | No          | Auto-skip failed parts after retries are exhausted                                                                                                    |
+| `--hide-progress`    | FLAG    | No          | Hide the upload progress display                                                                                                                      |
+| `--wait-async`       | FLAG    | No          | Wait until files over 1 GiB, which are processed asynchronously, have landed or failed                                                                |
+| `--async-timeout`    | INTEGER | No          | Seconds `--wait-async` waits (default: 3600)                                                                                                          |
+| `--json-input`       | TEXT    | No          | JSON parameters as a string or `@file` path; overrides matching command-line options                                                                  |
+| `--json-output`      | FLAG    | No          | Output raw JSON response (implies `--hide-progress`)                                                                                                  |
 
 ```bash
 # Single file
@@ -64,8 +66,18 @@ vamscli file upload -d my-db -a my-asset --asset-location /models/v2/ file.gltf
 vamscli file upload --json-input @upload-config.json --json-output
 ```
 
+:::note[Where a Directory Upload Lands]
+A directory upload stores the directory's contents under `--asset-location` (default `/`) and drops the directory's own name: `--directory ./pack` stores `/scene.usda` and `/props/pallet.usda`. This matches the web app's **Upload folder contents** option. To keep the folder name, as the web app's **Upload folder** option does, pass it as the location: `--asset-location /scene/pack/`. Without `--recursive`, only the directory's top-level files are uploaded and its subfolders are skipped, so pass `--recursive` for multi-file content such as USD scenes with sublayers in subfolders. A change to these defaults is tracked in [#1474](https://github.com/awslabs/visual-asset-management-system/issues/1474).
+:::
+
 :::note[Upload Limits]
 Files are split into parts and grouped into upload sequences. Each sequence is limited to 50 files, 1,000 total parts, and 3 GB; an individual file is limited to 1,000 parts with a 5 GB maximum part size. VamsCLI creates additional sequences automatically, so the total number of files is unbounded (for example, 200 files become 4 sequences of 50). The backend rate-limits upload initialization to 20 sequences per user per minute, which VamsCLI handles with exponential backoff. Files are chunked at 150 MB for files under 15 GB and at 1 GB for larger files. Zero-byte files are supported and created at completion.
+
+A file's key, including its asset location, may be at most 998 bytes of UTF-8 in a bucket registered at its root, and the length of the bucket's base prefix less than that otherwise. The backend refuses an upload sequence that holds a longer key before any of its files is sent. The command lists each of that sequence's files under failed files with the reason, `Failed to initialize upload for sequence 1: Invalid request (400): VAMS General Error: File key is too long to upload: a file key, including its asset location, may be at most N bytes`, where N is the bound for the asset's bucket, and exits non-zero. See [Amazon S3 quotas](../../additional/quotas.md#amazon-s3).
+:::
+
+:::note[Failed Files]
+A file that was not stored is listed under `Failed files:` with the reason, for example a permission denial (`Failed to initialize upload for sequence 1: Access forbidden. Not Authorized`), a refusal at completion, or a part that Amazon S3 did not accept (`part 2 of 3 did not upload: Amazon S3 answered HTTP 403 (AccessDenied)`), and the command exits non-zero. A refusal at initialization covers the whole upload sequence, up to 50 files, so every file in that sequence carries the same reason, including files the reason does not name. With `--json-output`, each entry of `sequence_results` lists the failed files' relative keys under `failed_files`, the same files with their reasons under `failed_file_errors` (`[{"relative_key": "...", "error": "..."}]`), and, when the whole sequence failed, its `error`. A reason is at most 500 characters, and credentials in it are masked.
 :::
 
 :::warning[Per-File Part Limit]
@@ -73,12 +85,42 @@ Only individual-file constraint violations stop an upload. A file requiring more
 :::
 
 :::tip[File Extension Restrictions]
-A database can restrict uploads to specific extensions (`restrictFileUploadsToExtensions`). When set, VamsCLI validates every file before upload and reports all violations at once. Asset preview uploads and `.previewFile.` auxiliary files are exempt from that list, but must still carry one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`; an empty list or `.all` allows any extension. Use `vamscli database get -d my-db` to view the restrictions.
+A database can restrict uploads to specific extensions (`restrictFileUploadsToExtensions`). When set, VamsCLI validates every file before upload and reports all violations at once. Asset preview uploads and `.previewFile.` auxiliary files are exempt from that list, but must still carry one of `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, or `.bmp`; an empty list or `.all` allows any extension. Use `vamscli database get -d my-db` to view the restrictions.
 :::
 
 :::note[Large-File Asynchronous Processing]
-Very large uploads may complete successfully but undergo additional backend processing before files appear in the asset. VamsCLI reports this in the result; re-run `vamscli file list` to confirm the files once processing finishes.
+A file over 1 GiB completes its upload and is then processed into the asset asynchronously. The result lists each such upload under `async_ingestion` with its status (`processing_async`) and the `vamscli file upload-status` command that checks it later. With `--wait-async` the command waits for the outcome, up to `--async-timeout` seconds, lists each file as `SUCCEEDED` or `FAILED` with a reason, counts a failed file as failed, and exits non-zero when a file failed or the wait timed out. When the status reads stop on an error that is not transient (throttling past the retries, a sign-in that stopped working, a denial, a blocked request), the wait ends: the upload result is still printed, each upload not yet settled is reported `unknown` with the error and its `vamscli file upload-status` command, and the command exits non-zero. The files were uploaded; check them with that command rather than uploading them again.
+
+```bash
+vamscli file upload -d my-db -a my-asset scan.e57 --wait-async --async-timeout 7200
+```
+
 :::
+
+---
+
+## file upload-status
+
+Show the outcome of the files an upload processes asynchronously (files over 1 GiB).
+
+```bash
+vamscli file upload-status [OPTIONS]
+```
+
+| Option              | Type | Required | Description                                                   |
+| ------------------- | ---- | -------- | ------------------------------------------------------------- |
+| `-d`, `--database`  | TEXT | Yes      | Database ID                                                   |
+| `-a`, `--asset`     | TEXT | Yes      | Asset ID                                                      |
+| `-u`, `--upload-id` | TEXT | Yes      | Upload ID (reported by `file upload` under `async_ingestion`) |
+| `--json-input`      | TEXT | No       | JSON parameters as a string or `@file` path                   |
+| `--json-output`     | FLAG | No       | Output raw JSON response                                      |
+
+```bash
+vamscli file upload-status -d my-db -a my-asset -u <UPLOAD_ID>
+vamscli file upload-status -d my-db -a my-asset -u <UPLOAD_ID> --json-output
+```
+
+The upload is `processing_async` while a file is `PENDING`, then `completed` or `completed_with_errors`. Each file is `PENDING`, `SUCCEEDED` or `FAILED` with a reason; a failed file is not in the asset, so upload it again. The command exits non-zero when a file failed. The status is kept for 7 days. An upload whose files all landed at completion keeps no status, so the command reports it as not found. The command calls `GET /uploads/{uploadId}`, which needs `GET` on the asset.
 
 ---
 
@@ -90,20 +132,21 @@ List files in an asset with prefix filtering, archived inclusion, asset-version 
 vamscli file list [OPTIONS]
 ```
 
-| Option               | Type    | Required | Description                                                             |
-| -------------------- | ------- | -------- | ----------------------------------------------------------------------- |
-| `-d`, `--database`   | TEXT    | Yes      | Database ID                                                             |
-| `-a`, `--asset`      | TEXT    | Yes      | Asset ID                                                                |
-| `--prefix`           | TEXT    | No       | Filter files by prefix                                                  |
-| `--include-archived` | FLAG    | No       | Include archived files                                                  |
-| `--asset-version-id` | TEXT    | No       | Return the file list from a specific asset version snapshot             |
-| `--basic`            | FLAG    | No       | Skip expensive lookups for faster listing                               |
-| `--page-size`        | INTEGER | No       | Items per page (passed to the API)                                      |
-| `--starting-token`   | TEXT    | No       | Token for manual pagination (mutually exclusive with `--auto-paginate`) |
-| `--auto-paginate`    | FLAG    | No       | Automatically fetch all items (default limit: 10,000)                   |
-| `--max-items`        | INTEGER | No       | Maximum total items to fetch; applies only with `--auto-paginate`       |
-| `--json-input`       | TEXT    | No       | JSON parameters as a string or `@file` path                             |
-| `--json-output`      | FLAG    | No       | Output raw JSON response                                                |
+| Option               | Type    | Required | Description                                                               |
+| -------------------- | ------- | -------- | ------------------------------------------------------------------------- |
+| `-d`, `--database`   | TEXT    | Yes      | Database ID                                                               |
+| `-a`, `--asset`      | TEXT    | Yes      | Asset ID                                                                  |
+| `--prefix`           | TEXT    | No       | Filter files by prefix                                                    |
+| `--include-archived` | FLAG    | No       | Include archived files                                                    |
+| `--show-archived`    | FLAG    | No       | Also find an archived asset; its files are all archived and always listed |
+| `--asset-version-id` | TEXT    | No       | Return the file list from a specific asset version snapshot               |
+| `--basic`            | FLAG    | No       | Skip expensive lookups for faster listing                                 |
+| `--page-size`        | INTEGER | No       | Items per page (passed to the API)                                        |
+| `--starting-token`   | TEXT    | No       | Token for manual pagination (mutually exclusive with `--auto-paginate`)   |
+| `--auto-paginate`    | FLAG    | No       | Automatically fetch all items (default limit: 10,000)                     |
+| `--max-items`        | INTEGER | No       | Maximum total items to fetch; applies only with `--auto-paginate`         |
+| `--json-input`       | TEXT    | No       | JSON parameters as a string or `@file` path                               |
+| `--json-output`      | FLAG    | No       | Output raw JSON response                                                  |
 
 ```bash
 vamscli file list -d my-db -a my-asset
@@ -112,6 +155,7 @@ vamscli file list -d my-db -a my-asset --prefix "models/"
 vamscli file list -d my-db -a my-asset --asset-version-id ver-123 --basic
 vamscli file list -d my-db -a my-asset --auto-paginate --max-items 5000 --page-size 500
 vamscli file list -d my-db -a my-asset --starting-token "token123" --page-size 200
+vamscli file list -d my-db -a my-archived-asset --show-archived
 ```
 
 :::tip[Basic Mode Performance]
@@ -140,6 +184,7 @@ vamscli file info [OPTIONS]
 | `-a`, `--asset`      | TEXT | Yes      | Asset ID                                    |
 | `-p`, `--path`       | TEXT | Yes      | File path to inspect                        |
 | `--include-versions` | FLAG | No       | Include version history in the output       |
+| `--show-archived`    | FLAG | No       | Also find a file of an archived asset       |
 | `--json-input`       | TEXT | No       | JSON parameters as a string or `@file` path |
 | `--json-output`      | FLAG | No       | Output raw JSON response                    |
 
@@ -226,20 +271,20 @@ vamscli file copy -d my-db -a my-asset --source "/file.gltf" --dest "/file.gltf"
 
 ## file archive
 
-Archive a file or all files under a prefix (soft delete, recoverable).
+Archive a file or every file in a folder (soft delete, recoverable).
 
 ```bash
 vamscli file archive [OPTIONS]
 ```
 
-| Option             | Type | Required | Description                                  |
-| ------------------ | ---- | -------- | -------------------------------------------- |
-| `-d`, `--database` | TEXT | Yes      | Database ID                                  |
-| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                     |
-| `-p`, `--path`     | TEXT | Yes      | File path to archive                         |
-| `--prefix`         | FLAG | No       | Archive all files under the path as a prefix |
-| `--json-input`     | TEXT | No       | JSON parameters as a string or `@file` path  |
-| `--json-output`    | FLAG | No       | Output raw JSON response                     |
+| Option             | Type | Required | Description                                             |
+| ------------------ | ---- | -------- | ------------------------------------------------------- |
+| `-d`, `--database` | TEXT | Yes      | Database ID                                             |
+| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                                |
+| `-p`, `--path`     | TEXT | Yes      | File path to archive                                    |
+| `--prefix`         | FLAG | No       | Treat the path as a folder and archive every file in it |
+| `--json-input`     | TEXT | No       | JSON parameters as a string or `@file` path             |
+| `--json-output`    | FLAG | No       | Output raw JSON response                                |
 
 ```bash
 vamscli file archive -d my-db -a my-asset -p "/file.gltf"
@@ -272,21 +317,21 @@ vamscli file unarchive -d my-db -a my-asset -p "/file.gltf"
 
 ## file delete
 
-Permanently delete a file or all files under a prefix.
+Permanently delete a file or every file in a folder.
 
 ```bash
 vamscli file delete [OPTIONS]
 ```
 
-| Option             | Type | Required | Description                                 |
-| ------------------ | ---- | -------- | ------------------------------------------- |
-| `-d`, `--database` | TEXT | Yes      | Database ID                                 |
-| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                    |
-| `-p`, `--path`     | TEXT | Yes      | File path to delete                         |
-| `--prefix`         | FLAG | No       | Delete all files under the path as a prefix |
-| `--confirm`        | FLAG | Yes      | Confirm permanent deletion                  |
-| `--json-input`     | TEXT | No       | JSON parameters as a string or `@file` path |
-| `--json-output`    | FLAG | No       | Output raw JSON response                    |
+| Option             | Type | Required | Description                                            |
+| ------------------ | ---- | -------- | ------------------------------------------------------ |
+| `-d`, `--database` | TEXT | Yes      | Database ID                                            |
+| `-a`, `--asset`    | TEXT | Yes      | Asset ID                                               |
+| `-p`, `--path`     | TEXT | Yes      | File path to delete                                    |
+| `--prefix`         | FLAG | No       | Treat the path as a folder and delete every file in it |
+| `--confirm`        | FLAG | Yes      | Confirm permanent deletion                             |
+| `--json-input`     | TEXT | No       | JSON parameters as a string or `@file` path            |
+| `--json-output`    | FLAG | No       | Output raw JSON response                               |
 
 ```bash
 vamscli file delete -d my-db -a my-asset -p "/file.gltf" --confirm
@@ -296,6 +341,15 @@ vamscli file delete -d my-db -a my-asset -p "/folder/" --prefix --confirm
 :::danger[Permanent Deletion]
 Requires the `--confirm` flag. Without it, the command exits with an error (a JSON error object in `--json-output` mode). This action cannot be undone.
 :::
+
+When the API refuses the delete with `400`, the command prints `✗ File Deletion Error:` followed by the API's message, and exits `1`. With `--json-output` it prints one JSON object whose `error_type` is `InvalidAssetDataError`. The API answers `400` when Amazon S3 does not delete every version of the file or of a file under the prefix, for example because a bucket policy denies the delete or the objects are locked; the files Amazon S3 kept keep their records, and the delete can be run again once the cause is removed. It also answers `400` for a file that is already gone:
+
+```json
+{
+    "error": "Invalid delete operation: VAMS General Error: File not found.",
+    "error_type": "InvalidAssetDataError"
+}
+```
 
 ---
 

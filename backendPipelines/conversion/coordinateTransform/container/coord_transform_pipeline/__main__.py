@@ -10,7 +10,7 @@ import sys
 
 from .core import run
 from .utils.logging import log
-from .utils.pipeline.objects import PipelineStatus
+from .utils.pipeline.objects import PipelineStatus, apply_input_versions, input_asset_location
 
 log.set_log_level(logging.INFO)
 
@@ -52,7 +52,10 @@ def main():
         })
         response = run(json.loads(test_input))
     else:
-        response = run(json.loads(sys.argv[1]))
+        # The definition, then (when the run has either) the input's launch version (#994) and where
+        # the input sits in its asset
+        response = run(apply_input_versions(json.loads(sys.argv[1]), sys.argv[2:]),
+                       input_asset=input_asset_location(sys.argv[2:]))
 
     exit_status = 0 if response.status is PipelineStatus.COMPLETE else 1
     exit(exit_status)

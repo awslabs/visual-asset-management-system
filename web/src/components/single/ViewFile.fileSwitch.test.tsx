@@ -27,13 +27,16 @@ const gate = (file: string): Gate => {
 };
 
 jest.mock("../../services/APIService", () => ({
-    fetchAsset: jest.fn(
-        async ({ databaseId, assetId }: { databaseId: string; assetId: string }) => ({
-            assetId,
-            databaseId,
-            assetName: `Asset ${assetId}`,
-            isDistributable: true,
-        })
+    fetchAssetWithStatus: jest.fn(
+        async ({ databaseId, assetId }: { databaseId: string; assetId: string }) => [
+            true,
+            {
+                assetId,
+                databaseId,
+                assetName: `Asset ${assetId}`,
+                isDistributable: true,
+            },
+        ]
     ),
     fetchFileInfo: jest.fn(
         async ({ assetId, fileKey }: { databaseId: string; assetId: string; fileKey: string }) => {
@@ -78,7 +81,7 @@ jest.mock("../../visualizerPlugin/components/DynamicViewer", () => ({
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ViewFile = require("./ViewFile").default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { fetchAsset, fetchFileInfo } = require("../../services/APIService");
+const { fetchAssetWithStatus, fetchFileInfo } = require("../../services/APIService");
 
 let go: ReturnType<typeof useNavigate> = () => undefined;
 let visited: string[] = [];
@@ -209,7 +212,7 @@ describe("ViewFile file switch within one asset", () => {
 
     it("keeps the page when only the version of the open file changes", async () => {
         await openAt("a.glb");
-        const assetReads = fetchAsset.mock.calls.length;
+        const assetReads = fetchAssetWithStatus.mock.calls.length;
 
         await move(`${FILE_ROUTE}/a.glb?version=v-old`, {
             state: { filename: "a.glb", key: "assetA/a.glb", versionId: "v-old" },
@@ -218,7 +221,7 @@ describe("ViewFile file switch within one asset", () => {
 
         expect(viewer()).toBe("assetA:assetA/a.glb@v-old");
         expect(lastUrl()).toBe(`${FILE_ROUTE}/a.glb?version=v-old`);
-        expect(fetchAsset.mock.calls.length).toBe(assetReads);
+        expect(fetchAssetWithStatus.mock.calls.length).toBe(assetReads);
     });
 
     it("clears the loading state when Back reaches an entry with navigation state", async () => {

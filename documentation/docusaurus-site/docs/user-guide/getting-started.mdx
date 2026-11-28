@@ -42,9 +42,9 @@ If your organization uses an external identity provider (such as SAML or OIDC fe
 
 ### Federated Identity Provider Authentication
 
-If your deployment uses a federated identity provider through Amazon Cognito, the login page displays a **Login with Federated Identity Provider** button instead of the standard username and password form.
+If your deployment uses a federated identity provider through Amazon Cognito, the login page displays a single sign-in button instead of the standard username and password form. The button reads **Login with SSO** unless your administrator set another display name for the identity provider. An Amazon Cognito account on such a deployment, such as one your administrator created with a welcome email, cannot sign in on this page; sign in with [VamsCLI](../cli/getting-started.md) instead.
 
-1. Select **Login with Federated Identity Provider**.
+1. Select **Login with SSO** (or the name your administrator set).
 2. You are redirected to your organization's identity provider login page.
 3. Complete authentication with your corporate credentials.
 4. You are redirected back to VAMS and signed in automatically.
@@ -73,9 +73,9 @@ The top navigation bar appears at the top of every page and contains:
 | ------------------------- | ----------------------------------------------------------------------------------------------------- |
 | **Application logo**      | Displays the VAMS logo. Select it to return to the home page.                                         |
 | **Settings dropdown**     | Provides theme selection (Light Theme or Dark Theme). The active theme is indicated with a checkmark. |
-| **User profile dropdown** | Displays your username and provides a **Sign out** option.                                            |
+| **User profile dropdown** | Displays your username and lists your own pages, such as **API Key Management**, then **Sign out**.   |
 
-![VAMS home page showing the top navigation bar and side navigation panel](/img/home_page_20260323_v2.5.png)
+![VAMS home page showing the top navigation bar and side navigation panel](/img/home_page_20261109_v2.7.png)
 
 ### Side Navigation Panel
 
@@ -91,11 +91,11 @@ The navigation panel is divided into the following sections:
 
 #### Manage
 
-| Navigation Item      | Description                                                       |
-| -------------------- | ----------------------------------------------------------------- |
-| **Databases**        | View, create, and manage databases that organize your assets.     |
-| **Assets and Files** | Search, browse, and manage assets across all databases.           |
-| **Create Asset**     | Upload a new asset with files, metadata, tags, and relationships. |
+| Navigation Item      | Description                                                                            |
+| -------------------- | -------------------------------------------------------------------------------------- |
+| **Databases**        | View, create, and manage databases that organize your assets.                          |
+| **Assets and Files** | Browse the asset list, and search by keyword or natural language across all databases. |
+| **Create Asset**     | Upload a new asset with files, metadata, tags, and relationships.                      |
 
 #### Orchestrate & Automate
 
@@ -113,26 +113,40 @@ The navigation panel is divided into the following sections:
 | **Tags Management**         | Create and manage tags and tag types for organizing and classifying assets.               |
 | **Subscription Management** | Manage notification subscriptions for asset change events.                                |
 
+#### Admin - Compliance
+
+| Navigation Item        | Description                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------- |
+| **Compliance Schemas** | Create and edit compliance schemas, and sweep the assets bound to a schema.       |
+| **Quarantine**         | Review quarantined assets, release them, and grant exceptions.                    |
+| **Cascade Approvals**  | Approve or reject pending cascades that re-evaluate an asset's downstream assets. |
+| **Audit Log**          | Browse the compliance audit trail.                                                |
+
 #### Admin - Auth
 
-| Navigation Item                | Description                                                                                                                                      |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Access Control Constraints** | Define fine-grained access control constraints that determine what resources roles can access.                                                   |
-| **Roles**                      | Create and manage roles that group sets of permissions.                                                                                          |
-| **Users in Roles**             | Assign users to roles to grant them the associated permissions.                                                                                  |
-| **User Management**            | Manage Amazon Cognito user accounts (create, disable, reset passwords). This item is only visible when Amazon Cognito authentication is enabled. |
+| Navigation Item                | Description                                                                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Access Control Constraints** | Define fine-grained access control constraints that determine what resources roles can access.                                                               |
+| **Roles**                      | Create and manage roles that group sets of permissions.                                                                                                      |
+| **Users in Roles**             | Assign users to roles to grant them the associated permissions.                                                                                              |
+| **Audit Log Search**           | Search the audit logs by user, action, asset, request and text, and export the records. This item is only visible when your role allows the audit log pages. |
+| **User Management**            | Manage Amazon Cognito user accounts (create, disable, reset passwords). This item is only visible when Amazon Cognito authentication is enabled.             |
+| **API Keys (all users)**       | Manage the API keys of every user. This item is only visible when your role may call the administrative API key routes.                                      |
 
-#### User
+Add-ons a deployment enables can add navigation sections of their own: in the main menu after **Orchestrate & Automate**, and in the admin area after **Admin - Auth**. See [Add-ons Overview](../developer/addons-overview.md).
 
-| Navigation Item        | Description                                                 |
-| ---------------------- | ----------------------------------------------------------- |
-| **API Key Management** | Create and manage API keys for programmatic access to VAMS. |
+#### Your pages (profile menu)
+
+Pages that belong to you are in the user profile dropdown in the top navigation bar, not in the side panel:
+
+| Menu Item              | Description                                                                            |
+| ---------------------- | -------------------------------------------------------------------------------------- |
+| **API Key Management** | Create and manage your own API keys for programmatic access to VAMS (**My Keys**).     |
+| **Sign out**           | End your session. Always the last item, and available even when your pages can't load. |
 
 :::info
 The navigation items visible to you depend on your assigned role and permissions. If you do not see a particular item, contact your administrator to request the necessary access.
 :::
-
-<!-- The home page screenshot above shows the full side navigation panel -->
 
 ---
 

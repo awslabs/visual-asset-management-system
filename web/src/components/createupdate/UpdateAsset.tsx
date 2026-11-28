@@ -1,21 +1,43 @@
-import { Modal, Select, SpaceBetween, Multiselect } from "@cloudscape-design/components";
+import {
+    Modal,
+    Select,
+    SelectProps,
+    SpaceBetween,
+    Multiselect,
+} from "@cloudscape-design/components";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import FormField from "@cloudscape-design/components/form-field";
 import Synonyms from "../../synonyms";
 import { buildTagOptionGroups, readCachedTagTypes } from "../../common/utils/tagOptions";
 import Input from "@cloudscape-design/components/input";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import { fetchTagsForAsset, fetchTagTypesForAsset, updateAsset } from "../../services/APIService";
+import {
+    fetchComplianceSchemas,
+    bindableSchemas,
+    fetchComplianceState,
+    bindSchemaToAsset,
+    liveDatabaseId,
+    unbindSchemaFromAsset,
+} from "../../services/ComplianceService";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
+import { loadFailureMessage } from "../compliance/listingStates";
 import { TagType } from "../../pages/Tag/TagType.interface";
 import {
     validateRequiredTagTypeSelected,
     validateNonZeroLengthTextAsYouType,
     enforceableRequiredTagTypes,
 } from "../../pages/AssetUpload/validations";
+
+// Compliance routes behind the schema-binding field.
+const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
+const COMPLIANCE_BIND_ASSET_API_ROUTE = "/compliance/bind/{databaseId}/{assetId}";
+// The field reads the asset's override from its compliance state.
+const COMPLIANCE_ASSET_STATE_API_ROUTE = "/compliance/state/{databaseId}/{assetId}";
 
 interface UpdateAssetProps {
     asset: any;
@@ -33,14 +55,23 @@ const tags: any[] = [];
 let assetTags: any[] = [];
 let tagTypes: TagType[] = [];
 
+// The fields an asset save sends, with an absent value written as its default, so the form and the
+// asset it was loaded from compare equal when nothing was edited. Tag order is not a change.
+const assetFields = (asset: any) => ({
+    assetName: asset?.assetName || "",
+    description: asset?.description || "",
+    isDistributable: asset?.isDistributable === true,
+    tags: [...(asset?.tags || [])].sort(),
+});
+
+const assetFieldsChanged = (a: any, b: any): boolean =>
+    JSON.stringify(assetFields(a)) !== JSON.stringify(assetFields(b));
+
+// Saves the asset and resolves with the outcome; a refusal is reported through setError.
 const update = async (
     updatedAsset: any,
-    setError: (error: { isError: boolean; message: string }) => void,
-    setComplete: (complete: boolean) => void,
-    isFormValid: boolean
-) => {
-    if (!isFormValid) return; // Don't attempt to update if form is not valid
-
+    setError: (error: { isError: boolean; message: string }) => void
+): Promise<boolean> => {
     setError({ isError: false, message: "" });
     try {
         // Update asset metadata using the new API endpoint
@@ -68,16 +99,15 @@ const update = async (
                     (Array.isArray(result) && result[1]) ||
                     "An error occurred during the update process",
             });
-            return;
+            return false;
         }
-
-        // Mark as complete
-        setComplete(true);
+        return true;
     } catch (err: any) {
         setError({
             isError: true,
             message: err.message || "An error occurred during the update process",
         });
+        return false;
     }
 };
 
@@ -87,12 +117,45 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     // the record in hand does not carry one. Never the unscoped list — that surfaces every other
     // database's required tag types as constraints on this form.
     const tagScopeDatabaseId = asset?.databaseId || routeDatabaseId;
+    // The database id of the compliance requests: the live one, also for an archived asset, whose
+    // record carries `<databaseId>#deleted` (a compliance route refuses it with 400).
+    const complianceDatabaseId = liveDatabaseId(tagScopeDatabaseId);
     const [assetDetail, setAssetDetail] = useState(asset);
+    // The asset as last saved; a save is sent only when the form differs from it.
+    const [savedAsset, setSavedAsset] = useState(asset);
+    // Set once a save lands while the modal is open, so closing it after a later refusal still
+    // refreshes the view with what was saved.
+    const savedWhileOpen = useRef(false);
     const [error, setError] = useState({ isError: false, message: "" });
     const [complete, setComplete] = useState(false);
     const [isValid, setIsValid] = useState(true);
     const [isFormTouched, setIsFormTouched] = useState(false);
     const [inProgress, setInProgress] = useState(false);
+
+    // Compliance schema binding: the field is shown only when the caller may list schemas and
+    // bind one to the asset. The asset-level override is loaded first so an untouched field
+    // leaves the existing binding alone.
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canBindComplianceSchema =
+        canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE) &&
+        canCallRoute("PUT", COMPLIANCE_BIND_ASSET_API_ROUTE) &&
+        canCallRoute("GET", COMPLIANCE_ASSET_STATE_API_ROUTE);
+    // Inherit removes an override through the binding's DELETE; while the asset has none it removes
+    // nothing, so it stays offered then.
+    const canUnbindComplianceSchema = canCallRoute("DELETE", COMPLIANCE_BIND_ASSET_API_ROUTE);
+    const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
+    const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
+    const [initialSchemaValue, setInitialSchemaValue] = useState<string | null>(null);
+    const [loadingSchemas, setLoadingSchemas] = useState(false);
+    // Whether the schema list and the asset's override were read. The field is offered only once
+    // the override is known, so a choice is never compared against an override the form could not
+    // read. A failure shows its reason and a Retry, which reads both again.
+    const [schemasError, setSchemasError] = useState<string | null>(null);
+    const [overrideStatus, setOverrideStatus] = useState<"loading" | "loaded" | "failed">(
+        "loading"
+    );
+    const [overrideError, setOverrideError] = useState<string | null>(null);
+    const [complianceReadAttempt, setComplianceReadAttempt] = useState(0);
 
     if (complete) {
         props.onComplete();
@@ -103,7 +166,59 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
         setIsFormTouched(false);
         setError({ isError: false, message: "" });
         setInProgress(false);
-        props.onClose();
+        if (savedWhileOpen.current) {
+            savedWhileOpen.current = false;
+            props.onComplete();
+        } else {
+            props.onClose();
+        }
+    };
+
+    // Sends the asset save only when an asset field changed and the schema binding only when the
+    // schema selection changed, in that order. A refused save sends no binding; any refusal keeps
+    // the modal open with the message, and the update completes only when every request sent
+    // succeeded. With nothing changed the modal closes without sending anything.
+    const submit = async () => {
+        setIsFormTouched(true);
+        if (!isValid) return;
+        const selectedValue = (selectedSchema?.value as string | undefined) || null;
+        const sendSave = assetFieldsChanged(assetDetail, savedAsset);
+        const sendBinding =
+            canBindComplianceSchema &&
+            !!complianceDatabaseId &&
+            !!assetDetail.assetId &&
+            overrideStatus === "loaded" &&
+            selectedValue !== initialSchemaValue;
+        if (!sendSave && !sendBinding) {
+            close();
+            return;
+        }
+
+        setInProgress(true);
+        setError({ isError: false, message: "" });
+        if (sendSave) {
+            const saved = await update(assetDetail, setError);
+            if (!saved) return;
+            setSavedAsset(assetDetail);
+            savedWhileOpen.current = true;
+        }
+        if (sendBinding && complianceDatabaseId) {
+            const [bound, message] = selectedValue
+                ? await bindSchemaToAsset(complianceDatabaseId, assetDetail.assetId, selectedValue)
+                : await unbindSchemaFromAsset(complianceDatabaseId, assetDetail.assetId);
+            if (!bound) {
+                setError({
+                    isError: true,
+                    message: sendSave
+                        ? `${Synonyms.Asset} saved, but the compliance schema binding failed: ${message}`
+                        : `The compliance schema binding failed: ${message}`,
+                });
+                return;
+            }
+            setInitialSchemaValue(selectedValue);
+        }
+        savedWhileOpen.current = false;
+        setComplete(true);
     };
 
     const [selectedTags, setSelectedTags] = useState<OptionDefinition[]>([]);
@@ -120,6 +235,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
 
     useEffect(() => {
         setAssetDetail(asset);
+        setSavedAsset(asset);
         // Scope to global + the asset's database so tags from other databases are hidden.
         if (!tagScopeDatabaseId) return;
         fetchTagsForAsset({ databaseId: tagScopeDatabaseId }).then((res) => {
@@ -192,6 +308,64 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     }, [tagScopeDatabaseId]);
 
     useEffect(() => {
+        if (!canBindComplianceSchema) return;
+        let cancelled = false;
+        const loadSchemas = async () => {
+            setLoadingSchemas(true);
+            setSchemasError(null);
+            const [success, result] = await fetchComplianceSchemas(complianceDatabaseId);
+            if (cancelled) return;
+            if (success && Array.isArray(result)) {
+                setSchemaOptions(
+                    bindableSchemas(result).map((s) => ({
+                        label: s.schemaName,
+                        value: s.schemaName,
+                        description: s.description,
+                    }))
+                );
+            } else {
+                setSchemaOptions([]);
+                setSchemasError(loadFailureMessage("the compliance schemas", result));
+            }
+            setLoadingSchemas(false);
+        };
+        loadSchemas();
+        return () => {
+            cancelled = true;
+        };
+    }, [canBindComplianceSchema, complianceDatabaseId, complianceReadAttempt]);
+
+    useEffect(() => {
+        if (!canBindComplianceSchema || !complianceDatabaseId || !asset?.assetId) return;
+        let cancelled = false;
+        const loadBinding = async () => {
+            setOverrideStatus("loading");
+            setOverrideError(null);
+            const [success, result] = await fetchComplianceState(
+                complianceDatabaseId,
+                asset.assetId
+            );
+            if (cancelled) return;
+            if (success && typeof result !== "string") {
+                const override =
+                    result.schemaSource === "asset" && result.schemaName ? result.schemaName : null;
+                setSelectedSchema(override ? { label: override, value: override } : null);
+                setInitialSchemaValue(override);
+                setOverrideStatus("loaded");
+            } else {
+                setOverrideStatus("failed");
+                setOverrideError(
+                    loadFailureMessage(`the ${Synonyms.asset}'s compliance schema`, result)
+                );
+            }
+        };
+        loadBinding();
+        return () => {
+            cancelled = true;
+        };
+    }, [canBindComplianceSchema, complianceDatabaseId, asset?.assetId, complianceReadAttempt]);
+
+    useEffect(() => {
         // Form Validation Error Check
         const validation = {
             assetName: validateNonZeroLengthTextAsYouType(assetDetail.assetName),
@@ -221,11 +395,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         </Button>
                         <Button
                             variant="primary"
-                            onClick={() => {
-                                setInProgress(true);
-                                setIsFormTouched(true);
-                                update(assetDetail, setError, setComplete, isValid);
-                            }}
+                            onClick={submit}
                             disabled={(inProgress && !error.isError) || !isValid}
                         >
                             {`Update ${Synonyms.Asset}`}
@@ -315,6 +485,47 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         }}
                     />
                 </FormField>
+                {canBindComplianceSchema && (
+                    <FormField
+                        label="Compliance Schema"
+                        description={`Override the ${Synonyms.database}-level compliance schema for this ${Synonyms.asset}. Choose "Inherit" to use the ${Synonyms.database} schema. Offered: the GLOBAL schemas and those available to this ${Synonyms.asset}'s ${Synonyms.database} only.`}
+                        constraintText={`Optional. ${Synonyms.Asset}-level binding overrides ${Synonyms.database}-level.`}
+                        errorText={overrideError || schemasError || undefined}
+                        secondaryControl={
+                            overrideError || schemasError ? (
+                                <Button
+                                    onClick={() =>
+                                        setComplianceReadAttempt((attempt) => attempt + 1)
+                                    }
+                                >
+                                    Retry
+                                </Button>
+                            ) : undefined
+                        }
+                    >
+                        <Select
+                            selectedOption={selectedSchema}
+                            disabled={overrideStatus !== "loaded"}
+                            onChange={({ detail }) => {
+                                setSelectedSchema(
+                                    detail.selectedOption?.value ? detail.selectedOption : null
+                                );
+                                setIsFormTouched(true);
+                            }}
+                            options={[
+                                ...(canUnbindComplianceSchema || !initialSchemaValue
+                                    ? [{ label: `Inherit from ${Synonyms.database}`, value: "" }]
+                                    : []),
+                                ...schemaOptions,
+                            ]}
+                            placeholder={`Inherit from ${Synonyms.database}`}
+                            loadingText="Loading schemas"
+                            statusType={loadingSchemas ? "loading" : "finished"}
+                            filteringType="auto"
+                            data-testid="asset-compliance-schema"
+                        />
+                    </FormField>
+                )}
                 {error.isError && (
                     <ProgressBar
                         value={0}

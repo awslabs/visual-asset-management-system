@@ -22,6 +22,8 @@ Using the same pipeline ID in both a GLOBAL database and a non-GLOBAL database c
 
 Each metadata entity type (database, asset, asset file, asset link) supports a maximum of **500 metadata and attribute records**. Operations that would exceed this limit are rejected by the API.
 
+Pipeline write-backs are exempt from this limit and can store more than 500 records on an entity. While an entity holds more than 500 records, user and API create and `update` requests on it are refused; a `replace_all` of 500 items or fewer, or deleting records, brings it back under the limit.
+
 ### Schema Validation Enforcement
 
 Metadata schema validation is enforced only when metadata is created or updated through the VAMS API. Metadata written by pipeline outputs or direct Amazon DynamoDB manipulation is not validated against schemas. This means:
@@ -38,12 +40,13 @@ Metadata schema validation is enforced only when metadata is created or updated 
 
 Amazon API Gateway waits for the integration timeout configured in `app.api.apiGatewayRest.apiGatewayTimeoutTime` — `29` seconds by default — before returning a `504`. The underlying AWS Lambda function continues executing for up to **15 minutes**. This affects:
 
-| Operation                              | Impact                                             |
-| -------------------------------------- | -------------------------------------------------- |
-| Listing assets with thousands of files | Response may time out while Lambda completes       |
-| Asset export with deep link trees      | Large response payloads take time to assemble      |
-| Bulk metadata operations               | Individual batch writes continue after timeout     |
-| Amazon OpenSearch re-indexing          | Lambda may complete indexing after API returns 504 |
+| Operation                              | Impact                                                                                                                |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Listing assets with thousands of files | Response may time out while Lambda completes                                                                          |
+| Asset export with deep link trees      | Large response payloads take time to assemble                                                                         |
+| Bulk metadata operations               | Individual batch writes continue after timeout                                                                        |
+| Amazon OpenSearch re-indexing          | Lambda may complete indexing after API returns 504                                                                    |
+| Copying or moving a large file         | The AWS Lambda function copies the file in Amazon S3 within the request; the copy continues after the API returns 504 |
 
 Deployments that routinely operate on assets with many files or many relationships can raise the integration timeout up to `300` seconds so these operations complete within a single synchronous request. Values above `29` seconds require an approved account-level **Integration timeout** quota increase (`L-E5AE38E3`) in the deployment Region before deploying — see the [configuration reference](../deployment/configuration-reference.md). The 15-minute AWS Lambda timeout remains the outer bound.
 
@@ -61,16 +64,21 @@ File upload initialization (stage 1) is limited to **20 upload initializations p
 
 ### Upload Request Size Limits
 
-A single upload-initialize request is bounded by three limits, each defined as a named constant in the backend:
+A single upload-initialize request is bounded by four limits, each defined as a named constant in the backend:
 
 | Limit                                  | Value      | Purpose                                                                                                                                         |
 | -------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | Files per request                      | **1,000**  | Bounds the request body size. Bulk uploads beyond this are split into multiple requests by the web app and VamsCLI.                             |
 | Parts per file                         | **10,000** | Matches the Amazon S3 hard limit on parts per multipart object.                                                                                 |
-| Total parts across all files (request) | **5,000**  | Bounds the upload-initialize Lambda's time and memory **and** keeps the presigned-URL response under the response-size limits (see note below). |
+| Total parts across all files (request) | **1,500**  | Bounds the upload-initialize Lambda's time and memory **and** keeps the presigned-URL response under the response-size limits (see note below). |
+| Estimated response size (request)      | **5 MiB**  | Keeps the presigned-URL response under the response-size limits when the file keys are long (see note below).                                   |
 
-:::note[Why the 5,000 total-parts cap is also a response-size guard]
-The upload-initialize response returns one presigned URL per part. The total-parts-per-request cap therefore directly bounds the response payload, keeping it under the **AWS Lambda synchronous response limit (6 MB)** and the **Amazon API Gateway payload limit**. This value is not purely a throttle — raising it requires re-checking the worst-case response size (total parts × presigned-URL length) against those limits.
+:::note[Why the upload-initialize response is bounded twice]
+The upload-initialize response returns one presigned URL per part, and each URL carries a signed query string of about 2 KB plus the file's Amazon S3 key, percent-encoded. The total-parts cap bounds the number of URLs. The backend also estimates the response from each file's part count and key, and refuses a request whose estimate is over 5 MiB with `400` ("Upload request too large; split the files across several requests") before it creates any multipart upload. Together they keep the response under the **AWS Lambda synchronous response limit (6 MB)** and the **Amazon API Gateway payload limit**. Neither value is purely a throttle — raising either requires re-checking the worst-case response size (total parts × presigned-URL length) against those limits.
+
+With ordinary keys, 1,500 parts and 1,000 files give a response of about 4.5 MB, inside the estimate. A key of non-ASCII characters costs up to three times its UTF-8 length in every URL, so a request with long non-ASCII keys is refused below 1,500 parts: a file whose key is 1,024 bytes of non-ASCII characters fits about 930 parts in one request. For such a file, send fewer, larger parts.
+
+Because one file is initialized in one request, the cap also bounds a single file's part count: at 1 GiB parts, which the web app uses for files over 15 GB, one file can be up to 1,500 GiB.
 :::
 
 ### Internal Pagination of Large Listings
@@ -109,15 +117,45 @@ Exceeding a bound does not fail the execution. When one entity passes a per-enti
 Each truncation is reported as a warning in the response to the execute request. The VamsCLI prints these under `Warnings` after `vamscli workflow execute`, and the web execute wizard displays them in place when the run starts. The warnings are not stored on the execution record, so a pipeline whose logic depends on a specific metadata key can receive an incomplete metadata file and produce incorrect output with no later indication. Review the launch warnings for executions over heavily annotated assets.
 :::
 
-### 3D Preview Thumbnail Pipeline File Size Limit
+### 3D Preview Thumbnail Pipeline Input Size
 
-The 3D Preview Thumbnail pipeline supports a maximum input file size of **100 GB**. The pipeline performs a pre-download Amazon S3 size validation and rejects files exceeding this limit. Supporting larger files may require an Amazon Elastic File System (Amazon EFS) and AWS Fargate implementation.
+The largest input the 3D Preview Thumbnail pipeline accepts is the free space of its task's work volume (200 GiB of AWS Fargate ephemeral storage), less 1 GiB kept for the output. The container compares the object size with the free space before it downloads, and fails with a message that names both sizes. PTX and PTS files are streamed from Amazon S3 and need no disk. Split a larger file before you upload it.
+
+### 3D Preview Thumbnail Rendering Limits
+
+-   **FBX** -- FBX 2011 (7.1) and later files are read. FBX meshes are coloured by vertex colour or material base colour; textures are not sampled.
+-   **USD** -- MaterialX materials are not read, so their prims render in the default colour. A USD stage that expands past 30 million vertices is drawn up to that point.
+-   **Gaussian splats** -- Splats are drawn as flat discs in their base colour, so view-dependent colour and splat shape are not shown. The preview shows a captured scene's core and leaves out the background around it. A scene whose up axis differs from the 3D Gaussian Splatting convention renders tilted unless its core is a ground plane, which is levelled.
+-   **Referenced files** -- A referenced file is fetched only when it lies inside the same asset; a reference to another asset, an absolute path or a URL is skipped and the preview renders without it. An `.lcc2` scene that names a chunk file outside its asset is not rendered.
+
+### Media Preview Thumbnail Limits
+
+-   **An image under 5 MiB gets no generated preview.** The web shows it as its own preview (`.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, `.bmp`), so the run completes successfully and its results say so. A TGA or TIFF of any size, and a larger image, gets a JPEG.
+-   **TIFF compressions.** LZW, Deflate, PackBits, Zstandard, LZMA, JPEG and LERC are read; a TIFF in another compression (for example WebP or JPEG XL) fails with a message naming it. Re-save it uncompressed or with LZW or deflate.
+-   **MDL files have no thumbnail** (tracked separately); an animated GIF or WebP under 5 MiB is left as it is, and a video with no video stream completes with no preview.
+-   **`vamscli` does not yet accept `.webp` and `.bmp` as preview uploads** (tracked in issue #1580); the web and the API do.
+
+### Video SOP/BOM Extraction Pipeline Input Limits
+
+The Video SOP/BOM Extraction pipeline accepts at most **4 video files** per run (`limits.maxVideoFiles`), **4 GB** per video and **16 GB** per run (`config.ts` constants sized to the container's 100 GiB ephemeral volume), and **240 minutes** of summed audio (`limits.maxTotalDurationMinutes`, at most 480, the Amazon Transcribe ceiling). Templates and workflows cannot express these bounds, so the pipeline enforces them itself: the file count, extensions, and byte sizes are checked by the entry-point Lambda before any AWS Batch job is submitted, and the duration by the container from the extracted audio before the transcription starts. A refused run fails its pipeline step through the AWS Step Functions task token with a readable cause visible in the execution details (for example `VideoSopBomInputRejected: 5 video files selected; this deployment allows at most 4.`); no partial deliverables are written. Whole-asset and folder selections are refused by the execute API with a `400` response. See [Video SOP/BOM Extraction — Limits](../pipelines/video-sop-bom.md#limits).
+
+### Download as Zip Archive Size and Retention
+
+A Download as Zip archive is a single Amazon S3 object, so one archive holds at most 5 TiB, and a selection larger than that is refused rather than split; download it as several archives. An archive is kept for 7 days and the retention is not configurable, so download it within that time or request it again. See [Download as Zip Limits](../additional/quotas.md#download-as-zip-limits).
 
 ### Pipeline Output Path Requirements
 
 Pipeline containers must preserve the input file's relative subdirectory path when writing output files. The workflow process-output step expects outputs at the same relative location as the input file within the asset. Failure to maintain this structure results in files being written to incorrect locations.
 
 ---
+
+### Natural-Language Search Limits
+
+Each vector query evaluates at most **100 candidates** per call (the DynamoDB `SearchVectors` `TopK` ceiling) and the API has no cursor; when a whole-file search window fills, the response reports `nlp.truncated: true` and `hits.total.relation: "gte"`, and the web interface notes that more matches may exist; a full segment window — which one long, chunked document can fill on its own — is reported as the `segments:window_full` warning instead, and only when no whole-file window filled; the web interface notes it under the results as well. Only the latest live version of a file is searchable, although embeddings are stored per version. Changing `bedrockModels.embeddingDimensions` on a populated index is unsupported — follow the model-change procedure in [Vector search](../concepts/vector-search.md#changing-the-embedding-model), which clears the table first. Lambda functions reach Amazon Bedrock over standard (non-FIPS) endpoints even when `app.useFips` is `true`.
+
+### SYSTEM GenAI Metadata Pipeline Size Limits
+
+3D files above `app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxInputFileSizeMb` (default 2048) and point clouds above `lambdaLimits.maxPointCloudPoints` (default 20,000,000) are analyzed attributes-only unless `useFargateRenderer` is enabled, which adds an AWS Batch renderer and requires a VPC. The media branch downloads files up to 3,500 MiB; above that a video or audio file is read by URL, a ZIP is listed from its central directory, and any other file gets `sys_file` only. Of an Excel workbook's shared-strings part (the table of its distinct text values, in order of first use) the first 64 MiB uncompressed are read: a text cell whose string lies past that point reads as blank in the sample rows and the captured text, the counts and numeric cells stand, and `sys_data` carries `stringValues: "partial"`. Archive members are not unpacked or analyzed individually. Proprietary CAD formats receive `sys_file` attributes and metadata derived from the file name and asset context only. Content chunks are produced for document, text, and data files up to 50 MiB; a larger file keeps its whole-file vector only. Per-window video analysis is capped at 360 windows per file.
 
 ## Web Application Limitations
 
@@ -129,7 +167,11 @@ Safari does not support the cross-origin isolation requirements needed by WebAss
 -   Three.js Viewer CAD formats (.stp, .step, .iges, .brep)
 -   Cesium 3D Tileset Viewer (.json tilesets)
 
-Standard mesh formats in the Three.js Viewer (.gltf, .glb, .obj, .fbx, .stl) work correctly in Safari because they do not require WASM.
+Standard mesh formats and USD in the Three.js Viewer (.gltf, .glb, .obj, .fbx, .stl, .usd, .usda, .usdc, .usdz) work correctly in Safari because they do not require WASM.
+
+### Three.js Viewer USD Composition Limits
+
+The Three.js Viewer composes a USD scene from the files it loads from the asset, using the three.js USD loader. It does not compose UDIM texture sets (`<UDIM>`), a `.usdz` referenced from another layer, or references written inside a binary (`.usdc`) layer, and it does not load files outside the asset. It does not compose or download sublayers (`subLayers`); the notice lists each one as not shown by this viewer. Scenes that place their geometry in sublayers or behind variant sets or payloads may compose only in part or not at all; when nothing in a scene can be drawn, the viewer shows a message instead of an empty view. Flattening the scene into one layer (for example with `usdcat --flatten`) or opening it in a desktop USD viewer shows the full scene. A notice on the viewer lists every referenced file it did not load. See [Referenced files in the Three.js Viewer](../concepts/viewers.md#referenced-files-in-the-threejs-viewer).
 
 ### Needle USD Viewer Compressed File Limitations
 
@@ -153,20 +195,22 @@ To limit the exposure:
 
 ### File Extension Upload Restrictions
 
-File extension and MIME type restrictions are enforced only on files written through the VAMS API: uploads, and the destination file name of a move, rename or copy, which gets the extension check. Files added directly to the Amazon S3 asset bucket bypass these checks. The following file extensions are blocked on upload:
+The blocked extension list is enforced only on files written through the VAMS API: uploads, and the destination file name of a move, rename or copy. Files added directly to the Amazon S3 asset bucket bypass it when they are written. The blocked MIME type list does not refuse an upload (see [Blocked File Types](../architecture/security.md#blocked-file-types)). Both lists are checked against a stored file's name and content type when it is downloaded, streamed, exported or zipped. The following file extensions are blocked on upload:
 
-| Extension              | Description                  |
-| ---------------------- | ---------------------------- |
-| `.exe`, `.dll`, `.com` | Executable files             |
-| `.bat`, `.cmd`         | Batch and command scripts    |
-| `.jar`, `.java`        | Java archives and source     |
-| `.php`                 | PHP scripts                  |
-| `.vbs`                 | VBScript files               |
-| `.reg`                 | Registry files               |
-| `.pif`, `.lnk`         | Shortcut files               |
-| `.bak`                 | Backup files                 |
-| `.nat`                 | NAT files                    |
-| `.docm`                | Macro-enabled Word documents |
+| Extension                                   | Description                                                                        |
+| ------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `.exe`, `.dll`, `.com`                      | Executable files                                                                   |
+| `.bat`, `.cmd`                              | Batch and command scripts                                                          |
+| `.jar`, `.java`                             | Java archives and source                                                           |
+| `.php`                                      | PHP scripts                                                                        |
+| `.vbs`                                      | VBScript files                                                                     |
+| `.reg`                                      | Registry files                                                                     |
+| `.pif`, `.lnk`                              | Shortcut files                                                                     |
+| `.bak`                                      | Backup files                                                                       |
+| `.nat`                                      | NAT files                                                                          |
+| `.docm`, `.dotm`                            | Macro-enabled Word documents and templates                                         |
+| `.xlsm`, `.xltm`, `.xlam`                   | Macro-enabled Excel workbooks and templates, and Excel add-ins                     |
+| `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm` | Macro-enabled PowerPoint presentations, templates, slide shows, add-ins and slides |
 
 ### Folder Selection in Firefox
 
@@ -180,17 +224,16 @@ The web application file selector for asset uploads supports folder selection in
 
 When deploying to AWS GovCloud (US) regions or the AWS European Sovereign Cloud, the following services are not available. Configuration validation rejects a deployment that enables any of them, naming the field.
 
-| Feature                                    | Restriction                                                                                     |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| Amazon CloudFront                          | Not available; use ALB deployment mode                                                          |
-| Amazon Location Service                    | Not available; map features are disabled                                                        |
-| AWS Deadline Cloud                         | Not available; `app.pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                |
-| Amazon Cognito SAML and OIDC federation    | Not available (both use the Cognito hosted UI); use the external OAuth identity provider option |
-| OpenSearch Serverless (next-generation)    | Not available; `app.openSearch.useServerless.nextGen` must be `false`                           |
-| OpenSearch Serverless (European Sovereign) | Not offered in the `aws-eusc` partition at all; use `app.openSearch.useProvisioned` there       |
-| Amazon Cognito Advanced Security           | Not available; security check is suppressed                                                     |
-
-Amazon Rekognition is not offered in the AWS European Sovereign Cloud or in AWS GovCloud (US-East) (`us-gov-east-1`), so the GenAI metadata labeling pipeline (`app.pipelines.useGenAiMetadata3dLabeling`) cannot run there; keep it disabled. Configuration validation rejects the pipeline in those Regions when `app.useGlobalVpc.useForAllLambdas` and `app.useGlobalVpc.addVpcEndpoints` are both `true`, and warns otherwise.
+| Feature                                    | Restriction                                                                                                                     |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| Amazon CloudFront                          | Not available; use ALB deployment mode                                                                                          |
+| Amazon Location Service                    | Not available; map features are disabled                                                                                        |
+| AWS Deadline Cloud                         | Not available; `app.pipelines.deadlineCloudExecutionTypeEnabled` must be `false`                                                |
+| Amazon Cognito SAML and OIDC federation    | Not available (both use the Cognito hosted UI); use the external OAuth identity provider option                                 |
+| OpenSearch Serverless (next-generation)    | Not available; `app.openSearch.useServerless.nextGen` must be `false`                                                           |
+| OpenSearch Serverless (European Sovereign) | Not offered in the `aws-eusc` partition at all; use `app.openSearch.useProvisioned` there                                       |
+| DynamoDB vector search                     | Not available in the `aws-eusc` partition; `app.vectorSearch.enabled` must be `false`. Defaults to `false` in AWS GovCloud (US) |
+| Amazon Cognito Advanced Security           | Not available; security check is suppressed                                                                                     |
 
 A VPC is also required in these partitions (`app.useGlobalVpc.enabled` must be `true`). See [Restricted-partition constraints](../deployment/configuration-reference.md#restricted-partition-constraints) for the authoritative per-field list.
 
@@ -201,3 +244,9 @@ VAMS supports either Amazon CloudFront or Application Load Balancer for web host
 ### VPC Subnet IP Requirements
 
 When using a VPC, each subnet must have sufficient IP addresses for all deployed Lambda functions and VPC endpoints. The number of required IPs scales with the number of enabled pipelines and services. Refer to the [Configuration Guide](../deployment/configuration-reference.md) for subnet sizing guidance.
+
+---
+
+## Add-on Limitations
+
+Add-ons have limitations of their own, which each add-on's page lists; see [Add-ons Overview](../developer/addons-overview.md).

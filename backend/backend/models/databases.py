@@ -8,7 +8,7 @@ from common.validators import validate, trim_name, id_pattern, object_name_patte
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="DatabaseModels")
+logger = safeLogger()
 
 # Maximum length of a caller-supplied pagination token. Tokens this service issues
 # are a base64-encoded DynamoDB LastEvaluatedKey, well under this bound.
@@ -75,9 +75,9 @@ class CreateDatabaseRequestModel(BaseModel, extra='ignore'):
                         raise ValueError("Each extension must start with a dot (e.g., '.pdf')")
                     if len(ext) < 2:
                         raise ValueError("Each extension must have at least one character after the dot")
-                    # Check for valid characters (alphanumeric and dot only)
-                    if not all(c.isalnum() or c == '.' for c in ext):
-                        raise ValueError("Extensions may contain only letters, digits, and dots")
+                    # Letters, digits, '_' (.x_t) and '.' (a multi-part extension such as .tar.gz)
+                    if not all(c.isalnum() or c in '._' for c in ext):
+                        raise ValueError("Extensions may contain only letters, digits, underscores, and dots")
             
         (valid, message) = validate(validation_dict)
         if not valid:
@@ -115,6 +115,10 @@ class GetDatabaseResponseModel(BaseModel, extra='ignore'):
     baseAssetsPrefix: Optional[str] = None  # Base prefix from S3 asset buckets table
     restrictMetadataOutsideSchemas: Optional[bool] = False
     restrictFileUploadsToExtensions: Optional[str] = ""
+    # The database's compliance schema binding (written by the compliance binding service); both
+    # are absent on a database with no binding.
+    complianceSchemaName: Optional[str] = None
+    complianceAutoEval: Optional[bool] = None
 
 class GetDatabasesRequestModel(BaseModel, extra='ignore'):
     """Request model for listing databases"""
@@ -187,9 +191,9 @@ class UpdateDatabaseRequestModel(BaseModel, extra='ignore'):
                         raise ValueError("Each extension must start with a dot (e.g., '.pdf')")
                     if len(ext) < 2:
                         raise ValueError("Each extension must have at least one character after the dot")
-                    # Check for valid characters (alphanumeric and dot only)
-                    if not all(c.isalnum() or c == '.' for c in ext):
-                        raise ValueError("Extensions may contain only letters, digits, and dots")
+                    # Letters, digits, '_' (.x_t) and '.' (a multi-part extension such as .tar.gz)
+                    if not all(c.isalnum() or c in '._' for c in ext):
+                        raise ValueError("Extensions may contain only letters, digits, underscores, and dots")
         
         if validation_dict:
             (valid, message) = validate(validation_dict)
@@ -226,6 +230,19 @@ class BucketModel(BaseModel, extra='ignore'):
     # true. Defaults to false so a row written before the flag existed reads as non-default rather
     # than absent, which keeps a client's boolean check total.
     isDefault: bool = False
+    # The bucket's Region and owning account. Clients sign and route per-bucket requests with
+    # the Region; both are absent on a row written before they were recorded, which readers treat
+    # as the deployment Region and the deployment account.
+    bucketRegion: Optional[str] = None
+    bucketAccountId: Optional[str] = None
+    # Whether S3 Transfer Acceleration is on for the bucket (#1610), as the row records it. A row
+    # without the attribute reads as false, so a client's boolean check stays total.
+    isAccelerated: bool = False
+    # Where the registration came from: "static" (the deployment's configuration; also a row written
+    # before the field existed) or "runtime" (added at run time), and its state
+    # (common.bucketRegistrations.registration_state): "active", "retired", "pending" or "disabled".
+    source: str = "static"
+    status: str = "active"
 
 class GetBucketsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing buckets"""

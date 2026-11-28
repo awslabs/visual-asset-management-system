@@ -31,10 +31,83 @@ from common.s3PathPatterns import (
     PIPELINE_OUTPUT_RESULTS_PREFIX,
 )
 
-logger = safeLogger(service_name="WorkflowAslBuilder")
+logger = safeLogger()
 
-# ASL schema version stamped in the definition Comment field.
-ASL_SCHEMA_VERSION = 1
+# ASL schema version stamped in the definition Comment field; equal to workflowAsl.ASL_SCHEMA_VERSION
+# (bumped together, see there). 2 adds the wait for large outputs after the process-output state
+# (AwaitOutputIngestion + FinalizeOutputs); 3 the process-output retry of Sandbox.Timedout and
+# EarlierIngestionInProgress (#1290, #1271); 4 the retry of a refused resource-name lookup on the
+# scaffolding states (RESOURCE_NAME_UNAVAILABLE_RETRIER, #1187); 5 that retrier's 15 s first interval.
+ASL_SCHEMA_VERSION = 5
+
+# Default maximum wait for large outputs. Mirrors common.largeObjectCopy MAX_OUTPUT_INGESTION_WAIT_HOURS
+# (this module keeps its import-free contract; a unit test pins the two equal).
+DEFAULT_MAX_OUTPUT_INGESTION_WAIT_HOURS = 48
+
+# State ids of the large-output wait (fixed: they appear once per definition).
+INGESTION_CHOICE_STATE_ID = "OutputIngestionPending"
+AWAIT_INGESTION_STATE_ID = "AwaitOutputIngestion"
+INGESTION_TIMEOUT_STATE_ID = "OutputIngestionTimedOut"
+FINALIZE_OUTPUTS_STATE_ID = "FinalizeOutputs"
+WORKFLOW_SUCCEEDED_STATE_ID = "WorkflowSucceeded"
+INGESTION_TIMEOUT_ERROR = "OutputIngestionTimeout"
+
+# Lambda throttling on the output states (process-output, the ingestion wait, finalize) waits for
+# capacity with long jittered backoff instead of failing the run, whose error handler
+# would then cancel the run's copies. A throttled invoke never ran the handler, so retrying it repeats
+# nothing. It is listed first: Step Functions uses the first retrier whose errors match. The copy
+# engine's tasks use the same values (infra assetFunctions.ts THROTTLE_RETRY). With full
+# jitter each delay is uniform between 0 and its computed value (10 s doubling to a 300 s cap), so 99
+# attempts wait about 4 hours on average and at most about 7.9 hours.
+THROTTLE_RETRIER = {
+    "ErrorEquals": ["Lambda.TooManyRequestsException"],
+    "IntervalSeconds": 10,
+    "BackoffRate": 2.0,
+    "MaxAttempts": 99,
+    "MaxDelaySeconds": 300,
+    "JitterStrategy": "FULL",
+}
+
+# The output step states (process-output, the ingestion wait, finalize) raise
+# LargeObjectCopyEngineBusy (common.largeObjectCopy) when the copy engine was still throttled after
+# the invocation's own waiting. That is not a failure: the state is retried, so a throttle slows the
+# run and never ends it FAILED while its copies are alive. Bounded; the wait state's own timeout
+# (the maximum output-ingestion wait) is unchanged, and an exhausted retry goes to the usual Catch.
+ENGINE_BUSY_ERROR = "LargeObjectCopyEngineBusy"
+ENGINE_BUSY_RETRIER = {
+    "ErrorEquals": [ENGINE_BUSY_ERROR],
+    "IntervalSeconds": 30,
+    "BackoffRate": 2.0,
+    "MaxAttempts": 8,
+    "MaxDelaySeconds": 300,
+    "JitterStrategy": "FULL",
+}
+
+# The VAMS Lambdas behind the scaffolding states (process-output, the ingestion wait, finalize, the
+# interim pipeline tracking and the error handler) resolve their resource names at import (backend
+# Rule 10). When Parameter Store throttles a burst of cold starts, common.resourceNames refuses the
+# lookup with ResourceNameUnavailableError and the Lambda's init fails, so its handler never ran and
+# a retry repeats nothing. Lambda re-runs a failed init once and then discards the environment, so the
+# state's next attempt starts cold again: this retrier spaces the attempts out until the burst is
+# over instead of failing the run at the first refusal. A handler that has started holds every
+# published name from its init sweep and is never refused one. The process-output Lambda also raises
+# the error when a function it calls synchronously (file ingestion, the metadata service, the copy
+# engine) could not start for the same reason; it first releases its ingest-ledger claims on what that
+# call did not ingest, so the retry ingests exactly the rest (#1271). On a test deployment, 1,000 runs
+# at about 7 per second kept Parameter Store throttled for 150 to 240 seconds (#1187). The delays
+# double from 15 s to a 60 s cap, so early retries do not add to the burst; with full jitter, 12
+# attempts wait about 5.4 minutes on average and at most about 10.8 minutes, on top of each attempt's
+# own refused start. Listed before any States.ALL retrier the state carries, since Step Functions uses
+# the first retrier whose errors match.
+RESOURCE_NAME_UNAVAILABLE_ERROR = "ResourceNameUnavailableError"
+RESOURCE_NAME_UNAVAILABLE_RETRIER = {
+    "ErrorEquals": [RESOURCE_NAME_UNAVAILABLE_ERROR],
+    "IntervalSeconds": 15,
+    "BackoffRate": 2.0,
+    "MaxAttempts": 12,
+    "MaxDelaySeconds": 60,
+    "JitterStrategy": "FULL",
+}
 
 # Characters that cannot appear in a pipeline name spliced into a States.Format() intrinsic
 # argument: the single quote closes the intrinsic's string literal, the braces are its
@@ -42,6 +115,20 @@ ASL_SCHEMA_VERSION = 1
 # produces an intrinsic Step Functions rejects when the definition is created.
 _ASL_INTRINSIC_UNSAFE_CHARS = "'{}\\"
 
+
+
+# The errors the process-output state retries (see build_* below). Changing this list changes every
+# workflow's definition: bump workflowAsl.ASL_SCHEMA_VERSION (and this module's) in the same change so deployed
+# workflows are redeployed at their next launch.
+PROCESS_OUTPUT_RETRY_ERRORS = [
+    "Lambda.ServiceException",
+    "Lambda.AWSLambdaException",
+    "Lambda.SdkClientException",
+    # Lambda.TooManyRequestsException is THROTTLE_RETRIER's (listed first on the state).
+    "States.Timeout",
+    "Sandbox.Timedout",
+    "EarlierIngestionInProgress",
+]
 
 def _validate_asl_pipeline_name(name):
     """Reject a pipeline name that cannot be embedded in the generated ASL's States.Format
@@ -56,11 +143,36 @@ def _validate_asl_pipeline_name(name):
             "characters. Use letters, numbers, dashes, and underscores.")
 
 
+def _job_name(prefix, name):
+    """One generated job name: a short unique prefix in front of the pipeline name, trimmed to 80."""
+    return (prefix + "-" + name)[:80]
+
+
+def reusable_job_names(stored_job_names, pipelines):
+    """The stored job names when each one is still the generated name for its pipeline at the same
+    position, else None.
+
+    A job name is a generated prefix plus the step's pipeline name, so a stored list stays valid for
+    as long as the steps keep their order and names. Reusing it keeps the output prefixes an
+    in-flight launch read from the workflow record identical to the ones a redeploy bakes in."""
+    stored = list(stored_job_names or [])
+    if not stored or len(stored) != len(pipelines):
+        return None
+    for job_name, pipeline in zip(stored, pipelines):
+        if not isinstance(job_name, str) or len(job_name) < 7 or job_name[5] != "-":
+            return None
+        if job_name != _job_name(job_name[:5], pipeline.get('name') or ""):
+            return None
+    return stored
+
+
 def generate_workflow_asl(pipelines, databaseId, workflowId,
                           process_workflow_output_function,
                           interim_tracking_function,
                           error_handler_function,
-                          aws_partition="aws"):
+                          aws_partition="aws",
+                          job_names=None,
+                          max_output_ingestion_wait_hours=DEFAULT_MAX_OUTPUT_INGESTION_WAIT_HOURS):
     """
     Generate the ASL workflow definition for a workflow.
     Uses the builder pattern from stepfunctions_builder to dispatch
@@ -75,6 +187,10 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         interim_tracking_function: name of the interim pipeline-tracking Lambda
         error_handler_function: name of the execution error-handler Lambda
         aws_partition: deployment AWS partition for service-integration ARNs (default "aws")
+        job_names: previously generated job names to keep; used only when reusable_job_names
+            accepts them for these pipelines, otherwise new ones are generated
+        max_output_ingestion_wait_hours: how long the run waits for its large outputs to land in
+            the asset before it fails (the AwaitOutputIngestion state's timeout)
 
     Returns:
         Tuple of (workflow_definition dict, job_names list)
@@ -88,11 +204,11 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
 
     # Generate unique names for each pipeline job
     # Trim UID to first 5 chars, place in front of pipeline name, then trim to 80 chars
-    job_names = [
+    job_names = reusable_job_names(job_names, pipelines) or [
         # uuid1 only makes a state-machine or job name unique; the value is neither a secret nor a
         # capability token, so predictability has no security consequence.
         # nosemgrep: python.lang.security.insecure-uuid-version.insecure-uuid-version
-        (uuid.uuid1().hex[:5] + "-" + x['name'])[:80] for x in pipelines
+        _job_name(uuid.uuid1().hex[:5], x['name']) for x in pipelines
     ]
     logger.info(f"Generated job names: {job_names}")
 
@@ -122,6 +238,7 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         fail_state=failed_state_id,
         partition=aws_partition,
     )
+    error_handler_state["Retry"] = [dict(RESOURCE_NAME_UNAVAILABLE_RETRIER)] + error_handler_state["Retry"]
 
     # Generate GLOBAL output paths (shared by ALL pipelines)
     # Use the FIRST pipeline's name for the global output location
@@ -307,6 +424,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
                 error_handler_state=error_handler_state_id,
                 partition=aws_partition,
             )
+            # Ahead of the state's own States.ALL retrier, which would otherwise match first.
+            interim_state["Retry"] = [dict(RESOURCE_NAME_UNAVAILABLE_RETRIER)] + interim_state["Retry"]
             states.append((interim_state_id, interim_state))
 
     # Create SINGLE process output state (runs ONCE after ALL pipelines complete). Its body carries
@@ -356,22 +475,30 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
             # --- Executing-user context ---
             "executingUserName.$": "$.executingUserName",
             "executingRequestContext.$": "$.executingRequestContext",
+
+            # --- A wait state follows: outputs over the async threshold are handed to copy jobs
+            #     and this definition waits for them (ASL v2). Absent on a v1 definition, which the
+            #     copy engine finalizes instead.
+            "awaitOutputIngestion": True,
+            # Retry count of this state (0 on the first attempt). A retried attempt folds in the
+            # copy jobs an earlier attempt started, whose files it may no longer list.
+            "outputStepAttempt.$": "$$.State.RetryCount",
         }
     }
 
     # Create retry and catch configs for process output (Catch routes through the
     # error-handler state, capturing the error at $.errorInfo).
-    # Retry only transient AWS/Lambda faults. This handler ingests produced files into the output
-    # asset before it records them, so a blanket States.ALL retry of an application error would
-    # re-run ingestion and duplicate files/versions; such errors go straight to the Catch instead.
+    # Retry only transient AWS/Lambda faults, a timed-out attempt, and an attempt that stood aside for
+    # another attempt still ingesting. A blanket States.ALL retry of an application error would re-run
+    # a failed write-back; such errors go straight to the Catch instead. Retrying is safe because every
+    # attempt claims each output in the run's ingest ledger before ingesting it (#1271): a retry
+    # records what earlier attempts ingested and never ingests an output twice.
+    #   Sandbox.Timedout - the Lambda's own timeout on current runtimes (#1290); States.Timeout is
+    #     raised only for a state TimeoutSeconds.
+    #   EarlierIngestionInProgress - processWorkflowExecutionOutput left outputs to a live earlier
+    #     attempt that had not finished them within this attempt's time.
     po_retry_config = create_retry_config(
-        error_equals=[
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException",
-            "States.Timeout",
-        ],
+        error_equals=PROCESS_OUTPUT_RETRY_ERRORS,
         interval_seconds=5,
         backoff_rate=2.0,
         max_attempts=3
@@ -388,6 +515,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         catch_config=po_catch_config,
         partition=aws_partition
     )
+    process_output_state["Retry"] = [dict(THROTTLE_RETRIER), dict(RESOURCE_NAME_UNAVAILABLE_RETRIER),
+                                     dict(ENGINE_BUSY_RETRIER), po_retry_config]
 
     # Add the single process_output state to the states list
     states.append((process_output_state_id, process_output_state))
@@ -398,8 +527,87 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         comment=f"VAMS Pipeline Workflow for {workflowId} | aslSchemaVersion={ASL_SCHEMA_VERSION}"
     )
 
+    # The wait for large outputs (ASL v2). The process-output state no longer ends the run: it
+    # answers outputIngestionPending when it handed files to copy jobs, and the run then waits on its
+    # ingestion batch (task token, bounded by the maximum wait) and finalizes the outcome.
+    workflow_definition["States"][process_output_state_id].pop("End", None)
+    workflow_definition["States"][process_output_state_id]["Next"] = INGESTION_CHOICE_STATE_ID
+    workflow_definition["States"].update(_output_ingestion_states(
+        process_output_state_id, process_workflow_output_function, error_handler_state_id,
+        po_retry_config, aws_partition, max_output_ingestion_wait_hours))
+
     # Add the error-handler + failure states to the States dict (reachable only via Catch handlers)
     workflow_definition["States"][error_handler_state_id] = error_handler_state
     workflow_definition["States"][failed_state_id] = failed_state
 
     return workflow_definition, job_names
+
+
+def _output_ingestion_states(process_output_state_id, process_workflow_output_function,
+                             error_handler_state_id, retry_config, aws_partition, wait_hours):
+    """The states after process-output: a Choice on outputIngestionPending, the task-token wait, the
+    timeout marker, the finalize task and the success end. The wait and the finalize invoke the same
+    process-output Lambda in another mode, so the workflow role needs no new invoke grant."""
+    pending_path = f"$.{process_output_state_id}.output.Payload.outputIngestionPending"
+    batch_path = f"$.{process_output_state_id}.output.Payload.batchId"
+    wait_seconds = int(wait_hours) * 3600
+
+    await_state = create_lambda_task_state(
+        state_id=AWAIT_INGESTION_STATE_ID,
+        function_name=process_workflow_output_function,
+        payload={"body": {"mode": "await", "batchId.$": batch_path, "taskToken.$": "$$.Task.Token",
+                          "workflowExecutionId.$": "$.workflowExecutionId"}},
+        result_path="$.outputIngestion",
+        wait_for_callback=True,
+        timeout_seconds=wait_seconds,
+        # Retried only on a fault of the Lambda invoke itself (throttling: THROTTLE_RETRIER, set
+        # below). A timeout ends the wait: retrying it would wait the whole maximum again.
+        retry_config=create_retry_config(
+            error_equals=["Lambda.ServiceException", "Lambda.AWSLambdaException",
+                          "Lambda.SdkClientException"],
+            interval_seconds=5, backoff_rate=2.0, max_attempts=3),
+        catch_config=[
+            {"ErrorEquals": ["States.Timeout"], "Next": INGESTION_TIMEOUT_STATE_ID,
+             "ResultPath": "$.errorInfo"},
+            *create_catch_all_configs(next_state=error_handler_state_id, result_path="$.errorInfo"),
+        ],
+        partition=aws_partition,
+    )
+    finalize_state = create_lambda_task_state(
+        state_id=FINALIZE_OUTPUTS_STATE_ID,
+        function_name=process_workflow_output_function,
+        payload={"body": {"mode": "finalize", "batchId.$": batch_path,
+                          "workflowExecutionId.$": "$.workflowExecutionId"}},
+        result_path="$.finalizeOutputs",
+        retry_config=retry_config,
+        catch_config=create_catch_all_configs(next_state=error_handler_state_id,
+                                              result_path="$.errorInfo"),
+        partition=aws_partition,
+    )
+    for state in (await_state, finalize_state):
+        state["Retry"] = ([dict(THROTTLE_RETRIER), dict(RESOURCE_NAME_UNAVAILABLE_RETRIER),
+                           dict(ENGINE_BUSY_RETRIER)]
+                          + list(state.get("Retry") or []))
+    finalize_state["Next"] = WORKFLOW_SUCCEEDED_STATE_ID
+    await_state["Next"] = FINALIZE_OUTPUTS_STATE_ID
+    return {
+        INGESTION_CHOICE_STATE_ID: {
+            "Type": "Choice",
+            "Choices": [{
+                "And": [{"Variable": pending_path, "IsPresent": True},
+                        {"Variable": pending_path, "BooleanEquals": True}],
+                "Next": AWAIT_INGESTION_STATE_ID,
+            }],
+            "Default": WORKFLOW_SUCCEEDED_STATE_ID,
+        },
+        AWAIT_INGESTION_STATE_ID: await_state,
+        INGESTION_TIMEOUT_STATE_ID: {
+            "Type": "Pass",
+            "Result": {"Error": INGESTION_TIMEOUT_ERROR,
+                       "Cause": f"Ingesting output files did not finish within {int(wait_hours)} hours."},
+            "ResultPath": "$.errorInfo",
+            "Next": error_handler_state_id,
+        },
+        FINALIZE_OUTPUTS_STATE_ID: finalize_state,
+        WORKFLOW_SUCCEEDED_STATE_ID: {"Type": "Succeed"},
+    }

@@ -18,6 +18,7 @@ import {
 } from "@cloudscape-design/components";
 import Popover from "@cloudscape-design/components/popover";
 import { downloadAsset, revertFileVersion } from "../../../services/APIService";
+import { downloadRefusalReason } from "../../../visualizerPlugin/core/streamFailure";
 import { fetchFileVersions } from "../../../services/AssetVersionService";
 import { getChangeSourceLabel } from "../utils/changeSourceLabels";
 import {
@@ -28,6 +29,7 @@ import {
 import { useAllowedRoutes } from "../../../features/orchestration/permissions/useAllowedRoutes";
 import { useNavigate } from "react-router";
 import Synonyms from "../../../synonyms";
+import { useAssetArchived } from "../../../context/ArchivedAssetContext";
 
 // TypeScript interfaces
 interface FileVersion {
@@ -54,12 +56,16 @@ interface FileVersionsTableProps {
     databaseId: string;
     assetId: string;
     filePath: string;
+    // How a file page link names the file: its path in the asset with its leading "/", or the form the
+    // hosting page's own link uses. Defaults to filePath. The API decides what either form names.
+    linkFilePath?: string;
     fileName: string;
     currentVersionId?: string; // For ViewFile context
     onVersionRevert?: () => void; // Refresh callback
     displayMode?: "modal" | "container"; // Display context
     visible?: boolean; // For modal context
     assetVersionId?: string; // Current asset version context for highlighting
+    previewFile?: string; // The file's preview file, when the hosting page holds it; carried to the page a version opens
     onNavigateAway?: () => void; // Called before a row link leaves the page (closes a hosting modal)
 }
 
@@ -141,12 +147,14 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     databaseId,
     assetId,
     filePath,
+    linkFilePath,
     fileName,
     currentVersionId,
     onVersionRevert,
     displayMode = "container",
     visible = true,
     assetVersionId,
+    previewFile,
     onNavigateAway,
 }) => {
     const navigate = useNavigate();
@@ -154,6 +162,9 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     // the same Tier-1 gate the orchestration pages apply. Fail-closed while loading.
     const { can: canCallRoute } = useAllowedRoutes();
     const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
+    // An archived asset's file versions are listed read-only: downloading, viewing and reverting
+    // all need it unarchived
+    const assetArchived = useAssetArchived();
 
     // State management
     const [versions, setVersions] = useState<FileVersion[]>([]);
@@ -175,7 +186,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
         if (visible && databaseId && assetId && filePath) {
             loadFileVersions();
         }
-    }, [visible, databaseId, assetId, filePath]);
+    }, [visible, databaseId, assetId, filePath, assetArchived]);
 
     const loadFileVersions = async () => {
         setLoading(true);
@@ -186,6 +197,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                 databaseId,
                 assetId,
                 filePath,
+                showArchived: assetArchived,
             });
 
             if (success && response?.versions) {
@@ -206,20 +218,25 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     // Handle download version
     const handleDownloadVersion = async (versionId: string) => {
         try {
-            const [success, downloadUrl] = (await downloadAsset({
+            const response = await downloadAsset({
                 databaseId,
                 assetId,
                 key: filePath,
                 versionId: versionId,
                 downloadType: "assetFile",
-            })) as [boolean, any];
+            });
+            const [success, downloadUrl] = (Array.isArray(response) ? response : [false]) as [
+                boolean,
+                any
+            ];
 
             if (success && downloadUrl) {
                 const link = document.createElement("a");
                 link.href = downloadUrl;
                 link.click();
             } else {
-                setError("Failed to download file version");
+                // A download the API refused shows the API's reason (D166).
+                setError(downloadRefusalReason(response) ?? "Failed to download file version");
             }
         } catch (err: any) {
             setError(err.message || "An error occurred while downloading the file");
@@ -231,17 +248,9 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
         // Find the version to get its isArchived status
         const version = versions.find((v) => v.versionId === versionId);
 
-        // Get the relative path from the file path
-        // The filePath format is typically: assetId/relativePath
-        // We need to extract just the relativePath part
-        const pathParts = filePath.split("/");
-        let relativePath = filePath;
-        if (pathParts.length > 1 && pathParts[0] === assetId) {
-            relativePath = pathParts.slice(1).join("/");
-        }
-
-        // Encode the path for URL
-        const encodedPath = encodeURIComponent(relativePath);
+        // The link names the file as the hosting page does (its path in the asset with its leading
+        // "/", or its key). No path is derived from the key here: the API reads either form (#1943)
+        const encodedPath = encodeURIComponent(linkFilePath || filePath);
 
         // Build URL with version query parameter
         const url = `/databases/${databaseId}/assets/${encodeURIComponent(
@@ -256,6 +265,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                 isDirectory: false,
                 versionId: versionId,
                 isArchived: version?.isArchived,
+                ...(previewFile ? { previewFile } : {}),
             },
         });
     };
@@ -563,7 +573,11 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                 ) : (
                     <>
                         <Table
-                            columnDefinitions={columnDefinitions}
+                            columnDefinitions={
+                                assetArchived
+                                    ? columnDefinitions.filter((column) => column.id !== "actions")
+                                    : columnDefinitions
+                            }
                             items={currentVersions}
                             loadingText="Loading versions"
                             sortingDisabled

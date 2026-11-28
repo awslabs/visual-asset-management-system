@@ -14,7 +14,8 @@ tables to a failed terminal state so a failure never leaves stale RUNNING rows:
     execution id the job carries as a reserved parameter, because a job sitting queued with no
     worker emits no status event to register from;
   - the V2 main row -> FAILED with a stop date, the specific executionError (from the caught
-    Step Functions Error/Cause), and the full CloudWatch executionLog;
+    Step Functions Error/Cause), and the full CloudWatch executionLog, followed by a
+    `workflow.execution.completed` event on the orchestration bus (when one is configured);
   - every non-terminal PipelineExecutions row -> FAILED with a stop date;
   - a per-pipeline logs row for the failing pipeline when identifiable.
 
@@ -26,21 +27,37 @@ records ABORTED.
 
 import os
 import json
+import time
 import boto3
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
+from datetime import datetime, timezone
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
+from customLogging.auditLogging import audited_handler, log_action
 from common.resourceNames import get_table_name, ResourceKeys
 from common.workflows import executionRecords as er
+from common.workflows import executionLogCapture as elc
 from common.workflows import executionOutputs as eo
+from common.workflows import executionLocks as el
+from common import largeObjectCopy as loc
+from common.s3 import region_routing_s3_client
 
 logger = safeLogger(service="HandleExecutionError")
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+# The events client publishes a best-effort completion event; bound its connect/read timeouts so an
+# unreachable events endpoint fails fast rather than holding the error handler.
+events_retry_config = Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2})
 logs_client = boto3.client('logs', config=retry_config)
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 sfn_client = boto3.client('stepfunctions', config=retry_config)
 batch_client = boto3.client('batch', config=retry_config)
+# Aborts the multipart uploads of the run's cancelled large output copies (in the asset bucket's Region).
+s3_client = region_routing_s3_client()
+# Hands a cancelled copy whose outcome the cancel left to the copy engine to its reconcile.
+lambda_client = boto3.client('lambda', config=retry_config)
+events_client = boto3.client('events', config=events_retry_config)
 # Used only to cancel a registered Deadline Cloud farm job while reconciling a failed run. Built
 # inside try/except and left None on failure: the execution type is accepted only in the commercial
 # partition, so a partition where the service does not resolve must not lose the whole reconciliation
@@ -50,20 +67,56 @@ try:
 except Exception as e:
     logger.info(f"Deadline Cloud client unavailable in this partition: {e}")
     deadline_client = None
+# Used only to stop a registered SageMaker training job or pipeline execution while reconciling a
+# failed run, and to read its status when that stop is refused. Built the same way for the same
+# reason; a None client reports the job as left running.
+try:
+    sagemaker_client = boto3.client('sagemaker', config=retry_config)
+except Exception as e:
+    logger.info(f"SageMaker client unavailable in this partition: {e}")
+    sagemaker_client = None
 
 try:
     workflow_execution_database_v2 = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
     pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
     pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
+    # Output tables read ONLY to derive the failed run's outputTypes (one bounded existence query per
+    # table per pipeline execution). Keyed by pipelineExecutionId (PK), so the query carries no
+    # FilterExpression and a Limit=1 hit is a conclusive existence answer.
+    pipeline_execution_output_files_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE)
+    pipeline_execution_output_metadata_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE)
+    pipeline_execution_output_results_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE)
+    workflow_execution_configuration_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE)
     # Read to resolve a DeadlineCloud pipeline's farm and queue, which live on the pipeline
     # DEFINITION rather than on any execution row.
     pipeline_table = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
+    # Read by the terminal lock release: the workflow row supplies the stored concurrencyRestriction and
+    # the input rows the file versions the run held.
+    workflow_table = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
+    workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
+    workflow_execution_locks_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE)
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
+    # Orchestration bus + event source prefix for the workflow.execution.completed event (optional:
+    # the event is skipped when the bus ARN is unset).
+    orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
+    orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 FAILED_STATUS = "FAILED"
+
+
+def emit_workflow_execution_completed(workflow_execution_id, workflow_database_id, workflow_id,
+                                      execution_status, started_at, completed_at,
+                                      execution_group_id=""):
+    """This lambda's `workflow.execution.completed` announcement: the shared emitter bound to the
+    events client and bus configuration resolved at import. Best-effort — skipped (logged) when no
+    bus is configured, and a publish failure is logged rather than failing the reconciliation."""
+    return eo.emit_workflow_execution_completed(
+        events_client, orchestration_bus_arn, orchestration_event_source_prefix,
+        workflow_execution_id, workflow_database_id, workflow_id, execution_status,
+        started_at, completed_at, execution_group_id=execution_group_id)
 
 # executionError and executionLog land on the same main-row item, so they share the item's
 # free-form text budget: the error message keeps a small reserved slice and the log takes the
@@ -96,22 +149,84 @@ def _extract_error_message(error_info):
     return message
 
 
-def _fetch_execution_log(execution_id):
-    """Best-effort full CloudWatch execution log for this execution within the shared
-    workflow log group, scoped by the execution id filter pattern. '' on any failure."""
-    if not workflow_execution_log_group_arn or not execution_id:
-        return ""
-    parts = workflow_execution_log_group_arn.split(":log-group:")
+# Bounds on the failure-time log read: FilterLogEvents calls, and seconds spent following
+# nextToken. Well inside the 15-minute function timeout.
+EXECUTION_LOG_CAPTURE_MAX_PAGES = 50
+EXECUTION_LOG_CAPTURE_BUDGET_SECONDS = 60
+# Seconds the log refresh after the failure write may spend waiting for CloudWatch Logs to ingest
+# the run's events, also well inside the function timeout.
+EXECUTION_LOG_SETTLE_BUDGET_SECONDS = 30
+
+
+def _refresh_execution_log(execution_id, workflow_database_id, workflow_id, execution_start_date,
+                           stored_log):
+    """After the failure write, re-read the run's log until two full reads agree on its events
+    (common.workflows.executionLogCapture), and store that read when it differs from the one the
+    failure write stored. The handler usually runs before the failing step's events are searchable,
+    so the first read is often empty. Runs after the status is recorded and the locks are released,
+    so the wait never delays either. Best-effort."""
+    log_group_name = _log_group_name(workflow_execution_log_group_arn)
+    if not log_group_name or not execution_id:
+        return
+    try:
+        text, _stream = elc.capture_settled_execution_log(
+            logs_client, log_group_name, execution_id,
+            start_time_ms=elc.log_capture_start_ms(execution_start_date),
+            max_bytes=min(elc.STORED_EXECUTION_LOG_MAX_BYTES, MAX_ERROR_LOG_FIELD_BYTES),
+            max_pages=EXECUTION_LOG_CAPTURE_MAX_PAGES,
+            deadline=time.monotonic() + EXECUTION_LOG_SETTLE_BUDGET_SECONDS,
+            sleep=_settle_sleep,
+        )
+        if text and text != (stored_log or ""):
+            eo.refresh_main_row_log(dynamodb, workflow_execution_database_v2, execution_id,
+                                    workflow_database_id, workflow_id, text)
+    except Exception as e:
+        logger.info(f"Could not refresh the stored execution log (non-critical): {e}")
+
+
+def _settle_sleep(seconds):
+    time.sleep(seconds)
+
+
+def _log_group_name(log_group_arn):
+    """The log group name in a log-group ARN (without a trailing ``:*``), or "" when unparseable."""
+    parts = (log_group_arn or "").split(":log-group:")
     if len(parts) < 2:
         return ""
-    log_group_name = parts[1]
-    if log_group_name.endswith(":*"):
-        log_group_name = log_group_name[:-2]
+    name = parts[1]
+    return name[:-2] if name.endswith(":*") else name
+
+
+def _execution_start_date(execution_id, workflow_database_id, workflow_id):
+    """The main row's executionStartDate, which anchors the log read; "" when it cannot be read."""
     try:
-        resp = logs_client.filter_log_events(
-            logGroupName=log_group_name, filterPattern=f'"{execution_id}"', limit=50)
-        text = "\n".join(e.get('message', '') for e in resp.get('events', []))
-        text, _ = er.truncate_text(text, limit=MAX_ERROR_LOG_FIELD_BYTES)
+        item = dynamodb.Table(workflow_execution_database_v2).get_item(
+            Key={"workflowExecutionId": execution_id,
+                 "workflowDatabaseId:workflowId": er.workflow_composite_key(
+                     workflow_database_id, workflow_id)},
+            ProjectionExpression="executionStartDate",
+        ).get("Item") or {}
+        return item.get("executionStartDate", "") or ""
+    except Exception as e:
+        logger.info(f"Could not read the execution start date (non-critical): {e}")
+        return ""
+
+
+def _fetch_execution_log(execution_id, execution_start_date=""):
+    """Best-effort capture of this execution's CloudWatch log within the shared workflow log group:
+    scoped by its id, anchored on its start date, following nextToken past empty pages, redacted and
+    bounded with the newest events kept (common.workflows.executionLogCapture). '' on any failure."""
+    log_group_name = _log_group_name(workflow_execution_log_group_arn)
+    if not log_group_name or not execution_id:
+        return ""
+    try:
+        text, _stream = elc.capture_execution_log(
+            logs_client, log_group_name, execution_id,
+            start_time_ms=elc.log_capture_start_ms(execution_start_date),
+            max_bytes=min(elc.STORED_EXECUTION_LOG_MAX_BYTES, MAX_ERROR_LOG_FIELD_BYTES),
+            max_pages=EXECUTION_LOG_CAPTURE_MAX_PAGES,
+            deadline=time.monotonic() + EXECUTION_LOG_CAPTURE_BUDGET_SECONDS,
+        )
         return text
     except Exception as e:
         logger.info(f"Could not fetch CloudWatch logs (non-critical): {e}")
@@ -149,21 +264,77 @@ def get_pipeline_definition(pipeline_database_id, pipeline_id):
     return resp.get('Item', {}) or {}
 
 
+def _pipeline_has_output_rows(table_name, pipeline_execution_id):
+    """Whether any row exists for a pipeline execution in one output table. A conclusive existence
+    check: the output tables are keyed by pipelineExecutionId (PK), so this is a plain key query with
+    no FilterExpression, where a single returned item is definitive (Rule 14)."""
+    if not pipeline_execution_id:
+        return False
+    table = dynamodb.Table(table_name)
+    resp = table.query(
+        KeyConditionExpression=Key('pipelineExecutionId').eq(pipeline_execution_id), Limit=1)
+    return bool(resp.get('Items'))
+
+
+def _derive_failure_output_types(pipeline_rows):
+    """The outputTypes subset a failed run produced, from whatever output rows exist at failure.
+
+    A failed run commonly produced nothing, but some pipelines write partial outputs before the step
+    that failed, so the real value is derived through the SAME shared helper the success path uses
+    rather than defaulting to []. Each pipeline execution is queried only for the output kinds not yet
+    found on an earlier one, and the walk ends once all three are found, so the reads are bounded by
+    three existence queries per pipeline execution."""
+    has_file = has_metadata = has_result = False
+    for prow in pipeline_rows or []:
+        pexec_id = prow.get('pipelineExecutionId', '')
+        if not pexec_id:
+            continue
+        if not has_file and _pipeline_has_output_rows(
+                pipeline_execution_output_files_table, pexec_id):
+            has_file = True
+        if not has_metadata and _pipeline_has_output_rows(
+                pipeline_execution_output_metadata_table, pexec_id):
+            has_metadata = True
+        if not has_result and _pipeline_has_output_rows(
+                pipeline_execution_output_results_table, pexec_id):
+            has_result = True
+        if has_file and has_metadata and has_result:
+            break
+    return er.derive_output_types(has_file, has_metadata, has_result)
+
+
+def _cancel_output_copies(execution_id):
+    """Stop the large object copy jobs of a failing run and abort their multipart uploads. Returns
+    one message per copy that could not be stopped or cleaned up. Never raises."""
+    try:
+        table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+        # The deploy window's AccessDenied and throttles are waited out (#1123 L1).
+        return loc.cancel_execution_copy_jobs(table, sfn_client, s3_client, execution_id,
+                                              lambda_client, loc.engine_function_name(),
+                                              max_wait_seconds=loc.ENGINE_CALL_DEPLOY_WAIT_SECONDS)
+    except Exception as e:
+        # Best-effort like every step here; a run with no large outputs has nothing to cancel.
+        logger.warning(f"Could not cancel the output copies of execution {execution_id} (continuing): {e}")
+        return []
+
+
 def reconcile_failed_execution(body, error_info):
     """Stop the in-flight pipelines' registered sub-processes, mark the execution + in-flight pipeline
     rows FAILED with stop times, and capture the error message + full execution log. Best-effort per
-    step; logs and continues on error."""
+    step; logs and continues on error. The stored log is refreshed last, once CloudWatch Logs has
+    made the run's events searchable."""
     execution_id = body.get('workflowExecutionId', '')
     workflow_database_id = body.get('workflowDatabaseId', '')
     workflow_id = body.get('workflowId', '')
 
     if not execution_id:
         logger.warning("No workflowExecutionId in error handler body; nothing to reconcile")
-        return
+        return {}
 
     now = er.iso_now()
     error_message = _extract_error_message(error_info)
-    execution_log = _fetch_execution_log(execution_id)
+    execution_start_date = _execution_start_date(execution_id, workflow_database_id, workflow_id)
+    execution_log = _fetch_execution_log(execution_id, execution_start_date)
 
     # 1) Fetch pipeline rows, stop the in-flight ones' registered sub-processes, then mark those rows
     #    FAILED. A sub-process that could not be stopped is named in the per-pipeline log row below,
@@ -174,13 +345,17 @@ def reconcile_failed_execution(body, error_info):
         stop_failures = eo.mark_inflight_pipelines_terminal(
             dynamodb, pipeline_executions_table, pipeline_rows, FAILED_STATUS, now,
             sfn_client=sfn_client, batch_client=batch_client, deadline_client=deadline_client,
-            get_pipeline_definition=get_pipeline_definition)
+            get_pipeline_definition=get_pipeline_definition, sagemaker_client=sagemaker_client)
         if stop_failures:
             logger.warning(f"Sub-processes left running for execution {execution_id}: "
                            f"{'; '.join(stop_failures)}")
     except Exception as e:
         logger.exception(f"Error marking pipeline rows failed (continuing): {e}")
         pipeline_rows = []
+
+    # 1b) Stop the run's large output copies (its output wait timed out, or a later state failed)
+    #     and discard their partial uploads. A run with no large outputs has no copy jobs.
+    stop_failures.extend(_cancel_output_copies(execution_id))
 
     # 2) Per-pipeline log row for each in-flight pipeline that was just failed. Step Functions
     #    cannot inject the failing state's id into this handler's static payload, so attribute
@@ -210,33 +385,125 @@ def reconcile_failed_execution(body, error_info):
     except Exception as e:
         logger.exception(f"Error writing failing-pipeline log rows (continuing): {e}")
 
-    # 3) Finalize the main row FAILED (unless already terminal) with error + log.
+    # 3) Finalize the main row FAILED (unless already terminal) with error + log. The status read
+    #    here and the finalize write are separate calls, so the end-state lambda can finish the run in
+    #    between; the write carries the terminal guard and reports whether it landed, and only a FAILED
+    #    status that landed is announced (step 5) — the writer that finished the run first has
+    #    already announced its status.
+    main_row = {}
+    finalized = False
     try:
         main_table = dynamodb.Table(workflow_execution_database_v2)
         existing = main_table.query(
             KeyConditionExpression=Key('workflowExecutionId').eq(execution_id), ScanIndexForward=False)
         rows = existing.get('Items', [])
-        current_status = rows[0].get('executionStatus', '') if rows else ''
+        main_row = rows[0] if rows else {}
+        current_status = main_row.get('executionStatus', '') if rows else ''
         if current_status not in eo.TERMINAL_STATUSES:
-            eo.finalize_main_row(
+            finalized = eo.finalize_main_row(
                 dynamodb, workflow_execution_database_v2, execution_id,
                 workflow_database_id, workflow_id, FAILED_STATUS, now,
                 execution_log=execution_log, execution_error=error_message)
+            if not finalized:
+                logger.info(f"Execution {execution_id} was finished by another writer; the FAILED "
+                            "completion event is not published")
     except Exception as e:
+        finalized = False
         logger.exception(f"Error finalizing main execution row (continuing): {e}")
 
+    # 4) Release the concurrency locks the run held (a no-op under the `none` restriction).
+    #    Best-effort like every step here; an unreleased row expires through the table's TTL.
+    el.release_locks_for_execution(
+        dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_table,
+        inputs_table_name=workflow_execution_inputs_table, workflow_execution_id=execution_id,
+        workflow_database_id=workflow_database_id, workflow_id=workflow_id)
 
+    # 5) Announce the FAILED status this handler recorded, once the locks are free, so a consumer
+    #    that relaunches on the event (the compliance callback's waiting pipeline rules) is not
+    #    refused again by the run it was told had ended.
+    if finalized:
+        emit_workflow_execution_completed(
+            execution_id, workflow_database_id, workflow_id, FAILED_STATUS,
+            started_at=main_row.get('executionStartDate', ''), completed_at=now,
+            execution_group_id=main_row.get('executionGroupId', ''))
+
+    # 6) Record the failed run's output types on its configuration row (UPDATE; created at launch),
+    #    derived through the shared helper from whatever output rows exist at failure. Best-effort and
+    #    isolated so a config-row write failure never fails the reconciliation; a missing write leaves
+    #    the launch-time [] in place, which every reader treats as "no output types".
+    try:
+        output_types = _derive_failure_output_types(pipeline_rows)
+        er.update_execution_output_types(
+            dynamodb, workflow_execution_configuration_table, execution_id, output_types)
+    except Exception as e:
+        logger.exception(f"Error recording failed-execution output types (continuing): {e}")
+    # 7) Refresh the stored log once CloudWatch Logs has ingested the failing run's events.
+    _refresh_execution_log(execution_id, workflow_database_id, workflow_id, execution_start_date,
+                           execution_log)
+    return {"triggeredByUserId": main_row.get('triggeredByUserId', ''),
+            "executionStartDate": main_row.get('executionStartDate') or execution_start_date}
+
+
+# The input rows read to name the failed run's asset: enough to tell one asset from several.
+EXECUTION_END_INPUT_ROWS = 50
+
+
+def _execution_input_asset(execution_id):
+    """The (databaseId, assetId) of a run whose inputs all belong to one asset, else (None, None).
+
+    The error handler's Step Functions input carries only the execution and workflow ids, so the
+    asset is read from the execution's input rows (one bounded query, on the failure path only)."""
+    try:
+        response = dynamodb.Table(workflow_execution_inputs_table).query(
+            KeyConditionExpression=Key('workflowExecutionId').eq(execution_id),
+            ProjectionExpression='databaseId, assetId', Limit=EXECUTION_END_INPUT_ROWS)
+    except Exception as e:
+        logger.exception(f"Reading the failed execution's input asset failed (continuing): {e}")
+        return None, None
+    pairs = {(item.get('databaseId'), item.get('assetId')) for item in response.get('Items', [])}
+    if len(pairs) == 1 and 'LastEvaluatedKey' not in response:
+        return next(iter(pairs))
+    return None, None
+
+
+def _duration_ms(start_date):
+    """Milliseconds from an ISO 8601 start date until now, or None when it cannot be read."""
+    try:
+        started = datetime.fromisoformat(str(start_date).replace("Z", "+00:00"))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - started).total_seconds() * 1000))
+    except (TypeError, ValueError):
+        return None
+
+
+def _log_failed_end(event, body, reconciled):
+    """Record the failed end of a workflow execution: duration, asset and the user it ran for."""
+    execution_id = body.get('workflowExecutionId') or None
+    database_id, asset_id = _execution_input_asset(execution_id) if execution_id else (None, None)
+    user = reconciled.get('triggeredByUserId')
+    log_action(event, "workflowExecutionEnd", outcome="failed", reason="internal",
+               database_id=database_id, asset_id=asset_id,
+               workflowId=body.get('workflowId') or None, executionId=execution_id,
+               duration_ms=_duration_ms(reconciled.get('executionStartDate')),
+               on_behalf_of=user if user and user != "SYSTEM_USER" else None,
+               details={"workflowDatabaseId": body.get('workflowDatabaseId')})
+
+
+@audited_handler
 def lambda_handler(event, context):
     """SFN-invoked on any caught error. Reconciles tables to FAILED, then returns so the
     state machine transitions to the Fail state. Never raises (so it never masks the
     original failure)."""
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
     try:
         body = event.get('body', event)
         if isinstance(body, str):
             body = json.loads(body)
         error_info = event.get('errorInfo', {})
-        reconcile_failed_execution(body or {}, error_info)
+        body = body or {}
+        reconciled = reconcile_failed_execution(body, error_info) or {}
+        _log_failed_end(event, body, reconciled)
     except Exception as e:
         # Best-effort: never let a bookkeeping error mask the original failure.
         logger.exception(f"Error handler encountered an error (continuing to Fail state): {e}")

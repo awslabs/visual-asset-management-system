@@ -16,7 +16,7 @@ from unittest.mock import Mock
 import pytest
 
 from vamscli import constants
-from vamscli.utils.api_client import APIClient, build_comment_path, route_path
+from vamscli.utils.api_client import APIClient, route_path
 from vamscli.utils.exceptions import APIError, GlobalInfrastructureError, InvalidRequestPathError
 
 # Every route constant constants.py exposes (the re-exported add-on paths included), with each
@@ -67,7 +67,7 @@ class TestRequestPathHasNoDotOrEmptySegment:
 
     def test_the_constant_parse_is_not_vacuous(self):
         # Control: the parametrization below reads the route constants rather than an empty set.
-        assert len(CONSTANT_PATHS) > 90
+        assert len(CONSTANT_PATHS) > 100
         assert ("API_AUTH_API_KEY", "/auth/api-keys/x-1") in CONSTANT_PATHS
 
     @pytest.mark.parametrize("name,path", CONSTANT_PATHS)
@@ -229,12 +229,15 @@ class TestPathValueStaysInItsOwnSegment:
         getattr(client, method)(*args)
         assert sent == [(verb, "https://api.example.com" + path)]
 
-    def test_a_comment_key_and_a_login_profile_value_stay_in_their_segment(self, monkeypatch):
-        assert build_comment_path("a-1", "v/1", "c#1").endswith("/v%2F1:c%231")
+    def test_a_comment_id_and_a_login_profile_value_stay_in_their_segment(self, monkeypatch):
         client = _client()
         sent = _record_requests(monkeypatch, client)
+        client.delete_comment("db-1", "a-1#", "c/1")
         client.call_login_profile("jane.doe@example.com")
-        assert sent == [("GET", "https://api.example.com/auth/loginProfile/jane.doe@example.com")]
+        assert sent == [
+            ("DELETE", "https://api.example.com/comments/database/db-1/assets/a-1%23/c%2F1"),
+            ("GET", "https://api.example.com/auth/loginProfile/jane.doe@example.com"),
+        ]
 
     @pytest.mark.parametrize("value", ["jane.doe@example.com", "a b", "x-1:c-1", "a+b", "a;b"])
     def test_every_other_character_is_left_as_it_was(self, value):
@@ -284,12 +287,16 @@ class TestPathValueStaysInItsOwnSegment:
                 for alias in node.names if alias.name.startswith("vamscli")] == []
 
     def test_core_endpoints_are_built_with_route_path(self):
-        """Ratchet: a method that formats a route constant itself would put a value into the path
-        unencoded."""
+        """Ratchet: a core method that formats a route constant itself would put a value into the path
+        unencoded. The EDH client encodes each value with `_edh_path_value`, held by its own tests;
+        every other method, the compliance methods included, builds its path with `route_path`."""
         package = Path(constants.__file__).parent
         offenders = []
         for source in sorted(package.rglob("*.py")):
-            for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+            if source.name == "edh_api_client.py":
+                continue
+            tree = ast.parse(source.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                         and node.func.attr == "format" and isinstance(node.func.value, ast.Name)
                         and node.func.value.id.startswith("API_")):

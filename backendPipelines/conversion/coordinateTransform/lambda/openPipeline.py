@@ -144,6 +144,17 @@ def lambda_handler(event, context):
         # Metadata + config S3 locations only; consumers read content from S3
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
+        # Regions of the input and output asset buckets (empty = deployment Region); constructPipeline
+        # hands them to the container, which signs each bucket's requests for its Region.
+        "inputBucketRegion": event.get("inputBucketRegion", ""),
+        "outputBucketRegion": event.get("outputBucketRegion", ""),
+        # The S3 version of the input the run reads (empty reads the current object).
+        "inputVersionId": event.get("inputVersionId", ""),
+        # Where the input sits in its asset (manifest relativePath, assetRootS3Key, assetRootBucket);
+        # empty from an older Lambda or without a manifest.
+        "inputRelativePath": event.get("inputRelativePath", ""),
+        "inputAssetRootS3Key": event.get("inputAssetRootS3Key", ""),
+        "inputAssetRootBucket": event.get("inputAssetRootBucket", ""),
         "externalSfnTaskToken": external_sfn_task_token,
         # Carried through the state machine so executeBatchJob can register the Batch job itself as
         # abortable. Stopping this sub-state-machine does not stop the job — it is submitted from a

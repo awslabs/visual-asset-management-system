@@ -23,13 +23,13 @@ from ..utils.exceptions import (
     SyncError, SyncPlanError, SyncPushError, SyncPullError,
     SyncConfirmationRequiredError, InvalidSyncIgnoreFileError,
     InvalidFileError, FileTooLargeError, UploadSequenceError, FileUploadError,
-    AssetNotFoundError, DatabaseNotFoundError, AssetVersionError, APIError
+    AssetNotFoundError, DatabaseNotFoundError, AssetVersionError, APIError, InvalidAssetDataError
 )
 from ..utils.file_processor import (
     FileInfo, create_upload_sequences, validate_file_for_upload,
     validate_file_extensions, format_file_size
 )
-from ..utils.upload_manager import UploadManager, format_duration
+from ..utils.upload_manager import UploadManager, failed_file_reasons, format_duration
 from ..utils.download_manager import (
     DownloadManager, DownloadFileInfo, StreamingDownloadProgress, parse_remote_timestamp,
     generate_presigned_urls
@@ -435,7 +435,9 @@ def push(ctx: click.Context, local_directory, database_id, asset_id, asset_locat
                             'isPrefix': False
                         })
                     delete_results['succeeded'].append(entry['relativeKey'])
-                except (APIError, AssetNotFoundError) as e:
+                # InvalidAssetDataError: the API's 400 for a delete it refused (Amazon S3 kept a
+                # version) or for a file that is already gone. One file's refusal must not stop the rest.
+                except (APIError, AssetNotFoundError, InvalidAssetDataError) as e:
                     delete_results['failed'].append({
                         'relativeKey': entry['relativeKey'],
                         'error': str(e)
@@ -470,6 +472,9 @@ def push(ctx: click.Context, local_directory, database_id, asset_id, asset_locat
                 lines.append(f"  Successful files: {uploads['successful_files']}/{uploads['total_files']}")
                 lines.append(f"  Total size: {uploads['total_size_formatted']}")
                 lines.append(f"  Duration: {format_duration(uploads['upload_duration'])}")
+                # Each file that was not uploaded, with the reason (#1072), as the deletes below list theirs.
+                for failure in failed_file_reasons(uploads):
+                    lines.append(f"  ✗ {failure['relative_key']}: {failure['error']}")
             deletes = data['execution'].get('deletes')
             if deletes:
                 verb = 'Deleted' if deletes['action'] == 'delete' else 'Archived'

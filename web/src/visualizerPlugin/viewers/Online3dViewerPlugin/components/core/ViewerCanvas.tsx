@@ -6,6 +6,7 @@
 import React, { useEffect, useRef, useCallback } from "react";
 import { useViewerContext } from "../../context/ViewerContext";
 import { Online3dViewerDependencyManager } from "../../dependencies";
+import { createEvalBlockTracker, EVAL_BLOCKED_MESSAGE } from "../../utils/evalBlocked";
 
 // Declare the global OV object
 declare const OV: any;
@@ -18,6 +19,21 @@ export const ViewerCanvas: React.FC = () => {
     const pendingFilesRef = useRef<string[]>([]); // Store files from container
     const { state, settings, cameraSettings, updateState, selection, setSelection } =
         useViewerContext();
+
+    // Names the deployment setting when the browser refuses eval for rhino3dm (#921).
+    const updateStateRef = useRef(updateState);
+    updateStateRef.current = updateState;
+    const evalBlockTrackerRef = useRef(
+        createEvalBlockTracker(() =>
+            updateStateRef.current({ error: EVAL_BLOCKED_MESSAGE, isLoading: false })
+        )
+    );
+    useEffect(() => {
+        const tracker = evalBlockTrackerRef.current;
+        const onViolation = (event: SecurityPolicyViolationEvent) => tracker.violation(event);
+        document.addEventListener("securitypolicyviolation", onViolation);
+        return () => document.removeEventListener("securitypolicyviolation", onViolation);
+    }, []);
 
     // Initialize the viewer using EmbeddedViewer like the working implementation
     const initializeViewer = useCallback(async () => {
@@ -119,6 +135,9 @@ export const ViewerCanvas: React.FC = () => {
                     });
                     modelLoadedRef.current = true;
                 },
+                onModelLoadFailed: () => {
+                    evalBlockTrackerRef.current.loadFailed();
+                },
             });
 
             viewerRef.current = viewer;
@@ -181,7 +200,10 @@ export const ViewerCanvas: React.FC = () => {
             const viewerWrapper = {
                 embeddedViewer: viewer,
                 viewer: viewer.GetViewer(),
-                LoadModelFromUrlList: (urls: string[]) => viewer.LoadModelFromUrlList(urls),
+                LoadModelFromUrlList: (urls: string[]) => {
+                    evalBlockTrackerRef.current.reset();
+                    return viewer.LoadModelFromUrlList(urls);
+                },
                 GetViewer: () => viewer.GetViewer(),
                 GetModel: () => viewer.GetModel(),
                 // Expose OV library for color and settings creation
@@ -231,6 +253,7 @@ export const ViewerCanvas: React.FC = () => {
                 updateState({ isLoading: true });
 
                 // Use the EmbeddedViewer's LoadModelFromUrlList method
+                evalBlockTrackerRef.current.reset();
                 viewerRef.current.LoadModelFromUrlList(modelUrls);
             } catch (error) {
                 console.error("Error loading model into viewer:", error);

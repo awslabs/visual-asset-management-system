@@ -34,7 +34,8 @@ from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_actions
+from common.eventLogSummary import event_log_summary
+from customLogging.auditLogging import audited_handler, log_action, log_actions
 from models.common import (
     APIGatewayProxyResponseV2,
     success,
@@ -55,17 +56,24 @@ from common.workflows import workflowRecords as wr
 from common.workflows import pipelineRecords as pr
 from common.workflows import templateBodyStorage as tbs
 from common.workflows.defaultBucket import resolve_default_bucket, default_bucket_key
+from common.s3 import region_routing_s3_client
 from common.workflows.triggerTemplateValidation import (
     validate_trigger_default_templates,
     validate_trigger_required_templates,
     trigger_supplied_pipeline_ids,
+)
+from common.workflows.systemRecords import (
+    is_schema_import_call,
+    trigger_locked_field_changed,
+    system_trigger_locked_field_message,
+    SYSTEM_TRIGGER_LOCKED_MESSAGE,
 )
 
 logger = safeLogger(service_name="WorkflowTriggerService")
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
-s3_client = boto3.client("s3", config=retry_config)
+s3_client = region_routing_s3_client()
 
 # The headless-template checks read the parent workflow's pipeline records and their default templates
 # advisorily: an unreadable table skips the check. Those reads are bounded so an unreachable table
@@ -91,6 +99,9 @@ OBJECT_TYPE_WORKFLOW = "workflow"
 OBJECT_TYPE_PIPELINE = "pipeline"
 
 TRIGGER_TYPE_FILE_UPLOAD = "fileUpload"
+
+ARCHIVED_WORKFLOW_TRIGGER_MESSAGE = (
+    "Workflow is archived and cannot have a trigger set. Restore the workflow first.")
 
 # Page a trigger listing serves when the caller asks for no size, and the ceiling on one it does ask
 # for. A trigger row carries its whole triggerConfig (up to 250 x 512-char input filter patterns and
@@ -463,7 +474,7 @@ def _same_type_triggers(database_id, workflow_id, base_type):
 
 
 def set_trigger(database_id, workflow_id, trigger_type, request, event=None,
-                workflow_item=None, claims_and_roles=None):
+                workflow_item=None, claims_and_roles=None, locked_config=None):
     # Scope the templates this trigger names BEFORE anything reads them: the parent workflow must
     # specify their pipeline and the caller must pass Tier-2 GET on it.
     scope_error = _authorize_referenced_templates(
@@ -518,12 +529,17 @@ def set_trigger(database_id, workflow_id, trigger_type, request, event=None,
                     "Another trigger of this type already uses the same default templates. Triggers of "
                     "one type must differ in the templates they launch with.")}, event=event)
 
-    builder = _TRIGGER_CONFIG_BUILDERS.get(base_type)
-    if builder is None:
-        logger.error(f"No triggerConfig builder for trigger type: {trigger_type}")
-        return validation_error(body={
-            "message": "This trigger type cannot be configured in this deployment."})
-    config = builder(request)
+    if locked_config is not None:
+        # A system workflow's trigger keeps the triggerConfig the bundle shipped: only `enabled`
+        # comes from the request, so a replace can never blank the filters or the default templates.
+        config = locked_config
+    else:
+        builder = _TRIGGER_CONFIG_BUILDERS.get(base_type)
+        if builder is None:
+            logger.error(f"No triggerConfig builder for trigger type: {trigger_type}")
+            return validation_error(body={
+                "message": "This trigger type cannot be configured in this deployment."})
+        config = builder(request)
     # Preserve the original creation timestamp when replacing an existing trigger (PUT is both the
     # create and the edit path), so a re-set updates only dateModified — matching update_workflow.
     existing = get_trigger(database_id, workflow_id, trigger_type)
@@ -564,6 +580,15 @@ def delete_trigger(database_id, workflow_id, trigger_type, event=None):
     return success(body={"message": "Trigger deleted"})
 
 
+def _request_body(event):
+    """Parsed JSON request body as a mapping. A valid-JSON-but-non-object body (list/string/null)
+    is a client error, not an internal one."""
+    body = json.loads(event.get("body") or "{}")
+    if not isinstance(body, dict):
+        raise ValueError("Request body must be a JSON object")
+    return body
+
+
 def _validate_ids(path_parameters):
     for pid, allow_global in (("databaseId", True), ("workflowId", False)):
         (valid, message) = validate({
@@ -574,9 +599,10 @@ def _validate_ids(path_parameters):
     return None
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     normalize_event(event)
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
     try:
         path_parameters = event.get("pathParameters", {}) or {}
         query_parameters = event.get("queryStringParameters", {}) or {}
@@ -626,7 +652,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             if base_type not in TRIGGER_TYPES:
                 logger.info(f"Unsupported trigger type requested: {trigger_type}")
                 return validation_error(body={
-                    "message": f"Unsupported trigger type. Supported types: {list(TRIGGER_TYPES)}"},
+                    "message": f"Unsupported trigger type. Supported types: {', '.join(TRIGGER_TYPES)}"},
                     event=event)
             # A trigger id shares the id character class, so a malformed suffix is rejected here rather
             # than becoming an unreachable row.
@@ -637,26 +663,70 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     logger.info(f"Invalid trigger id in path: {message}")
                     return validation_error(body={"message": "Invalid trigger id."}, event=event)
 
+        # The triggers of a system workflow are part of the shipped bundle: `enabled` may be switched,
+        # the stored filters and default templates may not change, and none may be added or deleted
+        # through the API. The importer's own cross-call re-asserts the bundle and is exempt.
+        system_locked = bool(workflow_item.get("isSystem")) and not is_schema_import_call(event)
+
         if method == "GET":
             if trigger_type:
                 row = get_trigger(database_id, workflow_id, trigger_type)
                 if not row:
                     return validation_error(status_code=404, body={"message": "Trigger not found"}, event=event)
+                log_action(event, "workflowTriggerGet", database_id=database_id, workflowId=workflow_id,
+                           triggerType=trigger_type)
                 return success(body={"message": _row_to_response(row).dict()})
-            return success(body={
-                "message": list_triggers(database_id, workflow_id, query_parameters).dict()})
+            listing = list_triggers(database_id, workflow_id, query_parameters)
+            log_action(event, "workflowTriggerList", database_id=database_id, workflowId=workflow_id,
+                       item_count=len(listing.Items), request_parameters=dict(query_parameters or {}))
+            return success(body={"message": listing.dict()})
 
         if method == "PUT":
             if not trigger_type:
                 return validation_error(body={"message": "triggerType required"}, event=event)
-            request = SetTriggerRequestModel(**json.loads(event.get("body") or "{}"))
+            # Archiving removes a workflow's triggers and the dispatcher skips an archived workflow,
+            # so a trigger set on one would be stored and never fire. Removing a trigger stays
+            # allowed. The importer restores a built-in workflow before it re-asserts the triggers.
+            if workflow_item.get("archived") and not is_schema_import_call(event):
+                logger.info(f"Trigger set on archived workflow {database_id}:{workflow_id} refused")
+                return validation_error(body={"message": ARCHIVED_WORKFLOW_TRIGGER_MESSAGE}, event=event)
+            raw_body = _request_body(event)
+            locked_config = None
+            if system_locked:
+                # The rule reads the RAW body: the request model defaults an absent field to {}, and
+                # absence here means "keep the stored value". A key with no stored trigger would be
+                # an addition, and a supplied filter or template set must equal the stored one.
+                existing = get_trigger(database_id, workflow_id, trigger_type)
+                if not existing:
+                    logger.info(f"Trigger add on system workflow {database_id}:{workflow_id} refused")
+                    return validation_error(body={"message": SYSTEM_TRIGGER_LOCKED_MESSAGE}, event=event)
+                locked_config = existing.get("triggerConfig") or {}
+                changed = trigger_locked_field_changed(raw_body, locked_config)
+                if changed is not None:
+                    logger.info(f"Trigger update on system workflow {database_id}:{workflow_id} "
+                                f"refused: '{changed}' is locked")
+                    return validation_error(
+                        body={"message": system_trigger_locked_field_message(changed)}, event=event)
+                model_body = {
+                    "inputFileFilters": locked_config.get("inputFileFilters") or {},
+                    "defaultTemplateIds": locked_config.get("defaultTemplateIds") or {},
+                }
+                if "enabled" in raw_body:
+                    model_body["enabled"] = raw_body["enabled"]
+                request = SetTriggerRequestModel(**model_body)
+            else:
+                request = SetTriggerRequestModel(**raw_body)
             return set_trigger(database_id, workflow_id, trigger_type, request, event,
                                workflow_item=workflow_item,
-                               claims_and_roles=claims_and_roles)
+                               claims_and_roles=claims_and_roles,
+                               locked_config=locked_config)
 
         if method == "DELETE":
             if not trigger_type:
                 return validation_error(body={"message": "triggerType required"}, event=event)
+            if system_locked:
+                logger.info(f"Trigger delete on system workflow {database_id}:{workflow_id} refused")
+                return validation_error(body={"message": SYSTEM_TRIGGER_LOCKED_MESSAGE}, event=event)
             return delete_trigger(database_id, workflow_id, trigger_type, event)
 
         return authorization_error(body={"message": "Method not allowed"})

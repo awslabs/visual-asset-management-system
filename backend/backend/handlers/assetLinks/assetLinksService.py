@@ -4,7 +4,6 @@
 import os
 import boto3
 import json
-import time
 import uuid
 from typing import Dict, List, Set, Optional, Tuple
 from botocore.config import Config
@@ -12,10 +11,12 @@ from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
-from common.validators import validate
+from common.dynamodb import batch_get_items, get_asset_record, asset_authorization_object
+from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, general_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetLinks import (
     GetAssetLinksRequestModel,
@@ -44,7 +45,8 @@ retry_config = Config(
 )
 
 # batch_get_item answers a partially throttled request with HTTP 200 and an UnprocessedKeys map,
-# which the botocore retry config does not cover, so those keys are re-requested here.
+# which the botocore retry config does not cover. The shared `batch_get_items` re-requests them;
+# these are this handler's budget for it, as total attempts and the base of the backoff.
 MAX_BATCH_GET_ATTEMPTS = 5
 BATCH_GET_RETRY_BASE_SECONDS = 0.05
 
@@ -121,53 +123,37 @@ def batch_get_asset_details(asset_keys: List[tuple]) -> Tuple[Dict[str, Dict], L
     asset_details = {}
     unresolved_keys: List[tuple] = []
 
-    # Process in batches of 100 (DynamoDB batch_get_item limit)
-    batch_size = 100
-    for i in range(0, len(asset_keys), batch_size):
-        batch = asset_keys[i:i + batch_size]
+    keys = [
+        {
+            'databaseId': database_id,
+            'assetId': asset_id
+        }
+        for database_id, asset_id in asset_keys
+    ]
 
-        try:
-            pending = [
-                {
-                    'databaseId': database_id,
-                    'assetId': asset_id
-                }
-                for database_id, asset_id  in batch
-            ]
+    try:
+        rows, pending = batch_get_items(
+            dynamodb, asset_storage_table_name, keys,
+            max_retries=MAX_BATCH_GET_ATTEMPTS - 1,
+            backoff_seconds=BATCH_GET_RETRY_BASE_SECONDS)
 
-            for attempt in range(MAX_BATCH_GET_ATTEMPTS):
-                response = dynamodb.batch_get_item(
-                    RequestItems={asset_storage_table_name: {'Keys': pending}}
-                )
+        for item in rows:
+            key = f"{item['databaseId']}:{item['assetId']}"
+            asset_details[key] = item
 
-                for item in response.get('Responses', {}).get(asset_storage_table_name, []):
-                    key = f"{item['databaseId']}:{item['assetId']}"
-                    asset_details[key] = item
+        if pending:
+            logger.warning(
+                f"{len(pending)} asset keys unretrieved after {MAX_BATCH_GET_ATTEMPTS} batch get attempts")
+            unresolved_keys.extend((key['databaseId'], key['assetId']) for key in pending)
 
-                pending = response.get('UnprocessedKeys', {}).get(
-                    asset_storage_table_name, {}).get('Keys', [])
-                if not pending:
-                    break
-                if attempt < MAX_BATCH_GET_ATTEMPTS - 1:
-                    # Exponential backoff before resending the keys batch_get_item left
-                    # unprocessed. Must be the last comment line before the call -- semgrep
-                    # attaches `nosemgrep` to the next line only.
-                    # nosemgrep: arbitrary-sleep
-                    time.sleep(BATCH_GET_RETRY_BASE_SECONDS * (2 ** attempt))
-
-            if pending:
-                logger.warning(
-                    f"{len(pending)} asset keys unretrieved after {MAX_BATCH_GET_ATTEMPTS} batch get attempts")
-                unresolved_keys.extend((key['databaseId'], key['assetId']) for key in pending)
-
-        except Exception as e:
-            logger.exception(f"Error in batch get asset details: {e}")
-            # Fall back to individual gets for this batch
-            for database_id, asset_id  in batch:
-                asset = get_asset_details(asset_id, database_id)
-                if asset:
-                    key = f"{database_id}:{asset_id}"
-                    asset_details[key] = asset
+    except Exception as e:
+        logger.exception(f"Error in batch get asset details: {e}")
+        # Fall back to individual gets
+        for database_id, asset_id in asset_keys:
+            asset = get_asset_details(asset_id, database_id)
+            if asset:
+                key = f"{database_id}:{asset_id}"
+                asset_details[key] = asset
 
     return asset_details, unresolved_keys
 
@@ -186,6 +172,28 @@ def check_asset_permission(asset: Dict, claims_and_roles: Dict, action: str = "G
     except Exception as e:
         logger.exception(f"Error checking asset permission: {e}")
         return False
+
+def authorize_link_ends(link_item: Dict, claims_and_roles: Dict, action: str, refusal_message: str) -> None:
+    """Decide Tier 2 on both ends of an asset link before reporting that either no longer exists
+
+    Each end is read, then decided on its common.dynamodb.asset_authorization_object (the record, or
+    the link's stored ids when the asset is gone), so a refused caller gets the same 403 whether or
+    not an end exists. Only a caller allowed both ends is told that one no longer exists.
+
+    Raises:
+        PermissionError: With refusal_message, if the caller is refused either end
+        ValueError: If the caller is allowed both ends and one of them no longer exists
+    """
+    ends = [(link_item['fromAssetDatabaseId'], link_item['fromAssetId']),
+            (link_item['toAssetDatabaseId'], link_item['toAssetId'])]
+    records = [get_asset_details(asset_id, database_id) for database_id, asset_id in ends]
+    for record, (database_id, asset_id) in zip(records, ends):
+        if not check_asset_permission(asset_authorization_object(record, database_id, asset_id),
+                                      claims_and_roles, action):
+            raise PermissionError(refusal_message)
+    if not all(records):
+        raise ValueError("One or both linked assets no longer exist")
+
 
 def delete_asset_link_metadata(asset_link_id: str):
     """Delete all metadata associated with an asset link"""
@@ -230,17 +238,8 @@ def get_single_asset_link(asset_link_id: str, claims_and_roles: Dict) -> GetSing
             
         link_item = response['Item']
         
-        # Check permissions for both assets
-        from_asset = get_asset_details(link_item['fromAssetId'], link_item['fromAssetDatabaseId'])
-        to_asset = get_asset_details(link_item['toAssetId'], link_item['toAssetDatabaseId'])
-        
-        if not from_asset or not to_asset:
-            raise ValueError("One or both linked assets no longer exist")
-            
-        # Check permissions
-        if not (check_asset_permission(from_asset, claims_and_roles) and 
-                check_asset_permission(to_asset, claims_and_roles)):
-            raise PermissionError("Not authorized to view this asset link")
+        # Both linked assets are authorized before either's existence is reported
+        authorize_link_ends(link_item, claims_and_roles, "GET", "Not authorized to view this asset link")
         
         # Create response model
         asset_link = AssetLinkModel(
@@ -260,18 +259,29 @@ def get_single_asset_link(asset_link_id: str, claims_and_roles: Dict) -> GetSing
         logger.exception(f"Error getting single asset link: {e}")
         raise
 
-def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: bool, claims_and_roles: Dict):
-    """Get all asset links for a specific asset"""
+def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: bool, claims_and_roles: Dict,
+                              show_archived: bool = False):
+    """Get all asset links for a specific asset.
+
+    With show_archived an archived asset's links are listed too; links stay keyed by the asset's
+    original database id, so only the lookup of the queried asset changes.
+    """
     try:
         asset_key = f"{database_id}:{asset_id}"
         
-        # Verify the target asset exists and user has permission
-        target_asset = get_asset_details(asset_id, database_id)
+        # Authorization on the target asset is decided before its existence is reported, on the record
+        # or, when there is none, the requested ids, so a refused caller gets the same 403 for an
+        # existing and a missing asset (with showArchived, for an archived one too)
+        if show_archived:
+            target_asset = get_asset_record(asset_storage_table, database_id, asset_id, include_archived=True)
+        else:
+            target_asset = get_asset_details(asset_id, database_id)
+        if not check_asset_permission(
+                asset_authorization_object(target_asset, database_id, asset_id, include_archived=show_archived),
+                claims_and_roles):
+            raise PermissionError("Not authorized to view links for this asset")
         if not target_asset:
             raise ValueError("Asset not found in database")
-            
-        if not check_asset_permission(target_asset, claims_and_roles):
-            raise PermissionError("Not authorized to view links for this asset")
         
         # Get all links where this asset is the 'from' asset (children/related going out)
         from_items = query_all_items(
@@ -569,7 +579,16 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
 # PUT Operations
 #######################
 
-def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestModel, claims_and_roles: dict) -> UpdateAssetLinkResponseModel:
+
+def _link_ids(link_item):
+    """The record ids of both ends of an asset link: the source as databaseId/assetId, the target
+    as targetDatabaseId/targetAssetId."""
+    return {"database_id": link_item.get("fromAssetDatabaseId"), "asset_id": link_item.get("fromAssetId"),
+            "targetDatabaseId": link_item.get("toAssetDatabaseId"), "targetAssetId": link_item.get("toAssetId")}
+
+
+def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestModel, claims_and_roles: dict,
+                      event=None) -> UpdateAssetLinkResponseModel:
     """Update an asset link (tags and assetLinkAliasId can be updated)"""
     try:
         # Get the asset link first
@@ -582,17 +601,9 @@ def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestM
             
         link_item = response['Item']
         
-        # Check permissions for both assets
-        from_asset = get_asset_details(link_item['fromAssetId'], link_item['fromAssetDatabaseId'])
-        to_asset = get_asset_details(link_item['toAssetId'], link_item['toAssetDatabaseId'])
-        
-        if not from_asset or not to_asset:
-            raise ValueError("One or both linked assets no longer exist")
-            
-        # Check permissions - user must have PUT permission on both assets
-        if not (check_asset_permission(from_asset, claims_and_roles, "PUT") and 
-                check_asset_permission(to_asset, claims_and_roles, "PUT")):
-            raise PermissionError("Not authorized to update this asset link")
+        # The user must have PUT permission on both linked assets, decided before either's
+        # existence is reported
+        authorize_link_ends(link_item, claims_and_roles, "PUT", "Not authorized to update this asset link")
         
         # Check if assetLinkAliasId is being updated
         if request_model.assetLinkAliasId is not None:
@@ -672,7 +683,12 @@ def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestM
             )
         
         logger.info(f"Updated asset link {asset_link_id}")
-        
+        if event is not None:
+            log_action(event, "assetLinkUpdate", assetLinkId=asset_link_id, **_link_ids(link_item),
+                       changes=request_model.dict(exclude_unset=True),
+                       previous={field: link_item.get(field)
+                                 for field in request_model.dict(exclude_unset=True) if field in link_item})
+
         return UpdateAssetLinkResponseModel(
             message="Asset link updated successfully"
         )
@@ -685,7 +701,8 @@ def update_asset_link(asset_link_id: str, request_model: UpdateAssetLinkRequestM
 # DELETE Operations
 #######################
 
-def delete_asset_link(asset_link_id: str, claims_and_roles: dict) -> DeleteAssetLinkResponseModel:
+
+def delete_asset_link(asset_link_id: str, claims_and_roles: dict, event=None) -> DeleteAssetLinkResponseModel:
     """Delete an asset link by ID"""
     try:
         # Get the asset link first
@@ -721,7 +738,9 @@ def delete_asset_link(asset_link_id: str, claims_and_roles: dict) -> DeleteAsset
         )
         
         logger.info(f"Deleted asset link {asset_link_id} between {link_item['fromAssetId']} and {link_item['toAssetId']}")
-        
+        if event is not None:
+            log_action(event, "assetLinkDelete", assetLinkId=asset_link_id, **_link_ids(link_item))
+
         return DeleteAssetLinkResponseModel(
             message="Asset link deleted successfully"
         )
@@ -764,6 +783,7 @@ def handle_get_request(event):
             
             # Get the single asset link
             response = get_single_asset_link(request_model.assetLinkId, claims_and_roles)
+            log_action(event, "assetLinkGet", assetLinkId=request_model.assetLinkId)
             return success(body=response.dict())
         
         # Case 2: Get asset links for a specific asset
@@ -798,14 +818,22 @@ def handle_get_request(event):
             except ValidationError as v:
                 logger.exception(f"Validation error in parameters: {v}")
                 return validation_error(body={'message': validation_error_message(v)}, event=event)
+
+            show_archived = parse_show_archived(query_parameters)
+            if show_archived is None:
+                return validation_error(body={'message': SHOW_ARCHIVED_INVALID_MESSAGE}, event=event)
             
             # Get asset links
             response = get_asset_links_for_asset(
                 request_model.assetId, 
                 request_model.databaseId, 
                 request_model.childTreeView, 
-                claims_and_roles
+                claims_and_roles,
+                show_archived=show_archived
             )
+            log_action(event, "assetLinkList", database_id=request_model.databaseId, asset_id=request_model.assetId,
+                       request_parameters={"childTreeView": request_model.childTreeView,
+                                           "showArchived": show_archived})
             return success(body=response.dict())
             
         else:
@@ -881,7 +909,7 @@ def handle_put_request(event):
         request_model = parse(body, model=UpdateAssetLinkRequestModel)
         
         # Update the asset link
-        response = update_asset_link(path_request_model.assetLinkId, request_model, claims_and_roles)
+        response = update_asset_link(path_request_model.assetLinkId, request_model, claims_and_roles, event=event)
         return success(body=response.dict())
         
     # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
@@ -933,7 +961,7 @@ def handle_delete_request(event):
         logger.info(f"Deleting asset link {request_model.assetLinkId}")
 
         # Delete the asset link
-        response = delete_asset_link(request_model.assetLinkId, claims_and_roles)
+        response = delete_asset_link(request_model.assetLinkId, claims_and_roles, event=event)
         return success(body=response.dict())
         
     # pydantic's ValidationError SUBCLASSES ValueError, so without this arm ABOVE the one
@@ -959,6 +987,8 @@ def handle_delete_request(event):
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset links operations (GET, PUT, and DELETE)"""
     global claims_and_roles

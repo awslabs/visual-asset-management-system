@@ -23,7 +23,9 @@ The frontend mirrors the preview-file values in
 ``previewFileFormats``); keep the two in sync when changing them.
 """
 
-from typing import FrozenSet, Tuple
+import hashlib
+from datetime import datetime, timezone
+from typing import Any, FrozenSet, Iterable, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Reserved S3 prefix folders.
@@ -77,6 +79,94 @@ PIPELINES_PREFIX = "pipelines/"
 AUXILIARY_PREVIEW_PREFIX = "preview/"
 
 # ---------------------------------------------------------------------------
+# Upload staging keys.
+#
+# An upload's files are staged under TEMPORARY_UPLOAD_PREFIX and copied to their
+# final keys when the upload is completed. Each upload stages in its own folder,
+#
+#   ``{baseAssetsPrefix}temp-uploads/{upload tag}/{final key}``
+#
+# so concurrent uploads of one file path never share a staged object, and a
+# completion that refuses its staged object deletes only its own upload's file.
+# The upload tag is UPLOAD_STAGING_TAG_LENGTH hex characters of the SHA-256 of
+# the upload id: a fixed length, and shorter than the upload id itself, because
+# the whole staging key must fit the 1,024-byte S3 key limit.
+# The staging key is the final key plus the bucket's prefix and
+# UPLOAD_STAGING_KEY_OVERHEAD_BYTES (the temp-uploads prefix, the tag and its
+# slash: 26 bytes), so an uploaded file's final key can be at most
+# max_uploaded_file_key_bytes(baseAssetsPrefix) bytes: 998 at the bucket root.
+# Upload initialize refuses a longer key with that number. The tag only has to
+# tell apart uploads of the same path that are completed at the same time; with
+# 48 bits, a clash between 100 such uploads is about a 1 in 57 billion chance.
+# Every staging key is built here; do not assemble one at a call site.
+# ---------------------------------------------------------------------------
+UPLOAD_STAGING_TAG_LENGTH = 12
+
+# The upload record's ``stagingLayout`` value for an upload that stages per upload. A record without it
+# was initialized before per-upload staging, and only such an upload falls back to the legacy key.
+UPLOAD_STAGING_LAYOUT_PER_UPLOAD = "perUpload"
+
+# Bytes a staging key adds to the final key besides the bucket's prefix.
+UPLOAD_STAGING_KEY_OVERHEAD_BYTES = len(TEMPORARY_UPLOAD_PREFIX.encode("utf-8")) + UPLOAD_STAGING_TAG_LENGTH + 1
+
+
+def upload_staging_tag(upload_id: str) -> str:
+    """The folder name an upload's files are staged under: the first UPLOAD_STAGING_TAG_LENGTH hex
+    characters of the SHA-256 of ``upload_id``."""
+    return hashlib.sha256(upload_id.encode("utf-8")).hexdigest()[:UPLOAD_STAGING_TAG_LENGTH]
+
+
+def staged_upload_key(base_assets_prefix: str, upload_id: str, final_s3_key: str) -> str:
+    """The key upload ``upload_id`` stages the file bound for ``final_s3_key`` under, in the bucket
+    whose normalized ``baseAssetsPrefix`` is ``base_assets_prefix``."""
+    return f"{base_assets_prefix}{TEMPORARY_UPLOAD_PREFIX}{upload_staging_tag(upload_id)}/{final_s3_key}"
+
+
+def max_uploaded_file_key_bytes(base_assets_prefix: str) -> int:
+    """The longest final key, in bytes of UTF-8, of a file uploaded into the bucket area whose
+    normalized ``baseAssetsPrefix`` is ``base_assets_prefix``: its staging key (staged_upload_key)
+    must fit the S3 object key limit, so that limit less the prefix and
+    UPLOAD_STAGING_KEY_OVERHEAD_BYTES. 998 at the bucket root."""
+    # Imported here: validators imports this module at load.
+    from common.validators import MAX_S3_OBJECT_KEY_BYTES
+
+    return (MAX_S3_OBJECT_KEY_BYTES - len((base_assets_prefix or "").encode("utf-8"))
+            - UPLOAD_STAGING_KEY_OVERHEAD_BYTES)
+
+
+def legacy_staged_upload_key(base_assets_prefix: str, final_s3_key: str) -> str:
+    """LEGACY STAGING KEY (#1928): the per-path key every upload staged under before per-upload
+    staging. Read only to complete or abort an upload initialized before the upgrade, whose record
+    carries no ``stagingLayout`` (UPLOAD_STAGING_LAYOUT_PER_UPLOAD); nothing is created under it any more.
+
+    Remove it, and the fallbacks in ``handlers/assets/uploadFile.py`` that use it, once no supported
+    upgrade starts from a release that staged per path (2.6.7 and earlier). Until then an upload
+    initialized before the upgrade can still be completed through it for as long as its upload
+    record is completable: 7 days after initialization (UPLOAD_EXPIRATION_DAYS in uploadFile.py,
+    the same age the VAMS asset bucket aborts incomplete multipart uploads at)."""
+    return f"{base_assets_prefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+
+
+# ---------------------------------------------------------------------------
+# Auxiliary-bucket top-level prefixes.
+#
+# AUXILIARY_PREPARED_DOWNLOADS_PREFIX: top-level auxiliary-bucket prefix holding
+#   prepared (zip download) archives under
+#   ``vams.preparedDownloads/{databaseId}/{assetId}/{userHash}/{requestId}/``. A
+#   lifecycle rule expires everything under it after the configured retention,
+#   whether or not the feature is enabled. Mirrored as PREPARED_DOWNLOADS_PREFIX in
+#   infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts and in the
+#   zipArchive pipeline (backendPipelines/utility/zipArchive).
+#
+# Every other auxiliary object lives under ``{databaseId}/...`` (see
+# ``executionRecords.aux_preview_file_prefix``). The dot in the first segment
+# keeps the two apart: a database id matches ``^[-_a-zA-Z0-9]{3,63}$``
+# (validators.id_pattern), which has no dot, so no database's auxiliary data can
+# start with this prefix, and no database id needs to be reserved for it.
+# ---------------------------------------------------------------------------
+AUXILIARY_PREPARED_DOWNLOADS_PREFIX = "vams.preparedDownloads/"
+
+# ---------------------------------------------------------------------------
 # Pipeline staging path segments.
 #
 # Unlike the prefixes above, these are mid-path segments (leading AND trailing
@@ -111,13 +201,29 @@ PIPELINE_INPUT_PREFIX = "/input/"
 #   threads it as ``outputResultsPrefixRelative`` (next pipeline's manifest) and
 #   ``resultsPathKey`` (process-output step), and processWorkflowExecutionOutput
 #   reads it for both the normal and the results-only (``outputLocationType:
-#   "none"``) terminal paths. No shipped pipeline writes here yet, so the
-#   channel is read-ready but has no producer.
+#   "none"``) terminal paths. Pipelines receive it as ``outputS3AssetResultsPath``
+#   from ``manifestHelper.resolve_inputs``.
 # ---------------------------------------------------------------------------
 PIPELINE_OUTPUT_FILES_PREFIX = "/files/"
 PIPELINE_OUTPUT_PREVIEWS_PREFIX = "/previews/"
 PIPELINE_OUTPUT_METADATA_PREFIX = "/metadata/"
 PIPELINE_OUTPUT_RESULTS_PREFIX = "/results/"
+
+# ---------------------------------------------------------------------------
+# Reserved results object.
+#
+# EXECUTION_STATUS_RESULTS_FILENAME: object name directly under the results
+#   prefix through which a pipeline reports a terminal outcome it records rather
+#   than raises -- a failure met AFTER its outputs were written, so those outputs
+#   still reach the asset. Body:
+#   ``{"status": "FAILED", "error": "<code>", "cause": "<text>"}``.
+#   The process-output step reads it after write-back on both terminal paths
+#   and, when ``status`` is FAILED, records the execution and its end-state
+#   pipeline row FAILED with ``executionError = "<error>: <cause>"``. Any other
+#   status, or no object, leaves the outcome to the write-back result. The
+#   object is additionally recorded as an ordinary results row.
+# ---------------------------------------------------------------------------
+EXECUTION_STATUS_RESULTS_FILENAME = "execution.status.json"
 
 # ---------------------------------------------------------------------------
 # File-level preview files.
@@ -141,7 +247,89 @@ PREVIEW_FILE_PATTERN = ".previewFile."
 
 EXCLUDED_FILE_PATH_PATTERNS: Tuple[str, ...] = (PREVIEW_FILE_PATTERN,)
 
-ALLOWED_PREVIEW_FILE_EXTENSIONS: Tuple[str, ...] = (".png", ".jpg", ".jpeg", ".svg", ".gif")
+ALLOWED_PREVIEW_FILE_EXTENSIONS: Tuple[str, ...] = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".svg",
+    ".gif",
+    ".webp",
+    ".bmp",
+)
+
+# The size limit of a preview file, in bytes (5 MiB). Three places use it and must agree:
+#   - the upload handlers reject a preview file LARGER than this;
+#   - the web shows a file as its own preview only when its size is STRICTLY UNDER this
+#     (``isSelfPreviewable`` in web/src/common/constants/fileFormats.ts);
+#   - the media preview pipeline writes only previews STRICTLY UNDER this and writes none for an image
+#     the web already shows as its own preview (backendPipelines/preview/3dThumbnail).
+# A drift test reads the web constant, and another reads the container's.
+PREVIEW_FILE_SIZE_LIMIT_BYTES: int = 5 * 1024 * 1024
+
+
+def is_self_previewable(file_name: str, size: Optional[int]) -> bool:
+    """True when the web shows ``file_name`` as its own preview: its extension is an allowed
+    preview extension and its size is known and strictly under PREVIEW_FILE_SIZE_LIMIT_BYTES.
+
+    Mirrors ``isSelfPreviewable`` in web/src/common/constants/fileFormats.ts. A file with an unknown
+    size is not self-previewable.
+    """
+    if size is None or isinstance(size, bool) or not isinstance(size, (int, float)):
+        return False
+    dot = file_name.rfind(".")
+    if dot < 0:
+        return False
+    return file_name[dot:].lower() in ALLOWED_PREVIEW_FILE_EXTENSIONS and size < PREVIEW_FILE_SIZE_LIMIT_BYTES
+
+
+# ---------------------------------------------------------------------------
+# Choosing a base file's preview.
+#
+# A file can hold several ``.previewFile.<ext>`` objects: a pipeline run with
+# another output format writes ``<file>.previewFile.png`` beside an existing
+# ``<file>.previewFile.gif``, and neither the run nor process-output removes the
+# other format. Every consumer that attaches one preview to a base file (the
+# file listings and the asset export) picks it with select_newest_preview_file,
+# so they agree on which preview is current.
+# ---------------------------------------------------------------------------
+def preview_file_has_allowed_extension(file_key: str) -> bool:
+    """True when the text after ``.previewFile.`` is an allowed preview image extension."""
+    if PREVIEW_FILE_PATTERN not in file_key:
+        return False
+    extension = "." + file_key.split(PREVIEW_FILE_PATTERN)[1]
+    return extension.lower() in ALLOWED_PREVIEW_FILE_EXTENSIONS
+
+
+def preview_modified_timestamp(value: Any) -> float:
+    """Sort key for a preview candidate's last-modified value: a datetime or ISO 8601 text, read
+    as UTC when it carries no offset. A missing or unreadable value sorts as the oldest."""
+    try:
+        if isinstance(value, str):
+            text = value.strip()
+            value = datetime.fromisoformat(text.replace("Z", "+00:00")) if text else None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.timestamp()
+    except (ValueError, OverflowError, OSError):
+        pass
+    return float("-inf")
+
+
+def select_newest_preview_file(candidates: Iterable[Tuple[str, Any, bool]]) -> Optional[str]:
+    """The preview to attach to one base file, from its ``(key, lastModified, isArchived)`` candidates.
+
+    A live preview beats an archived one and, among those, the latest ``lastModified`` wins; equal
+    times keep the first in key order. Candidates without an allowed extension are ignored.
+    """
+    best_key, best_rank = None, None
+    for key, modified, archived in sorted(candidates, key=lambda candidate: candidate[0]):
+        if not preview_file_has_allowed_extension(key):
+            continue
+        rank = (not archived, preview_modified_timestamp(modified))
+        if best_rank is None or rank > best_rank:
+            best_key, best_rank = key, rank
+    return best_key
 
 
 # ---------------------------------------------------------------------------
@@ -233,10 +421,17 @@ def join_asset_location_key(location_key: str, relative_path: str) -> str:
         relative_path: The asset-relative file path, with or without its leading ``/``.
 
     Returns:
-        str: The location folder and the path joined by exactly one ``/``. An empty
-        location key yields the path without its leading ``/``.
+        str: The key ``common.assetLocations.object_key_for`` names: in a folder location,
+        the folder and the path joined by exactly one ``/``; in a single-file location, the
+        object itself for its own file name, an own preview, or an entry of its companion
+        folder ``{file key}/`` for any other path. ``/`` in a single-file location names the
+        asset as a whole and yields the object's key. An empty location key yields the path
+        without its leading ``/``.
     """
-    base = location_key or ""
-    if base and not base.endswith("/"):
-        base += "/"
-    return base + (relative_path or "").lstrip("/")
+    # Imported here: assetLocations imports this module at load.
+    from common.assetLocations import normalize_location, object_key_for
+
+    if not normalize_location(location_key):
+        return (relative_path or "").lstrip("/")
+    key = object_key_for(location_key, relative_path)
+    return key if key is not None else normalize_location(location_key)

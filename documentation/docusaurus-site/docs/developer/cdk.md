@@ -19,7 +19,7 @@ VAMS deploys as a root stack (`CoreVAMSStack`) with 10+ nested stacks. Understan
 
 ### Dependency Chain
 
-Each solid arrow is an explicit `addStackDependency()` call in `core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none. The dotted arrow is a cross-stack reference that AWS CloudFormation orders implicitly: StaticWeb reads the REST API endpoint. See [Nested Stack Dependency Chain](../architecture/details.md#nested-stack-dependency-chain) for how the ordering is derived.
+Each solid arrow is an explicit `addStackDependency()` call in `core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none, except LocationService, which declares its dependency on StaticWeb when the static web stack is built. See [Nested Stack Dependency Chain](../architecture/details.md#nested-stack-dependency-chain) for how the ordering is derived.
 
 ```mermaid
 graph TD
@@ -31,6 +31,7 @@ graph TD
     Auth["AuthBuilder"]
     Api["ApiBuilder"]
     Api2["ApiBuilder2"]
+    Api3["ApiBuilder3"]
     Search["SearchBuilder"]
     Pipeline["PipelineBuilder"]
     Addon["AddonBuilder"]
@@ -51,6 +52,8 @@ graph TD
     Names --> Api
     Storage --> Api2
     Names --> Api2
+    Storage --> Api3
+    Names --> Api3
     Api --> Api2
     Storage --> Search
     Names --> Search
@@ -62,35 +65,41 @@ graph TD
     Auth --> Rest
     Api --> Rest
     Api2 --> Rest
+    Api3 --> Rest
     Search --> Rest
     Addon --> Rest
     Storage --> Web
-    Rest -.->|API endpoint| Web
+    Rest --> Web
+    Auth --> Web
+    Web --> Location
 ```
 
 ### Key Nested Stacks
 
-| Stack                   | File                                                             | Purpose                                                                                |
-| ----------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| VPCBuilder              | `nestedStacks/vpc/vpcBuilder-nestedStack.ts`                     | VPC, subnets, VPC endpoints                                                            |
-| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts`             | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, Amazon EventBridge, AWS KMS |
-| ResourceNamesBuilder    | `nestedStacks/resourceNames/resourceNamesBuilder-nestedStack.ts` | AWS Systems Manager Parameter Store parameters that publish resource names             |
-| AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`                   | Amazon Cognito, SAML, external OAuth                                                   |
-| ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`               | Primary API routes and Lambda wiring                                                   |
-| ApiBuilder2             | `nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`              | Secondary API routes and Lambda wiring                                                 |
-| RestApi                 | `nestedStacks/apiLambda/api-nestedStack.ts`                      | Amazon API Gateway REST API and Lambda authorizer, built from the route registry       |
-| StaticWeb               | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`      | Amazon S3 + Amazon CloudFront or ALB hosting                                           |
-| PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`          | Processing pipeline orchestrator                                                       |
+| Stack                   | File                                                             | Purpose                                                                                                         |
+| ----------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| VPCBuilder              | `nestedStacks/vpc/vpcBuilder-nestedStack.ts`                     | VPC, subnets, VPC endpoints                                                                                     |
+| StorageResourcesBuilder | `nestedStacks/storage/storageBuilder-nestedStack.ts`             | Amazon DynamoDB tables, Amazon S3, Amazon SNS, Amazon SQS, Amazon EventBridge, AWS KMS                          |
+| ResourceNamesBuilder    | `nestedStacks/resourceNames/resourceNamesBuilder-nestedStack.ts` | AWS Systems Manager Parameter Store parameters that publish resource names                                      |
+| AuthBuilder             | `nestedStacks/auth/authBuilder-nestedStack.ts`                   | Amazon Cognito, SAML, external OAuth                                                                            |
+| ApiBuilder              | `nestedStacks/apiLambda/apiBuilder-nestedStack.ts`               | Primary API routes and Lambda wiring                                                                            |
+| ApiBuilder2             | `nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`              | Secondary API routes and Lambda wiring                                                                          |
+| ApiBuilder3             | `nestedStacks/apiLambda/apiBuilder3-nestedStack.ts`              | Third API stack: audit log search (own template size budget; built only when `app.auditLogging.search.enabled`) |
+| RestApi                 | `nestedStacks/apiLambda/api-nestedStack.ts`                      | Amazon API Gateway REST API and Lambda authorizer, built from the route registry                                |
+| StaticWeb               | `nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts`      | Amazon S3 + Amazon CloudFront or ALB hosting                                                                    |
+| PipelineBuilder         | `nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`          | Processing pipeline orchestrator                                                                                |
+
+**Resource-name keys.** Core keys are declared in `common/resourceParamKeys.ts` (`RESOURCE_PARAM_KEYS`) and published by ResourceNamesBuilder, except the names of resources built after it: those stacks publish theirs with `publishLateCoreResourceName()` (`nestedStacks/resourceNames/lateCoreResourceNames.ts`), such as the OpenSearch endpoint and index names, the web URL and the map API key ARN, whose backend mirror is `backend/backend/common/deployTimeValues.py`. The add-on and custom lanes declare theirs in `common/addonResourceParamKeys.ts` (`ADDON_RESOURCE_PARAM_KEYS`) and `common/customResourceParamKeys.ts` (`CUSTOM_RESOURCE_PARAM_KEYS`), both shipped empty. The stack that creates the resource publishes the key with `publishAddonResourceName()` (`nestedStacks/addon/addonStackHelpers.ts`) or `publishCustomResourceName()` (`nestedStacks/custom/customStackHelpers.ts`). Both helpers fail synthesis on a key equal to a core key or to one the other lane declares. Each lane's keys are mirrored in a backend file (`backend/backend/common/addonResourceNames.py`, `backend/backend/custom/customResourceNames.py`), and `test/storage/resourceNamesMirror.test.ts` compares each pair.
 
 ### Cross-Stack Shared Interfaces
 
 The `storageResources` interface (defined in `storageBuilder-nestedStack.ts`) is the primary shared interface. It exposes 20+ Amazon DynamoDB tables, Amazon S3 buckets, Amazon SNS topics, Amazon SQS queues, AWS KMS keys, and Amazon CloudWatch audit log groups to all downstream stacks.
 
-A top-level Amazon EventBridge orchestration bus is also exposed through `storageResources.eventBridge`. Downstream stacks reference `eventBridge.orchestrationBus` to publish events and `eventBridge.eventSourcePrefix` for the deployment-unique source prefix to put on those events. The bus is the central hub for event-driven VAMS features; a starter rule routes all events from the deployment's sources to a dedicated Amazon CloudWatch log group (`eventBridge.orchestrationBusAuditLogGroup`).
+A top-level Amazon EventBridge orchestration bus is also exposed through `storageResources.eventBridge`. Downstream stacks reference `eventBridge.orchestrationBus` to publish events and `eventBridge.eventSourcePrefix` for the deployment-unique source prefix to put on those events. The bus is the central hub for event-driven VAMS features; a starter rule routes all events from the deployment's sources to a dedicated Amazon CloudWatch log group (`eventBridge.orchestrationBusAuditLogGroup`). The events VAMS itself puts on the bus are `asset.file.uploaded` (file uploads, consumed by the workflow trigger dispatcher; its detail is `{"Records": [<S3 record>, ...], "ASSET_BUCKET_NAME", "ASSET_BUCKET_PREFIX"}`, and each record bucket sync attributed also carries an optional `vamsBinding` with `databaseId`, `assetId`, `bucketId`, `relativePath` and `resolvedBy`), `pipeline.execution.register` (a pipeline reporting its sub-processes and logs) and `workflow.execution.completed` (a workflow execution reaching a terminal status, consumed by the compliance workflow callback); the contracts of the latter two are documented in the [workflow execution data model](workflow-execution-data-model-handoff.md#sub-process-registration).
 
 ## Lambda Builder Pattern
 
-All Lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. There are approximately 17 builder files containing 40+ function builders.
+All Lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. There are approximately 18 builder files containing 40+ function builders.
 
 ### Standard Function Signature
 
@@ -159,11 +168,12 @@ Missing `setupSecurityAndLoggingEnvironmentAndPermissions` breaks authorization 
 | `kmsKeyLambdaPermissionAddToResourcePolicy`        | Grants AWS KMS Decrypt, Encrypt, GenerateDataKey, ReEncrypt, ListKeys, CreateGrant, ListAliases                                                                                      |
 | `setupSecurityAndLoggingEnvironmentAndPermissions` | Adds env vars for auth tables and 9 audit log groups. Grants DynamoDB read on auth, constraints, userRoles, roles tables. Grants Amazon CloudWatch PutLogEvents on audit log groups. |
 | `globalLambdaEnvironmentsAndPermissions`           | Injects `VAMS_RESOURCE_PARAM_PREFIX` and grants AWS Systems Manager parameter read access for resource-name resolution                                                               |
-| `suppressCdkNagErrorsByGrantReadWrite`             | Suppresses AwsSolutions-IAM5 for Amazon S3 and resource wildcards                                                                                                                    |
+| `suppressCdkNagErrorsByGrantReadWrite`             | Suppresses AwsSolutions-IAM5 for Amazon S3 and resource wildcards, on the IAM policies under the scope                                                                               |
+| `addIamNagSuppressions`                            | Adds AwsSolutions-IAM4 and AwsSolutions-IAM5 suppressions to the IAM roles and policies under a scope that each rule checks, and to no other resource. Throws on any other rule ID   |
 
 ## API Route Wiring
 
-Routes are wired with the `attachFunctionToApi` helper (`lib/nestedStacks/apiLambda/apiRouteRegistry.ts`) from the nested stack that builds the route's Lambda function. Add new core routes in `apiBuilder2-nestedStack.ts`; use `apiBuilder-nestedStack.ts` only when the function must share a function instance defined there.
+Routes are wired with the `attachFunctionToApi` helper (`lib/nestedStacks/apiLambda/apiRouteRegistry.ts`) from the nested stack that builds the route's Lambda function. Add new core routes in `apiBuilder2-nestedStack.ts` (a template size guard, `infra/test/api/nestedTemplateSizeGuard.test.ts`, fails when an API stack nears the 1,000,000 byte CloudFormation limit, and then new functions go in `apiBuilder3-nestedStack.ts`); use `apiBuilder-nestedStack.ts` only when the function must share a function instance defined there.
 
 ### Attaching a Function to Amazon API Gateway
 
@@ -213,14 +223,9 @@ Unauthenticated paths (`VamsAnonymousAuthorizer`: IP check only, no token): `/ap
 
 ## Configuration System
 
-### Three-Tier Fallback Chain
+### Resolution Order
 
-Configuration values resolve in this order:
-
-1. CDK context (`-c key=value`)
-2. `config/config.json` file
-3. Environment variables
-4. Hardcoded defaults
+Most values come from `config/config.json`, with defaults `getConfig()` fills in for absent keys. A few can also come from CDK context (`-c key=value`) or environment variables, and the order differs by value: context, then `config.json`, then the environment for `env.account`, `env.region`, `app.baseStackName` and the two timeouts; context, then the environment, then `config.json` for the admin and default role settings; and the first source that is true for `resolveConfigBool` booleans such as `useWaf`. The [configuration reference](../deployment/configuration-reference.md) lists each one.
 
 The entry point `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`.
 
@@ -322,25 +327,34 @@ CDK Nag is always enabled with AWS Solutions checks. Every new resource must pas
 
 ### Adding Suppressions
 
-Every CDK Nag suppression requires a detailed justification:
+Every CDK Nag suppression requires a detailed justification. Add an IAM suppression (AwsSolutions-IAM4 or AwsSolutions-IAM5) with `addIamNagSuppressions` from `lib/helper/security.ts`. It writes the suppression only on the function's role and policies, the resources those rules check:
+
+```typescript
+import { addIamNagSuppressions } from "../helper/security";
+
+addIamNagSuppressions(myFunction, [
+    {
+        id: "AwsSolutions-IAM5",
+        reason: "Index ARNs of one named table: a table grant covers its global secondary indexes.",
+        appliesTo: [{ regex: "/^Resource::<.*Table.*\\.Arn>/index/\\*$/g" }],
+    },
+]);
+```
+
+Suppress any other rule with `NagSuppressions.addResourceSuppressions` on the resource the finding names:
 
 ```typescript
 import { NagSuppressions } from "cdk-nag";
 
-NagSuppressions.addResourceSuppressions(
-    resource,
-    [
-        {
-            id: "AwsSolutions-IAM5",
-            reason:
-                "Wildcard permissions required for dynamic S3 object " +
-                "access within VAMS asset buckets. Scope is limited " +
-                "to deployment-specific buckets.",
-        },
-    ],
-    true
-);
+NagSuppressions.addResourceSuppressions(deadLetterQueue, [
+    {
+        id: "AwsSolutions-SQS3",
+        reason: "This queue is the dead-letter queue of the processing queue, so it ends that queue's redrive chain.",
+    },
+]);
 ```
+
+Do not add an IAM suppression with `NagSuppressions.addResourceSuppressions(scope, [...], true)`. The `true` (apply to children) copies it onto every resource under the scope, such as the function itself, its security group and its permissions. CDK Nag never reads it there, and each copy counts toward the 1,000,000-byte CloudFormation template limit of the nested stack.
 
 :::warning[Suppressions Require Justification]
 Never add a suppression with a generic reason like "Suppressed" or "Not applicable". Explain why the suppression is acceptable in the VAMS security context.
@@ -370,16 +384,23 @@ enum VAMS_APP_FEATURES {
     AUTHPROVIDER_COGNITO_SAML,
     AUTHPROVIDER_COGNITO_OIDC,
     AUTHPROVIDER_EXTERNALOAUTHIDP,
-    PHYSNA_ADDON,
     DEADLINECLOUD_PIPELINES,
+    VECTORSEARCH,
+    ZIPDOWNLOADS,
+    AUDITLOGSEARCH,
+}
+
+// common/addonAppFeatures.ts
+enum ADDON_APP_FEATURES {
+    PHYSNA_ADDON,
 }
 ```
 
-Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to Amazon DynamoDB by `CustomFeatureEnabledConfigNestedStack`. The frontend reads these from `/api/secure-config` at runtime.
+Features are tracked in the `enabledFeatures` array on `CoreVAMSStack` and persisted to Amazon DynamoDB by `CustomFeatureEnabledConfigNestedStack`. The frontend reads these from `/api/secure-config` at runtime. Core switches are in `common/vamsAppFeatures.ts` and are pushed by `core-stack.ts`. Add-on switches are in `common/addonAppFeatures.ts` and are returned by `AddonBuilderNestedStack.enabledFeatures`. A fork's switches are in `common/customAppFeatures.ts` and are returned by its `buildCustomResources()`. `core-stack.ts` publishes all three lists. A value may appear in only one of the three enums (`test/addon/appFeatureLanes.test.ts`), and the add-on and custom stacks fail synthesis when they return a value from another lane. The CLI mirrors the lanes in `vamscli/constants.py`, `vamscli/addon_constants.py` (re-exported from `constants.py`) and `vamscli/custom_constants.py`.
 
 ### Adding a New Feature Flag
 
-1. Add the constant to `VAMS_APP_FEATURES` enum in `common/vamsAppFeatures.ts`
+1. Add the constant to `VAMS_APP_FEATURES` enum in `common/vamsAppFeatures.ts` (an add-on's to `ADDON_APP_FEATURES` in `common/addonAppFeatures.ts`), and the matching `FEATURE_*` constant to the CLI file of the same lane
 2. Add the config option in `ConfigPublic` interface in `config/config.ts`
 3. Push to `enabledFeatures` array in `core-stack.ts` when the feature is enabled
 4. Gate frontend UI with feature check on `config.featuresEnabled`
@@ -444,3 +465,4 @@ Always use `nestedStack.addDependency(otherStack)` when one nested stack depends
 -   [Backend Development](backend.md) -- Lambda handler patterns that consume CDK-provisioned resources
 -   [Frontend Development](frontend.md) -- How the frontend reads configuration and feature flags
 -   [Local Development Setup](setup.md) -- CDK synthesis and deployment commands
+-   [Extending VAMS in a Fork](customizing-vams.md) -- Adding CDK resources, routes and resource names in the custom nested stack

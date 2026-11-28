@@ -27,18 +27,39 @@ jest.mock("react-router", () => ({
 }));
 
 jest.mock("../../services/APIService", () => ({
-    fetchAsset: jest.fn().mockResolvedValue({
-        assetId: "asset1",
-        databaseId: "db1",
-        assetName: "Seeded Asset",
-        isDistributable: true,
-    }),
+    fetchAssetWithStatus: jest.fn().mockResolvedValue([
+        true,
+        {
+            assetId: "asset1",
+            databaseId: "db1",
+            assetName: "Seeded Asset",
+            isDistributable: true,
+        },
+    ]),
     fetchFileInfo: jest.fn(),
 }));
 jest.mock("../../services/FileOperationsService", () => ({ archiveFile: jest.fn() }));
 jest.mock("../metadata/FileMetadata", () => ({ __esModule: true, default: () => null }));
 jest.mock("../filemanager/components/FileVersionsTable", () => ({
     FileVersionsTable: () => null,
+}));
+// The registry pulls in Vite's import.meta.glob; ViewFile uses only the ViewerMode type from it, and
+// the compare-mode lookups are stubbed to "visualize only" so the toggle stays out of this test.
+jest.mock("../../visualizerPlugin/core/PluginRegistry", () => ({}));
+jest.mock("../../visualizerPlugin/core/useViewerRegistryReady", () => ({
+    useViewerRegistryReady: () => true,
+}));
+jest.mock("../../visualizerPlugin/core/viewableExtensions", () => ({
+    availableModesForFiles: () => ({ visualize: true, compare: false }),
+}));
+
+// The registry pulls in Vite's import.meta.glob, which jest cannot load; only types are used here.
+jest.mock("../../visualizerPlugin/core/PluginRegistry", () => ({}));
+jest.mock("../../visualizerPlugin/core/viewableExtensions", () => ({
+    availableModesForFiles: () => ({ visualize: true, compare: false }),
+}));
+jest.mock("../../visualizerPlugin/core/useViewerRegistryReady", () => ({
+    useViewerRegistryReady: () => true,
 }));
 
 const mockMounts: string[] = [];
@@ -79,9 +100,9 @@ beforeEach(() => {
 /** Renders the page and waits for the asset fetch to settle the view type, so later mounts are the file's. */
 const renderSettled = async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { fetchAsset } = require("../../services/APIService");
+    const { fetchAssetWithStatus } = require("../../services/APIService");
     const view = render(<ViewFile />);
-    await waitFor(() => expect(fetchAsset).toHaveBeenCalled());
+    await waitFor(() => expect(fetchAssetWithStatus).toHaveBeenCalled());
     await act(async () => {
         await Promise.resolve();
     });

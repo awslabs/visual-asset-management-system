@@ -75,6 +75,8 @@ def validate_event_parameters(event, data=None):
         'inputConfigurationS3Location': '',
         'orchestrationEventPrefix': '',
         'assetId': '',
+        'inputVersionId': '',
+        'inputRelativePath': '',
         'outputType': '',
         'executingUserName': '',
         'executingRequestContext': ''
@@ -169,7 +171,8 @@ def validate_event_parameters(event, data=None):
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path,
                     inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token,
-                    executing_userName, executing_requestContext, output_file_type, asset_id="", orchestration_event_prefix=""):
+                    executing_userName, executing_requestContext, output_file_type, asset_id="", orchestration_event_prefix="",
+                    input_version_id="", input_relative_path=""):
     """
     Executes the EKS pipeline by invoking the open pipeline Lambda function with comprehensive error handling
     """
@@ -200,6 +203,10 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
             "executingRequestContext": executing_requestContext,
             "outputFileType": output_file_type,
             "assetId": asset_id,
+            "inputVersionId": input_version_id,
+            # The input's asset-relative path from its manifest entry; its folder is the output
+            # subfolder. Empty without a manifest entry.
+            "inputRelativePath": input_relative_path,
             "orchestrationEventPrefix": orchestration_event_prefix
         }
 
@@ -411,6 +418,10 @@ def lambda_handler(event, context):
             resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
             # Single input file per execution today (SFN/manifest layer is multi-file-ready).
             manifestHelper.enforce_single_input_file(resolved)
+            # This pipeline hands s3:// locations to a third-party container image whose SDK reads and
+            # writes Amazon S3 in the deployment Region only; a bucket in another Region is rejected
+            # before submission.
+            manifestHelper.enforce_same_region_io(resolved)
             logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']})")
             for field in ('inputS3AssetFilePath', 'outputS3AssetFilesPath', 'outputS3AssetPreviewPath',
                           'outputS3AssetMetadataPath', 'inputOutputS3AssetAuxiliaryFilesPath',
@@ -418,6 +429,11 @@ def lambda_handler(event, context):
                           'orchestrationEventPrefix', 'assetId'):
                 if resolved.get(field):
                     data[field] = resolved[field]
+            # The S3 version the run reads its input at, recorded at launch; "" reads the current
+            # object. It comes from the manifest only, so a legacy payload reads the current object.
+            data['inputVersionId'] = resolved['inputVersionId']
+            # Where the input sits in its asset, from the manifest only.
+            data['inputRelativePath'] = ((resolved['inputFiles'] or [{}])[0] or {}).get('relativePath') or ''
 
         # Validate event parameters with enhanced error context
         logger.info("Starting event parameter validation")
@@ -498,7 +514,9 @@ def lambda_handler(event, context):
                 executing_requestContext,
                 output_file_type,
                 asset_id,
-                orchestration_event_prefix
+                orchestration_event_prefix,
+                input_version_id=validated_data['inputVersionId'],
+                input_relative_path=validated_data['inputRelativePath']
             )
 
             # Calculate execution time

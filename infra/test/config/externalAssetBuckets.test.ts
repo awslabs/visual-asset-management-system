@@ -3,7 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { validateExternalAssetBuckets, ConfigPublicAssetS3Buckets } from "../../config/config";
+import {
+    validateExternalAssetBuckets,
+    crossRegionExternalBuckets,
+    crossRegionExternalBucketRegions,
+    ConfigPublicAssetS3Buckets,
+} from "../../config/config";
 
 // Helper to build a bucket entry with sensible defaults.
 const entry = (overrides: Partial<ConfigPublicAssetS3Buckets>): ConfigPublicAssetS3Buckets => ({
@@ -142,53 +147,153 @@ describe("validateExternalAssetBuckets", () => {
         );
     });
 
-    // Amazon S3 requires an event-notification destination to be in the same region as the
-    // bucket, and VAMS creates its notification topics in the deployment region. Without this
-    // guard the mismatch surfaces only as a PutBucketNotificationConfiguration InvalidArgument
-    // from a custom resource, well into the deploy.
-    describe("bucketRegion must match the deployment region", () => {
-        test("rejects a bucket in a different region than the deployment", () => {
+    // A bucket may be in another Region of the deployment's partition: its notification topics are
+    // created there by a per-Region stack. What is rejected is a malformed Region, a Region in
+    // another partition, and a cross-Region DEFAULT bucket, whose pipeline template data and run
+    // I/O the deployment reads and writes from its own Region.
+    describe("bucketRegion", () => {
+        test("accepts a bucket in a different Region than the deployment", () => {
             const buckets = [entry({ bucketAccountId: "222222222222", bucketRegion: "eu-west-1" })];
             expect(() =>
                 validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-east-1")
-            ).toThrow(/does not match the deployment region/);
+            ).not.toThrow();
         });
 
-        test("accepts a bucket in the deployment region", () => {
+        test("accepts a same-account bucket in a different Region", () => {
+            const buckets = [entry({ bucketRegion: "us-west-2" })];
+            expect(() =>
+                validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-east-1")
+            ).not.toThrow();
+        });
+
+        test("accepts a bucket in the deployment Region", () => {
             const buckets = [entry({ bucketAccountId: "222222222222", bucketRegion: "us-east-1" })];
             expect(() =>
                 validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-east-1")
             ).not.toThrow();
         });
 
-        test("accepts an omitted bucketRegion, which defaults to the deployment region", () => {
+        test("accepts an omitted bucketRegion, which defaults to the deployment Region", () => {
             const buckets = [entry({ bucketAccountId: "222222222222" })];
             expect(() =>
                 validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-east-1")
             ).not.toThrow();
         });
 
-        test("treats UNDEFINED bucketRegion as omitted rather than as a mismatch", () => {
+        test("treats UNDEFINED bucketRegion as omitted", () => {
             const buckets = [entry({ bucketAccountId: "222222222222", bucketRegion: "UNDEFINED" })];
             expect(() =>
                 validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-east-1")
             ).not.toThrow();
         });
 
-        test("skips the check when the deployment region is unknown at synth", () => {
-            const buckets = [entry({ bucketAccountId: "222222222222", bucketRegion: "eu-west-1" })];
+        test.each([
+            ["us-east-1a", "an Availability Zone"],
+            ["US-EAST-1", "upper case"],
+            ["useast1", "no separators"],
+            ["us-east", "no number"],
+            ["us east 1", "spaces"],
+        ])("rejects a malformed bucketRegion %s (%s)", (region) => {
+            const buckets = [entry({ bucketRegion: region })];
+            expect(() =>
+                validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-east-1")
+            ).toThrow(/is not a valid AWS Region name/);
+        });
+
+        test.each(["us-gov-west-1", "eusc-de-east-1", "cn-north-1", "us-iso-east-1"])(
+            "accepts the well-formed restricted-partition Region %s in its own partition",
+            (region) => {
+                const partition = region.startsWith("us-gov")
+                    ? "aws-us-gov"
+                    : region.startsWith("eusc")
+                    ? "aws-eusc"
+                    : region.startsWith("cn")
+                    ? "aws-cn"
+                    : "aws-iso";
+                const buckets = [
+                    entry({ bucketArn: `arn:${partition}:s3:::my-bucket`, bucketRegion: region }),
+                ];
+                expect(() =>
+                    validateExternalAssetBuckets(buckets, partition, "111111111111", region)
+                ).not.toThrow();
+            }
+        );
+
+        test("rejects a bucketRegion in another partition than the deployment", () => {
+            const buckets = [entry({ bucketRegion: "us-gov-west-1" })];
+            expect(() =>
+                validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-east-1")
+            ).toThrow(
+                /is in partition 'aws-us-gov' which does not match the deployment partition 'aws'/
+            );
+        });
+
+        test("rejects a cross-Region bucket marked isDefault, naming both Regions", () => {
+            const buckets = [entry({ bucketRegion: "ap-southeast-2", isDefault: true })];
+            expect(() =>
+                validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-west-2")
+            ).toThrow(
+                /is marked isDefault but is in 'ap-southeast-2' while the deployment is in 'us-west-2'[\s\S]*must be in the deployment Region/
+            );
+        });
+
+        test("accepts a same-Region bucket marked isDefault", () => {
+            const buckets = [entry({ bucketRegion: "us-west-2", isDefault: true })];
+            expect(() =>
+                validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-west-2")
+            ).not.toThrow();
+        });
+
+        test("accepts a default bucket with no bucketRegion alongside a cross-Region non-default one", () => {
+            const buckets = [
+                entry({ bucketArn: "arn:aws:s3:::default-bucket", isDefault: true }),
+                entry({
+                    bucketArn: "arn:aws:s3:::remote-bucket",
+                    bucketRegion: "eu-central-1",
+                    defaultSyncDatabaseId: "remote",
+                }),
+            ];
+            expect(() =>
+                validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-west-2")
+            ).not.toThrow();
+        });
+
+        test("skips the default-bucket Region check when the deployment Region is unknown at synth", () => {
+            const buckets = [entry({ bucketRegion: "eu-west-1", isDefault: true })];
             expect(() =>
                 validateExternalAssetBuckets(buckets, "aws", "111111111111", undefined)
             ).not.toThrow();
         });
+    });
+});
 
-        test("names both regions so the operator can see which to change", () => {
-            const buckets = [
-                entry({ bucketAccountId: "222222222222", bucketRegion: "ap-southeast-2" }),
-            ];
-            expect(() =>
-                validateExternalAssetBuckets(buckets, "aws", "111111111111", "us-west-2")
-            ).toThrow(/ap-southeast-2[\s\S]*us-west-2/);
-        });
+describe("crossRegionExternalBuckets", () => {
+    test("returns only entries whose Region is set and differs from the deployment Region", () => {
+        const buckets = [
+            entry({ bucketArn: "arn:aws:s3:::a" }),
+            entry({ bucketArn: "arn:aws:s3:::b", bucketRegion: "us-east-1" }),
+            entry({ bucketArn: "arn:aws:s3:::c", bucketRegion: "UNDEFINED" }),
+            entry({ bucketArn: "arn:aws:s3:::d", bucketRegion: "eu-west-1" }),
+            entry({
+                bucketArn: "arn:aws:s3:::e",
+                bucketRegion: "eu-west-1",
+                baseAssetsPrefix: "x/",
+            }),
+            entry({ bucketArn: "arn:aws:s3:::f", bucketRegion: "ap-south-1" }),
+        ];
+        expect(crossRegionExternalBuckets(buckets, "us-east-1").map((b) => b.bucketArn)).toEqual([
+            "arn:aws:s3:::d",
+            "arn:aws:s3:::e",
+            "arn:aws:s3:::f",
+        ]);
+        expect(crossRegionExternalBucketRegions(buckets, "us-east-1")).toEqual([
+            "eu-west-1",
+            "ap-south-1",
+        ]);
+    });
+
+    test("handles an undefined list", () => {
+        expect(crossRegionExternalBuckets(undefined, "us-east-1")).toEqual([]);
+        expect(crossRegionExternalBucketRegions(undefined, "us-east-1")).toEqual([]);
     });
 });

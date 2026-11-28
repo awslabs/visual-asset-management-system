@@ -1,0 +1,156 @@
+name: vams-isaacsim-nucleus-server
+description: Records the Nucleus server the recipe's optional nucleusServer parameter names and installs the helper the Isaac Sim launcher runs to add it to each desktop user's Omniverse server list; with the parameter empty no server is recorded and the helper changes nothing.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: RecordTheNucleusServer
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        # The parameter is written out as data through a quoted heredoc, so nothing in it
+                        # is expanded, and it is checked before anything reads it.
+                        cat > /var/tmp/vams-nucleus-server <<'VAMS_NUCLEUS_SERVER'
+                        ${PARAM_nucleusServer}
+                        VAMS_NUCLEUS_SERVER
+                        server="$(cat /var/tmp/vams-nucleus-server)"
+                        rm -f /var/tmp/vams-nucleus-server /etc/vams-isaacsim-nucleus-server
+                        # Surrounding white space and one trailing slash are dropped; anything else stays.
+                        server="${server#"${server%%[![:space:]]*}"}"
+                        server="${server%"${server##*[![:space:]]}"}"
+                        server="${server%/}"
+                        if [ -z "${server}" ]; then
+                            echo "nucleusServer is empty: the image names no Nucleus server."
+                            exit 0
+                        fi
+                        if ! [[ "${server}" =~ ^omniverse://[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(:([0-9]{1,5}))?$ ]] \
+                            || { [ -n "${BASH_REMATCH[3]}" ] && { [ "${BASH_REMATCH[3]}" -lt 1 ] || [ "${BASH_REMATCH[3]}" -gt 65535 ]; }; }; then
+                            echo "nucleusServer must be omniverse://<host> or omniverse://<host>:<port>, with no path, user or query; got '${server}'" >&2
+                            exit 1
+                        fi
+                        printf '%s\n' "${server}" > /etc/vams-isaacsim-nucleus-server
+                        chmod 0644 /etc/vams-isaacsim-nucleus-server
+                        echo "Desktops from this image add ${server} to Isaac Sim's server list."
+          - name: InstallTheRegistrationHelper
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        cat > /usr/local/bin/vams-isaacsim-nucleus-register <<'NUCLEUS_REGISTER'
+                        #!/usr/bin/python3
+                        """Adds the Nucleus server this image names to the desktop user's Omniverse server list.
+
+                        Isaac Sim 6 lists the servers in the [servers] table of the user's
+                        ~/.nvidia-omniverse/config/omniverse.toml, each keyed by its URL with its display name
+                        as the value, and keeps every other table it finds there. This adds the image's server
+                        when that table lacks it, and changes nothing else. It exits 0 when the image names no
+                        server or the server is already listed, and non-zero, with the reason on stderr, when
+                        the file cannot be read or written; the launcher starts Isaac Sim either way.
+                        """
+                        import json
+                        import os
+                        import re
+                        import sys
+                        import tempfile
+                        import tomllib
+
+                        SERVER_FILE = "/etc/vams-isaacsim-nucleus-server"
+                        SERVER = re.compile(r"omniverse://[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(?::[0-9]{1,5})?")
+                        SERVERS_HEADER = re.compile(r"^[ \t]*\[[ \t]*servers[ \t]*\][ \t]*(?:#[^\n]*)?$", re.MULTILINE)
+
+
+                        def listed(data):
+                            return {str(url).rstrip("/") for url in (data.get("servers") or {})}
+
+
+                        def main():
+                            try:
+                                with open(SERVER_FILE, encoding="utf-8") as handle:
+                                    server = handle.read().strip()
+                            except FileNotFoundError:
+                                return 0
+                            if not SERVER.fullmatch(server):
+                                print(f"{SERVER_FILE} does not hold an omniverse:// server: {server!r}", file=sys.stderr)
+                                return 2
+                            config = os.path.join(os.path.expanduser("~"), ".nvidia-omniverse", "config")
+                            path = os.path.join(config, "omniverse.toml")
+                            try:
+                                with open(path, encoding="utf-8") as handle:
+                                    text = handle.read()
+                                mode = os.stat(path).st_mode & 0o777
+                            except FileNotFoundError:
+                                text, mode = "", 0o644
+                            try:
+                                data = tomllib.loads(text)
+                            except tomllib.TOMLDecodeError as err:
+                                print(f"{path} is not valid TOML ({err}); it was left unchanged", file=sys.stderr)
+                                return 3
+                            if not isinstance(data.get("servers", {}), dict):
+                                print(f"{path} holds 'servers' as something other than a table; it was left unchanged",
+                                      file=sys.stderr)
+                                return 3
+                            if server in listed(data):
+                                print(f"{server} is already in Isaac Sim's server list")
+                                return 0
+                            name = server[len("omniverse://"):].split(":")[0]
+                            entry = f"{json.dumps(server)} = {json.dumps(name)}\n"
+                            if "servers" not in data:
+                                updated = text
+                                if updated and not updated.endswith("\n"):
+                                    updated += "\n"
+                                updated += ("\n" if updated else "") + "[servers]\n" + entry
+                            else:
+                                header = SERVERS_HEADER.search(text)
+                                if header is None:
+                                    print(f"{path} defines 'servers' without a [servers] header; it was left unchanged",
+                                          file=sys.stderr)
+                                    return 3
+                                cut = header.end()
+                                if cut < len(text) and text[cut] == "\n":
+                                    updated = text[:cut + 1] + entry + text[cut + 1:]
+                                else:
+                                    updated = text[:cut] + "\n" + entry + text[cut:]
+                            if server not in listed(tomllib.loads(updated)):
+                                print(f"{server} could not be added to {path}; it was left unchanged", file=sys.stderr)
+                                return 3
+                            os.makedirs(config, exist_ok=True)
+                            # Another desktop of the user shares this home, so the file is replaced in one step.
+                            fd, temp = tempfile.mkstemp(dir=config, prefix=".omniverse.toml.", suffix=".tmp")
+                            try:
+                                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                                    handle.write(updated)
+                                os.chmod(temp, mode)
+                                os.replace(temp, path)
+                            except BaseException:
+                                if os.path.exists(temp):
+                                    os.unlink(temp)
+                                raise
+                            print(f"Added {server} to Isaac Sim's server list in {path}")
+                            return 0
+
+
+                        if __name__ == "__main__":
+                            sys.exit(main())
+                        NUCLEUS_REGISTER
+                    - chmod 0755 /usr/local/bin/vams-isaacsim-nucleus-register
+    - name: validate
+      steps:
+          - name: HelperInstalledAndServerWellFormed
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -eux
+                    - test -x /usr/local/bin/vams-isaacsim-nucleus-register
+                    - /usr/bin/python3 -c 'import ast, sys, tomllib; ast.parse(open(sys.argv[1]).read())' /usr/local/bin/vams-isaacsim-nucleus-register
+                    - |
+                        # With a server recorded, the helper adds it to an empty home's server list.
+                        if [ -f /etc/vams-isaacsim-nucleus-server ]; then
+                            server="$(cat /etc/vams-isaacsim-nucleus-server)"
+                            home="$(mktemp -d)"
+                            HOME="${home}" /usr/local/bin/vams-isaacsim-nucleus-register
+                            grep -Fq "\"${server}\" = " "${home}/.nvidia-omniverse/config/omniverse.toml"
+                            rm -rf "${home}"
+                        fi

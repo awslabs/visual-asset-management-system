@@ -84,6 +84,26 @@ class TestEvaluationBundle:
     def test_evaluation_requires_a_template_for_its_mode(self):
         assert _load("evaluation", "pipeline.json")["systemConfig"]["requireTemplate"] is True
 
+    def test_evaluation_timeout_leaves_room_for_the_gpu_wait_after_the_playback_limit(self):
+        # The workflow's taskTimeout counts the time the job waits in RUNNABLE for a GPU instance
+        # (observed up to about 50 minutes) and the image pull, while the container's own playback
+        # watchdog can run up to EVALUATION_TIME_LIMIT_CAP_SECONDS once the job starts. A taskTimeout
+        # close to that cap ends a slow-to-start evaluation in a bare States.Timeout before the
+        # watchdog's readable failure. Keep at least an hour and a half of margin.
+        import re
+
+        main_path = os.path.normpath(os.path.join(_SCHEMA_ROOT, "..", "container", "__main__.py"))
+        with open(main_path, encoding="utf-8") as handle:
+            cap = int(re.search(r"^EVALUATION_TIME_LIMIT_CAP_SECONDS = (\d+)", handle.read(), re.M).group(1))
+        task_timeout = int(_load("evaluation", "pipeline.json")["executionConfig"]["taskTimeout"])
+        training_timeout = int(_load("training", "pipeline.json")["executionConfig"]["taskTimeout"])
+        assert task_timeout >= cap + 5400
+        # Evaluation is the longer mode (9 hours); training keeps 8. The shared Batch job definition
+        # takes the larger value as its backstop (infra/test/pipelines/isaacLabTimeoutChain.test.ts).
+        assert task_timeout == 32400
+        assert training_timeout == 28800
+        assert task_timeout > training_timeout
+
     def test_shipped_evaluation_template_selects_evaluate_mode(self):
         template = _template("evaluation")
         config_body = json.loads(_body_with_declared_defaults(template))
@@ -171,10 +191,10 @@ class TestTemplateTagsReachTheConfigBody:
 
     def test_the_training_defaults_match_the_task_the_template_advertises(self):
         # A blank TASK with no declared default would fall through to openPipeline's DEFAULT_TASK,
-        # Isaac-Cartpole-v0 — a different environment from the one the template names, and a run that
+        # Isaac-Cartpole — a different environment from the one the template names, and a run that
         # trains the wrong task while reporting success.
         config = json.loads(_body_with_declared_defaults(_template("training")))["trainingConfig"]
-        assert config["task"] == "Isaac-Cartpole-Direct-v0"
+        assert config["task"] == "Isaac-Cartpole-Direct"
         assert config["numEnvs"] == 4096
         assert config["maxIterations"] == 1500
         assert config["rlLibrary"] == "rsl_rl"
@@ -202,3 +222,32 @@ class TestTemplateTagsReachTheConfigBody:
         unlabelled = [field["tagKey"] for field in _template(bundle)["tagSchema"]
                       if not field.get("label") or not field.get("description")]
         assert unlabelled == [], unlabelled
+
+
+@pytest.mark.unit
+class TestPhysicsTag:
+    """The PHYSICS tag (issue #1669): one drop-down per template, rendered into the config body."""
+
+    @pytest.mark.parametrize("bundle", _BUNDLE_NAMES)
+    def test_the_default_renders_newton_in_valid_json(self, bundle):
+        config = json.loads(_body_with_declared_defaults(_template(bundle)))["trainingConfig"]
+        assert config["physics"] == "newton_mjwarp"
+
+    @pytest.mark.parametrize("bundle", _BUNDLE_NAMES)
+    def test_the_tag_offers_exactly_the_two_engines_the_lambda_accepts(self, bundle):
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        import importlib
+        mod = importlib.import_module("openPipeline")
+        (tag,) = [t for t in _template(bundle)["tagSchema"] if t["tagKey"] == "PHYSICS"]
+        assert tag["type"] == "enum" and tag["label"] == "Physics engine"
+        assert tuple(tag["enumValues"]) == mod.SUPPORTED_PHYSICS
+        assert tag["default"] == mod.DEFAULT_PHYSICS
+
+    @pytest.mark.parametrize("bundle", _BUNDLE_NAMES)
+    def test_the_placeholder_is_quoted_because_an_enum_renders_text(self, bundle):
+        assert '"physics":"{{PHYSICS}}"' in _template(bundle)["configBody"]
+
+    @pytest.mark.parametrize("bundle", _BUNDLE_NAMES)
+    def test_no_template_names_a_2x_task_id(self, bundle):
+        assert "-v0" not in json.dumps(_template(bundle))

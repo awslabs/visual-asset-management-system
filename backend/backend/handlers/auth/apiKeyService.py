@@ -18,10 +18,11 @@ from common.apiRoutes import (
     API_AUTH_USER_API_KEYS,
     API_AUTH_USER_API_KEY_BY_ID,
 )
+from common.constants import TEMPORARY_SESSION_KEY_NAME_PREFIX
 from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
-from handlers.auth import request_to_claims
+from handlers.auth import AUTH_METHOD_API_KEY, request_to_claims
 from customLogging.logger import safeLogger
 from models.common import (
     validation_error_message,
@@ -35,7 +36,7 @@ from models.apiKeys import (
     USER_API_KEY_MAX_EXPIRATION_DAYS, parse_iso8601_datetime,
 )
 from common.dynamodb import to_update_expr
-from customLogging.auditLogging import log_auth_changes
+from customLogging.auditLogging import log_action, log_auth_changes, audited_handler
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
@@ -76,6 +77,15 @@ API_KEY_USER_ID_INDEX_NAME = 'userIdIndex'
 # small page does not pay to read more records than it can receive.
 API_KEY_LISTING_MAX_ITEMS = 3000
 API_KEY_LISTING_PAGE_SIZE = 1000
+
+# The 403s a caller that authenticated with an API key gets on a key create and on an expiration change
+# (issue #433). A key that could mint keys or move an expiration could keep a leaked credential alive
+# indefinitely, each new key with a fresh expiration window. Reads, description changes, deactivation and
+# deletes stay open to it, so a key can still list and revoke itself.
+API_KEY_CALLER_CREATE_REFUSAL = ("API keys cannot be created with an API key. "
+                                 "Sign in through your identity provider to create one.")
+API_KEY_CALLER_EXPIRATION_REFUSAL = ("An API key's expiration cannot be changed with an API key. "
+                                     "Sign in through your identity provider to change it.")
 
 
 def _resolve_page_bounds(query_params):
@@ -263,6 +273,44 @@ def _requesting_user_id():
     return claims_and_roles['tokens'][0] if claims_and_roles.get('tokens') else None
 
 
+def _caller_used_an_api_key():
+    """Whether the request was authenticated with an API key, as the authorizer marks it
+    (vams:authMethod, surfaced by request_to_claims). A JWT from the deployment's identity provider and a
+    Lambda cross-call read as jwt."""
+    return claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY
+
+
+def _caller_is_temporary_session_key():
+    """Whether the caller authenticated with a temporary session key: an API key named with
+    TEMPORARY_SESSION_KEY_NAME_PREFIX. Such a key may neither create nor update a key, or a session
+    credential would outlive its session through a key of its own making. An API-key caller whose key
+    record cannot be identified is treated as one; every other caller is not. A record that cannot be
+    read is no judgement on the caller: the read error propagates and the request is answered as an
+    internal error."""
+    if not _caller_used_an_api_key():
+        return False
+    api_key_id = claims_and_roles.get('apiKeyId')
+    if not api_key_id or api_key_table is None:
+        return True
+    record = api_key_table.get_item(Key={'apiKeyId': api_key_id}).get('Item')
+    if not record:
+        return True
+    return str(record.get('apiKeyName', '')).startswith(TEMPORARY_SESSION_KEY_NAME_PREFIX)
+
+
+def _reserved_key_name_refusal(event, api_key_name):
+    """The 400 answer to a create that names a key under TEMPORARY_SESSION_KEY_NAME_PREFIX, which only a
+    Lambda cross-call may mint under; None for any other name or caller."""
+    if not str(api_key_name).startswith(TEMPORARY_SESSION_KEY_NAME_PREFIX) or 'lambdaCrossCall' in event:
+        return None
+    logger.info("Refused an API key name under the reserved temporary session key prefix")
+    return validation_error(
+        body={'message': "API key names starting with the temporary session key prefix are reserved. "
+                         "Please choose a different name."},
+        event=event
+    )
+
+
 def _max_user_expiration(created_at_iso):
     """Latest allowed expiration for a user key: creation + the max window."""
     return parse_iso8601_datetime(created_at_iso) + timedelta(days=USER_API_KEY_MAX_EXPIRATION_DAYS)
@@ -350,6 +398,9 @@ def list_api_keys(event, user_scope=False):
         for item in items:
             item.pop('apiKeyHash', None)
 
+        log_action(event, "apiKeyList", item_count=len(items), request_parameters=dict(query_params),
+                   details={"scope": "user"} if user_scope else None)
+
         result = {'Items': items}
         if next_key:
             # More keys remain. Reported as both a token and a flag, so a caller that does
@@ -385,6 +436,8 @@ def get_api_key(event, api_key_id, user_scope=False):
             return general_error(body={'message': 'API key not found'}, event=event)
 
         item.pop('apiKeyHash', None)
+        log_action(event, "apiKeyGet", entity_id=api_key_id, apiKeyId=api_key_id,
+                   details={"scope": "user"} if user_scope else None)
         return success(body=item)
     except Exception as e:
         logger.exception(f"Error getting API key: {e}")
@@ -406,6 +459,10 @@ def create_api_key(event):
         return validation_error(body={'message': 'Request body cannot be parsed'}, event=event)
 
     request = parse(body, model=CreateApiKeyRequestModel)
+
+    reserved_name_response = _reserved_key_name_refusal(event, request.apiKeyName)
+    if reserved_name_response is not None:
+        return reserved_name_response
 
     # Check for duplicate API key name across the deployment (admin scope)
     if _api_key_name_exists(request.apiKeyName):
@@ -456,6 +513,11 @@ def create_api_key(event):
             "userId": request.userId,
             "expiresAt": request.expiresAt or '',
             "operation": "create"
+        }, entity_id=api_key_id, ids={"targetUserId": request.userId}, changes={
+            "apiKeyName": request.apiKeyName,
+            "userId": request.userId,
+            "description": request.description,
+            "expiresAt": request.expiresAt,
         })
 
         # Return the key only once — remove hash from response, add plaintext key
@@ -489,6 +551,10 @@ def create_user_api_key(event):
         return validation_error(body={'message': 'Request body cannot be parsed'}, event=event)
 
     request = parse(body, model=CreateUserApiKeyRequestModel)
+
+    reserved_name_response = _reserved_key_name_refusal(event, request.apiKeyName)
+    if reserved_name_response is not None:
+        return reserved_name_response
 
     user_id = _requesting_user_id()
     if not user_id:
@@ -551,6 +617,11 @@ def create_user_api_key(event):
             "expiresAt": request.expiresAt,
             "operation": "create",
             "scope": "user"
+        }, entity_id=api_key_id, ids={"targetUserId": user_id}, changes={
+            "apiKeyName": request.apiKeyName,
+            "userId": user_id,
+            "description": request.description,
+            "expiresAt": request.expiresAt,
         })
 
         # Return the key only once — remove hash from response, add plaintext key
@@ -584,6 +655,12 @@ def update_api_key(event, api_key_id, user_scope=False):
         return validation_error(body={'message': 'Request body cannot be parsed'}, event=event)
 
     request = parse(body, model=UpdateUserApiKeyRequestModel if user_scope else UpdateApiKeyRequestModel)
+
+    # Any expiresAt in the request, a clear ("") on the admin route included, is an expiration change.
+    # Refused before the key is read, so the answer says nothing about whether the key exists.
+    if request.expiresAt is not None and _caller_used_an_api_key():
+        logger.info("Refused an API key expiration change to a caller that authenticated with an API key")
+        return authorization_error(body={'message': API_KEY_CALLER_EXPIRATION_REFUSAL}, event=event)
 
     # Fetch existing item
     response = api_key_table.get_item(Key={'apiKeyId': api_key_id})
@@ -625,7 +702,9 @@ def update_api_key(event, api_key_id, user_scope=False):
             "apiKeyId": api_key_id,
             "updatedFields": list(update_fields.keys()),
             "operation": "update"
-        })
+        }, entity_id=api_key_id, ids={"targetUserId": item.get('userId')},
+            changes=dict(update_fields),
+            previous={field: item[field] for field in update_fields if field in item})
 
         # Return updated item
         updated = api_key_table.get_item(Key={'apiKeyId': api_key_id})
@@ -664,7 +743,9 @@ def delete_api_key(event, api_key_id, user_scope=False):
             "apiKeyName": item.get('apiKeyName', ''),
             "userId": item.get('userId', ''),
             "operation": "delete"
-        })
+        }, entity_id=api_key_id, ids={"targetUserId": item.get('userId')},
+            previous={field: item[field] for field in ('apiKeyName', 'userId', 'description', 'expiresAt',
+                                                         'isActive') if field in item})
 
         return success(body={'message': f"API key '{api_key_id}' deleted successfully"})
     except Exception as e:
@@ -672,6 +753,7 @@ def delete_api_key(event, api_key_id, user_scope=False):
         return internal_error(event=event)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
@@ -688,6 +770,16 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         if not method_allowed_on_api:
             return authorization_error()
+
+        if method in ('POST', 'PUT') and _caller_is_temporary_session_key():
+            logger.info("Refused an API key create or update to a caller holding a temporary session key")
+            return authorization_error(
+                body={'message': 'API keys cannot be created or updated with a temporary session key'},
+                event=event)
+
+        if method == 'POST' and _caller_used_an_api_key():
+            logger.info("Refused an API key create to a caller that authenticated with an API key")
+            return authorization_error(body={'message': API_KEY_CALLER_CREATE_REFUSAL}, event=event)
 
         if method == 'GET':
             return handle_get(event, path)

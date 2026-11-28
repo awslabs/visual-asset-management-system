@@ -36,13 +36,15 @@ release: the source had the fix, the served bundle did not.
 
 ## Two kinds of spec — know which you are writing
 
-|           | **Core specs (tracked)**                               | **Ad-hoc specs (untracked)**                                |
-| --------- | ------------------------------------------------------ | ----------------------------------------------------------- |
-| Purpose   | Permanent smoke coverage of a page or shared component | Prove one specific change / fix works                       |
-| Lifetime  | Lives with the page; updated when the page changes     | Deleted or left untracked after the change ships            |
-| Data      | **Must not require specific data**                     | May target known seed data                                  |
-| Naming    | `orchestration.{page}.spec.ts`, `viewers.spec.ts`      | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
-| Committed | Yes                                                    | No — keep out of git                                        |
+|           | **Core specs (tracked)**                                                                                                                                                                                                                                                                                                                                                                | **Ad-hoc specs (untracked)**                                |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Purpose   | Permanent smoke coverage of a page or shared component                                                                                                                                                                                                                                                                                                                                  | Prove one specific change / fix works                       |
+| Lifetime  | Lives with the page; updated when the page changes                                                                                                                                                                                                                                                                                                                                      | Deleted or left untracked after the change ships            |
+| Data      | **Must not require specific data**                                                                                                                                                                                                                                                                                                                                                      | May target known seed data                                  |
+| Naming    | `orchestration.{page}.spec.ts`; `{area}.spec.ts` or `{area}.{page}.spec.ts` for another page or shared concern (`databases`, `tags`, `search`, `search.counts`, `security`, `navigation.profile-menu`, `asset.archived`, `zipdownloads`, `viewers`); `seeded.{feature}.spec.ts` for a spec that reads a seed fixture the environment names; `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
+| Committed | Yes                                                                                                                                                                                                                                                                                                                                                                                     | No — keep out of git                                        |
+
+A `seeded.` spec still hardcodes nothing: a seed script writes a JSON fixture, an `E2E_*` variable names it, and the whole file skips with the reason when it is unset (`seeded.compare.spec.ts` reads `E2E_COMPARE_SEED`, written by `tools/VamsCLI/examples/seed_compare_smoke.py`). A spec's other opt-in variables are listed in its header comment.
 
 **Add a core spec only when a new page or shared component is added.** A fix to existing behavior gets
 an ad-hoc spec, or a new assertion inside the relevant core spec if the behavior is permanent.
@@ -82,6 +84,11 @@ test is honest; a test that passes because its assertion never ran is not.
 A spec that needs a file of a particular type looks one up with `findAssetFiles` and skips when the
 returned map has no entry for that extension — never a fixed database and asset id.
 
+`viewers.preview-toggle.spec.ts` follows the same rule for the file page's Preview toggle: it scans for
+a distributable asset whose file has a generated preview and skips when there is none.
+`E2E_PREVIEW_ASSET="<databaseId>/<assetId>"` (optional) confines the scan to one asset.
+A second case opens a file at an older file version and expects the notice that its preview belongs to the latest version; it skips when the scan finds no file with a preview and an older version. A third case holds the asset details request back for six seconds (`page.route`) so the file read answers first, and expects the Preview toggle all the same; the toggle follows the file the page holds, so no case reloads the page to find it.
+
 **Why this matters concretely:** the executions board is newest-first and server-paginated (pageSize
 50). A spec that waited for a specific seeded workflow id passed for weeks, then failed once newer
 executions pushed that id off page 1 — the app was fine, the assumption was not.
@@ -114,40 +121,81 @@ await deleteButton.click();
 await expect.poll(() => confirmText).toMatch(/cannot be undone/i);
 ```
 
-An ad-hoc spec may create and clean up its own throwaway data. A core spec may not.
+An ad-hoc spec may create and clean up its own throwaway data. A core spec may not, with one exception:
+`zipdownloads.spec.ts` creates one zip job and deletes it again, only behind `E2E_ZIP_CREATE=1`, and
+skips that case with the reason without it (see "Running the suite").
 
 ---
 
 ## Rule 3: Use the shared harness, don't re-derive selectors
 
 `support/fixtures.ts` holds the durable selector knowledge. Import from it rather than rewriting
-locators — the app's markup is not always guessable, and these were established empirically.
+locators — the app's markup is not always guessable, and these were established empirically. An
+add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 
-| Helper                                                        | Use for                                                                                    |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                        |
-| `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages           |
-| `searchBox(page)`                                             | The orchestration filter-bar search input                                                  |
-| `facet(page, label)`                                          | A native `<select>` filter                                                                 |
-| `firstCardId(page)`                                           | Id of the first card, or `null` when the list is empty                                     |
-| `openCardMenu(page, id)`                                      | Filter to a card and open its actions menu                                                 |
-| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion                                       |
-| `menuSurface(items)`                                          | The open menu's own floating surface, from an item                                         |
-| `wizardRail(page)`                                            | The execute dialog's step rail (`navigation` "Execution steps")                            |
-| `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                      |
-| `collectPageErrors(page)`                                     | Uncaught page errors, for crash-regression assertions                                      |
-| `openAssetFile(page, databaseId, assetId, filename)`          | Open an asset's file in the File Visualizer through the File Manager, as a user does       |
-| `treeNode(page, name)`                                        | A File Manager tree row by name, in the visible tree, for files and folders alike          |
-| `chooseViewer(page, name)`                                    | Pick a File Visualizer viewer matching a RegExp, by keyboard, and confirm it applied       |
-| `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator |
-| `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls            |
-| `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context               |
-| `findNestedAssetFile(page, options)`                          | First file inside a folder via the API, plus its stored key when known, or `null`          |
-| `findAssetsWithFiles(page, count, options)`                   | Up to `count` distributable assets with one top-level file each via the API, or `null`     |
-| `selectedTreeNode(page)`                                      | The File Manager tree's single-selected row label, in the visible tree                     |
-| `VIEWPORTS`                                                   | The layout widths: phone 390, tablet 768, laptop 1280, desktop 1440 (use with `test.use`)  |
-| `pageOverflowX(page)` / `expectNoPageOverflowX(page, where)`  | How far the page scrolls sideways / assert it does not, naming the widest element          |
-| `expectReachable(locator, what)`                              | Scroll a control into view and assert it lies fully inside the viewport                    |
+| Helper                                                        | Use for                                                                                                              |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                                                  |
+| `cachedFeaturesEnabled(page)`                                 | Same as `featureSwitches(page)` (older name); `test.skip` on an absent flag                                          |
+| `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages                                     |
+| `searchBox(page)`                                             | The orchestration filter-bar search input                                                                            |
+| `facet(page, label)`                                          | A native `<select>` filter                                                                                           |
+| `firstCardId(page)`                                           | Id of the first card, or `null` when the list is empty                                                               |
+| `openCardMenu(page, id)`                                      | Filter to a card and open its actions menu                                                                           |
+| `cardSummaries(page)` / `firstCardName(page, { system })`     | Each card's name and whether it is a system record (its System badge) / the first card that is, or is not, one       |
+| `allowedApiRoutes(page)` / `routeAllowed(routes, m, path)`    | The role's allowed API routes (`GET /auth/routes/api/allowed`, what the app's check reads) / whether one is allowed  |
+| `pageAllowed(page, heading)`                                  | Waits for the page heading or the app's "You do not have access to this page" panel; false for a role without access |
+| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion; takes the page's own empty-state regex                         |
+| `menuSurface(items)`                                          | The open menu's own floating surface, from an item                                                                   |
+| `wizardRail(page)`                                            | The execute dialog's step rail (`navigation` "Execution steps")                                                      |
+| `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                                                |
+| `collectPageErrors(page)`                                     | Uncaught page errors, for crash-regression assertions                                                                |
+| `openAssetFile(page, databaseId, assetId, filename)`          | Open an asset's file in the File Visualizer through the File Manager, as a user does                                 |
+| `openFileManager(page, databaseId, assetId)`                  | Land on an asset's File Manager tab with its tree rendered (the first half of `openAssetFile`)                       |
+| `selectTreePath(page, filename, { modifiers })`               | Select a file in the File Manager tree by path, expanding each folder by its caret as needed                         |
+| `compareSeed()`                                               | The `E2E_COMPARE_SEED` seed fixture of `seeded.compare.spec.ts`, or `null` when unset                                |
+| `treeNode(page, name)`                                        | A File Manager tree row by name, in the visible tree, for files and folders alike                                    |
+| `chooseViewer(page, name)`                                    | Pick a File Visualizer viewer matching a RegExp, by keyboard, and confirm it applied                                 |
+| `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator                           |
+| `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls                                      |
+| `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context                                         |
+| `gotoSearch(page, { databaseId?, tab? })`                     | Navigate to the search page; waits on its h1 + the view's first searchbox                                            |
+| `searchViewSwitch(page)`, `searchViewSegment(page, name)`     | The title row's view switch (`toolbar` "Page view") and one view's segment                                           |
+| `searchPageHeading(page, databaseId?)`                        | The search page h1 every view shares (`… and Files`, `… for <databaseId>`)                                           |
+| `searchCountBadge(page)`, `searchCountBadgeText(total)`       | The h1's result-count badge (any count, `+` or not) and its exact text for a `hits.total`                            |
+| `searchSubmitButton(page)`                                    | The Search view's Search button, scoped to the query band (the switch has a `Search` too)                            |
+| `searchNotice(page)`                                          | The dismissible Search notice above the results (rare warnings, keyword `truncated:time`)                            |
+| `readFeaturesEnabled(page)`                                   | Cached secure-config switches; `null` if none cached                                                                 |
+| `expectSearchRendered(page)`                                  | Rows, "No matches", or "No … to display" — any sandbox                                                               |
+| `findNestedAssetFile(page, options)`                          | First file inside a folder via the API, plus its stored key when known, or `null`                                    |
+| `findAssetsWithFiles(page, count, options)`                   | Up to `count` distributable assets with one top-level file each via the API, or `null`                               |
+| `selectedTreeNode(page)`                                      | The File Manager tree's single-selected row label, in the visible tree                                               |
+| `VIEWPORTS`                                                   | The layout widths: phone 390, tablet 768, laptop 1280, desktop 1440 (use with `test.use`)                            |
+| `pageOverflowX(page)` / `expectNoPageOverflowX(page, where)`  | How far the page scrolls sideways / assert it does not, naming the widest element                                    |
+| `expectReachable(locator, what)`                              | Scroll a control into view and assert it lies fully inside the viewport                                              |
+| `actionDisabledReason(button)`                                | A gated Button's disabled reason once its permission check settles, or `""` if allowed                               |
+| `viewerSamples()`                                             | The `E2E_VIEWER_SAMPLES` seed fixture (seeded public viewer samples), or `null` when unset                           |
+| `openViewerFile(page, ref)`                                   | Load a file's ViewFile route as a fresh page and wait for its heading (one reload)                                   |
+| `gotoFresh(page, route)`                                      | Load a `/#/...` route as a new document (`about:blank` first), for a page already on `/` (D135)                      |
+| `pickViewerIfAsked(page, name, select?)`                      | Choose viewer `name` (config name) if asked, then ALWAYS assert it is the one selected                               |
+| `expectViewerSelected(page, name)`                            | Assert the picker shows viewer `name` and no viewer placeholder remains                                              |
+| `dataGrid(scope)`                                             | The Columnar viewer's react-data-grid root; scope header and row queries to it                                       |
+| `featuresEnabled(page)` / `missingFeatures(list, req)`        | Same as `featureSwitches(page)` (older name) / the required features it lacks                                        |
+| `watchConsoleErrors(page, ignore?)`                           | Collect `console.error` and page errors not matching `CONSOLE_ERROR_IGNORE` (or your list)                           |
+| `largestCanvas(scope)`                                        | The largest visible `<canvas>`, a viewer's rendering surface                                                         |
+| `canvasStats(page, canvas, timeouts?)`                        | Pixel stats via `captureCanvas`: element shot, then bounded page clip of the canvas box                              |
+| `expectCanvasRendered(page, canvas, what, thresholds?)`       | Poll (90 s) until a canvas shows content rather than its clear colour                                                |
+| `watchCspViolations(page)`                                    | Record `securitypolicyviolation` events in the page and its frames (call before navigating)                          |
+| `expectNoNewCspViolations(csp, allowed, what)`                | Fail on any recorded violation no `allowed` pattern matches (`unexpectedCspViolations` lists them)                   |
+| `watchRequestHosts(page, { extraHosts })`                     | Record request hosts; `thirdParty()` lists those outside the deployment                                              |
+| `profileMenuName(page)` / `profileMenuTrigger(page)`          | The signed-in user name / the top-bar profile-menu trigger (named "Profile menu" without a name)                     |
+| `openProfileMenu(page)`                                       | Open the profile menu by keyboard; returns `menu`, or `overflow` when it sits under "More" (phone)                   |
+| `profileMenuLink(page, href)`                                 | A visible page link in the open profile menu, by href (e.g. `#/auth/api-keys/?mode=user`)                            |
+| `sideNavigation(page)`                                        | The side navigation `nav` landmark (the one holding hash-route links)                                                |
+| `expectSuperSplatRendered(page, iframe, what)`                | SuperSplat Editor drew the file: splat count > 0, canvas differs from the empty editor's                             |
+| `SUPERSPLAT_CSP_ALLOWED` / `CSP_CONSOLE_REPORT`               | The editor page's baseline CSP violations / the console copy of a CSP report                                         |
+| `featureSwitches(page)`                                       | The deployment's `featuresEnabled`, from the app's own cache: the harness's one feature reader                       |
+| `signInAs(page, username, password)`                          | Sign a fresh context in as another user, from credentials the environment supplies                                   |
 
 **Selector facts worth not rediscovering:**
 
@@ -157,6 +205,11 @@ locators — the app's markup is not always guessable, and these were establishe
 -   Filters are native `<select>`s labelled `Status`, `Execution Type`, `Database`, `Group by`,
     `Filter by status`, `Filter by trigger`, `Filter by group ID`, `Time window`.
 -   Cards expose `Actions for {id}` buttons — the stable way to read a card's identity.
+-   **A system record's card is read-only.** The SYSTEM GenAI, preview and Zip Archive pipelines and
+    workflows (registered by default) carry a `System` badge (`SYSTEM_RECORD_BADGE_TITLE`), offer View
+    instead of Edit, and keep Archive listed but `aria-disabled` with its reason in `aria-description`.
+    A case about Edit, Archive or a new template picks `firstCardName(page, { system: false })`; and a
+    card's menu lists only the actions `routeAllowed` grants the role, so expect each item from that.
 -   The template panel heading is an `h1` reading exactly `Templates`.
 -   Card lists are server-paginated (pageSize 50); filter down to a card before locating it.
 -   Execution trigger values use the **stored** vocabulary (`Manual`, `File-Upload`) — not `fileUpload`.
@@ -180,6 +233,49 @@ locators — the app's markup is not always guessable, and these were establishe
 -   Detail and quick-view panels render a field as a label span plus its value span, so a field's value
     is the label's next sibling. Use `rowValue(page, label)`; a page-wide `getByText` for a value's
     shape (a path, a slash, an id) matches dozens of unrelated elements.
+-   **The search page switches views from its title row**: one h1 every view shares, and a
+    SegmentedControl (`searchViewSwitch`, a `toolbar` of `aria-pressed` buttons; a select below
+    688 px) when more than one view is available. There is no `role=tablist`. The asset list view
+    is always there and the `Search` view only when OpenSearch or vector search is on, so with the
+    asset list alone there is no switch — derive the expectation from `readFeaturesEnabled(page)`
+    (`VECTORSEARCH` present, or `NOOPENSEARCH` absent), never from a fixture. The active view is the
+    `?tab=` hash query (`/#/assets/?tab=asset-list`). Its empty states read `No matches` (search
+    table) and `No assets to display.` (asset list), neither of which `expectTableRendered`'s regex
+    matches — use `expectSearchRendered(page)`.
+-   **The count badge carries a `+` when the total is a minimum** (`hits.total.relation` `gte`, e.g.
+    `9+ results` from a natural-language search). Compare it with the answer the page received
+    through `searchCountBadgeText`, which adds the `+` only for `gte`; a digits-only pattern fails
+    on every lower-bound count.
+-   **A segment locator filtered on `pressed` re-resolves after the click.** Pin the segment you
+    press by its `data-testid` (the view id) before pressing it, then assert on the pinned locator.
+-   **A permission-gated action depends on the signed-in role.** A role the API refuses sees the
+    Button disabled with its reason (hidden text named by `aria-describedby`), and reads "Checking
+    your permissions." until the allowed-routes check answers. Branch on
+    `actionDisabledReason(button)`: assert the refusal and `test.skip` the steps behind the action,
+    or exercise them when it returns `""`. Never assume the admin role.
+-   **The search page announces a finished search's count, it does not toast it.** "Found N
+    results" goes to a visually hidden polite live region, followed by the Search notice's text
+    when the answer has one. Rare natural-language warnings, and a keyword page the time bound cut short (`truncated:time`), show in that **Search notice**, a
+    dismissible Alert above the results (`searchNotice(page)`), never in a toast; `truncated:window`
+    and `segments:window_full` raise none, and the page states them under the results. Count
+    toasts as a snapshot right after the answer: a toast hides after 5 s, so a polled
+    `toHaveCount(0)` passes once it has gone. The notice stays until dismissed or the answer
+    changes, so poll it.
+-   **A failed search is a toast, not a missing feature.** A `503` from either search route shows a
+    **Search failed** toast with the API's message, and the view switch, the mode switch and the
+    query band stay; do not read a failure as "search is off". With no answer on screen (the first
+    search of a page load) the page also shows a **Search did not finish** alert above the results
+    (`getByTestId("search-failed-notice")`) and the table reads "No results to show".
+-   **The count's explanation is a named button.** Beside a minimum count the table header has a
+    `button` named "About this count" (`getByRole("button", { name: "About this count" })`) that
+    opens its popover on click, Enter or Space; an exact count has none.
+-   **A database route locks the Database filter and names it.** On `#/databases/<databaseId>/assets/`
+    the disabled Database multiselect reads the database id, not "All databases", so
+    `getByRole("button", { name: /^All databases/ })` finds nothing there.
+-   **Clear all filters is absent until a criterion is set.** The title row shows the button only
+    once a query, a filter or a metadata filter row is set, and it is gone again after it is pressed.
+    A fresh load, a record type switch and a database route's locked database show none, so set a
+    filter before looking for it, and expect no button on an untouched page.
 
 When a page's markup changes, fix the helper once; every spec follows.
 
@@ -211,6 +307,63 @@ expect(hit).toBe(true);
 
 ---
 
+## Viewer render proof (shared by every viewer PR)
+
+`viewers.spec.ts` "viewer render proof (seeded samples)" proves a viewer DRAWS a known file, not only
+that it mounts. Add a viewer's cases to `renderCases` there; do not start another spec or harness.
+
+**Samples.** Every subject is an entry of `e2e/fixtures/viewer-samples.json` (tracked; schema checked by
+`web/src/visualizerPlugin/config/viewerSamplesManifest.test.ts`). An entry has `id`, `viewer` (a viewer id
+from the viewer configs, or `none` for the subject of a `not-offered` case that no viewer may open), `path` (asset-relative key with a leading slash; folders allowed), `licence` and
+`source`, and EXACTLY ONE of:
+
+| Kind      | Fields                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Download  | `url` (https, pinned to a tag or commit), `size`, `sha256`; the seeder refuses a mismatch                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Generated | `generated`: `off-cube` or `text` (`content` sets the text; default three numbered lines)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Derived   | `derivedFrom` (an id, or a list for `zip`) and `transform`: `prepend-utf8-bom`, `copy`, `utf16le-bom` / `utf16be-bom` / `utf16le` (the source's UTF-8 re-encoded, with or without a byte order mark), `zip` (optional `zipEntries` names), `splat-transform` (`version` pinned, optional `args`; output format from `path`'s extension), `ply-to-splat` (a float 3DGS `.ply` as raw `.splat` rows, which splat-transform cannot write), `ksplat` (`.ply` to `.ksplat` with `@mkkellogg/gaussian-splats-3d`: `version` and `threeVersion` pinned, optional `level`), or `las-to-ply` (an uncompressed `.las` with colour written as binary PLY vertices; stdlib only, LAZ refused) |
+
+Optional: `requiresFeature` (a string or list of `featuresEnabled` entries, such as `ALLOWUNSAFEEVAL` or
+`PHYSNA_ADDON`; a case skips with a reason when the deployment lacks one) and `expect` (free-form values the
+case reads; `expect.minForegroundFraction` / `expect.minDistinctColours` lower a canvas case's render
+thresholds for a model that fills little of the canvas, such as the splat samples' unicorn at about
+0.6% of the pixels; `expect.canvasWidth` / `canvasHeight` pin the decoded size the TIFF/TGA viewer reports on its canvas, `expect.pages` / `lastPageWidth` check its page picker, `expect.solid` skips the pixel-variety check for a sample of solid-colour pages; `expect.vertexCount` makes a canvas case also assert the viewer reports
+`<n> vertices`, as the Three.js info box does for the `threejs-ply-points` point cloud). VNTANA and VEERUM have no feature flag (they are enabled in `addonViewerConfig.json` at build
+time), so their cases must skip themselves when that viewer is not offered. Verify the licence at its
+source before adding a download; no sample binary is ever committed.
+
+**Seeding.** `tools/VamsCLI/examples/seed_viewer_samples.py --profile <name> [--samples id,id] [--cache dir]`
+validates the manifest, produces the samples (with `--samples`, a derived sample's sources are produced but not uploaded), uploads them
+to one distributable asset (`e2e-viewers-db` / `e2e-viewers-samples`) and writes
+`e2e/fixtures/viewer-samples-seed.json`; export its path as `E2E_VIEWER_SAMPLES`. `splat-transform` runs
+through `npm exec --min-release-age=7` at the pinned version.
+
+**A case** names `sample`, `viewer` (the viewer's exact config `name`; the case asserts that viewer
+opened, and a web jest test checks the name), `kind` (`canvas`, `image` (the Image Viewer's `<img>` decoded and showing content), `raster-notice` (the TIFF/TGA viewer's fallback notice, `expect.notice` names its text), `pdf`, `grid`, `text`, `text-binary`, `text-encoding`, `not-offered`, `potree`, `refused` — the viewer's refusal message, `raster-map` — the GeoTIFF Map Viewer's layer row for the file in the sample's `expect.mode` (`tile` or `placed`, with `expect.approximate` for the approximate-placement label) and a map canvas with content, `raster-refused` — its notice matching `expect.notice`), and optionally
+`select` (viewer picker RegExp), `requiresFeature` / `withoutFeature`, `fetches` (a URL part a response
+must succeed for), `thresholds`, `cspAllowed`, `servedBundle` (a web path a disabled-by-default add-on
+serves only when enabled; the case skips when it is not served as JavaScript, as the VNTANA cases do), `consoleAllowed` (console lines that case alone may log,
+such as Chromium's own `416` line for an empty file; never widen `CONSOLE_ERROR_IGNORE` for one case)
+and `reads` (the statuses, in order, of the presigned GETs of the sample's file: `[206]`, `[206, 200]`
+or `[416]`, how the bounded text loader read it), and `selectInPanel` (a Three.js canvas case also
+selects the object by its scene graph row and checks the canvas gains, then loses, highlight-green
+pixels, as `threejs-ply-points` does for a point cloud, #1275). A text sample's `viewer` must list the sample's
+`extensionToken` (so `.gitignore` is `(none)`, `.env.example` is `.example`); the manifest jest test
+checks it. Every case fails on console or page errors
+(`watchConsoleErrors`), on any CSP violation outside `cspAllowed` (`expectNoNewCspViolations`; list the
+development baseline's violations EXACTLY, so only new ones fail) and on any host outside the deployment
+(`watchRequestHosts`). The `supersplat` kind checks inside the editor's iframe with
+`expectSuperSplatRendered` and passes `SUPERSPLAT_CSP_ALLOWED` as `cspAllowed`. Run the spec on the development build first and record the pixel stats it logs;
+a case that passes there and fails on a change is a regression.
+
+A `potree` case reads the octree the Point Cloud Potree Viewer pipeline (`app.pipelines.usePreviewPcPotreeViewer`)
+wrote for the file, so after seeding run that pipeline on each `potree-*` sample; the case skips, naming the
+pipeline, while the file's `preview/PotreeViewer/metadata.json` is missing. It asserts `Potree.lru.numPoints > 0`
+and point pixels on `#potree_render_area > canvas` by red channel, because Potree's blue gradient background
+defeats the most-common-colour measure of `canvasStats`.
+
+---
+
 ## Running the suite
 
 ```bash
@@ -222,7 +375,42 @@ npm run e2e:headed                                    # watch a run
 npx playwright test e2e/orchestration.pipelines.spec.ts --retries=0 --workers=2
 E2E_BASE_URL=http://localhost:3001 npm run e2e        # against a local dev server
 E2E_VIEWER_ASSET=<databaseId>/<assetId> npx playwright test e2e/viewers.spec.ts  # one fixture asset
+E2E_WEBGPU=1 E2E_REQUIRE_WEBGPU=1 npx playwright test e2e/viewers.spec.ts       # SuperSplat render checks
 ```
+
+Opt-in variables of `zipdownloads.spec.ts` (Download as Zip). Without them each case that needs them
+skips with the reason; the rest of the spec mutates nothing and discovers its data (the first
+distributable asset with a top-level file), skipping when the deployment has none or has the
+`ZIPDOWNLOADS` switch off:
+
+| Variable                                      | Effect                                                                                                                                                                                                                                                                                             |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `E2E_ZIP_CREATE=1`                            | Creates one zip job on that asset and deletes it again (cancel, then delete)                                                                                                                                                                                                                       |
+| `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD` | A second user for the ownership check (signs in with `signInAs`; never hardcoded): get and delete of the admin's job answer 404, and its URL follows the API's own decision, the all-users list's `canDownload` for that job (200, or 400 when a member is no longer downloadable; 404 without it) |
+
+Map viewer spec. `viewers.cogmap.layout.spec.ts` lives in the `chromium` project, counts the frame's stripe pixels through
+`support/rasterViewerFixtures.ts`, and skips with a reason when location services are off. It opens a raster in the GeoTIFF Map Viewer on the View File page and in
+the File Viewer modal (the File Manager's Visualize File eye) and checks it fills its frame at 390,
+820 and 1280 px, and in fullscreen on the page: canvas equal to its column, map, list and the
+viewer's own map controls inside the frame, and none of the frame backdrop's stripe colours visible.
+A third case hides and shows a raster with its **Visible** switch (one name, `Visible: <label>`, the checked state, Space, the status line,
+Zoom disabled while hidden). It waits on the picker's options and on the layout settling (two equal
+reads of the boxes, canvas equal to its column) rather than on fixed sleeps. It finds a `.tif` through
+the API and skips, with the reason, when the file is not a raster the viewer draws.
+
+| Helper (`support/rasterViewerFixtures.ts`) | Use for                                                                 |
+| ------------------------------------------ | ----------------------------------------------------------------------- |
+| `stripePixels(page, png)`                  | Count of the visualizer frame backdrop's stripe colours in a screenshot |
+
+| Variable                              | Effect                                                                                  |
+| ------------------------------------- | --------------------------------------------------------------------------------------- |
+| `E2E_COG_MAP_FILE=<db>/<asset>/<key>` | Names the georeferenced raster the layout spec opens, instead of the first `.tif` found |
+
+The SuperSplat Editor renders only through WebGPU, which headless Chromium hides. `E2E_WEBGPU=1` runs
+the SuperSplat cases in a separate `chromium-webgpu` project launched with WebGPU on, and takes them out
+of the `chromium` project, so every other case still runs in a browser without WebGPU. Without an
+adapter the SuperSplat cases skip with the reason; `E2E_REQUIRE_WEBGPU=1` makes that a failure. On a machine with no GPU, Chromium's software adapter loses the device while the editor
+loads a file (v3.1.1 and v3.7.0 alike), so run the render checks where a GPU is available.
 
 `retries: 1` is configured, so a spec that fails then passes is reported as **flaky**, not failed —
 and Playwright's own exit code counts flaky as success. Read the summary line, not the exit status:
@@ -242,9 +430,11 @@ challenge manually.
 ## Adding a core spec for a new page
 
 1. Add the page's route to the `gotoOrchestration` union in `support/fixtures.ts` if it is a new
-   orchestration route.
-2. Create `orchestration.{page}.spec.ts` and assert, in this order: the page renders without a crash;
-   its controls exist; its filters offer the expected values; and one interaction per row action.
+   orchestration route. A page outside the orchestration module gets its own `goto*` helper that
+   waits on its own structure — `gotoSearch` (h1 + the view's first searchbox) is the model.
+2. Create `orchestration.{page}.spec.ts` — or `{page}.spec.ts` for a page outside the module, as
+   `search.spec.ts` is — and assert, in this order: the page renders without a crash; its controls
+   exist; its filters offer the expected values; and one interaction per row action.
 3. Derive every subject from the environment (Rule 1) and mutate nothing (Rule 2).
 4. Add any new selector knowledge to `support/fixtures.ts`, not inline in the spec.
 5. Run against a deployed environment and confirm the result is `passed` or an explicit `skipped` —
@@ -261,3 +451,5 @@ challenge manually.
 5. **Committing an ad-hoc or `_probe` spec** — these are per-change and stay untracked.
 6. **Hardcoding credentials or the base URL** — use `E2E_USERNAME` / `E2E_PASSWORD` / `E2E_BASE_URL`.
 7. **Claiming a web fix is verified without checking the deployed bundle hash** — see the warning above.
+8. **Changing only the hash right after loading `/`** (`page.goto("/#/route")` after `cachedFeaturesEnabled`, `featuresEnabled` or `apiContext` loaded the page) — the app may still be starting and render Home with the new hash in the address bar (D135). Use `gotoFresh(page, route)`.
+9. **Asserting an action a role is not offered** — gate each menu-item or button assertion on the role's allowed routes, as the per-role loop does; Playwright needs the element to check its attributes (D134).

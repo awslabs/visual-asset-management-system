@@ -2,6 +2,7 @@
 
 import os
 import time
+import warnings
 from pathlib import Path
 
 import pytest
@@ -394,6 +395,34 @@ class TestVamsIgnoreMatcher:
         matcher = VamsIgnoreMatcher(['build/**'])
         assert matcher.is_ignored('build/out/a.bin') is True
         assert matcher.is_ignored('src/a.bin') is False
+
+    def test_negation_reincludes_a_file_under_an_ignored_directory(self):
+        matcher = VamsIgnoreMatcher(['build/', '!build/keep.txt'])
+        assert matcher.is_ignored('build/out.bin') is True
+        assert matcher.is_ignored('build/keep.txt') is False
+
+    def test_last_matching_pattern_wins(self):
+        matcher = VamsIgnoreMatcher(['!important.log', '*.log'])
+        assert matcher.is_ignored('important.log') is True
+
+    def test_trailing_slash_matches_directories_only(self):
+        matcher = VamsIgnoreMatcher(['temp/'])
+        assert matcher.is_ignored('temp/a.txt') is True
+        assert matcher.is_ignored('sub/temp/a.txt') is True
+        assert matcher.is_ignored('temp') is False
+        assert matcher.is_ignored('temp.txt') is False
+
+    def test_directory_negation_does_not_reinclude_files_matched_by_double_star(self):
+        # As in git: 'tmp/**' matches the files themselves, so re-including the directory
+        # leaves them ignored.
+        matcher = VamsIgnoreMatcher(['tmp/**', '!tmp/a/'])
+        assert matcher.is_ignored('tmp/a/b.txt') is True
+        assert matcher.is_ignored('tmp/c/d.txt') is True
+
+    def test_building_the_matcher_raises_no_deprecation_warning(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', DeprecationWarning)
+            VamsIgnoreMatcher(['*.log', '!keep.log', 'build/']).is_ignored('a.log')
 
     def test_comments_and_blanks_ignored(self):
         matcher = VamsIgnoreMatcher(['# comment', '', '*.tmp'])

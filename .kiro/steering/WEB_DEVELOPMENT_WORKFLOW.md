@@ -2,7 +2,9 @@
 
 This document provides comprehensive guidelines for developing and extending the VAMS web frontend application. Follow these rules to ensure consistency, quality, and maintainability across all frontend implementations.
 
-> **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its testing sections are also the Kiro counterpart for `web/e2e/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+> **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its "End-to-End Testing (Playwright)" section is the Kiro counterpart for `web/e2e/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
+> **Add-on steering:** an add-on's own steering lives in `.kiro/steering/ADDON_*.md` (`inclusion: fileMatch`), which loads when you edit that add-on's files; this document covers core and the lanes an add-on plugs into.
 
 ## 🏗️ **Architecture Overview**
 
@@ -12,13 +14,13 @@ This document provides comprehensive guidelines for developing and extending the
 | ---------------- | -------------------------------------------------------------- |
 | React            | 18.3 (upgraded from 17.0.2)                                    |
 | TypeScript       | ^5.0.0 (upgraded from 4.4.4)                                   |
-| Vite             | ^8.0.0 (upgraded from ^6.0.0)                                  |
+| Vite             | ^8.0.16 (upgraded from ^6.0.0)                                 |
 | UI Library       | AWS Cloudscape Design System (`@cloudscape-design/components`) |
 | Auth             | AWS Amplify v6 + `@badgateway/oauth2-client` (dual-mode)       |
 | Routing          | React Router v7 with HashRouter                                |
 | State Management | React Context API + useReducer (NO global state libraries)     |
 | API Client       | Custom fetch-based apiClient with auto auth headers            |
-| Package Manager  | npm 11.10.0+ (NEVER yarn)                                      |
+| Package Manager  | npm `>=11.10.0 <12` (NEVER yarn)                               |
 
 ### **File Structure Standards**
 
@@ -28,8 +30,8 @@ web/
   e2e/                      # Playwright specs against a deployed stack
   customInstalls/           # Viewer plugin custom install scripts
   src/
-    App.tsx                 # Root app shell, HashRouter, TopNavigation
-    routes.tsx              # Centralized route table, lazyWithRetry, permission filtering
+    App.tsx                 # Root app shell, HashRouter, TopNavigation (Settings menu, profile menu)
+    routes.tsx              # Centralized route table (core + add-on + custom), lazyWithRetry, permission filtering
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
@@ -38,9 +40,11 @@ web/
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
                             #   triggerCache.ts
-      permissions/          # useAllowedRoutes.ts (Tier-1 gating)
+      permissions/          # useAllowedRoutes.ts (Tier-1 gating), routeDisabledReason.ts (disabledReason text),
+                            #   systemRecordReasons.ts (disabledReason text for system records)
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
-                            #   Stepper, Breadcrumb, ConfigEditor, Dialog, Callout, ToastProvider, ...)
+                            #   Stepper, Breadcrumb, ConfigEditor, Dialog, Callout, ToastProvider,
+                            #   DisabledReason (tooltip + button for a disabled control's reason), ...)
       pipelines/            # PipelinesPage, PipelineForm (wizard), TemplateEditor, TemplateForm,
                             #   TagSchemaBuilder, TemplateOverridesEditor, pipelineValidation
       workflows/            # WorkflowsPage, WorkflowBuilder, PipelineOrderList, TriggersEditor (live),
@@ -48,7 +52,8 @@ web/
                             #   WorkflowSystemConfigFields, DagPreview, workflowValidation
       executions/           # ExecutionsBoard, ExecutionDetailPage, ExecutionLogViewer,
                             #   ExecutionQuickView, ExecuteWorkflowModal, SubProcessesSection, StageTimeline,
-                            #   logSearch
+                            #   logSearch, resourceTypeLabels (sub-process type labels; unknown types render
+                            #   raw with a not-abortable note when abortable === false)
       wizard/               # ExecuteWizard (+ExecuteWizardBody), WizardRail, RequirementsStrip, WorkflowPicker,
                             #   pipeline/input/review stages, InputFileSelector, MetadataSourceSelector,
                             #   SelectedInputFilesList, BulkFilePicker, selectedInputFiles (multi-file
@@ -60,8 +65,9 @@ web/
       Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2
       oauthSignInState.ts   # External OAuth: opaque state, same-origin return page, one-time values
 
-    services/               # API and data services (with features/orchestration/api/, the ONLY
-                            #   places apiClient is imported)
+    services/               # API and data services (with features/orchestration/api/, an add-on
+                            #   module's own api/ directory and, in a fork, custom/services/, the
+                            #   ONLY places apiClient is imported)
       APIService.ts         # Main API service (~3,500 lines, 110+ exports)
       apiClient.ts          # Custom fetch wrapper (internal, never import from components)
       appCache.ts           # localStorage cache (replaces Amplify Cache)
@@ -71,26 +77,54 @@ web/
       FileOperationsService.ts
       MetadataService.ts
       MetadataSchemaService.ts
+      ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
+      addons/               # Add-on API calls (physnaAPIService.ts)
+
+    addons/                 # Add-on web lane: addonRoutes.tsx, addonNavigation.ts, addonFeatures.ts
+                            #   (add-on feature-switch names) — see WEB_FRONTEND.md 7.5, 7.6
+      edh/                  #   EDH Workstations add-on module (Tailwind + Radix, pages/ route shells)
+                            #   — see .kiro/steering/ADDON_EDH_WORKSTATIONS.md
+    custom/                 # FORK EXTENSION POINT (shipped empty): customRoutes.tsx, customNavigation.ts,
+                            #   customFeatures.ts, services/, pages/ — see WEB_FRONTEND.md 7.5, 7.6
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
       AssetDetailContext.ts  # useReducer-based context
+      RuntimeConfigContext.ts # Live runtime config from Auth (useFeaturesEnabled); falls back to appCache outside the provider
 
     components/             # Domain/feature components
       asset/                # Asset viewing (ViewAsset.tsx is the main detail page)
-        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        tabs/               # FileManager, Versions, AssetLinks, Comments, AssetExecutions, Compliance tabs
         versions/           # Asset version management
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
+      compliance/           # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1 rules:
+                            #   "Add rule" for all six types, the pipeline-rule input-file selector,
+                            #   the metadata-rule scope form (scope, include/exclude paths, link
+                            #   direction + type), typed fileStructure / versionCoverage /
+                            #   assetAttributes checks)
+                            #   + complianceSchemaRules.ts;
+                            #   ReasonModal.tsx (Cloudscape reason dialog); complianceStateBadge.tsx
+                            #   (shared state -> StatusIndicator map, `exception` = info);
+                            #   EvaluationHistoryModal.tsx; ExecutionFailureReasons.tsx (a failed
+                            #   pipeline rule's execution failure reason, when the API returns it);
+                            #   RevokeExceptionModal.tsx; rowActions.ts; bindingConfirmations.ts
+                            #   (the Bind/Change/Remove confirmation text); cascadeNodes.tsx (node
+                            #   outcomes, paged and sorted in the browser)
       createupdate/         # CreateDatabase, UpdateAsset + form definitions
       filemanager/          # File tree and file operations
-      form/
-      list/
+      form/                 # Shared upload control + uploadPaths.ts (the one upload path rule)
+      list/                 # TableList.tsx (standard list page); ListToolbar.tsx (search + refresh
+                            #   left, filters right, for a page with its own Table); tableSorting.ts
+                            #   (column comparators, useSortedItems, useBrowserPagedItems)
       loading/
       metadata/
       metadataSchema/
       metadataV2/
       modals/
-      search/               # ModernSearchContainer.tsx - main search UI
+      search/               # ModernSearchContainer.tsx - unified keyword / natural-language search
+                            #   (the body of the search page's "Search" view)
+                            #   SearchLayout/lockedDatabase.ts — trigger text of the Database filter
+                            #   a database route locks (names the database, not "All databases")
       searchSmall/
       selectors/
       single/               # Single-entity views (ViewFile, AssetIngestion, Metadata)
@@ -99,12 +133,18 @@ web/
     pages/                  # Thin page wrappers composing components
       AssetDownload.tsx
       AssetUpload/
-      auth/                 # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys
+      auth/                 # Constraints, Roles, UserRoles, CognitoUsers, ApiKeys, AuditLogSearch
       Databases.tsx
       LandingPage.tsx
       ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
-      search/
+                            #   ListPage.tsx keys its body by the route's databaseId: the routes
+                            #   that share one page component keep it mounted (#1228)
+      search/               # SearchPage.tsx — breadcrumbs + searchPlugin's SearchTabsHost (title row, views)
       Subscription/ Tag/
+      # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
+      # flag); each deploys unconditionally and the nav/routes filter hides them without access.
+      ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
+      ComplianceAuditLog.tsx DatabaseCompliance.tsx
       # Orchestration route shells rendering the matching features/orchestration component
       PipelinesPage2.tsx PipelineBuilderPage.tsx
       TemplateListPage.tsx TemplateBuilderPage.tsx
@@ -114,22 +154,37 @@ web/
     visualizerPlugin/       # 3D/media viewer plugin system
       core/
         PluginRegistry.ts   # Singleton registry
+        streamFailure.ts    # Names why a streamed file failed to load
         types.ts
       config/
         viewerConfig.json   # Plugin configuration
       viewers/              # Individual viewer plugins
         manifest.ts
 
+    searchPlugin/           # Search page provider host (title row + view switch); see WEB_FRONTEND.md 8.11
+      index.ts
+      config/searchProviderConfig.json  # Provider catalog (searchProviderConfig.test.ts guards it)
+      core/                 # SearchProviderRegistry.ts, providerAvailability.ts,
+                            #   useSearchProvidersReady.ts, types.ts
+      components/SearchTabsHost.tsx  # title row (h1, view switch, titleSlots) + active body
+      providers/            # manifest.ts + AssetListProvider/, UnifiedSearchProvider/
+
     common/                 # Shared utilities, helpers, and feature-switch constants
+      cogRaster/            # Shared GeoTIFF/COG raster code of the GeoTIFF Map Viewer and the Search map's Show raster
     constants/uploadLimits.ts
-    hooks/                  # usePageTitle.ts, useThemeSettings.ts
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts,
+                            #   useAssetPageAccess.ts (may the caller open an assets/asset page),
+                            #   useWebRouteAllowed.ts (does the POST /auth/routes decision allow a path)
     layout/
-      Navigation.tsx        # Left sidebar navigation
+      navigationRegistry.ts # The one navigation registry: core + add-on + custom, side/profile placement
+      Navigation.tsx        # Left sidebar navigation (side entries)
+      useProfileMenuItems.ts # Top-bar profile menu items (profile entries, current page checked, then Sign out)
     utils/
       apiEndpoint.ts        # Resolves the API base URL
       chunkLoadRecovery.ts  # lazyWithRetry, chunk-failure detection, guarded one-time reload
-      authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
+      authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader, resolveExternalUserId
       sessionManager.ts     # Idle/expiry session handling
+      queryRetry.ts         # createAppQueryClient, shouldRetryQuery: a final 4xx is never retried
     styles/
       theme.css             # CSS custom properties for dark/light theming
       tailwind.css          # Tailwind entry (scoped content glob; preflight disabled)
@@ -162,27 +217,28 @@ web/
 #### **Step 2: Component Implementation**
 
 -   [ ] **Add copyright header**: Apache-2.0 header with `2026` year
--   [ ] **Use Cloudscape components**: Import from individual subpaths
+-   [ ] **Use Cloudscape components**: Import from individual subpaths (new imports; see Rule 2)
 -   [ ] **Use Synonyms**: For all user-visible "Asset", "Database", "Comment" text
 -   [ ] **Use TypeScript**: All new files must be `.ts` or `.tsx`
 -   [ ] **Import from service layer**: Never import `apiClient` directly
 -   [ ] **Use Context for shared state**: Follow `AssetDetailContext.ts` patterns
 -   [ ] **Handle API responses**: Check boolean flag before using data
+-   [ ] **List toolbar and sorting**: A list page puts the search and the refresh button on the left and the filter drop-downs on the right (`TableList.tsx`, or `components/list/ListToolbar.tsx`), and every column that offers sorting sorts (`components/list/tableSorting.ts`; see `WEB_FRONTEND.md` section 7.7)
 
 #### **Step 3: Page and Route Setup**
 
 -   [ ] **Create thin page wrapper**: In `src/pages/`
 -   [ ] **Add lazy import**: `lazyWithRetry(() => import("./pages/MyPage"))` in `routes.tsx`
 -   [ ] **Add to routeTable**: With `path`, `Page`, and `active` properties
--   [ ] **Add navigation item**: In `src/layout/Navigation.tsx` if needed
+-   [ ] **Add navigation entry**: In `src/layout/navigationRegistry.ts` if needed (`placement: "profile"` for a page of the signed-in user)
 
 ### **Phase 3: Quality Assurance**
 
 #### **Step 4: Verification**
 
--   [ ] **No TypeScript errors**: Run `npm run build` or check IDE
+-   [ ] **No TypeScript errors**: Run `npm run typecheck` or check IDE (`npm run build` does not type-check)
 -   [ ] **No broken imports**: Verify relative paths (no path aliases in this project)
--   [ ] **Cloudscape subpath imports**: Not barrel exports
+-   [ ] **Cloudscape subpath imports**: Not barrel exports (new imports; see Rule 2)
 -   [ ] **Service layer compliance**: No direct `apiClient` imports in components/pages
 -   [ ] **Synonyms compliance**: No hardcoded "Asset"/"Database"/"Comment" in user-visible text
 -   [ ] **HashRouter compliance**: No `BrowserRouter` usage
@@ -202,7 +258,7 @@ web/
 
 ### **Rule 1: All API Calls Go Through Service Layer Files**
 
-Components and pages MUST NEVER import `apiClient` directly. Only service files in `src/services/` may import `apiClient`.
+Components and pages MUST NEVER import `apiClient` directly. Only service files in `src/services/` (including `src/services/addons/` for add-on calls), `src/features/orchestration/api/`, an add-on module's own `api/` directory under `src/addons/<addon>/` and, in a fork, `src/custom/services/` may import `apiClient`.
 
 ```typescript
 // CORRECT -- import from a service file
@@ -215,7 +271,7 @@ import { apiClient } from "../../services/apiClient";
 const response = await fetch("/api/databases");
 ```
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern.
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. An add-on's calls go in `services/addons/`, or in its module's `api/` directory when it ships a module of its own, never in `APIService.ts`.
 
 ### **Rule 2: Use Cloudscape Components (with orchestration exception)**
 
@@ -223,12 +279,14 @@ The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module
 
 -   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
 -   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
--   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind scoped to `src/features/orchestration/**` content glob).
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**`, each Tailwind add-on module under `src/addons/<addon>/**`, and the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**` or `src/addons/**`). A new orchestration shell or Tailwind add-on module must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added.
 -   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page. A Cloudscape page that happens to use a class named like a Tailwind utility therefore picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (verified present in the built CSS; the emitted set depends on what the orchestration module uses, so treat this as examples rather than a closed list). Outside the orchestration module use a VAMS-defined class or no class at all.
 
     Real instance: `<div className="container">` wrapped the asset-view comment editor. VAMS defines no `.container` rule, so the only match was Tailwind's `.container` utility and its responsive max-widths (640/768/1024/1280/1536px), which capped the comment box on any wide viewport. The component's own styles gave no hint — the editor filled its parent correctly and the parent was the clamped element — so it was only findable by measuring the rendered DOM. When a width or spacing problem has no explanation in the component's own styles, walk the ancestors' computed `max-width` in the browser before changing the component.
 
 Import Cloudscape from individual subpaths, NEVER from the barrel export.
+
+This applies to new imports. A new file, or a Cloudscape component newly imported into an existing file, uses a subpath import, even in a file that already imports from the barrel. Existing barrel imports stay as they are; do not convert them.
 
 ```typescript
 // CORRECT -- tree-shakeable individual imports
@@ -270,7 +328,7 @@ import MyPage from "./pages/MyPage";
 
 ### **Rule 5: No Global State Libraries (TanStack Query for orchestration server state)**
 
-This codebase uses NO global state library (no Redux, Zustand, MobX, Recoil, Jotai). Use React Context API + `useReducer` for shared state. The orchestration module (`features/orchestration/`) uses **TanStack Query v5** for server-state management (caching, background refetch, smart polling via `computeRefetchInterval` that keeps polling active only while non-terminal executions are visible).
+This codebase uses NO global state library (no Redux, Zustand, MobX, Recoil, Jotai). Use React Context API + `useReducer` for shared state. The Tailwind modules (`features/orchestration/` and the add-on modules under `addons/`) use **TanStack Query v5** for server-state management (caching, background refetch, smart polling via `computeRefetchInterval` that keeps polling active only while non-terminal executions are visible); each module has its own `qk` key factory.
 
 ```typescript
 // CORRECT
@@ -320,7 +378,7 @@ Every source file MUST begin with the Apache-2.0 copyright header:
 
 ### **Rule 9: npm Only -- Never Use yarn**
 
-**Package manager:** npm 11.10.0+. Node 22.x ships with npm 10.9.x, which does **not** honor `min-release-age` (introduced in npm 11.10.0). Always pin npm before installing:
+**Package manager:** npm `>=11.10.0 <12`. Node 22.x ships with npm 10.9.x, which does **not** honor `min-release-age` (introduced in npm 11.10.0). npm 12 is **not** supported: it blocks dependency install scripts, among them those of `esbuild` and `@parcel/watcher` (locked in `web/` and `infra/`), unless an `allowScripts` entry approves them, and VAMS has not approved or tested any, so builds are supported on npm 11 only until that is done. `engines.npm` in the root, `web/`, `infra/` and `documentation/docusaurus-site/` `package.json` files caps the range, and `engine-strict` in their `.npmrc` files makes npm 10 and npm 12 stop with `EBADENGINE`; do not add `allowScripts` entries to make npm 12 work. npm 11.21 and later print an `install scripts not yet covered by allowScripts` warning for `esbuild` and `@parcel/watcher`; the warning is expected, and npm 11 still runs those scripts. Always pin npm before installing:
 
 ```bash
 # Pin npm to the required version first
@@ -334,6 +392,8 @@ npm run build
 # INCORRECT
 yarn install
 ```
+
+The viewer installs the `postinstall` chain runs under `web/customInstalls/*` do not inherit `web/.npmrc`, because npm reads a project `.npmrc` only from the directory of the `package.json` it installs. Each viewer package directory therefore carries its own `.npmrc` (a copy of `web/.npmrc`), and an install inside a cloned upstream repository (SuperSplat, Potree, Needle USD) passes `--min-release-age=7` on the command line. `src/visualizerPlugin/config/customInstallsNpmIntake.test.ts` fails when a new viewer directory or clone install is not covered (#334).
 
 #### Keep the platform-specific native bindings in `optionalDependencies`
 
@@ -384,13 +444,17 @@ Cache.setItem("config", data);
 
 ### **Rule 12: Permission Graying (Orchestration Module)**
 
-The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. Navigational surfaces are the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer — removing a tab makes the capability undiscoverable, while an absent menu entry simply narrows a list of actions. Gate the panel's contents, not the tab. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
+The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. The trigger list (`TriggersEditor`, on the Triggers page and the builder's Triggers step) offers Add, Edit and Retry only to a role that may call the trigger `PUT` route and Delete only to one that may call its `DELETE`; the create flow's Triggers step is gated on the `PUT` as a whole. Navigational surfaces are the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer — removing a tab makes the capability undiscoverable, while an absent menu entry simply narrows a list of actions. Gate the panel's contents, not the tab. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
+
+The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the search page's Search and Asset list views (Create Asset, Delete Selected, and Unarchive Selected, gated on `PUT /database/{databaseId}/assets/{assetId}/unarchiveAsset` as the asset page's Unarchive is: `database-admin` reaches it through `starts_with /database`, `database-user` denies it and `database-readonly` has no `PUT`; `pages/search/SearchPage.tsx` computes the three reasons). The delete dialog both open (`modals/AssetDeleteModal.tsx`) offers its permanent-delete toggle only with `canPermanentlyDelete` (the `deleteAsset` route), and the search list disables Delete Selected for a selection with an archived row without that route, since such a selection can only be permanently deleted. The metadata editor (`metadataV2/MetadataContainer.tsx`) is editable with POST or PUT on the asset metadata route and offers row delete on a stored field only with `canDelete` (DELETE on that route); clearing a schema field and removing a field added in the same edit stay available. With `canDelete` false a bulk-edit CSV import also keeps every stored field the file leaves out, since a `replace_all` that removes stored keys needs the route's DELETE. The file metadata editor (`metadata/FileMetadata.tsx`, both file tabs) and the asset-link metadata editor pass `canDelete` from DELETE on their own routes (`.../metadata/file`, `/asset-links/{assetLinkId}/metadata`). The database metadata editor is not gated: the `database-user` template grants DELETE on `/database/{databaseId}/metadata` for its own database only, which the listing does not report (see below). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`features/orchestration/permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `features/orchestration/permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
 
 ```typescript
 const { can } = useAllowedRoutes();
 const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent");
 <Button disabled={!canDelete}>Permanent Delete</Button>;
 ```
+
+System records (`isSystem: true` on a pipeline or workflow) are graded from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. View replaces Edit in the actions menu and is open to any role that may read the record, so on a pipeline or workflow View page **Enabled** and **Update**/**Save** follow the record's `PUT` route: a role without it sees them disabled with `routeDisabledReason` ("Your role does not allow changing this pipeline." / "… this workflow."). Every other action the API would refuse stays listed, disabled with its reason from `features/orchestration/permissions/systemRecordReasons.ts`: **Archive** in the Pipelines and Workflows menus (`ContextMenu` `disabledReason`), **Create Template** and **Delete** on the Templates board, and **Add** and **Delete** in the trigger list (`DisabledReasonButton`). A run a system feature started (its server `triggerType` starts with `System-`) lists **Rerun** in the executions row menu disabled with `SYSTEM_RECORD_REASONS.rerunSystemRun`, since the rerun route refuses it. The route check runs first: an action the role may not call stays hidden whatever the record. A disabled control with a reason stays focusable (`aria-disabled`, not `disabled`), is announced with its reason (`aria-description`), and shows the reason on hover and focus (`DisabledReasonTooltip`, which opens above the control, stays inside the viewport at any width, and Escape dismisses); choosing it does nothing. This is presentation only; the backend guards in `common/workflows/systemRecords.py` enforce it (mirrors `web/CLAUDE.md` 6.4).
 
 ### **Rule 13: Toast Notifications (Orchestration Module)**
 
@@ -410,7 +474,7 @@ try {
 }
 ```
 
-Match the app's message convention: a short header naming the outcome (`"Archive failed"` / `"Pipeline archived"`, mirroring `"Search failed"` / `"Search completed"`), with the entity name and backend message in the `description` — never the entity in the header. Never leave a mutation's `catch` as `console.error` only and never use `alert()`. Always confirm success when the surface disappears (a form that closes, a page that navigates away). Keep an inline message as well where it has context; the toast is additive. `toastErrorMessage(err)` normalizes an `Error`, a raw string, or a `{message|error|detail}` object instead of rendering `[object Object]`. The provider adds lifecycle safety over the search hook: timers cleared on unmount, identical repeats collapsed, stack capped at four, and z-index 4000 so a failure raised inside a dialog (z 3001) is not painted underneath it.
+Match the app's message convention: a short header naming the outcome (`"Archive failed"` / `"Pipeline archived"`, mirroring `"Search failed"` / `"Search cleared"`), with the entity name and backend message in the `description` — never the entity in the header. Never leave a mutation's `catch` as `console.error` only and never use `alert()`. Always confirm success when the surface disappears (a form that closes, a page that navigates away). Keep an inline message as well where it has context; the toast is additive. `toastErrorMessage(err)` normalizes an `Error`, a raw string, or a `{message|error|detail}` object instead of rendering `[object Object]`. The provider adds lifecycle safety over the search hook: timers cleared on unmount, identical repeats collapsed, stack capped at four, and z-index 4000 so a failure raised inside a dialog (z 3001) is not painted underneath it.
 
 ### **Rule 14: Use Dual-Mode Auth Token Utilities**
 
@@ -431,14 +495,14 @@ const session = await AmplifyAuth.currentSession();
 
 When frontend changes affect user-facing functionality, update the relevant Docusaurus documentation:
 
-| Change Type          | Documentation to Update                                         |
-| -------------------- | --------------------------------------------------------------- |
-| UI navigation change | `user-guide/web-interface.md`, `user-guide/getting-started.mdx` |
-| New feature/page     | `overview/features.md`, relevant user guide page                |
-| New viewer plugin    | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`   |
-| Config/feature flag  | `deployment/configuration-reference.md`                         |
-| Search UI change     | `user-guide/search-and-discovery.md`                            |
-| Upload flow change   | `user-guide/upload-first-asset.md`                              |
+| Change Type          | Documentation to Update                                                                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| UI navigation change | `user-guide/web-interface.md`, `user-guide/getting-started.mdx`                                                      |
+| New feature/page     | `overview/features.md`, relevant user guide page                                                                     |
+| New viewer plugin    | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`                                                        |
+| Config/feature flag  | `deployment/configuration-reference.md`, feature-flag tables in `overview/features.md` and `architecture/details.md` |
+| Search UI change     | `user-guide/search-and-discovery.md`, `concepts/vector-search.md` (natural-language mode)                            |
+| Upload flow change   | `user-guide/upload-first-asset.md`                                                                                   |
 
 ### **Rule 17: Update Steering Files When Standards Change**
 
@@ -447,6 +511,8 @@ When system-wide frontend standards change (new rules, new patterns, new convent
 1. `web/CLAUDE.md` -- frontend steering document
 2. `.kiro/steering/WEB_FRONTEND.md` -- Kiro mirror of `web/CLAUDE.md`
 3. `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md` -- this file
+
+A change to an add-on module's own conventions goes in that module's `CLAUDE.md` (`src/addons/<addon>/CLAUDE.md`) and its `.kiro/steering/ADDON_*.md` file instead.
 
 ### **Rule 18: Regenerate the CSP Hashes After Editing an Inline Script in `index.html`**
 
@@ -493,19 +559,10 @@ Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples:
 export const fetchSomething = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/something`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return false;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -523,6 +580,12 @@ if (result === false || result[0] === false) {
 }
 const data = result[1];
 ```
+
+A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message.
+
+A request whose response the browser never saw rejects with a `TypeError` ("Failed to fetch"). `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` (both in `services/networkFailure.ts`, re-exported by `apiClient.ts`; a `catch` uses `requestFailureMessage(error, fallback)`) in its place, with no status, so the page says the service could not be reached and can offer Retry instead of a "not found" or permission message. A create or launch that got no reply says its outcome is unknown and where to check before retrying.
+
+A TanStack Query hook never retries a final answer. The app's query client (`createAppQueryClient` in `utils/queryRetry.ts`) retries a failed query once, except when the error carries a 4xx status other than 408 or 429: a 403 is the API's authorization decision and a 404 says the object is not there, so the page shows the error at once. `toTuple` / `toTupleWithWarnings` tag a failed tuple with the call's status (`failureStatus(result)`, non-enumerable, so the tuple still destructures and compares as `[false, message]`), and the hooks in `features/orchestration/api/queries.ts` throw through `callService`, which raises a `ServiceCallError` carrying it. A hook that throws on a tuple itself goes through `callService` too, or its 403 is re-sent (#1270). A service that rebuilds its tuple drops the status and keeps the old retry-once behaviour. The core services that are not TanStack hooks return the status as a visible third entry instead, `[false, message, status?]` (the zip download calls, `downloadAsset`, `fetchFileInfo`, `ComplianceService.getDatabaseBindings`), so a caller reads `result[2]`.
 
 ### **Authentication: Dual-Mode System**
 
@@ -584,9 +647,15 @@ VAMS supports dark/light themes (default: dark):
 }
 ```
 
+### **A Resizable Table Column's Width Is Seeded Once**
+
+With `resizableColumns`, Cloudscape seeds each column's width **once**, on the render in which that column id first becomes visible, and silently ignores later changes to its declared `width` (raising `minWidth` is not the lever either). **The value that selects the visible column set and the value that selects a column's declared width must come from one source, resolved in the same render**: this is why `SearchPageListView` derives `isFileMode` from the container's `recordType` rather than from the `_rectype` filter. Full rule: `WEB_FRONTEND.md` section 10.5.
+
+Source: `web/CLAUDE.md`, "10.5 A Resizable Table Column's Width Is Seeded Once".
+
 ### **Feature Flags**
 
-Feature flags are read from `/api/secure-config` and stored in `appCache`:
+Feature flags are read from `GET /secure-config` and stored in `appCache`:
 
 ```typescript
 const config = appCache.getItem("config");
@@ -594,6 +663,29 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
     // Enable map features
 }
 ```
+
+**Download as Zip** is gated twice: the `ZIPDOWNLOADS` feature switch decides whether the controls exist at all,
+and `useAllowedRoutes().can()` on the zip routes (a server decision) decides whether the user sees them. The
+file manager's **Export** menu offers **Download as Zip** for file, folder, root and mixed selections (hidden for
+an asset that is not distributable or is archived). `buildZipSelection` lists archived or deleted selected items in
+`refused`, and the dialog then refuses the whole job (names them, no Create), as the API does; items inside a selected
+folder collapse into it, and more than `ZIP_MAX_SELECTION_ENTRIES` (1,000) entries is refused with a plain message. The asset tab `zipDownloads` (**Download Queue**) and the
+global page `#/zipdownloads` (**My Download Queue**) list the caller's jobs and poll every 5 s only while a non-terminal job is visible.
+The user-facing names come from `DOWNLOAD_QUEUE_PAGE_TITLE` / `DOWNLOAD_QUEUE_TAB_LABEL` and do not say "zip", so other kinds of
+download job can join the queue; the route, the tab id, the API routes and the CLI/MCP names keep `zip`. Both lists search the
+rows already loaded (`filterZipJobs`: asset ID, asset name, request ID, archive name) with the refresh button beside the
+search; the API pages the list, so **Load more** adds older jobs, which the search then covers. The asset tab offers **Show all users** (a `SegmentedControl` right-aligned in the table's filter row through the `pagination` slot, default **My jobs**) only when `useAllowedRoutes().can("GET", ZIP_ROUTES.allUsers)` allows the all-users route; that view lists `fetchAssetZipDownloadsAllUsers` and shows **Download** and **Cancel**/**Delete** only from the row flags the API returns (`canDownload`, `canRemove`), never from a role or ownership rule in the client. The My jobs views (the asset tab's default and the **My Download Queue** page) get the same flags on their rows: a finished job with `canDownload: false` (a quarantined asset) offers no **Download**, and `canRemove: false` greys **Cancel**/**Delete**; the role's route decisions still gate the controls, and a response without the flags is read as before (#1125 D37). A created job's success message links to the asset's own **Download Queue** tab: `assetDownloadQueueLink()` sets the asset page's `?tab=zipDownloads` query (`ASSET_TAB_QUERY_PARAM`) and keeps its other parameters, and `ViewAsset` hands `?tab=` to `TabbedContainer` (`requestedTabId`), which switches tabs in place without remounting and reports a tab the user picks back to the query (`onTabChange`; File Manager drops it).
+
+Files: `src/components/zipDownloads/` (`zipDownloads.ts` rules and route templates, `CreateZipDownloadModal.tsx`,
+`ZipDownloadsTable.tsx`), `src/components/asset/tabs/ZipDownloadsTab.tsx` (tab id `ZIP_DOWNLOADS_TAB_ID` in
+`TabbedContainer.tsx`), `src/pages/ZipDownloadsPage.tsx`, and the profile-menu entry in `src/layout/navigationRegistry.ts`
+(`featuresEnabledRestriction: [ZIPDOWNLOADS]`).
+
+A surface that stays mounted across a login (the side navigation) or that gates whole pages reads the flags through `useFeaturesEnabled()` from `context/RuntimeConfigContext.ts` instead: the cached config carries no `featuresEnabled` until the secure config lands after the first login, and only the context re-renders a mounted consumer when it does.
+
+Any side-navigation entry (a section, link or group in the core, add-on or custom lists) may carry `featuresEnabledRestriction: string[]`, the field name and all-of meaning the viewer config uses: `layout/Navigation.tsx` drops the entry until every listed switch is enabled, re-runs the web-route check when the switches arrive, and strips the field before the items reach `SideNavigation`. An add-on's switch names live in `addons/addonFeatures.ts` (`addonFeaturesEnabled`), each one declared in `infra/common/addonAppFeatures.ts` (`addons/addonFeatures.test.ts`); a fork's live in `custom/customFeatures.ts`.
+
+`VECTORSEARCH` enables the natural-language mode of the search page's Search view; the Executions board offers its `System-Reindex` trigger filter only with it (only the vector reindexer starts such runs), and its `System-ZipDownload` trigger filter only with `ZIPDOWNLOADS` (only Download as Zip starts such runs). Full flag list: `WEB_FRONTEND.md` section 9.3.
 
 ---
 
@@ -611,9 +703,11 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 | Viewer config        | `src/visualizerPlugin/config/viewerConfig.json`   |
 | Complex component    | `src/components/asset/ViewAsset.tsx`              |
 | Search UI            | `src/components/search/ModernSearchContainer.tsx` |
+| Search page views    | `src/searchPlugin/components/SearchTabsHost.tsx`  |
 | Upload service       | `src/services/AssetUploadService.ts`              |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |
 | Synonyms config      | `src/synonyms.tsx`                                |
+| Navigation registry  | `src/layout/navigationRegistry.ts`                |
 | Navigation           | `src/layout/Navigation.tsx`                       |
 | App shell            | `src/App.tsx`                                     |
 
@@ -623,6 +717,19 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 
 ### **New Page Template**
 
+Every top-level page (a route in `src/routes.tsx`, `src/addons/addonRoutes.tsx` or `src/custom/customRoutes.tsx`) sets its own outer padding and heading. The `AppLayout` in `routes.tsx` runs with `disableContentPaddings` while the side navigation is open, so a page whose root is a bare `Table` or `Container` sits flush against the navigation and the header. A page opens with one of two page shells:
+
+-   **Cloudscape pages:** the root is `<Box padding={{ top: "m", horizontal: "l" }}>`; inside it, the page `h1` in a `TextContent` in its own `Grid` row, then the content (a `variant="container"` `Table` or a `Container`) in the next `Grid` row, then `<div style={{ paddingBottom: "20px" }} />`. References: `src/pages/auth/ApiKeys.tsx` (a list opened from the profile menu, with search, refresh and Load more), `src/pages/ListPageNoDatabase.tsx` (Roles, Constraints, Tags) and `src/pages/ZipDownloadsPage.tsx`. A page that opens with a breadcrumb uses a smaller top (`"s"`, or `"xs"` as on the asset page) and keeps `horizontal: "l"`.
+-   **Tailwind pages (orchestration module, add-ons):** the root element carries `className="orchestration-root orchestration-page ..."` (`src/styles/tailwind.css`, matched to the Cloudscape shell). Reference: `src/features/orchestration/pipelines/PipelinesPage.tsx`.
+
+The page also calls `usePageTitle`. A feature component that renders both as a page and inside an asset tab (such as `ZipDownloadsTable`) has no outer padding of its own; the page adds the shell around it. A list table searches like the other VAMS tables: a Cloudscape `TextFilter` in the table's `filter` slot with the refresh icon button beside it, not in the header actions (`ApiKeys.tsx`, `components/list/TableList.tsx`).
+
+**Table filter row:** a table's filter row has the search on the left, the refresh icon button right beside the search, and any view toggle or select (a `Toggle`, `SegmentedControl` or `Select` that changes which rows are listed, such as "Show archived" or "My jobs / Show all users") right-aligned. Put the search and refresh in the table's `filter` slot inside `<SpaceBetween direction="horizontal" size="xs">`, and the toggles in the table's `pagination` slot (in the same `SpaceBetween` when there are several, followed by the `Pagination` when the table has one). Cloudscape draws that slot in the right-aligned group of the filter row. Do not put toggles in the `filter` slot or the header actions, and do not build the row with hand-rolled flex styles. A toggle that depends on a permission renders only when the API's route listing allows its route. References: `src/components/asset/versions/components/AssetVersionList.tsx` (the Versions tab: search and refresh left, "Show archived" right) and `src/components/zipDownloads/ZipDownloadsTable.tsx` (the Download Queue tab: search and refresh left, "My jobs / Show all users" right).
+
+**Table width:** a table fits its container at 1280 px without sideways scrolling. Give no column a `minWidth` to stop wrapping; keep a status on one line with `<StatusIndicator wrapText={false}>`, let names and IDs with no spaces break anywhere (`overflowWrap: "anywhere"`), and put several row actions in icon buttons (`variant="icon"` with an `ariaLabel`, which Cloudscape also shows as the tooltip). `inline-link` and `link` buttons drop `disabledReason`, so do not use them for an action that can be greyed with a reason. Reference: `components/zipDownloads/ZipDownloadsTable.tsx` (#1125 D30).
+
+`src/pages/pageShell.test.ts` reads every routed page and the local modules it imports directly, and fails when none of them opens with a shell. Its `EXEMPT` map lists the pages with a layout of their own, each with its reason (the landing page); a list page never belongs there.
+
 ```tsx
 /*
  * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -630,10 +737,29 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
  */
 
 import React from "react";
+import Box from "@cloudscape-design/components/box";
+import Grid from "@cloudscape-design/components/grid";
+import TextContent from "@cloudscape-design/components/text-content";
 import MyComponent from "../components/myfeature/MyComponent";
+import { usePageTitle } from "../hooks/usePageTitle";
 
 const MyPage: React.FC = () => {
-    return <MyComponent />;
+    usePageTitle("My Feature");
+    return (
+        <Box padding={{ top: "m", horizontal: "l" }}>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <div>
+                    <TextContent>
+                        <h1>My Feature</h1>
+                    </TextContent>
+                </div>
+            </Grid>
+            <Grid gridDefinition={[{ colspan: 12 }]}>
+                <MyComponent />
+            </Grid>
+            <div style={{ paddingBottom: "20px" }} />
+        </Box>
+    );
 };
 
 export default MyPage;
@@ -740,19 +866,10 @@ import { apiClient } from "./apiClient";
 export const myServiceFunction = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/myendpoint`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return response;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -813,6 +930,7 @@ cd web
 npm install           # Install dependencies + runs postinstall (viewer installs)
 npm run start         # Dev server (port 3001)
 npm run build         # Production build (output: web/dist/)
+npm run typecheck     # Type-check only (tsc --noEmit); the Vite build does not type-check
 npm test              # Run tests with coverage (Jest 30 + @testing-library/react)
 npx jest              # Run tests without coverage (faster)
 ```
@@ -835,6 +953,49 @@ Do **not** label a test whose forbidden construct is still writable: a CSP that 
 a Tailwind utility. Those must keep holding. Full criterion: root `CLAUDE.md` Rule 13; Claude Code
 counterpart: `web/CLAUDE.md` section 11.4.1.
 
+**End-to-end specs** (`web/e2e/`, Playwright against a deployed stack) follow the rules in "End-to-End Testing (Playwright)" below.
+
+**Playwright specs for the search page (`web/e2e/`).** These drive the deployed search page and must pass
+against any sandbox. The core spec for a page outside the orchestration module is `{page}.spec.ts`
+(`search.spec.ts`), with its own `goto*` helper that waits on the page's own structure: `gotoSearch(page,
+{ databaseId?, tab? })` waits on the h1 and the view's first searchbox. The shared helpers in
+`e2e/support/fixtures.ts` are `gotoSearch`, `searchViewSwitch` / `searchViewSegment`, `searchPageHeading`,
+`searchCountBadge` / `searchCountBadgeText`, `searchSubmitButton`, `searchNotice`, `readFeaturesEnabled`,
+`expectSearchRendered` and `actionDisabledReason`. Selector facts:
+
+-   **Views switch from the title row**: one h1 every view shares, and a SegmentedControl
+    (`searchViewSwitch`, a `toolbar` of `aria-pressed` buttons; a select below 688 px) when more than one
+    view is available. There is no `role=tablist`. The asset list view is always there and the `Search`
+    view only when OpenSearch or vector search is on, so derive the expectation from
+    `readFeaturesEnabled(page)` (`VECTORSEARCH` present, or `NOOPENSEARCH` absent), never from a fixture.
+    The active view is the `?tab=` hash query. The empty states read `No matches` (search table) and
+    `No assets to display.` (asset list); use `expectSearchRendered(page)`.
+-   **The count badge carries a `+` when the total is a minimum** (`hits.total.relation` `gte`). Compare
+    it through `searchCountBadgeText`, which adds the `+` only for `gte`.
+-   **A segment locator filtered on `pressed` re-resolves after the click.** Pin the segment by its
+    `data-testid` (the view id) before pressing it.
+-   **A permission-gated action depends on the signed-in role.** A refused role sees the Button disabled
+    with its reason (named by `aria-describedby`), and "Checking your permissions." until the
+    allowed-routes check answers. Branch on `actionDisabledReason(button)`; never assume the admin role.
+-   **A finished search's count is announced, not toasted.** "Found N results" goes to a hidden polite
+    live region, followed by the Search notice's text. Rare natural-language warnings, and a keyword page the time bound cut short (`truncated:time`), show in the
+    dismissible **Search notice** above the results (`searchNotice(page)`), never a toast. Count toasts
+    as a snapshot right after the answer (a toast hides after 5 s); poll the notice.
+-   **A failed search is a toast, not a missing feature.** A `503` shows a **Search failed** toast with
+    the API's message, and the switches and the query band stay. With no answer on screen (the first
+    search of a page load) the page also shows a **Search did not finish** alert above the results
+    (`getByTestId("search-failed-notice")`) and the table reads "No results to show".
+-   **The count's explanation is a named button**, `getByRole("button", { name: "About this count" })`,
+    opened by click, Enter or Space; an exact count has none.
+-   **A database route locks the Database filter and names it**: the disabled multiselect reads the
+    database id, not "All databases".
+-   **Clear all filters is absent until a criterion is set**: it shows once a query, a filter or a
+    metadata filter row is set and is gone after it is pressed; a fresh load, a record type switch
+    and a database route's locked database show none.
+
+Claude Code counterpart: `web/e2e/CLAUDE.md` ("Selector facts worth not rediscovering", "Adding a core
+spec for a new page").
+
 **Lint and format (from project root):**
 
 ```bash
@@ -846,12 +1007,208 @@ npm run prettier-fix
 
 ---
 
+## 🧪 **End-to-End Testing (Playwright)**
+
+Mirrors `web/e2e/CLAUDE.md`; a change to either lands in both (root `CLAUDE.md` Rule 11).
+
+Playwright drives the **deployed** application, so it is the only layer that proves a frontend change reached
+users. `E2E_BASE_URL` is required: `playwright.config.ts` throws when it is unset. A fix that exists only in
+`web/src/` fails until the front end is rebuilt (`cd web && npm run build`) and deployed. Confirm the
+deployment took by matching the served main-bundle hash to the local one
+(`curl -s https://<host>/index.html | grep -oE '/assets/index-[A-Za-z0-9_-]+\.js'` against
+`ls web/dist/assets/index-*.js`). A passing jest suite says nothing about what is deployed.
+
+### **Two kinds of spec**
+
+|           | **Core specs (tracked)**                                                                                                                                                                                                                                                                                                                                                                | **Ad-hoc specs (untracked)**                                |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Purpose   | Permanent smoke coverage of a page or shared component                                                                                                                                                                                                                                                                                                                                  | Prove one specific change or fix works                      |
+| Data      | **Must not require specific data**                                                                                                                                                                                                                                                                                                                                                      | May target known seed data                                  |
+| Naming    | `orchestration.{page}.spec.ts`; `{area}.spec.ts` or `{area}.{page}.spec.ts` for another page or shared concern (`databases`, `tags`, `search`, `search.counts`, `security`, `navigation.profile-menu`, `asset.archived`, `zipdownloads`, `viewers`); `seeded.{feature}.spec.ts` for a spec that reads a seed fixture the environment names; `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
+| Committed | Yes                                                                                                                                                                                                                                                                                                                                                                                     | No: keep out of git                                         |
+
+-   Add a core spec only when a new page or shared component is added. A fix to existing behaviour gets an
+    ad-hoc spec, or a new assertion in the relevant core spec when the behaviour is permanent.
+-   A `seeded.` spec hardcodes nothing: a seed script writes a JSON fixture, an `E2E_*` variable names it, and
+    the whole file skips with the reason when it is unset (`seeded.compare.spec.ts` reads `E2E_COMPARE_SEED`).
+-   Prefix throwaway probe specs with `_` and delete them when finished; a probe left behind runs in every
+    later suite.
+
+### **Rule E1: Core specs pass against ANY environment**
+
+-   Never depend on a particular pipeline, workflow, execution, asset or count existing. Derive the subject
+    from whatever exists (`firstCardId(page)`) and `test.skip(!id, "<reason>")` when there is none; never a
+    hardcoded seed id.
+-   Never wait on data to prove the page loaded: wait on the page's own heading (`gotoOrchestration`), then
+    assert the list rendered rows **or** its empty state (`expectTableRendered`).
+-   A spec that needs a file of a particular type finds one with `findAssetFiles` and skips when there is
+    none, never a fixed database and asset id.
+-   `viewers.preview-toggle.spec.ts` follows the same rule for the file page's Preview toggle: it scans for a
+    distributable asset whose file has a generated preview and skips when there is none;
+    `E2E_PREVIEW_ASSET="<databaseId>/<assetId>"` (optional) confines the scan to one asset. A second case
+    opens a file at an older file version and expects the notice that its preview belongs to the latest
+    version; it skips when the scan finds no file with a preview and an older version. A third case holds the
+    asset details request back for six seconds (`page.route`) so the file read answers first, and expects the
+    Preview toggle all the same; the toggle follows the file the page holds, so no case reloads the page to
+    find it.
+-   A skip with a reason is the honest outcome when a precondition is absent; a test that passes because its
+    assertion never ran is not. Card lists are server-paginated (pageSize 50), so a spec that waits for one
+    seeded id fails once newer items push it off page 1.
+
+### **Rule E2: Core specs do not mutate the environment**
+
+-   Open dialogs and wizards to assert they work, then dismiss them (`Escape`); never Launch.
+-   For a destructive action, assert the confirm appears and says the right thing, then dismiss it (capture a
+    native `confirm()` with `page.once("dialog", …)` and `d.dismiss()`).
+-   Only an ad-hoc spec may create and clean up its own data. The one core exception is
+    `zipdownloads.spec.ts`, which creates one zip job and deletes it again only behind `E2E_ZIP_CREATE=1`,
+    and skips that case with the reason without it. A core spec that needs a second user reads it from
+    `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD` (signed in with `signInAs`, never hardcoded) and skips
+    without them. A spec lists its other opt-in variables in its header comment.
+
+### **Rule E3: Use the shared harness, don't re-derive selectors**
+
+`web/e2e/support/fixtures.ts` holds the durable selector knowledge; import from it, and when a page's markup
+changes fix the helper once. An add-on's page helpers sit beside it in `support/{addon}Fixtures.ts`. The full
+helper table is in `web/e2e/CLAUDE.md` Rule 3; the groups are:
+
+-   **Navigation and page state:** `gotoOrchestration`, `orchestrationRoot`, `searchBox`, `facet`,
+    `firstCardId`, `openCardMenu`, `tableRows` / `expectTableRendered` (takes the page's own empty-state
+    regex), `menuSurface`, `wizardRail`, `rowValue`, `collectPageErrors`, `sideNavigation`,
+    `profileMenuName` / `profileMenuTrigger` / `openProfileMenu` / `profileMenuLink`, `signInAs`.
+-   **Feature switches:** `featureSwitches(page)` is the harness's one feature reader (the deployment's
+    `featuresEnabled`, from the app's own cache); `test.skip` on an absent switch. `cachedFeaturesEnabled`
+    and `featuresEnabled` are older names for it, and `missingFeatures(list, req)` lists the required
+    features a deployment lacks.
+-   **Files and viewers:** `openAssetFile`, `openFileManager`, `selectTreePath`, `treeNode`,
+    `selectedTreeNode`, `chooseViewer`, `chooseSelectOption`, `apiContext`, `findAssetFiles`,
+    `findNestedAssetFile`, `findAssetsWithFiles`, `viewerSamples`, `compareSeed`, `openViewerFile`,
+    `pickViewerIfAsked`, `expectViewerSelected`, `dataGrid`, `largestCanvas`, `canvasStats`,
+    `expectCanvasRendered`, `expectSuperSplatRendered`.
+-   **Layout:** `VIEWPORTS` (phone 390, tablet 768, laptop 1280, desktop 1440), `pageOverflowX` /
+    `expectNoPageOverflowX`, `expectReachable`.
+-   **Security and hygiene:** `watchConsoleErrors` (ignores only `CONSOLE_ERROR_IGNORE`),
+    `watchCspViolations` (call before navigating) / `expectNoNewCspViolations`, `watchRequestHosts`
+    (`thirdParty()`), `SUPERSPLAT_CSP_ALLOWED`, `CSP_CONSOLE_REPORT`.
+
+Selector facts worth not rediscovering:
+
+-   The orchestration search input is `getByLabel("Search")`, matched by label, not placeholder; there are two
+    "Search" inputs (filter bar and global nav), so scope to `.orchestration-root`.
+-   Filters are native `<select>`s (`Status`, `Execution Type`, `Database`, `Group by`, `Filter by status`,
+    `Filter by trigger`, `Filter by group ID`, `Time window`). Cards expose `Actions for {id}` buttons, the
+    stable way to read a card's identity. The template panel heading is an `h1` reading exactly `Templates`.
+    Execution trigger values use the stored vocabulary (`Manual`, `File-Upload`).
+-   The pipeline form is a three-step wizard ("1 Basic", "2 Execution", "3 Settings"); later steps' fields do
+    not exist until you advance with the form's own `Next`. Never locate a step by name:
+    `getByRole("button", { name: /Settings/ })` matches the global navigation's Settings button.
+-   The execute flow is one dialog: its first step is the workflow picker (`role=option` rows in a
+    `role=listbox`, search labelled `Workflow`) except from a workflow card's Execute action, and `Launch`
+    exists only on the final step; an Inputs-step assertion targets `Next`.
+-   The executions board names the workflow's database `Workflow Database` and has no `Group` column.
+-   `[role="menu"]` is ambiguous on every page: closed Cloudscape Selects keep zero-size menus earlier in
+    document order. Reach the open surface with `menuSurface(items)`.
+-   A detail panel's field value is the label's next sibling; use `rowValue(page, label)`, never a page-wide
+    `getByText` for a value's shape.
+
+### **Rule E4: Assert behaviour, not implementation**
+
+Prefer role-based, user-visible assertions. A crash regression asserts no uncaught errors
+(`collectPageErrors` empty), not only that something rendered. A layering fix proves the dialog receives the
+click (`document.elementFromPoint` at the dialog lands inside it); a z-index alone proves nothing.
+
+### **Viewer render proof (shared by every viewer PR)**
+
+`viewers.spec.ts` "viewer render proof (seeded samples)" proves a viewer DRAWS a known file. Add a viewer's
+cases to `renderCases` there; never start another spec or harness.
+
+-   **Samples** are entries of the tracked `e2e/fixtures/viewer-samples.json` (schema checked by
+    `web/src/visualizerPlugin/config/viewerSamplesManifest.test.ts`): `id`, `viewer` (a config viewer id, or
+    `none` for a `not-offered` subject), `path`, `licence`, `source`, and exactly one of a download (`url`
+    pinned to a tag or commit, `size`, `sha256`; the seeder refuses a mismatch), `generated`, or
+    `derivedFrom` plus `transform`. Optional `requiresFeature` and `expect` thresholds. Verify the licence at
+    its source before adding a download; no sample binary is ever committed.
+-   **Seeding:** `tools/VamsCLI/examples/seed_viewer_samples.py --profile <name>` uploads the samples to one
+    distributable asset and writes `e2e/fixtures/viewer-samples-seed.json`; export its path as
+    `E2E_VIEWER_SAMPLES`.
+-   **A case** names `sample`, `viewer` (the exact config `name`; the case asserts that viewer opened) and
+    `kind` (`canvas`, `image`, `raster-notice`, `pdf`, `grid`, `text`, `text-binary`, `text-encoding`,
+    `not-offered`, `potree`, `refused`, `supersplat`), with optional `select`, `requiresFeature` /
+    `withoutFeature`, `fetches`, `thresholds`, `cspAllowed`, `servedBundle`, `consoleAllowed`, `reads` and
+    `selectInPanel`. VNTANA and VEERUM have no feature flag, so their cases skip when the viewer is not
+    offered.
+-   **Every case fails** on console or page errors (`watchConsoleErrors`; never widen
+    `CONSOLE_ERROR_IGNORE` for one case, use `consoleAllowed`), on any CSP violation outside `cspAllowed`
+    (list the development baseline's violations exactly, so only new ones fail) and on any request host
+    outside the deployment (`watchRequestHosts`). Run the spec on the development build first and record its
+    pixel stats; a case that passes there and fails on a change is a regression.
+-   **Potree cases** read the octree the Potree pipeline wrote, so run that pipeline on each `potree-*` sample
+    after seeding; the case skips, naming the pipeline, until `preview/PotreeViewer/metadata.json` exists. It
+    asserts `Potree.lru.numPoints > 0` and point pixels by red channel.
+-   **SuperSplat** renders only through WebGPU, which headless Chromium hides. `E2E_WEBGPU=1` runs those cases
+    in a separate `chromium-webgpu` project and takes them out of `chromium`; without an adapter they skip,
+    and `E2E_REQUIRE_WEBGPU=1` makes that a failure. Run them where a GPU is available: Chromium's software
+    adapter loses the device while the editor loads a file.
+
+### **Map viewer layout spec**
+
+`viewers.cogmap.layout.spec.ts` lives in the `chromium` project, counts the frame's stripe pixels through
+`support/rasterViewerFixtures.ts`, and skips with a reason when location services are off. It opens a raster in
+the GeoTIFF Map Viewer on the View File page and in the File Viewer modal (the File Manager's Visualize File
+eye) and checks it fills its frame at 390, 820 and 1280 px, and in fullscreen on the page: canvas equal to its
+column, map, list and the viewer's own map controls inside the frame, and none of the frame backdrop's stripe
+colours visible. A third case hides and shows a raster with its **Visible** switch (one name,
+`Show "<label>" on the map`, the checked state, Space, the status line, Zoom disabled while hidden). It waits on
+the picker's options and on the layout settling (two equal reads of the boxes, canvas equal to its column)
+rather than on fixed sleeps. It finds a `.tif` through the API and skips, with the reason, when the file is not a
+raster the viewer draws.
+
+| Helper (`support/rasterViewerFixtures.ts`) | Use for                                                                 |
+| ------------------------------------------ | ----------------------------------------------------------------------- |
+| `stripePixels(page, png)`                  | Count of the visualizer frame backdrop's stripe colours in a screenshot |
+
+| Variable                              | Effect                                                                                  |
+| ------------------------------------- | --------------------------------------------------------------------------------------- |
+| `E2E_COG_MAP_FILE=<db>/<asset>/<key>` | Names the georeferenced raster the layout spec opens, instead of the first `.tif` found |
+
+### **Running the suite**
+
+```bash
+cd web
+export E2E_BASE_URL=https://<your-deployment-host>   # required
+export E2E_USERNAME=<user> E2E_PASSWORD=<pass>       # never hardcode credentials
+npm run e2e                                           # all specs
+npx playwright test e2e/orchestration.pipelines.spec.ts --retries=0 --workers=2
+E2E_WEBGPU=1 E2E_REQUIRE_WEBGPU=1 npx playwright test e2e/viewers.spec.ts   # SuperSplat render checks
+```
+
+-   `retries: 1` reports a fail-then-pass as **flaky**, and Playwright's exit code counts flaky as success;
+    read the summary line, not the exit status (a shell pipeline makes the exit code the pipeline's).
+-   `auth.setup.ts` signs in once and saves `e2e/.auth/admin.json` for 45 minutes (rapid Cognito sign-ins can
+    trip the edge WAF); `E2E_FORCE_LOGIN=1` refreshes it, and an MFA account runs `npm run e2e:auth` headed
+    once. Keep `auth.setup.ts` tracked and working: every spec depends on it.
+
+### **Adding a core spec for a new page**
+
+1. Add a new orchestration route to the `gotoOrchestration` union in `support/fixtures.ts`.
+2. Assert, in order: the page renders without a crash; its controls exist; its filters offer the expected
+   values; one interaction per row action.
+3. Derive every subject from the environment (Rule E1) and mutate nothing (Rule E2).
+4. Put new selector knowledge in `support/fixtures.ts`, not inline.
+5. Run against a deployed environment; the result is `passed` or an explicit `skipped`, never a silent pass.
+
+Anti-patterns: hardcoded seed ids; waiting on data to prove page load; mutating shared state in a core spec;
+inline selectors; committing an ad-hoc or `_probe` spec; hardcoded credentials or base URL; calling a web fix
+verified without checking the deployed bundle hash.
+
+---
+
 ## 🔍 **Code Review Checklist**
 
 ### **Compliance Checks**
 
 -   [ ] Copyright headers present on all new/modified files
--   [ ] Cloudscape components imported from subpaths (not barrel)
+-   [ ] Cloudscape components imported from subpaths (not barrel) (new imports; see Rule 2)
 -   [ ] API calls go through service layer (no direct `apiClient` imports in components)
 -   [ ] `Synonyms` used for all user-visible entity names
 -   [ ] All pages lazy-loaded in `routes.tsx`
@@ -864,6 +1221,7 @@ npm run prettier-fix
 -   [ ] npm used (no yarn)
 -   [ ] Relative imports used (no path aliases)
 -   [ ] Theme-aware styles (Cloudscape design tokens or theme.css custom properties)
+-   [ ] List pages use the standard toolbar (search and refresh left, filters right) and every sortable column sorts (`WEB_FRONTEND.md` section 7.7)
 
 ### **Documentation Checks**
 
@@ -879,9 +1237,10 @@ npm run prettier-fix
 
 1. Create component in `src/components/myfeature/MyFeatureTable.tsx`
 2. Use `@cloudscape-design/collection-hooks` for filtering/sorting
-3. Create page wrapper in `src/pages/MyFeaturePage.tsx`
-4. Add lazy import + route in `src/routes.tsx`
-5. Add navigation item in `src/layout/Navigation.tsx`
+3. Lay out the toolbar and wire the column sorting per `WEB_FRONTEND.md` section 7.7 (search and refresh on the left, filters on the right; every sortable column sorts)
+4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
+5. Add lazy import + route in `src/routes.tsx`
+6. Add a navigation entry in `src/layout/navigationRegistry.ts` (`placement: "profile"` for a page of the signed-in user)
 
 ### **Adding a new API call**
 
@@ -917,7 +1276,7 @@ npm run prettier-fix
 ## 🚫 **Anti-Patterns Summary**
 
 1. **Importing apiClient in components/pages** -- use service layer files
-2. **Importing Cloudscape from barrel export** -- use individual subpaths
+2. **Importing Cloudscape from barrel export** -- use individual subpaths (new imports; see Rule 2)
 3. **Using BrowserRouter** -- must use HashRouter
 4. **Eagerly importing pages** -- must use lazyWithRetry
 5. **Adding Redux/Zustand/MobX** -- use Context + useReducer

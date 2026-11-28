@@ -31,8 +31,11 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path,
                      asset_id, database_id,
                      input_metadata_s3_location, input_configuration_s3_location,
                      external_task_token, executing_userName, executing_requestContext,
-                     orchestration_event_prefix=""):
+                     orchestration_event_prefix="",
+                     input_bucket_region="", output_bucket_region="", input_version_id="",
+                     input_asset=None):
 
+    input_asset = input_asset or {}
     messagePayload = {
         "inputS3AssetFilePath": input_s3_asset_file_path,
         "outputS3AssetFilesPath": output_s3_asset_files_path,
@@ -43,6 +46,18 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path,
         "databaseId": database_id,
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
+        # The Regions of the input and output asset buckets, from the manifest (empty when a bucket
+        # is in the deployment Region), so the Batch container signs its requests for each bucket
+        # with a client for that bucket's Region.
+        "inputBucketRegion": input_bucket_region,
+        "outputBucketRegion": output_bucket_region,
+        # The S3 version of the input file the run reads, from the manifest (empty reads the current object).
+        "inputVersionId": input_version_id,
+        # Where the input sits in its asset, from its manifest entry (empty without one): its
+        # asset-relative path, whose folder is the output subfolder, and the asset root.
+        "inputRelativePath": input_asset.get("relativePath") or "",
+        "inputAssetRootS3Key": input_asset.get("assetRootS3Key") or "",
+        "inputAssetRootBucket": input_asset.get("assetRootBucket") or "",
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
@@ -115,6 +130,10 @@ def lambda_handler(event, context):
         resolved = manifestHelper.resolve_pipeline_inputs(data, s3_client)
         # Single input file per execution today (SFN/manifest layer is multi-file-ready).
         manifestHelper.enforce_single_input_file(resolved)
+        # This pipeline's AWS Batch compute runs in the VPC's isolated subnets, which reach Amazon S3 in
+        # the deployment Region and in the Regions served by the VPC's cross-Region S3 endpoints
+        # (CROSS_REGION_S3_ENDPOINT_REGIONS); an input anywhere else is rejected before submission.
+        manifestHelper.enforce_inputs_in_region(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved['manifestUsed']}): {resolved}")
 
         execute_pipeline(
@@ -131,6 +150,10 @@ def lambda_handler(event, context):
             executing_userName,
             executing_requestContext,
             resolved['orchestrationEventPrefix'],
+            input_bucket_region=resolved['inputBucketRegion'],
+            output_bucket_region=resolved['outputBucketRegion'],
+            input_version_id=resolved['inputVersionId'],
+            input_asset=(resolved['inputFiles'] or [None])[0],
         )
 
         return {'statusCode': 200, 'body': 'Success'}

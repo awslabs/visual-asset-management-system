@@ -15,6 +15,8 @@ interface Bucket {
     bucketAccountId?: string;
     bucketRegion?: string;
     bucketKmsKeyArn?: string;
+    useS3TransferAcceleration?: boolean;
+    tagSyncedObjects?: boolean;
 }
 
 /** Optional keys omitted from the emitted config when left blank. */
@@ -71,6 +73,28 @@ export default function ExternalBucketsField({ field, value, onChange }: Props) 
         update(copy);
     };
 
+    // Emitted only when true, so an entry that does not use acceleration stays unchanged.
+    const setAccelerated = (index: number, next: boolean) => {
+        const copy = buckets.map((b) => ({ ...b }));
+        if (next) {
+            copy[index].useS3TransferAcceleration = true;
+        } else {
+            delete copy[index].useS3TransferAcceleration;
+        }
+        update(copy);
+    };
+
+    // Emitted only when off, so an entry that keeps the default (on) stays unchanged.
+    const setTagged = (index: number, next: boolean) => {
+        const copy = buckets.map((b) => ({ ...b }));
+        if (next) {
+            delete copy[index].tagSyncedObjects;
+        } else {
+            copy[index].tagSyncedObjects = false;
+        }
+        update(copy);
+    };
+
     const removeAt = (index: number) => update(buckets.filter((_, i) => i !== index));
 
     const add = () => update([...buckets, { ...EMPTY }]);
@@ -116,6 +140,26 @@ export default function ExternalBucketsField({ field, value, onChange }: Props) 
                                 onChange={(e) => setDefault(index, e.target.checked)}
                             />{" "}
                             Default asset bucket (houses pipeline template + run I/O data)
+                        </label>
+                    </div>
+                    <div className={styles.field}>
+                        <label className={styles.fieldLabel}>
+                            <input
+                                type="checkbox"
+                                checked={!!bucket.useS3TransferAcceleration}
+                                onChange={(e) => setAccelerated(index, e.target.checked)}
+                            />{" "}
+                            Use S3 Transfer Acceleration (the bucket owner must enable it first)
+                        </label>
+                    </div>
+                    <div className={styles.field}>
+                        <label className={styles.fieldLabel}>
+                            <input
+                                type="checkbox"
+                                checked={bucket.tagSyncedObjects !== false}
+                                onChange={(e) => setTagged(index, e.target.checked)}
+                            />{" "}
+                            Tag synced objects with VAMS:databaseId and VAMS:assetId
                         </label>
                     </div>
                     <div className={styles.field}>

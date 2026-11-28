@@ -1,38 +1,64 @@
-# 3D Preview Thumbnail Pipeline
+# 3D and Media Preview Thumbnail Pipelines
 
-The 3D Preview Thumbnail pipeline generates animated GIF or static image previews from 3D files, providing visual thumbnails for assets in the VAMS web interface. It supports a wide range of mesh, point cloud, CAD, and USD file formats. The pipeline uses CPU-based headless rendering with PyVista, VTK, and Xvfb inside an AWS Batch Fargate container.
+The 3D Preview Thumbnail pipeline generates animated GIF or static image previews from 3D files, providing visual thumbnails for assets in the VAMS web interface. It supports a wide range of mesh, point cloud, CAD, USD and Gaussian splat file formats. The same container also runs the optional **Media Preview Thumbnail** workflow (`app.pipelines.useMediaPreviews`), which writes JPEG or animated GIF previews for images, TGA/TIFF files and video; see [Media Formats](#media-formats). Media previews are off by default and need the Global VPC. The pipeline uses CPU-based headless rendering with PyVista, VTK, and Xvfb in an AWS Batch job on AWS Fargate. It is a [system pipeline](system-pipelines.md) in the `SYSTEM - Preview` category: registered from its `vamsSchema` bundle, read-only through the API except for its `enabled` switches and its template's configuration body and tag schema, and re-asserted by each deployment.
 
 ## Supported Formats
 
 ### Mesh Formats
 
-| Format      | Extension | Library                                     |
-| ----------- | --------- | ------------------------------------------- |
-| PLY         | `.ply`    | Trimesh                                     |
-| STL         | `.stl`    | Trimesh                                     |
-| OBJ         | `.obj`    | Trimesh                                     |
-| GLB         | `.glb`    | Trimesh                                     |
-| GLTF        | `.gltf`   | Trimesh (with external dependency download) |
-| FBX         | `.fbx`    | Trimesh                                     |
-| DRC (Draco) | `.drc`    | Trimesh                                     |
+| Format      | Extension | Library                                          |
+| ----------- | --------- | ------------------------------------------------ |
+| PLY         | `.ply`    | Trimesh                                          |
+| STL         | `.stl`    | Trimesh                                          |
+| OBJ         | `.obj`    | Trimesh                                          |
+| GLB         | `.glb`    | Trimesh                                          |
+| GLTF        | `.gltf`   | Trimesh (with its referenced buffers and images) |
+| FBX         | `.fbx`    | Open3D (Assimp)                                  |
+| DRC (Draco) | `.drc`    | DracoPy (with vertex colours)                    |
+| OFF         | `.off`    | Trimesh                                          |
+| 3MF         | `.3mf`    | built-in (hardened XML parsing)                  |
+| COLLADA     | `.dae`    | built-in (hardened XML parsing)                  |
+
+3MF and COLLADA files are parsed with DTDs and external entities disabled, so a crafted file cannot read local files or reach the network. The up axis comes from the file where it says (FBX `UpAxis`, COLLADA `<up_axis>`, 3MF and survey formats Z-up, glTF Y-up); other meshes, STL included, render as authored. FBX quad and polygon faces are triangulated, each part is placed by its node transforms, and parts keep their vertex colours or material base colour; textures are not sampled.
 
 ### Point Cloud Formats
 
-| Format | Extension | Library        |
-| ------ | --------- | -------------- |
-| LAS    | `.las`    | laspy          |
-| LAZ    | `.laz`    | laspy + laszip |
-| E57    | `.e57`    | pye57          |
-| PTX    | `.ptx`    | Open3D         |
-| PCD    | `.pcd`    | Open3D         |
-| FLS    | `.fls`    | Open3D         |
-| FWS    | `.fws`    | Open3D         |
+| Format              | Extension | Library        |
+| ------------------- | --------- | -------------- |
+| LAS                 | `.las`    | laspy          |
+| LAZ                 | `.laz`    | laspy + laszip |
+| E57                 | `.e57`    | pye57          |
+| PTX                 | `.ptx`    | built-in       |
+| PTS                 | `.pts`    | built-in       |
+| PCD                 | `.pcd`    | Open3D         |
+| PLY (vertices only) | `.ply`    | built-in       |
+
+FARO scans (`.fls`, `.fws`) are not supported: reading them needs the proprietary FARO SDK. Convert them to E57 or LAS first.
 
 ### CAD Formats
 
 | Format | Extension       | Library                 |
 | ------ | --------------- | ----------------------- |
 | STEP   | `.stp`, `.step` | CadQuery / Open CASCADE |
+
+STEP files are read with their assembly placements and their part, component and face colours. Tessellation detail is relative to the model's size, so a part renders with the same detail in millimetres or metres, and free surfaces beside solids are kept.
+
+### Gaussian Splat Formats
+
+| Format             | Extension         | Library                          |
+| ------------------ | ----------------- | -------------------------------- |
+| 3DGS PLY           | `.ply`            | built-in (routed by PLY header)  |
+| Compressed PLY     | `.compressed.ply` | PlayCanvas splat-transform (CPU) |
+| SPZ                | `.spz`            | PlayCanvas splat-transform (CPU) |
+| SOG                | `.sog`            | PlayCanvas splat-transform (CPU) |
+| antimatter15 splat | `.splat`          | built-in                         |
+| KSPLAT             | `.ksplat`         | PlayCanvas splat-transform (CPU) |
+| XGRIDS LCC         | `.lcc`            | PlayCanvas splat-transform (CPU) |
+| XGRIDS LCC2        | `.lcc2`           | PlayCanvas splat-transform (CPU) |
+
+Splats render on the CPU as flat discs in their base (degree-0) spherical-harmonic colour, each with the coverage of its Gaussian, so a faint or elongated splat does not draw as a large opaque blob. Faint splats are dropped and the rest are sampled by opacity to the splat budget. A captured scene usually surrounds its subject with background (room walls, sky, distant trees), so the preview shows the scene's core: the region where the capture holds its detail, found from where small, opaque splats concentrate. The background around it, and oversized fog splats inside it, are left out, and a tilted ground plane is levelled. A compact subject, such as a scanned object or a single room, is drawn whole. A `.ply` with faces still renders as a mesh and a vertex-only `.ply` as a point cloud.
+
+An XGRIDS `.lcc` or `.lcc2` scene holds several levels of detail; the preview reads the finest level whose splat count is at most twice the splat budget. An `.lcc` scene needs its `data.bin` and `index.bin`, and its `shcoef.bin` when the scene has spherical harmonics (`fileType` `Quality`), in the same folder; `environment.bin` is not read. An `.lcc2` scene needs the chunk files its description names, usually in a `data/3dgs/` folder beside it; only the chosen level's chunk files are downloaded. The file-upload trigger skips files in a `data/3dgs/` folder, so uploading an `.lcc2` scene starts one run for the scene rather than one for each chunk file.
 
 ### USD Formats
 
@@ -43,6 +69,51 @@ The 3D Preview Thumbnail pipeline generates animated GIF or static image preview
 | USDC   | `.usdc`   | OpenUSD (pxr) |
 | USDZ   | `.usdz`   | OpenUSD (pxr) |
 
+A USD stage is rendered as composed. When the stage has a default prim that is defined, active and a root prim, a root prim beside it is left out only when it looks like a thumbnail rig by both tests: it is at least 50 times larger than the default prim, and it holds both a camera and a light of any type. Every other root prim is drawn, as it is for a stage without a default prim, so a placeholder default prim beside the model, peer roots, a site plan beside a building and a root that holds lights only all show; when unsure the whole stage is drawn. The roots left out are named in the job log with their size, ratio and reason. Known limit: a model's own root that is at least 50 times larger than a tiny default prim and holds a camera and a light is left out. A prop uploaded without its shared rig folder (for example the SimReady `common_tools` layer) renders correctly but is still listed as an incomplete preview, naming the missing rig layer: the listing is harmless because the rig is never drawn, and VAMS lists it because a layer that composes nothing cannot be told apart from a missing real layer. A referenced file that only a left-out root reaches, with nothing that is drawn depending on that root, is not reported in the incomplete-preview summary. A stage with no usable default prim, or whose default prim draws no geometry, is drawn whole. Instanced prims and point instancers are drawn at every instance (a stage that expands past 30,000,000 vertices is drawn from an evenly spread, repeatable sample that keeps the scene's outermost items and its small items (up to a quarter of the budget), so the preview covers the whole scene, and the job log says how many are shown), invisible prims and `guide` or `proxy` purpose prims are skipped, and implicit shapes (cube, sphere, cylinder, cone, capsule) are drawn. Each prim's colour comes from the first of these that its material or the prim provides:
+
+1. The diffuse texture or constant `diffuseColor` of the bound `UsdPreviewSurface`.
+2. When the material has no `UsdPreviewSurface`, its NVIDIA `OmniPBR` or `OmniSurface` MDL shader, as in NVIDIA Isaac Sim and Omniverse assets: its diffuse texture, else its base colour, times the `OmniPBR` colour tint.
+3. A material from another MDL module, such as the `MI_*.mdl` materials of an Unreal Engine export: inputs found by name, for example `AlbedoTexture` or `BaseColor_Texture`, else `ColorAlbedo`, times `BaseColor_Tint`. This is an approximation of the module's own blend; the [pipeline README](https://github.com/awslabs/visual-asset-management-system/blob/main/backendPipelines/preview/3dThumbnail/README.md#usd-colour-and-texture-support) lists every input name read.
+4. The `displayColor` primvar.
+5. Otherwise the prim is drawn in neutral grey.
+
+The job log names each MDL module whose colour is approximated or not read. Textures are read at most 1,024 pixels on their long side, and the decoded textures of one stage take at most 10% of the task's memory; a texture past that is not read, and its prims take their material's constant colour or the next source in the list. MaterialX materials are not read.
+
+## Media Formats
+
+The same container also writes previews for images and video, through a second registered pipeline and workflow, **Media Preview Thumbnail** (`preview-media-thumbnail`). Like the 3D Preview Thumbnail it is a [system pipeline](system-pipelines.md) in the `SYSTEM - Preview` category: read-only through the API except for its `enabled` switches and its template's configuration body and tag schema, re-registered by every deployment that revises its bundle, and its runs are hidden from the execution lists unless a listing is filtered to its workflow or asks for system runs. One deployment (container, Batch queue and state machine) serves both workflows and deploys when either `app.pipelines.usePreview3dThumbnail.enabled` or `app.pipelines.useMediaPreviews.enabled` is `true`; the flags only choose which workflow is registered, so a media-only deployment (3D off) works and takes its compute tiers from `usePreview3dThumbnail`. A deployment whose configuration has no `useMediaPreviews` block keeps today's behaviour (media previews off).
+
+| Category | Extensions                                                          | Handler                                                 |
+| :------- | :------------------------------------------------------------------ | :------------------------------------------------------ |
+| Image    | .png, .jpg, .jpeg, .gif, .webp, .bmp                                | Pillow                                                  |
+| Image    | .tga, .tif, .tiff                                                   | Pillow, with tifffile and imagecodecs for TIFF variants |
+| Video    | .mp4, .m4v, .mov, .mkv, .webm, .avi, .wmv, .mpg, .mpeg, .mts, .m2ts | PyAV (bundled FFmpeg libraries)                         |
+
+Not accepted: SVG, HEIC/HEIF, AVIF, EXR, HDR, PSD, DDS and MDL (MDL thumbnails are tracked in #1547).
+
+The media pipeline skips `*.cog.tif`, the Cloud Optimized GeoTIFF that the [COG Conversion](cog-conversion.md) pipeline writes beside its source: the source `.tif` already has a preview, and a COG can exceed the pixel limit.
+
+### What a run writes
+
+An image whose extension is one the web shows as its own preview (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`) and whose size is strictly under 5,242,880 bytes (5 MiB) is shown as its own preview, so the run writes nothing.
+
+| Input                                             | Default                                                                                                                                    | With `downscaleSelfPreviewableImages`                                                   |
+| :------------------------------------------------ | :----------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------- |
+| Displayable image under 5 MiB                     | No preview and no container job: the run completes successfully and says why                                                               | A JPEG when it is at least 25% smaller or the long edge is over 2048 px; otherwise none |
+| Displayable still image of 5 MiB or more          | A JPEG under 5 MiB (EXIF orientation applied, transparency on white)                                                                       | Same                                                                                    |
+| Animated GIF or WebP of 5 MiB or more             | A smaller animated GIF (fewer frames, then smaller size, then fewer colours); else a first-frame JPEG                                      | Same                                                                                    |
+| `.tga`, `.tif`, `.tiff`, any size                 | A JPEG under 5 MiB (16-bit, float and CMYK scaled to 8-bit RGB; first full-resolution page)                                                | Same                                                                                    |
+| Video                                             | An animated GIF of 12 frames sampled across the duration (at most 24, long edge 480 px, rotation applied), else the middle frame as a JPEG | Same                                                                                    |
+| Audio-only file or video with no decodable frames | Completes successfully, no preview                                                                                                         | Same                                                                                    |
+
+A run that writes no preview completes successfully and records why as `preview-not-generated.json` in the execution's results: for an image shown as its own preview the message reads "No preview was generated for '<name>': the file is under 5 MiB and is already shown as its own preview." With the downscale option on, an animated GIF or WebP under 5 MiB is still left alone (a JPEG would drop the animation), and the result says so. Every preview is strictly under 5 MiB. TGA and TIFF are never shown as their own preview because browsers cannot display them. A large still image, TGA or TIFF that cannot be decoded within the task's memory fails with a message that names the file type and the pixel limit.
+
+TIFF compressions: Pillow reads the common ones; a TIFF it cannot read (16-bit colour, float samples, BigTIFF, some predictors) is read with tifffile and its codec package imagecodecs, which the image installs from wheels only. The pipeline decodes the LZW, Deflate (Adobe and plain), PackBits, Zstandard, LZMA, JPEG and LERC (GeoTIFF) compressions, with or without a predictor, and refuses a TIFF in any other compression (JPEG XL, WebP, JPEG 2000, CCITT, vendor codecs) with a message that names it. The pixel budget and a byte budget for float and multi-sample images apply to this path as to the others. imagecodecs bundles about 90 codec libraries, all permissive licences plus the GCC OpenMP runtime; `NOTICE.md` lists them.
+
+### Safety limits
+
+The pixel count is read from the file header and checked against a budget derived from the task's memory before anything is decoded. Video is opened as a local file only (`protocol_whitelist=file`) through an allowlist of container formats, decoded for at most 10 minutes, and sampled by seeking rather than by decoding the whole file.
+
 ## Architecture
 
 ```mermaid
@@ -50,6 +121,7 @@ flowchart LR
     subgraph Workflow["AWS Step Functions Workflow"]
         VE[vamsExecute Lambda]
         CP[constructPipeline Lambda]
+        CT{Compute tier<br/>standard or large}
         PE[pipelineEnd Lambda]
     end
 
@@ -65,7 +137,8 @@ flowchart LR
     S3Out[(Asset Bucket<br/>Preview Files)]
 
     VE --> CP
-    CP --> DL
+    CP --> CT
+    CT --> DL
     S3In --> DL
     DL --> Load
     Load --> Render
@@ -77,12 +150,12 @@ flowchart LR
 
 ### Processing Steps
 
-1. **Download** -- The container downloads the input file from the asset Amazon S3 bucket. For GLTF files, external dependencies (buffers, textures) are also downloaded.
-2. **Load** -- A format-specific handler loads the file into a PyVista PolyData object. The handler is selected based on file extension: mesh, point cloud, CAD, or USD.
-3. **Normalize** -- The pipeline detects and normalizes the coordinate up-axis to Y-up for consistent rendering. Z-up formats (LAS, LAZ, E57, STL, etc.) are rotated automatically. Variable formats use a bounding-box heuristic.
-4. **Render** -- PyVista generates rotating preview frames using headless off-screen rendering via Xvfb. If animated rendering fails, the pipeline falls back to a single static frame.
-5. **Save** -- The requested format is written: `auto` assembles multiple frames into an animated GIF and saves a single frame as a JPEG, while `gif`, `jpg` and `png` write that format whatever the frame count. The pipeline ensures the output stays under a size limit for efficient web display.
-6. **Upload** -- The preview file is uploaded to the asset bucket alongside the source file, preserving the relative directory structure.
+1. **Download** -- The container downloads the input file from the asset Amazon S3 bucket, then the files it references from the same asset: a glTF file's buffers and images, a USD layer's sublayers, references, payloads and asset-valued attributes such as texture paths (followed through each fetched layer), an OBJ file's material libraries and the texture maps they name (also from a folder above the file's own, such as `../textures/`, when it stays inside the asset), an FBX file's texture files, an `.lcc` scene's data files, and the chunk files of the level of detail an `.lcc2` scene is read at. A reference is fetched only when it is a relative path that stays inside the input's own asset; absolute paths, `..` segments that leave the asset, and URIs (`s3://`, `http(s)://`, `file:`) are skipped. For an asset created on a single existing object (a `bucketExistingKey` without a trailing `/`), the references of its file are looked up in its companion folder `{key}/`, never among the other keys in the object's own Amazon S3 folder. At most 2,000 referenced files and 50 GiB are fetched, each checked against free disk space first. A skipped or missing reference is logged and does not fail the run, but the preview is then incomplete: see [Incomplete previews](#incomplete-previews).
+2. **Load** -- A format-specific handler (mesh, point cloud, CAD, USD, Gaussian splat, or the built-in 3MF and COLLADA reader) loads the file into a PyVista PolyData object. The handler is chosen by extension, except that a `.ply` is routed by its header: splat properties to the splat handler, faces to the mesh handler, and vertices only to the point cloud handler.
+3. **Normalize** -- The pipeline turns the model Y-up from what the file or its format declares. LAS, LAZ, E57, PTX, PTS and PCD are Z-up and are rotated; FBX `UpAxis`, COLLADA `<up_axis>`, the USD stage up axis and the 3MF specification are applied; glTF is Y-up. Gaussian splat scenes are turned from the 3D Gaussian Splatting (COLMAP) Y-down convention. Other formats, STL included, render as authored.
+4. **Render** -- PyVista renders with headless off-screen rendering via Xvfb: a 36-frame orbit for an animated or `auto` output, or one front three-quarter view for a `jpg` or `png` output. A mesh is framed on its full bounds and a point cloud on its 2nd-98th percentile bounds, which ignores stray points. A near-flat ground or environment plane at least 50 times larger than the rest of a scene and centred on it, such as the ground plane under a simulation robot, is left out of the preview: it is not drawn, so the model fills the preview on a transparent background. A scene made only of flat parts, such as a sign or a floor plan, and a sheet less than 50 times its content, such as a sheet-metal panel with a bracket, are drawn whole. Only the outermost sheet is left out, so a model's own platform on a ground plane is kept. A near-flat sheet whose only solid content is one item centred on it and at most 1/50 of its size is treated as a backdrop, so its preview shows the item alone: for example a floor plan or terrain tile with a single centred marker, a solar panel with only a small junction box, or an enclosure of thin panels (a room or a skybox) around a single small item, whose panels are all left out. A small part far from the rest of a model, at most half the model's size, such as a stray cube left 50 metres away, is left out of the framing and still drawn; a larger far-away part, such as a second building, and repeated parts at one distance, such as an exploded ring, are framed with the model. Points with NaN or infinite coordinates are dropped from point clouds; a cloud with none left fails with a clear message. If the orbit fails, the pipeline falls back to the single still view.
+5. **Save** -- The requested format is written: `auto` assembles multiple frames into an animated GIF and saves a single frame as a JPEG, while `gif`, `jpg` and `png` write that format whatever the frame count. A preview is kept under 5 MiB: a GIF over the limit is re-encoded with 18, 12 and then 8 frames, then at lower resolution, and finally written as a single PNG or JPEG still, so a run that asks for `gif` can write a `.previewFile.png` or `.previewFile.jpg`.
+6. **Upload** -- The preview file is uploaded to the asset bucket alongside the source file, preserving the relative directory structure. When a file holds previews in several formats (for example a `.gif` from an earlier run and a `.png` from a later one), the file listing shows the most recently written one.
 
 ### Output Files
 
@@ -90,10 +163,43 @@ The pipeline generates preview files with the following naming convention:
 
 ```
 <original_filename>.previewFile.gif    (animated, multi-frame)
-<original_filename>.previewFile.jpg    (static, single-frame fallback)
+<original_filename>.previewFile.png    (still)
+<original_filename>.previewFile.jpg    (still)
 ```
 
+GIF and PNG previews have a transparent background; a JPEG preview is composited onto white. A still shows the front three-quarter view, 45 degrees around the orbit and 25 degrees above it.
+
 These files are written to `outputS3AssetFilesPath`, which maps to the asset bucket. The relative subdirectory from the input path is preserved so the VAMS process-output step can locate and register the previews correctly.
+
+### Incomplete previews
+
+When any referenced file could not be fetched, the run still succeeds and writes its preview, and the job log says the preview is incomplete. After the download step the log carries one warning summary that gives the count and lists each skipped file, the file that names it, and the reason:
+
+-   **missing from the asset** -- the file is not in the input's asset (or could not be downloaded from it).
+-   **outside the asset** -- an absolute path, a URI scheme such as `http://` or `omniverse://`, or a `..` path that leaves the asset.
+-   **over the file, byte or disk budget** -- the fetch limits above were reached.
+
+The summary groups the skipped files by what their absence costs the preview:
+
+-   **Geometry layers** -- USD sublayers, references and payloads that name a USD layer (`.usd`, `.usda`, `.usdc`, `.usdz`). Part of the model is missing.
+-   **Data files** -- glTF buffers (`.bin`), the data or chunk files of an XGRIDS `.lcc`/`.lcc2` scene, and USD value clips (a `clips` set's asset paths and manifest). Geometry, points or animated geometry are missing.
+-   **Textures and other files** -- images, OBJ material libraries and other asset-valued attributes. Colour or detail may be missing.
+
+A composition arc to a file that is not a USD layer (a `.mtlx` material, for example) counts as a texture or other file. Three kinds of reference are not counted, because their absence removes nothing from the preview: asset paths in USD layer or prim metadata (a component's `assetInfo` `identifier`, or a source-file path an exporter wrote into `customLayerData` or `customData`), MDL material modules named without a folder (for example `OmniPBR.mdl`), which the renderer resolves from its own library, and FBX texture files, since an FBX preview draws vertex and material colours and does not sample textures. They are still looked up in the asset and never make a preview incomplete. A metadata path or FBX texture that is not found is logged as missing; an MDL module that is not in the asset is logged once as resolved by the renderer and is not counted among the missing files.
+
+Once the preview has been written, the run's completion line reads, for example:
+
+```
+Preview generated, but incomplete: 2 referenced files could not be fetched (1 geometry layer, 0 data files, 1 texture/other file). See the job log for the list.
+```
+
+A run that fails after the fetch (for example because a missing glTF buffer leaves nothing to load) reports its failure as before; the skipped-files summary is still in its log.
+
+The run also records a result named `preview-incomplete.json` on the execution. It shows under **Output Results** on the execution's detail page in **Workflows**, and `vamscli execution details results <execution-id>` returns it. It holds the same message, the counts of skipped geometry layers, data files, and textures and other files, and up to 100 skipped files, each with the file that names it and the reason. `truncated` is `true` when more were skipped than the list holds. Paths are relative to the asset. A reference outside the asset is recorded by its reason and at most its bare file name; no bucket, host, port, share or folder is ever written. The full reference is in the job log.
+
+A USD stage can also hold prims the preview does not draw: `Points`, `BasisCurves`, `NurbsCurves`, `HermiteCurves`, `NurbsPatch`, `Plane` and `TetMesh` prims (hair, grass, point clouds written as USD points, a ground `Plane`, tetrahedral volumes). The preview is the same with or without them, and the run says what was left out: the job log has one warning per type with the count and the first five prim paths, the completion line reads `Preview generated, but incomplete: 3 Points prims and 1 BasisCurves prim are not drawn by the 3D Preview Thumbnail.` (after the fetched-files sentence when files were also skipped), and `preview-incomplete.json` gains `counts.skippedPrimTypes` (the count per type) and `skippedPrims` (the type, count and first five prim paths). Both keys are absent when no such prim was skipped, so the result is unchanged for every other run. The result stays within its 64 KB cap with these keys included: when it would not, the list of skipped files is shortened (`truncated` is `true`); a result without these keys is sized exactly as before. The run still succeeds. The types are joined the same way in the completion line and the error (`A, B and C`). A stage that holds only such prims, and nothing else to draw, fails with `No valid mesh geometry found in USD stage: the stage holds only 2 Points prims and 1 BasisCurves prim, which the 3D Preview Thumbnail does not draw`. Invisible, guide and proxy prims, and prims under a root prim left out as a thumbnail rig, are not counted.
+
+A run that fetched every referenced file and skipped no prim ends with `Preview 3D Thumbnail pipeline executed successfully.` and records no result. To read the job log, open the execution in **Workflows** and select its **Logs** tab, or run `vamscli execution logs`.
 
 :::note[Relative Path Preservation]
 If the input file is at `<assetId>/subfolder/model.glb`, the preview is written to `<assetId>/subfolder/model.glb.previewFile.gif`. The `assetId` is threaded through the pipeline from the workflow state to ensure correct path computation.
@@ -119,7 +225,17 @@ Enable this pipeline in `infra/config/config.json`:
             "usePreview3dThumbnail": {
                 "enabled": true,
                 "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "computeTiers": {
+                    "standard": { "vcpu": 4, "memoryGiB": 16 },
+                    "large": { "vcpu": 16, "memoryGiB": 120 }
+                },
+                "largeTierThresholdGiB": 2
+            },
+            "useMediaPreviews": {
+                "enabled": true,
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "downscaleSelfPreviewableImages": false
             }
         }
     }
@@ -128,47 +244,90 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option                                | Default | Description                                                              |
-| ------------------------------------- | ------- | ------------------------------------------------------------------------ |
-| `enabled`                             | `false` | Deploy the 3D thumbnail pipeline infrastructure. Enables the global VPC. |
-| `autoRegisterWithVAMS`                | `false` | Automatically register the pipeline and workflow during CDK deployment.  |
-| `autoRegisterAutoTriggerOnFileUpload` | `false` | Automatically trigger the pipeline when supported 3D files are uploaded. |
+| Option                                                 | Default | Description                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                                              | `false` | Deploy the 3D thumbnail pipeline infrastructure. Requires `app.useGlobalVpc.enabled`.                                                                                                                                                                         |
+| `autoRegisterWithVAMS`                                 | `true`  | Register the pipeline, its workflow, its template, and its trigger during deployment.                                                                                                                                                                         |
+| `autoRegisterAutoTriggerOnFileUpload`                  | `true`  | Arm the file-upload trigger. Each deployment re-asserts this value on the trigger.                                                                                                                                                                            |
+| `computeTiers.standard.vcpu`                           | `4`     | AWS Fargate vCPU of the standard tier, which runs inputs below the large-tier threshold.                                                                                                                                                                      |
+| `computeTiers.standard.memoryGiB`                      | `16`    | Memory (GiB) of the standard tier. Must be a size AWS Fargate supports for the tier's vCPU.                                                                                                                                                                   |
+| `computeTiers.large.vcpu`                              | `16`    | AWS Fargate vCPU of the large tier, which runs inputs at or above the large-tier threshold.                                                                                                                                                                   |
+| `computeTiers.large.memoryGiB`                         | `120`   | Memory (GiB) of the large tier. Must be a size AWS Fargate supports for the tier's vCPU.                                                                                                                                                                      |
+| `largeTierThresholdGiB`                                | `2`     | Input size (GiB) at or above which a run takes the large tier when its `computeTier` parameter is `auto`. Positive.                                                                                                                                           |
+| `useMediaPreviews.enabled`                             | `false` | Registers the Media Preview Thumbnail pipeline and workflow (images, TGA/TIFF, video) and deploys the shared container when `usePreview3dThumbnail` is off. Requires the Global VPC. The shipped config and templates ship `false` (it needs the Global VPC). |
+| `useMediaPreviews.autoRegisterAutoTriggerOnFileUpload` | `false` | Triggers the media workflow when a supported image or video is uploaded. Needs `useMediaPreviews.enabled`. The shipped config and templates ship `false` (it needs the Global VPC).                                                                           |
+| `useMediaPreviews.downscaleSelfPreviewableImages`      | `false` | Also writes a smaller JPEG for an image the web already shows as its own preview (under 5 MiB), when the JPEG is at least 25% smaller. Needs `useMediaPreviews.enabled`.                                                                                      |
+
+The defaults are the values the shipped config templates carry. A pipeline block that omits a flag still registers the pipeline (`autoRegisterWithVAMS` falls back to `true`) but leaves the upload trigger off (`autoRegisterAutoTriggerOnFileUpload` falls back to `false`), and an omitted `computeTiers` or `largeTierThresholdGiB` takes the values in this table; see the [Configuration Reference](../deployment/configuration-reference.md).
 
 :::warning[License Notice]
-This pipeline is disabled by default because it depends on libraries with LGPL licenses (CadQuery/Open CASCADE for STEP file support). Review the `requirements.txt` file in the container directory and consult your legal team before enabling this pipeline. Other format handlers use MIT-licensed or Apache-licensed libraries.
+This pipeline is disabled by default because it depends on libraries with LGPL licenses: Open CASCADE, which CadQuery uses for STEP file support, and the casadi and nlopt solvers that CadQuery requires. Reading a STEP file also loads the native libraries that the cadquery-ocp wheel bundles with Open CASCADE, among them JBIG-KIT (GPL-2.0-or-later), FreeImage (GPL or the FreeImage Public License) and LibRaw (LGPL-2.1 or CDDL-1.0); `NOTICE.md` lists them all. It also contains MPL-2.0 code: the certifi and tqdm packages and the Eigen library compiled into open3d. Review `requirements.txt` (every Python package, pinned, exported from `uv.lock`) and `splat-transform/package-lock.json` (the Node.js packages) in the container directory and consult your legal team before enabling this pipeline. Other format handlers use MIT-licensed or Apache-licensed libraries.
 :::
 
 ## Input Parameters
 
-Parameters reach the pipeline through the template selected for the run. Deployment registers the `preview-3d-thumbnail-default` template, whose configuration body carries the parameters below and declares the two tags that the execute screen prompts for.
+Parameters reach the pipeline through the template selected for the run. Deployment registers the `preview-3d-thumbnail-default` template, whose configuration body carries the parameters below and declares the three tags that the execute screen prompts for.
 
 | Parameter                       | Template tag                       | Type    | Default | Description                                                                                                                                                                                                |
 | ------------------------------- | ---------------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `overwriteExistingPreviewFiles` | `OVERWRITE_EXISTING_PREVIEW_FILES` | boolean | `true`  | When `true`, regenerates preview files even if they already exist for the input file. When `false`, the pipeline skips files that already have a preview.                                                  |
 | `outputType`                    | `OUTPUT_TYPE`                      | enum    | `auto`  | The preview file format written for the input file. `auto` writes an animated GIF when the renderer produces several frames and a JPG otherwise; `gif`, `jpg` and `png` write that format for every input. |
+| `computeTier`                   | `COMPUTE_TIER`                     | enum    | `auto`  | The compute tier the job runs on. `auto` chooses by input size (see [Compute and limits](#compute-and-limits)); `standard` and `large` run that tier for every input.                                      |
 
 ### Template configuration body
 
 ```json
 {
     "overwriteExistingPreviewFiles": {{OVERWRITE_EXISTING_PREVIEW_FILES}},
-    "outputType": "{{OUTPUT_TYPE}}"
+    "outputType": "{{OUTPUT_TYPE}}",
+    "computeTier": "{{COMPUTE_TIER}}"
 }
 ```
 
-`{{OVERWRITE_EXISTING_PREVIEW_FILES}}` and `{{OUTPUT_TYPE}}` are template tags: the execute screen presents the first as a checkbox and the second as a list of the supported formats, and substitutes both values before the pipeline receives the configuration. The template also allows per-run edits, so a single run can supply a replacement body without changing the registered template.
+`{{OVERWRITE_EXISTING_PREVIEW_FILES}}`, `{{OUTPUT_TYPE}}` and `{{COMPUTE_TIER}}` are template tags: the execute screen presents the first as a checkbox and the other two as lists of their values, and substitutes all three before the pipeline receives the configuration. The template also allows per-run edits, so a single run can supply a replacement body without changing the registered template. A body without `computeTier` is treated as `auto`.
 
-## Limits and Constraints
+## Compute and limits
 
-| Constraint                         | Value                       |
-| ---------------------------------- | --------------------------- |
-| Maximum input file size            | 100 GB                      |
-| Container ephemeral storage        | 200 GiB                     |
-| Point cloud downsampling threshold | 20 million points           |
-| Rendering method                   | CPU-based (no GPU required) |
+Each run executes on one of two AWS Fargate sizes, both submitted from one AWS Batch job definition. Before the state machine starts, the pipeline's `openPipeline` Lambda reads the input file's size with an Amazon S3 `HeadObject` call and picks the tier; a `Choice` state then routes the job to that tier's Batch state, which overrides the job's vCPU and memory and sets the container environment variables `VAMS_COMPUTE_TIER` (`standard` or `large`) and `VAMS_TASK_MEMORY_MIB` (the tier's memory in MiB).
+
+| Tier       | Runs                                                 | vCPU (default) | Memory (default) | Attempt duration |
+| ---------- | ---------------------------------------------------- | -------------- | ---------------- | ---------------- |
+| `standard` | inputs below `largeTierThresholdGiB` (default 2 GiB) | 4              | 16 GiB           | 1 hour           |
+| `large`    | inputs at or above `largeTierThresholdGiB`           | 16             | 120 GiB          | 3 hours          |
+
+-   **Choosing the tier.** A run's `computeTier` parameter forces a tier; `auto` (the default) leaves the choice to the input size. When the input size cannot be read, the run uses the standard tier and logs a warning.
+-   **Sizing.** vCPU and memory are configured per tier (see [Configuration Options](#configuration-options)). Deployment validates each pair against the AWS Fargate Linux task sizes (4 vCPU: 8–30 GiB in 1 GiB steps; 8 vCPU: 16–60 GiB in 4 GiB steps; 16 vCPU: 32–120 GiB in 8 GiB steps), because AWS Batch checks an override only when a job is submitted.
+-   **Time bounds.** The attempt durations are fixed and start when the job leaves the job queue. Each tier's AWS Batch state also has its own 3 hour 30 minute bound, which counts the time the job waited in the queue as well as its run; a job still waiting or running at that bound fails the run with a timeout cause and is ended, so a job that waited past the bound never runs; run the pipeline again later. The pipeline's state machine times out after 3 hours 45 minutes, inside the registered pipeline's task timeout of 14,400 seconds, so the run always reports its own outcome.
+-   **Ephemeral storage.** Both tiers have 200 GiB, the AWS Fargate maximum; ephemeral storage is a property of the job definition and cannot be overridden per job.
+-   **Concurrency.** The Fargate compute environment allows 256 vCPU at a time, so up to 64 standard-tier jobs or 16 large-tier jobs run at once; further jobs wait in the job queue. The account's AWS Fargate vCPU quota in the Region also applies.
+
+| Constraint                  | Value                                                                               |
+| --------------------------- | ----------------------------------------------------------------------------------- |
+| Maximum input file size     | The free space of the work volume, less 1 GiB kept for the output                   |
+| Container ephemeral storage | 200 GiB                                                                             |
+| Point budget                | 5 million per vCPU, at most 20 million (and 35% of the memory limit)                |
+| Triangle budget             | 5 million per vCPU, at most 30 million (and 35% of the memory limit)                |
+| Splat budget                | 1 million per vCPU, at most 5 million (and 35% of the memory limit)                 |
+| Task size                   | The run's tier (default 4 vCPU and 16 GiB, or 16 vCPU and 120 GiB, on AWS Fargate)  |
+| Run time                    | 1 hour on the standard tier, 3 hours on the large tier (AWS Batch attempt duration) |
+| Gaussian splat conversion   | 30 minutes                                                                          |
+| Preview file size           | 5 MiB                                                                               |
+| Rendering method            | CPU-based (Mesa llvmpipe, one rasteriser thread per vCPU; no GPU)                   |
+
+The container derives the budgets from its task's memory and vCPU count, so it stays within whichever task size runs it. It reads the vCPU count from its cgroup. Its memory limit is the smallest of its cgroup's limit, the tier's memory in `VAMS_TASK_MEMORY_MIB` and physical memory, because on AWS Fargate the cgroup sets no limit and physical memory is larger than the task. At the default tier sizes the budgets are 20 million points, 20 million triangles and 4 million splats on the standard tier, and 20 million points, 30 million triangles and 5 million splats on the large tier. Each budget has a floor (1 million points, 1 million triangles, 250,000 splats) that applies on a task too small to reach it.
+
+-   **Point clouds** -- A point cloud above the point budget is sampled while it is read (E57 scan by scan, PTX and PTS streamed from Amazon S3 with no local copy).
+-   **Meshes** -- A mesh above the triangle budget is decimated with VTK quadric clustering, keeping its texture, vertex or face colours as face colours.
+-   **Meshes coloured per face** -- A mesh drawn with face colours (STEP, 3MF, COLLADA, or a decimated coloured mesh) takes about three times the render memory of other meshes, so it has its own triangle limit: `(60% of the memory limit - 0.75 GiB) / 475 bytes`, at most the triangle budget. The default tiers keep their full budgets. Because the limit sets aside a fixed 0.75 GiB, it is lower than the triangle budget on smaller tasks: below 4.9 GiB on 1 vCPU, 8.6 GiB on 2 vCPU, 16 GiB on 4 vCPU and 23.4 GiB on 8 vCPU. There such a mesh is decimated further, for example to 3.7 million triangles on 1 vCPU and 4 GiB (triangle budget 5 million), 9.2 million on 2 vCPU and 8 GiB (budget 10 million) and 9.2 million on 4 vCPU and 8 GiB (budget 15 million).
+-   **Repeated placements** -- A 3MF, COLLADA or STEP file that places the same part many times is expanded until its placed geometry reaches the triangle budget, and the remaining placements are skipped. A STEP assembly that places more than 1,000,000 components fails.
+-   **FBX** -- An FBX scene is counted before it is read, since its reader expands every placement at once. One that places more than 1,000,000 models, or whose repeated parts add up to more triangles than the triangle budget beyond the file's own geometry, fails. An FBX file whose scopes or node records nest deeper than 256 levels, more than any model an exporter produces, is refused before it is read.
+-   **Disk** -- An input larger than the free disk fails before the download with a message naming both sizes.
+-   **Log** -- The execution log records the input size, the budgets and each phase's duration (download, fetch, load, render, encode, upload).
+
+The full list of fixed limits is in [Quotas](../additional/quotas.md).
 
 :::tip[Large Point Clouds]
-Point clouds exceeding 20 million points are automatically downsampled for rendering performance. The original file is not modified; only the rendering input is reduced.
+The original file is never modified; only the rendering input is reduced. Every scan of a multi-scan E57 or PTX file is read and placed by its pose or transform.
 :::
 
 ## Prerequisites
@@ -182,13 +341,19 @@ This pipeline runs on AWS Batch with AWS Fargate and requires the global VPC. Se
 The container image is built during CDK deployment from `backendPipelines/preview/3dThumbnail/container/Dockerfile`. It is based on Python 3.12 slim and includes:
 
 -   **PyVista / VTK** -- 3D rendering engine (MIT license)
--   **Trimesh** -- Mesh loading for PLY, STL, OBJ, GLB, GLTF, FBX, DRC (MIT license)
+-   **Trimesh** -- Mesh loading for PLY, STL, OBJ, GLB, GLTF, OFF (MIT license)
+-   **DracoPy** -- Draco (`.drc`) decoding (Apache-2.0 license)
 -   **laspy** -- LAS/LAZ point cloud reading (BSD license)
 -   **pye57** -- E57 point cloud reading (MIT license)
--   **Open3D** -- Additional point cloud formats: PTX, PCD, FLS, FWS (MIT license)
+-   **Open3D** -- PCD point clouds and FBX meshes (MIT license)
 -   **CadQuery** -- STEP/STP CAD file support (LGPL license)
 -   **OpenUSD (pxr)** -- USD format support (Modified Apache 2.0 license)
+-   **PlayCanvas splat-transform** -- Gaussian splat format conversion on the CPU (MIT license), run on **Node.js** 22 (MIT license)
 -   **Xvfb** -- Virtual framebuffer for headless rendering
+
+### Lambda image
+
+The same `preview_pipeline` package is also built as an AWS Lambda container image from `Dockerfile.lambda` in the same directory. That image is the 3D render branch of the SYSTEM - GenAI Metadata Generation pipeline: it loads a file with the format handlers above, extracts `sys_*` attributes, and renders still frames for the analysis model. It differs from the Fargate image in three ways. Its direct dependencies are pinned to exact versions in `lambdaImage/pyproject.toml`, the image installs `lambdaImage/requirements.txt` (exported from `lambdaImage/uv.lock`: every Python package, transitive ones included, pinned by version and hash), and Open3D is not installed because that pipeline routes FBX files to its Blender image. Xvfb is started by the handler into `/tmp` rather than by the image entrypoint. All working directories live under `/tmp`, the only writable path in AWS Lambda. The 3D Preview Thumbnail pipeline itself does not use this image. The SYSTEM - GenAI Metadata Generation pipeline's optional Fargate render job runs the same handler in this pipeline's Fargate image instead, where the render uses the Xvfb server that the image entrypoint started and never starts a second one.
 
 ## How It Works
 
@@ -202,4 +367,5 @@ The container image is built during CDK deployment from `backendPipelines/previe
 
 -   [Pipeline System Overview](overview.md)
 -   [Potree Point Cloud Viewer Pipeline](potree-viewer.md) -- interactive point cloud visualization (complementary to thumbnail previews)
--   [CAD/Mesh Metadata Extraction Pipeline](cad-mesh-extraction.md) -- extracts metadata from similar file formats
+-   [SYSTEM - GenAI Metadata Generation Pipeline](system-genai-metadata.md) -- shares this pipeline's renderers to extract attributes and generate metadata for the same file formats
+-   [System pipelines](system-pipelines.md) -- the rules that apply to this pipeline's records

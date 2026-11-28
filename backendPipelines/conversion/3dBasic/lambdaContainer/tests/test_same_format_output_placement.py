@@ -46,6 +46,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from inprocess_worker import in_process_worker  # noqa: E402
+
 _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _LAMBDA_DIR not in sys.path:
     sys.path.insert(0, _LAMBDA_DIR)
@@ -224,8 +227,10 @@ def _run(relative_path, output_type):
         uploaded["bucket"], uploaded["key"] = bucket, key
         return key
 
-    def _download(bucket, key, path):
+    def _download(bucket, key, path, **kwargs):
         downloaded["bucket"], downloaded["key"] = bucket, key
+        # The real download always writes the file, and the handler reads it before loading.
+        open(path, "wb").close()
         return path
 
     # The export stub writes its output file: the upload reads the export directory back from disk,
@@ -244,7 +249,7 @@ def _run(relative_path, output_type):
     with patch.object(module, "s3_client", stub_s3), \
             patch.object(module, "download", MagicMock(side_effect=_download)), \
             patch.object(module, "uploadV2", MagicMock(side_effect=_upload)), \
-            patch.object(module, "trimesh", trimesh_stub):
+            patch.object(module, "run_worker", in_process_worker(trimesh_stub)):
         response = module.lambda_handler({"body": json.dumps({
             "inputManifestS3Location": MANIFEST_LOCATION,
             "inputConfigurationS3Location": CONFIG_LOCATION,

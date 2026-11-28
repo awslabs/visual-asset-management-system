@@ -16,21 +16,10 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import * as APIService from "../../services/APIService";
 import ViewAsset from "./ViewAsset";
 import { __resetCache } from "../../features/orchestration/permissions/useAllowedRoutes";
-
-/** What `GET /auth/routes/api/allowed` lists for a role allowed every asset page action. */
-const ADMIN_ROUTES = [
-    "/database",
-    "/database/{databaseId}",
-    "/assets",
-    "/uploads",
-    "/database/{databaseId}/assets/{assetId}",
-    "/database/{databaseId}/assets/{assetId}/archiveAsset",
-    "/database/{databaseId}/assets/{assetId}/metadata",
-].map((path) => ({ path, methods: ["GET", "POST", "PUT", "DELETE"], category: "test" }));
-const allowedRoutesResponse = (routes: typeof ADMIN_ROUTES) => [
-    true,
-    { routes, userId: "template-user" },
-];
+import {
+    ADMIN_ROUTES,
+    allowedRoutesResponse,
+} from "../../features/orchestration/permissions/templateRoleRoutes.testdata";
 import Synonyms from "../../synonyms";
 
 jest.mock("../../services/APIService", () => ({
@@ -53,9 +42,11 @@ jest.mock("./AssetDetailsPane", () => ({
     },
 }));
 const mockDetailStates: any[] = [];
+const mockTabRequests: any[] = [];
 jest.mock("./TabbedContainer", () => ({
     __esModule: true,
-    default: function MockTabbedContainer() {
+    default: function MockTabbedContainer(props: any) {
+        mockTabRequests.push(props.requestedTabId);
         const { useContext: useCtx } = jest.requireActual("react");
         const { AssetDetailContext: Ctx } = jest.requireActual("../../context/AssetDetailContext");
         const { state } = useCtx(Ctx);
@@ -85,6 +76,14 @@ function Nav() {
             <button type="button" onClick={() => navigate("/databases/db1/assets/a2")}>
                 open a2
             </button>
+            <button
+                type="button"
+                onClick={() =>
+                    navigate({ pathname: "/databases/db1/assets/a1", search: "?tab=zipDownloads" })
+                }
+            >
+                open a1 download queue
+            </button>
         </>
     );
 }
@@ -108,6 +107,7 @@ describe("asset page across in-app navigation", () => {
         __resetCache();
         mockPaneAssets.length = 0;
         mockDetailStates.length = 0;
+        mockTabRequests.length = 0;
         mockFetchAllowedApiRoutes.mockResolvedValue(allowedRoutesResponse(ADMIN_ROUTES));
         mockFetchAsset.mockImplementation(async ({ assetId }: any) =>
             ASSETS[assetId] ? [true, ASSETS[assetId]] : [false, "Not Authorized", 403]
@@ -122,6 +122,17 @@ describe("asset page across in-app navigation", () => {
 
         await waitFor(() => expect(screen.getByTestId("pane")).toHaveTextContent("Bracket"));
         expect(screen.queryByText(unavailableHeader)).not.toBeInTheDocument();
+    });
+
+    it("hands ?tab= to the tabs and switches in place, without loading the asset again", async () => {
+        renderAt("a1");
+        expect(await screen.findByTestId("pane")).toHaveTextContent("Bracket");
+        expect(mockTabRequests[mockTabRequests.length - 1]).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: "open a1 download queue" }));
+        await waitFor(() =>
+            expect(mockTabRequests[mockTabRequests.length - 1]).toBe("zipDownloads")
+        );
+        expect(mockFetchAsset).toHaveBeenCalledTimes(1);
     });
 
     it("fetches each asset once", async () => {

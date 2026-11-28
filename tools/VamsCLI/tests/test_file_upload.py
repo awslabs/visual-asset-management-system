@@ -150,6 +150,47 @@ class TestFileProcessor:
         finally:
             tmp_path.unlink()
     
+    @pytest.mark.parametrize('suffix', ['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.bmp'])
+    def test_validate_file_for_upload_accepts_preview_extensions(self, suffix):
+        """Every image type the API takes as a preview passes validation (#1580)."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(b"test")
+            tmp_path = Path(tmp.name)
+
+        try:
+            validate_file_for_upload(tmp_path, "assetPreview")
+        finally:
+            tmp_path.unlink()
+
+    @pytest.mark.parametrize('suffix', ['.tga', '.tif', '.tiff'])
+    def test_validate_file_for_upload_rejects_non_displayable_previews(self, suffix):
+        """TGA and TIFF are not shown as their own preview, so they stay refused (#1580)."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(b"test")
+            tmp_path = Path(tmp.name)
+
+        try:
+            with pytest.raises(PreviewFileError, match="unsupported extension"):
+                validate_file_for_upload(tmp_path, "assetPreview")
+        finally:
+            tmp_path.unlink()
+
+    def test_validate_file_for_upload_preview_exactly_5_mib_is_accepted(self):
+        """A preview of exactly 5 MiB (5,242,880 bytes) passes, as at the API; one byte more fails."""
+        assert MAX_PREVIEW_FILE_SIZE == 5_242_880
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.webp') as tmp:
+            tmp.write(b"x" * MAX_PREVIEW_FILE_SIZE)
+            tmp_path = Path(tmp.name)
+
+        try:
+            validate_file_for_upload(tmp_path, "assetPreview")
+            with open(tmp_path, 'ab') as f:
+                f.write(b"x")
+            with pytest.raises(FileTooLargeError, match="exceeds maximum size"):
+                validate_file_for_upload(tmp_path, "assetPreview")
+        finally:
+            tmp_path.unlink()
+
     def test_validate_file_for_upload_invalid_preview_extension(self):
         """Test file validation for invalid preview file extensions."""
         with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
@@ -454,6 +495,12 @@ class TestFileUploadCommand:
         assert '--asset-preview' in result.output
         assert '--json-input' in result.output
         assert '--json-output' in result.output
+
+    def test_upload_help_names_the_asset_location_a_folder_path_in_the_asset(self, cli_runner):
+        """--asset-location is a folder path in the asset with a leading '/', never an S3 key (#1943)."""
+        result = cli_runner.invoke(cli, ['file', 'upload', '--help'], terminal_width=200)
+        assert result.exit_code == 0
+        assert 'Folder path in the asset to upload into, with a leading "/"' in ' '.join(result.output.split())
     
     def test_upload_missing_required_args(self, cli_runner, file_command_mocks):
         """Test upload command with missing required arguments."""
@@ -885,6 +932,52 @@ class TestFileUploadCommandJSONHandling:
                     # Should output valid JSON
                     output_json = json.loads(result.output.strip())
                     assert output_json == expected_result
+        finally:
+            Path(tmp_path).unlink()
+
+    def test_upload_json_output_names_each_sequence(self, cli_runner, file_command_mocks):
+        """Each sequence result's sequence_number is the upload manager's sequence_id (#1988)."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.txt') as tmp:
+            tmp.write(b"test content")
+            tmp_path = tmp.name
+
+        try:
+            with file_command_mocks as mocks:
+                mocks['api_client'].get_database.return_value = {
+                    'databaseId': 'test-db',
+                    'restrictFileUploadsToExtensions': ''
+                }
+
+                with patch('vamscli.commands.file.asyncio.run', new_callable=CoroutineClosingMock) as mock_run:
+                    # The shape UploadManager.upload_all returns: a completed and a failed sequence.
+                    mock_run.return_value = {
+                        "overall_success": False,
+                        "total_files": 2,
+                        "successful_files": 1,
+                        "failed_files": 1,
+                        "total_size": 24,
+                        "total_size_formatted": "24B",
+                        "upload_duration": 1.0,
+                        "average_speed": 24.0,
+                        "average_speed_formatted": "24B/s",
+                        "sequence_results": [
+                            {"sequence_id": 1, "successful_files": ["a.txt"], "failed_files": []},
+                            {"sequence_id": 2, "error": "boom", "successful_files": [],
+                             "failed_files": ["b.txt"]},
+                        ]
+                    }
+
+                    result = cli_runner.invoke(cli, [
+                        'file', 'upload',
+                        '-d', 'test-db',
+                        '-a', 'test-asset',
+                        '--json-output',
+                        '--hide-progress',
+                        tmp_path
+                    ])
+
+                    output_json = json.loads(result.output.strip())
+                    assert [s["sequence_number"] for s in output_json["sequence_results"]] == [1, 2]
         finally:
             Path(tmp_path).unlink()
 
@@ -1663,6 +1756,35 @@ class TestFileExtensionValidation:
         
         # Should handle spaces in extension list
         validate_file_extensions(files, ".glb, .gltf, .obj")
+
+    @pytest.mark.parametrize("relative_key", [
+        "part.x_t", "PART.X_T", "archive.tar.gz", "ARCHIVE.TAR.GZ", "dir/scan.v2.tar.gz",
+    ])
+    def test_validate_extensions_underscore_and_multi_part(self, relative_key):
+        """A multi-part (.tar.gz) or underscore (.x_t) entry matches as the API does (#371)."""
+        from vamscli.utils.file_processor import validate_file_extensions
+        validate_file_extensions([FileInfo(f"/tmp/{relative_key}", relative_key, 1024)], ".x_t,.tar.gz")
+
+    @pytest.mark.parametrize("relative_key", [
+        "archive.gz", "archive.tgz", "part.xt", "README", "file.", ".x_t", "..x_t",
+    ])
+    def test_validate_extensions_refuses_a_partial_or_missing_extension(self, relative_key):
+        from vamscli.utils.file_processor import validate_file_extensions
+        with pytest.raises(InvalidFileError, match="do not meet the restriction"):
+            validate_file_extensions([FileInfo(f"/tmp/{relative_key}", relative_key, 1024)], ".x_t,.tar.gz")
+
+    def test_validate_extensions_checks_the_name_the_file_is_stored_under(self):
+        """The API checks the relative key, not the local file name."""
+        from vamscli.utils.file_processor import validate_file_extensions
+        validate_file_extensions([FileInfo("/tmp/upload.bin", "model.glb", 1024)], ".glb")
+        with pytest.raises(InvalidFileError, match="model.bin"):
+            validate_file_extensions([FileInfo("/tmp/model.glb", "model.bin", 1024)], ".glb")
+
+    @pytest.mark.parametrize("entry", ["pdf", "..", ".tar."])
+    def test_an_entry_that_names_no_extension_matches_nothing(self, entry):
+        from vamscli.utils.file_processor import file_name_has_extension
+        for name in ("x.pdf", "x..", "x.tar."):
+            assert file_name_has_extension(name, entry) is False
     
     def test_upload_with_extension_restrictions(self, cli_runner, file_command_mocks):
         """Test upload command with database extension restrictions."""

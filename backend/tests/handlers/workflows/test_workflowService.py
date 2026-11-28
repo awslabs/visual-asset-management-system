@@ -42,8 +42,8 @@ def _real_to_update_expr(record, op="SET"):
     `tests/handlers/roles/test_createRole_partial_update.py`.
     """
     keys = record.keys()
-    keys_attr_names = ["#f{n}".format(n=x) for x in range(len(keys))]
-    values_attr_names = [":v{n}".format(n=x) for x in range(len(keys))]
+    keys_attr_names = ["#u{n}".format(n=x) for x in range(len(keys))]
+    values_attr_names = [":u{n}".format(n=x) for x in range(len(keys))]
     keys_map = {k: key for k, key in zip(keys_attr_names, keys)}
     values_map = {v1: record[v] for v, v1 in zip(keys, values_attr_names)}
     expr = "{op} ".format(op=op) + ", ".join(
@@ -56,6 +56,16 @@ def _real_to_update_expr(record, op="SET"):
 def bind_real_to_update_expr():
     with patch(f"{MOD}.to_update_expr", _real_to_update_expr):
         yield
+
+
+@pytest.fixture(autouse=True)
+def stub_triggers_table():
+    """The archive route deletes the workflow's trigger rows after its own write; these tests are about
+    the workflow row, so the triggers table answers an empty partition."""
+    table = MagicMock()
+    table.query.return_value = {"Items": []}
+    with patch(f"{MOD}._triggers_table", return_value=table):
+        yield table
 
 
 def _written(table):
@@ -146,7 +156,7 @@ class TestWorkflowServiceV2:
         mock_enforcer.return_value = _enforcer()
         mock_get_pipe.return_value = PIPELINE_REC
         mock_asl.ASL_SCHEMA_VERSION = 1
-        mock_asl.deploy_state_machine.return_value = ("", [])
+        mock_asl.deploy_state_machine.return_value = ("", [], "")
         table = MagicMock()
         table.get_item.return_value = {}  # no existing workflow
         mock_table.return_value = table
@@ -226,7 +236,7 @@ class TestWorkflowServiceV2:
         # resolution, so a workflow-denied caller cannot use either as an existence oracle.
         mock_claims.return_value = {"tokens": ["user1"]}
         mock_enforcer.return_value = _enforcer(api=True, obj=False)  # workflow POST denied
-        mock_asl.deploy_state_machine.return_value = ("", [])
+        mock_asl.deploy_state_machine.return_value = ("", [], "")
         table = MagicMock()
         mock_table.return_value = table
         body = {"databaseId": "db1", "workflowId": "wflow1", "workflowName": "W",

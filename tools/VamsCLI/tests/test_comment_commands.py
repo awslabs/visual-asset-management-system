@@ -1,10 +1,10 @@
 """Tests for the comment command group.
 
-The comments API carries six verbs that no CLI command could reach. The first class here is the
-check that would have caught that: it asserts the HTTP method and the exact path each `APIClient`
-method requests, so a missing, renamed, or mis-built route fails in the suite rather than against a
-live deployment. `tests/test_constants_contract.py` separately proves each path constant names a
-route the backend registers.
+The first class asserts the HTTP method and the exact path each comment `APIClient` method
+requests, so a missing, renamed, or mis-built route fails in the suite rather than against a live
+deployment. `tests/test_constants_contract.py` separately proves each path constant names a route
+the backend registers. Comments are addressed by database and asset id (two databases may hold
+assets with the same asset id), and a comment by its own id, which the API generates.
 """
 
 import json
@@ -13,9 +13,8 @@ from unittest.mock import MagicMock, Mock
 import pytest
 import requests
 
-from vamscli import constants
 from vamscli.main import cli
-from vamscli.utils.api_client import APIClient, build_comment_path
+from vamscli.utils.api_client import APIClient
 from vamscli.utils.exceptions import (
     AssetNotFoundError,
     CommentNotFoundError,
@@ -53,114 +52,93 @@ def _recording_client(payload=None):
 
 
 class TestCommentRequestPathsAndMethods:
-    """Each of the six comment verbs reaches the route the backend registers, with its own method."""
+    """Each comment verb reaches the route the backend registers, with its own method."""
 
     def test_list_asset_comments_gets_the_asset_route(self):
         client, calls = _recording_client({'message': []})
-        client.list_asset_comments('my-asset')
+        client.list_asset_comments('my-db', 'my-asset')
 
         assert calls[0]['method'] == 'GET'
-        assert calls[0]['endpoint'] == '/comments/assets/my-asset'
+        assert calls[0]['endpoint'] == '/comments/database/my-db/assets/my-asset'
         # An omitted pagination option leaves the deployment's own default in force.
         assert calls[0]['kwargs']['params'] == {}
 
     def test_list_asset_comments_forwards_only_the_pagination_given(self):
         client, calls = _recording_client({'message': []})
-        client.list_asset_comments('my-asset', max_items=25, page_size=5, starting_token='tok')
+        client.list_asset_comments('my-db', 'my-asset', max_items=25, page_size=5, starting_token='tok')
 
         assert calls[0]['kwargs']['params'] == {
             'maxItems': 25, 'pageSize': 5, 'startingToken': 'tok'}
 
-    def test_list_asset_version_comments_gets_the_version_route(self):
+    def test_list_asset_version_comments_filters_the_asset_route_by_version(self):
         client, calls = _recording_client({'message': []})
-        client.list_asset_version_comments('my-asset', 'v1')
+        client.list_asset_version_comments('my-db', 'my-asset', 'v1')
 
         assert calls[0]['method'] == 'GET'
-        assert calls[0]['endpoint'] == '/comments/assets/my-asset/assetVersionId/v1'
+        assert calls[0]['endpoint'] == '/comments/database/my-db/assets/my-asset'
+        assert calls[0]['kwargs']['params'] == {'assetVersionId': 'v1'}
 
-    def test_get_comment_gets_the_composite_key_route(self):
+    def test_get_comment_gets_the_comment_route(self):
         client, calls = _recording_client({'message': {'commentBody': 'hi'}})
-        client.get_comment('my-asset', 'v1', 'c-1')
+        client.get_comment('my-db', 'my-asset', 'c-1')
 
         assert calls[0]['method'] == 'GET'
-        assert calls[0]['endpoint'] == '/comments/assets/my-asset/assetVersionId:commentId/v1:c-1'
+        assert calls[0]['endpoint'] == '/comments/database/my-db/assets/my-asset/c-1'
 
-    def test_add_comment_posts_the_composite_key_route_with_the_body(self):
-        client, calls = _recording_client({'message': 'Succeeded'})
-        client.add_comment('my-asset', 'v1', 'c-1', 'a remark')
+    def test_add_comment_posts_the_asset_route_with_the_body_and_version(self):
+        client, calls = _recording_client({'message': 'Succeeded', 'commentId': 'c-new'})
+        result = client.add_comment('my-db', 'my-asset', 'v1', 'a remark')
 
         assert calls[0]['method'] == 'POST'
-        assert calls[0]['endpoint'] == '/comments/assets/my-asset/assetVersionId:commentId/v1:c-1'
-        # commentBody is the only field the handler reads, and it is required.
-        assert calls[0]['kwargs']['json'] == {'commentBody': 'a remark'}
+        assert calls[0]['endpoint'] == '/comments/database/my-db/assets/my-asset'
+        assert calls[0]['kwargs']['json'] == {'commentBody': 'a remark', 'assetVersionId': 'v1'}
+        assert result['commentId'] == 'c-new'
 
-    def test_update_comment_puts_the_composite_key_route_with_the_body(self):
+    def test_update_comment_puts_the_comment_route_with_the_body(self):
         client, calls = _recording_client({'message': 'Succeeded'})
-        client.update_comment('my-asset', 'v1', 'c-1', 'a corrected remark')
+        client.update_comment('my-db', 'my-asset', 'c-1', 'a corrected remark')
 
         assert calls[0]['method'] == 'PUT'
-        assert calls[0]['endpoint'] == '/comments/assets/my-asset/assetVersionId:commentId/v1:c-1'
+        assert calls[0]['endpoint'] == '/comments/database/my-db/assets/my-asset/c-1'
         assert calls[0]['kwargs']['json'] == {'commentBody': 'a corrected remark'}
 
-    def test_delete_comment_deletes_the_composite_key_route(self):
+    def test_delete_comment_deletes_the_comment_route(self):
         client, calls = _recording_client({'message': 'Comment deleted'})
-        client.delete_comment('my-asset', 'v1', 'c-1')
+        client.delete_comment('my-db', 'my-asset', 'c-1')
 
         assert calls[0]['method'] == 'DELETE'
-        assert calls[0]['endpoint'] == '/comments/assets/my-asset/assetVersionId:commentId/v1:c-1'
+        assert calls[0]['endpoint'] == '/comments/database/my-db/assets/my-asset/c-1'
         # The endpoint takes no body; sending one would be silently ignored, so none is built.
         assert 'json' not in calls[0]['kwargs']
 
     def test_every_comment_route_the_registry_declares_is_requested_by_a_method(self):
-        """The four declared comment paths are covered, as templates rather than as one instance."""
+        """The declared comment routes and methods are covered, as templates rather than one instance."""
         requested = set()
         for call in (
-            lambda c: c.list_asset_comments('a'),
-            lambda c: c.list_asset_version_comments('a', 'v'),
-            lambda c: c.get_comment('a', 'v', 'c'),
-            lambda c: c.add_comment('a', 'v', 'c', 'body'),
-            lambda c: c.update_comment('a', 'v', 'c', 'body'),
-            lambda c: c.delete_comment('a', 'v', 'c'),
+            lambda c: c.list_asset_comments('d', 'a'),
+            lambda c: c.list_asset_version_comments('d', 'a', 'v'),
+            lambda c: c.get_comment('d', 'a', 'c'),
+            lambda c: c.add_comment('d', 'a', 'v', 'body'),
+            lambda c: c.update_comment('d', 'a', 'c', 'body'),
+            lambda c: c.delete_comment('d', 'a', 'c'),
         ):
             client, calls = _recording_client({'message': {'commentBody': 'x'}})
             call(client)
             requested.add((calls[0]['method'], calls[0]['endpoint']))
 
         assert requested == {
-            ('GET', '/comments/assets/a'),
-            ('GET', '/comments/assets/a/assetVersionId/v'),
-            ('GET', '/comments/assets/a/assetVersionId:commentId/v:c'),
-            ('POST', '/comments/assets/a/assetVersionId:commentId/v:c'),
-            ('PUT', '/comments/assets/a/assetVersionId:commentId/v:c'),
-            ('DELETE', '/comments/assets/a/assetVersionId:commentId/v:c'),
+            ('GET', '/comments/database/d/assets/a'),
+            ('POST', '/comments/database/d/assets/a'),
+            ('GET', '/comments/database/d/assets/a/c'),
+            ('PUT', '/comments/database/d/assets/a/c'),
+            ('DELETE', '/comments/database/d/assets/a/c'),
         }
 
-
-class TestCompositeCommentKey:
-    """The `assetVersionId:commentId` segment is built, never formatted."""
-
-    def test_the_constant_cannot_be_formatted(self):
-        # This is why build_comment_path exists: str.format reads `commentId` as a format spec.
-        with pytest.raises(ValueError):
-            constants.API_COMMENTS_ASSET_VERSION_COMMENT.format(assetId='a', assetVersionId='v')
-
-    def test_the_two_parts_are_joined_with_a_colon(self):
-        assert build_comment_path('a', 'v1', 'c-1') == (
-            '/comments/assets/a/assetVersionId:commentId/v1:c-1')
-
-    @pytest.mark.parametrize('asset_version_id, comment_id', [
-        ('v1:extra', 'c-1'),
-        ('v1', 'c:1'),
-    ])
-    def test_a_colon_in_either_part_is_rejected(self, asset_version_id, comment_id):
-        # The handlers split the segment and read element [1] as the commentId, so a third colon
-        # shifts which value is validated. Rejecting here keeps that request unconstructible.
-        with pytest.raises(InvalidCommentDataError):
-            build_comment_path('a', asset_version_id, comment_id)
-
-    def test_an_empty_part_is_rejected(self):
-        with pytest.raises(InvalidCommentDataError):
-            build_comment_path('a', '', 'c-1')
+    def test_each_path_segment_stays_one_segment(self):
+        # An asset id may end with '#', which would end the path; it is sent percent-encoded.
+        client, calls = _recording_client({'message': {'commentBody': 'x'}})
+        client.get_comment('my-db', 'abc#', 'c-1')
+        assert calls[0]['endpoint'] == '/comments/database/my-db/assets/abc%23/c-1'
 
 
 class TestGetCommentAbsence:
@@ -169,11 +147,11 @@ class TestGetCommentAbsence:
     def test_an_empty_payload_raises_not_found(self):
         client, _ = _recording_client({'message': {}})
         with pytest.raises(CommentNotFoundError):
-            client.get_comment('my-asset', 'v1', 'missing')
+            client.get_comment('my-db', 'my-asset', 'missing')
 
     def test_a_present_comment_is_returned_with_its_envelope(self):
         client, _ = _recording_client({'message': {'commentBody': 'hi'}})
-        assert client.get_comment('my-asset', 'v1', 'c-1') == {'message': {'commentBody': 'hi'}}
+        assert client.get_comment('my-db', 'my-asset', 'c-1') == {'message': {'commentBody': 'hi'}}
 
 
 class _ErrorResponse:
@@ -218,21 +196,26 @@ class TestCommentErrorMapping:
     def test_a_404_on_update_is_a_comment_not_found(self):
         client = _client_with_transport(_ErrorResponse(404, {'message': 'Record not found'}))
         with pytest.raises(CommentNotFoundError) as raised:
-            client.update_comment('a', 'v', 'c', 'body')
-        # The handler reports a missing comment and an unresolvable asset with the same status, so
-        # its message has to survive into the error the operator sees.
+            client.update_comment('d', 'a', 'c', 'body')
+        # The handler reports a missing comment and a missing asset with the same status, so its
+        # message has to survive into the error the operator sees.
         assert 'Record not found' in str(raised.value)
 
     def test_a_404_on_a_listing_is_an_asset_not_found(self):
         client = _client_with_transport(_ErrorResponse(404, {'message': 'Asset not found'}))
         with pytest.raises(AssetNotFoundError):
-            client.list_asset_comments('a')
+            client.list_asset_comments('d', 'a')
 
     def test_a_400_on_add_is_invalid_comment_data(self):
         client = _client_with_transport(_ErrorResponse(400, {'message': 'commentBody is too long'}))
         with pytest.raises(InvalidCommentDataError) as raised:
-            client.add_comment('a', 'v', 'c', 'x' * 20000)
+            client.add_comment('d', 'a', 'v', 'x' * 20000)
         assert 'too long' in str(raised.value)
+
+    def test_a_400_on_get_is_invalid_comment_data(self):
+        client = _client_with_transport(_ErrorResponse(400, {'message': 'commentId is invalid'}))
+        with pytest.raises(InvalidCommentDataError):
+            client.get_comment('d', 'a', 'bad#id')
 
 
 class TestCommentList:
@@ -240,48 +223,52 @@ class TestCommentList:
         with generic_command_mocks('comment') as mocks:
             mocks['api_client'].list_asset_comments.return_value = {
                 'message': [{
-                    'assetVersionId:commentId': 'v1:c-1',
+                    'commentId': 'c-1',
+                    'assetVersionId': 'v1',
                     'commentBody': 'first remark',
                     'commentOwnerUsername': 'alice@example.com',
                     'dateCreated': '2026-09-01T00:00:00.000Z',
                 }]
             }
-            result = cli_runner.invoke(cli, ['comment', 'list', '-a', 'my-asset'])
+            result = cli_runner.invoke(cli, ['comment', 'list', '-d', 'my-db', '-a', 'my-asset'])
 
             assert result.exit_code == 0
-            assert 'first remark' in result.output
+            assert 'first remark' in result.output and 'c-1' in result.output
             mocks['api_client'].list_asset_comments.assert_called_once_with(
-                'my-asset', max_items=None, page_size=None, starting_token=None)
+                'my-db', 'my-asset', max_items=None, page_size=None, starting_token=None,
+                show_archived=False, asset_version_id=None)
 
-    def test_list_with_a_version_uses_the_version_route(self, cli_runner, generic_command_mocks):
+    def test_list_with_a_version_filters_by_it(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('comment') as mocks:
-            mocks['api_client'].list_asset_version_comments.return_value = {'message': []}
-            result = cli_runner.invoke(cli, ['comment', 'list', '-a', 'my-asset', '-v', 'v1'])
+            mocks['api_client'].list_asset_comments.return_value = {'message': []}
+            result = cli_runner.invoke(
+                cli, ['comment', 'list', '-d', 'my-db', '-a', 'my-asset', '-v', 'v1'])
 
             assert result.exit_code == 0
-            mocks['api_client'].list_asset_version_comments.assert_called_once_with(
-                'my-asset', 'v1', max_items=None, page_size=None, starting_token=None)
-            mocks['api_client'].list_asset_comments.assert_not_called()
+            mocks['api_client'].list_asset_comments.assert_called_once_with(
+                'my-db', 'my-asset', max_items=None, page_size=None, starting_token=None,
+                show_archived=False, asset_version_id='v1')
 
     def test_list_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('comment') as mocks:
             mocks['api_client'].list_asset_comments.return_value = {
-                'message': [{'assetVersionId:commentId': 'v1:c-1'}]}
-            result = cli_runner.invoke(cli, ['comment', 'list', '-a', 'my-asset', '--json-output'])
+                'message': [{'commentId': 'c-1', 'databaseId': 'my-db'}]}
+            result = cli_runner.invoke(
+                cli, ['comment', 'list', '-d', 'my-db', '-a', 'my-asset', '--json-output'])
 
             assert result.exit_code == 0
             # The envelope is unwrapped for output, as the pipeline and execution groups do.
-            assert json.loads(result.output) == [{'assetVersionId:commentId': 'v1:c-1'}]
+            assert json.loads(result.output) == [{'commentId': 'c-1', 'databaseId': 'my-db'}]
 
     def test_list_asset_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('comment') as mocks:
             mocks['api_client'].list_asset_comments.side_effect = AssetNotFoundError("Asset not found")
-            result = cli_runner.invoke(cli, ['comment', 'list', '-a', 'nope'])
+            result = cli_runner.invoke(cli, ['comment', 'list', '-d', 'my-db', '-a', 'nope'])
             assert result.exit_code != 0
 
     def test_list_no_setup(self, cli_runner, no_setup_command_mocks):
         with no_setup_command_mocks('comment'):
-            result = cli_runner.invoke(cli, ['comment', 'list', '-a', 'my-asset'])
+            result = cli_runner.invoke(cli, ['comment', 'list', '-d', 'my-db', '-a', 'my-asset'])
             # Global exception handling: SetupRequiredError propagates rather than being
             # printed, so `result.output` is empty and the message lives on the exception.
             # This matches the convention in test_tag_commands.py and its siblings.
@@ -290,56 +277,75 @@ class TestCommentList:
             assert isinstance(result.exception, SetupRequiredError)
 
 
+@pytest.mark.parametrize('args', [
+    ['comment', 'list', '-a', 'my-asset'],
+    ['comment', 'get', '-a', 'my-asset', '-c', 'c-1'],
+    ['comment', 'add', '-a', 'my-asset', '-v', 'v1', '-b', 'x'],
+    ['comment', 'update', '-a', 'my-asset', '-c', 'c-1', '-b', 'x'],
+    ['comment', 'delete', '-a', 'my-asset', '-c', 'c-1', '--confirm'],
+], ids=['list', 'get', 'add', 'update', 'delete'])
+def test_every_comment_command_requires_the_database_id(cli_runner, generic_command_mocks, args):
+    with generic_command_mocks('comment') as mocks:
+        result = cli_runner.invoke(cli, args)
+        assert result.exit_code == 2
+        assert '--database-id' in result.output
+        assert not mocks['api_client'].method_calls
+
+
 class TestCommentGet:
     def test_get_success(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('comment') as mocks:
             mocks['api_client'].get_comment.return_value = {
-                'message': {'assetVersionId:commentId': 'v1:c-1', 'commentBody': 'a remark'}}
+                'message': {'commentId': 'c-1', 'assetVersionId': 'v1', 'commentBody': 'a remark'}}
             result = cli_runner.invoke(
-                cli, ['comment', 'get', '-a', 'my-asset', '-v', 'v1', '-c', 'c-1'])
+                cli, ['comment', 'get', '-d', 'my-db', '-a', 'my-asset', '-c', 'c-1'])
 
             assert result.exit_code == 0
             assert 'a remark' in result.output
-            mocks['api_client'].get_comment.assert_called_once_with('my-asset', 'v1', 'c-1')
+            mocks['api_client'].get_comment.assert_called_once_with('my-db', 'my-asset', 'c-1')
 
     def test_get_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('comment') as mocks:
             mocks['api_client'].get_comment.side_effect = CommentNotFoundError("not found")
             result = cli_runner.invoke(
-                cli, ['comment', 'get', '-a', 'my-asset', '-v', 'v1', '-c', 'gone'])
+                cli, ['comment', 'get', '-d', 'my-db', '-a', 'my-asset', '-c', 'gone'])
             assert result.exit_code != 0
 
 
 class TestCommentAdd:
-    def test_add_sends_the_body_and_the_supplied_id(self, cli_runner, generic_command_mocks):
+    def test_add_sends_the_body_and_the_version(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('comment') as mocks:
-            mocks['api_client'].add_comment.return_value = {'message': 'Succeeded'}
+            mocks['api_client'].add_comment.return_value = {'message': 'Succeeded', 'commentId': 'c-new'}
             result = cli_runner.invoke(cli, [
-                'comment', 'add', '-a', 'my-asset', '-v', 'v1', '-c', 'c-1', '-b', 'a remark'])
+                'comment', 'add', '-d', 'my-db', '-a', 'my-asset', '-v', 'v1', '-b', 'a remark'])
 
             assert result.exit_code == 0
-            mocks['api_client'].add_comment.assert_called_once_with(
-                'my-asset', 'v1', 'c-1', 'a remark')
+            mocks['api_client'].add_comment.assert_called_once_with('my-db', 'my-asset', 'v1', 'a remark')
 
-    def test_add_generates_a_comment_id_and_reports_it(self, cli_runner, generic_command_mocks):
+    def test_add_reports_the_id_the_api_generated(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('comment') as mocks:
-            mocks['api_client'].add_comment.return_value = {'message': 'Succeeded'}
+            mocks['api_client'].add_comment.return_value = {'message': 'Succeeded', 'commentId': 'c-new'}
             result = cli_runner.invoke(cli, [
-                'comment', 'add', '-a', 'my-asset', '-v', 'v1', '-b', 'a remark',
+                'comment', 'add', '-d', 'my-db', '-a', 'my-asset', '-v', 'v1', '-b', 'a remark',
                 '--json-output'])
 
             assert result.exit_code == 0
-            generated = mocks['api_client'].add_comment.call_args[0][2]
-            assert generated, "no comment id was generated for the request"
-            # The endpoint acknowledges with a status string only, so the id has to come back here
-            # or the caller cannot address the comment it just created.
-            assert json.loads(result.output)['commentId'] == generated
+            assert json.loads(result.output) == {
+                'message': 'Succeeded', 'databaseId': 'my-db', 'assetId': 'my-asset',
+                'assetVersionId': 'v1', 'commentId': 'c-new'}
+
+    def test_add_no_longer_takes_a_comment_id(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('comment') as mocks:
+            result = cli_runner.invoke(cli, [
+                'comment', 'add', '-d', 'my-db', '-a', 'my-asset', '-v', 'v1', '-c', 'c-1', '-b', 'x'])
+            assert result.exit_code == 2
+            mocks['api_client'].add_comment.assert_not_called()
 
     def test_add_invalid_data(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('comment') as mocks:
             mocks['api_client'].add_comment.side_effect = InvalidCommentDataError("too long")
             result = cli_runner.invoke(cli, [
-                'comment', 'add', '-a', 'my-asset', '-v', 'v1', '-b', 'x' * 10])
+                'comment', 'add', '-d', 'my-db', '-a', 'my-asset', '-v', 'v1', '-b', 'x' * 10])
             assert result.exit_code != 0
 
 
@@ -348,18 +354,17 @@ class TestCommentUpdate:
         with generic_command_mocks('comment') as mocks:
             mocks['api_client'].update_comment.return_value = {'message': 'Succeeded'}
             result = cli_runner.invoke(cli, [
-                'comment', 'update', '-a', 'my-asset', '-v', 'v1', '-c', 'c-1',
-                '-b', 'corrected'])
+                'comment', 'update', '-d', 'my-db', '-a', 'my-asset', '-c', 'c-1', '-b', 'corrected'])
 
             assert result.exit_code == 0
             mocks['api_client'].update_comment.assert_called_once_with(
-                'my-asset', 'v1', 'c-1', 'corrected')
+                'my-db', 'my-asset', 'c-1', 'corrected')
 
     def test_update_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('comment') as mocks:
             mocks['api_client'].update_comment.side_effect = CommentNotFoundError("Record not found")
             result = cli_runner.invoke(cli, [
-                'comment', 'update', '-a', 'my-asset', '-v', 'v1', '-c', 'gone', '-b', 'x'])
+                'comment', 'update', '-d', 'my-db', '-a', 'my-asset', '-c', 'gone', '-b', 'x'])
             assert result.exit_code != 0
 
 
@@ -367,7 +372,7 @@ class TestCommentDelete:
     def test_delete_requires_confirm(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('comment') as mocks:
             result = cli_runner.invoke(cli, [
-                'comment', 'delete', '-a', 'my-asset', '-v', 'v1', '-c', 'c-1'])
+                'comment', 'delete', '-d', 'my-db', '-a', 'my-asset', '-c', 'c-1'])
 
             assert result.exit_code != 0
             # The request must not have been made — a confirmation gate that still deletes is worse
@@ -377,7 +382,7 @@ class TestCommentDelete:
     def test_delete_requires_confirm_in_json_mode(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('comment') as mocks:
             result = cli_runner.invoke(cli, [
-                'comment', 'delete', '-a', 'my-asset', '-v', 'v1', '-c', 'c-1', '--json-output'])
+                'comment', 'delete', '-d', 'my-db', '-a', 'my-asset', '-c', 'c-1', '--json-output'])
 
             assert result.exit_code != 0
             mocks['api_client'].delete_comment.assert_not_called()
@@ -387,14 +392,14 @@ class TestCommentDelete:
         with generic_command_mocks('comment') as mocks:
             mocks['api_client'].delete_comment.return_value = {'message': 'Comment deleted'}
             result = cli_runner.invoke(cli, [
-                'comment', 'delete', '-a', 'my-asset', '-v', 'v1', '-c', 'c-1', '--confirm'])
+                'comment', 'delete', '-d', 'my-db', '-a', 'my-asset', '-c', 'c-1', '--confirm'])
 
             assert result.exit_code == 0
-            mocks['api_client'].delete_comment.assert_called_once_with('my-asset', 'v1', 'c-1')
+            mocks['api_client'].delete_comment.assert_called_once_with('my-db', 'my-asset', 'c-1')
 
     def test_delete_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('comment') as mocks:
             mocks['api_client'].delete_comment.side_effect = CommentNotFoundError("Record not found")
             result = cli_runner.invoke(cli, [
-                'comment', 'delete', '-a', 'my-asset', '-v', 'v1', '-c', 'gone', '--confirm'])
+                'comment', 'delete', '-d', 'my-db', '-a', 'my-asset', '-c', 'gone', '--confirm'])
             assert result.exit_code != 0

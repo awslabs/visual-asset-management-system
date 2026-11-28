@@ -158,6 +158,9 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
         // Configure custom domain if enabled
         let certificate: acm.ICertificate | undefined;
         let domainNames: string[] | undefined;
+        // The viewer TLS floor applies only with a custom certificate. The default *.cloudfront.net
+        // certificate uses the policy CloudFront sets for it, so the property is left unset there.
+        let minimumProtocolVersion: cloudfront.SecurityPolicyProtocol | undefined;
 
         if (props.config.app.useCloudFront.customDomain.enabled) {
             // Import ACM certificate (must be in us-east-1 for CloudFront)
@@ -169,6 +172,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
 
             // Set custom domain name
             domainNames = [props.config.app.useCloudFront.customDomain.domainHost];
+            minimumProtocolVersion = cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021; // Required by security
         }
 
         const cloudFrontDistribution = new cloudfront.Distribution(this, "WebAppDistribution", {
@@ -197,17 +201,9 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                 viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             },
 
-            errorResponses: [
-                {
-                    httpStatus: 404,
-                    ttl: cdk.Duration.hours(0),
-                    responseHttpStatus: 200,
-                    responsePagePath: "/index.html",
-                },
-            ],
             defaultRootObject: "index.html",
             webAclId: props.webAcl != "" ? props.webAcl : undefined,
-            minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021, // Required by security
+            minimumProtocolVersion: minimumProtocolVersion,
             enableLogging: true,
             logBucket: props.webAppAccessLogsBucket,
             logFilePrefix: "cloudfront-access-logs/",
@@ -267,7 +263,7 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-CFR4",
-                    reason: "Custom domain support is now available through configuration. When custom domain is disabled, CloudFront uses the default certificate. When enabled, customers must provide their own ACM certificate in us-east-1.",
+                    reason: "With the default *.cloudfront.net certificate, CloudFront fixes the viewer security policy at TLSv1 (TLS 1.0 and later) for every path, /api/* included, and no distribution setting can raise it. A custom domain (app.useCloudFront.customDomain, with an ACM certificate in us-east-1) gets TLSv1.2_2021. See documentation/docusaurus-site/docs/architecture/security.md#amazon-cloudfront-viewer-tls.",
                 },
             ],
             true
@@ -306,43 +302,75 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
 }
 
 /**
- * Adds a proxy route from CloudFront /api to the api gateway url
+ * Adds the proxy routes from CloudFront `/api/*` to the API Gateway REST API.
  *
- * Deploys Api gateway (proxied through a CloudFront distribution at route `/api` if deploying through cloudfront)
+ * The anonymous bootstrap routes are registered under the stage's own `/api/` prefix, so each of
+ * those exact paths is forwarded with the stage as the origin path (`<cf>/api/version` reaches stage
+ * route `/api/version`). Every other `/api/*` path is forwarded without an origin path, so
+ * `<cf>/api/{route}` reaches stage `api`, route `/{route}` — the same URL shape as the execute-api
+ * invoke URL. The exact behaviors come first because CloudFront matches behaviors in order.
  *
- * Any Api's attached to the gateway should be located at `/api/*` so that requests are correctly proxied.
- * Make sure Api's return the header `"Cache-Control" = "no-cache, no-store"` or CloudFront will cache responses
+ * The catch-all uses the managed CachingDisabled and AllViewerExceptHostHeader policies: every
+ * header, cookie and query string except Host reaches the API, and nothing is cached. Managed policies
+ * do not count against the account's custom cache policy quota.
  *
+ * Make sure APIs return the header `"Cache-Control" = "no-cache, no-store"` or CloudFront will cache
+ * the bootstrap responses.
+ *
+ * `originCustomHeaders` (CloudFront deployments with an origin verification secret) is added to both
+ * origins. CloudFront sets an origin custom header on every request it forwards, replacing a viewer
+ * header of the same name; origin custom headers are not a CloudFront policy and use no policy quota.
  */
 export function addBehaviorToCloudFrontDistribution(
     scope: Construct,
     cloudFrontDistribution: cloudfront.Distribution,
     apiUrl: string,
-    apiStageName: string
+    apiStageName: string,
+    apiGatewayTimeoutSeconds: number,
+    originCustomHeaders?: Record<string, string>
 ) {
-    // Add general behavior for all other /api/* routes (excluding /api/amplify-config)
+    const stagePrefixedOrigin = new cloudfrontOrigins.HttpOrigin(apiUrl, {
+        originSslProtocols: [cloudfront.OriginSslPolicy.TLS_V1_2],
+        protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+        originPath: `/${apiStageName}`,
+        customHeaders: originCustomHeaders,
+    });
+    const stagePrefixedCachePolicy = new cloudfront.CachePolicy(scope, "ApiCachePolicy", {
+        // required or CloudFront will strip the Authorization token from the request.
+        // must be in the cache policy
+        headerBehavior: cloudfront.CacheHeaderBehavior.allowList("Authorization"),
+        enableAcceptEncodingGzip: true,
+    });
+    const stagePrefixedOriginRequestPolicy = new cloudfront.OriginRequestPolicy(
+        scope,
+        "ApiOriginRequestPolicy",
+        {
+            // required or CloudFront will strip all query strings off the request
+            queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
+        }
+    );
+    for (const routePath of Config.API_STAGE_PREFIXED_ROUTE_PATHS) {
+        cloudFrontDistribution.addBehavior(routePath, stagePrefixedOrigin, {
+            cachePolicy: stagePrefixedCachePolicy,
+            originRequestPolicy: stagePrefixedOriginRequestPolicy,
+            allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+            viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        });
+    }
+
+    // The origin response timeout is one second above the integration timeout, so the REST API answers a
+    // timed-out integration before CloudFront does, capped at 60 seconds (CloudFront's default quota).
     cloudFrontDistribution.addBehavior(
         "/api/*",
         new cloudfrontOrigins.HttpOrigin(apiUrl, {
             originSslProtocols: [cloudfront.OriginSslPolicy.TLS_V1_2],
             protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
-            originPath: `/${apiStageName}`,
+            readTimeout: Duration.seconds(Math.min(apiGatewayTimeoutSeconds + 1, 60)),
+            customHeaders: originCustomHeaders,
         }),
         {
-            cachePolicy: new cloudfront.CachePolicy(scope, "ApiCachePolicy", {
-                // required or CloudFront will strip the Authorization token from the request.
-                // must be in the cache policy
-                headerBehavior: cloudfront.CacheHeaderBehavior.allowList("Authorization"),
-                enableAcceptEncodingGzip: true,
-            }),
-            originRequestPolicy: new cloudfront.OriginRequestPolicy(
-                scope,
-                "ApiOriginRequestPolicy",
-                {
-                    // required or CloudFront will strip all query strings off the request
-                    queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
-                }
-            ),
+            cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+            originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
             allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
             viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         }

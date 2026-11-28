@@ -139,11 +139,15 @@ VamsCLI is a [Click](https://click.palletsprojects.com/) application. Source is 
 vamscli/
   main.py        # CLI entry point and command-group registration
   version.py     # Version constants
-  constants.py   # API endpoint paths and limit constants
+  constants.py   # API endpoint paths, limit constants and core feature-switch names
+  addon_constants.py   # Add-on feature-switch names (FEATURE_PHYSNA_ADDON), re-exported by constants.py
+  custom_constants.py  # Fork extension point: a fork's endpoint paths and FEATURE_CUSTOM_* names
   auth/          # Authentication providers (Cognito)
-  commands/      # One module per command group
+  commands/      # One module per command group; commands/custom/ is the fork extension point
   utils/         # APIClient, ProfileManager, exceptions, decorators, JSON output
 ```
+
+A fork adds its own commands, client methods and constants in the fork-owned files above, which upstream ships empty, instead of editing `main.py`, `constants.py` or `api_client.py`. See [Extending VAMS in a Fork](../developer/customizing-vams.md#6-cli-command).
 
 ### Adding a new command
 
@@ -159,6 +163,40 @@ vamscli/
 
 :::tip[Conventions]
 Match the established patterns: never `print()` directly in commands that support `--json-output`, obtain the profile manager with `get_profile_manager_from_context(ctx)`, keep all endpoint paths in `constants.py`, and catch only `BusinessLogicError` subclasses in commands (global infrastructure errors propagate to the top-level handler). The full rule set lives in `tools/VamsCLI/CLAUDE.md`.
+:::
+
+---
+
+## Using the API client from Python
+
+Every VamsCLI command calls the VAMS API through `APIClient` (`vamscli/utils/api_client.py`). A Python program can use the same client in one of two ways.
+
+**With a saved profile.** The client reads the token from a profile that `vamscli auth login` created, refreshes it when it expires, and saves the refreshed token back to the profile:
+
+```python
+from vamscli.utils.api_client import APIClient
+from vamscli.utils.profile import ProfileManager
+
+profile_manager = ProfileManager("default")
+config = profile_manager.load_config()
+api_client = APIClient(config["api_gateway_url"], profile_manager)
+```
+
+**With a per-call token.** A process that serves several users, such as a remotely hosted MCP server, creates one client per request from the caller's own token:
+
+```python
+api_client = APIClient(api_gateway_url, bearer_token=caller_token)
+```
+
+-   The token is held in memory on that client only. No profile is read or written, and the token is never saved or refreshed.
+-   Pass the raw token: the Cognito or external IdP JWT, or a VAMS API key, without a `Bearer ` prefix. The client sends it as `Authorization: Bearer <token>`. A value that contains whitespace or control characters raises `ValueError`.
+-   Requests carry the caller's own permissions. The API's authorizer and the caller's roles decide every request, as for any other client.
+-   A rejected token is reported after one attempt: `AuthenticationError` for a `401` (for example an expired token), and `PermissionDeniedError` when the authorizer refuses it. Other errors are raised as for a profile-based client.
+-   Two clients created with different tokens share no state, so a client must not be reused for another caller.
+-   The request log is still written, with the `Authorization` header redacted.
+
+:::note
+No VamsCLI command takes a per-call token. To sign in from the command line, use `vamscli auth login`, or `vamscli auth login --user-id <user-id> --token-override-stdin` for a token from an external identity provider.
 :::
 
 ---
@@ -215,3 +253,4 @@ See [General Troubleshooting and Debugging](troubleshooting/general.md) for log 
 -   [Command Reference](command-reference.md)
 -   [Automation and Scripting](automation.md)
 -   [Local Development Environment Setup](../developer/setup.md) — full-stack (frontend, backend, CDK, CLI) developer setup
+-   [Extending VAMS in a Fork](../developer/customizing-vams.md) — custom CLI commands, client methods and constants in fork-owned files

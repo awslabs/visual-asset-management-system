@@ -13,6 +13,7 @@ For asset management, see [Assets](assets.md). For file operations, see [Files](
 -   **File Metadata vs. File Attributes**: Both use the same API path with a `type` query parameter. File metadata stores descriptive information, while file attributes store operational data (e.g., `primaryType`).
 -   **Bulk Operations**: All create, update, and delete operations support bulk processing of multiple metadata items in a single request. Responses include partial success information.
 -   **Schema Validation**: When metadata schemas are configured, metadata values are validated against the schema on create and update operations.
+-   **Authorization Before Existence**: Every metadata endpoint decides whether the caller may act on the asset, the database or both linked assets before it reports whether they exist. A caller who is not allowed receives `403` whether or not they exist; only an allowed caller is told that an asset or database is not found. A role allowed assets only by asset name, type or tags receives `403` for an asset ID that does not exist.
 
 ### Supported Value Types
 
@@ -68,6 +69,7 @@ Retrieves metadata items for the specified asset, one page at a time. When more 
 | `pageSize`       | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `startingToken`  | query    | string  | No       | Continuation token from a previous response.                                                      |
 | `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot.                                         |
+| `showArchived`   | query    | boolean | No       | When `true`, also reads the metadata of an archived asset. Default: `false`.                      |
 
 **Response:**
 
@@ -104,12 +106,11 @@ When a metadata schema applies to the entity, each metadata item is enriched wit
 
 **Error Responses:**
 
-| Status | Description                                     |
-| ------ | ----------------------------------------------- |
-| `400`  | Invalid parameters or pagination token.         |
-| `403`  | Not authorized to view metadata for this asset. |
-| `404`  | Asset not found.                                |
-| `500`  | Internal server error.                          |
+| Status | Description                                                                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or pagination token, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized to view metadata for this asset.                                                                                                  |
+| `500`  | Internal server error.                                                                                                                           |
 
 ---
 
@@ -169,13 +170,12 @@ Adds new metadata items to an asset. Supports bulk creation of multiple items in
 
 **Error Responses:**
 
-| Status | Description                                                                                |
-| ------ | ------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, validation error, or schema validation failure.                        |
-| `403`  | Not authorized to create metadata for this asset.                                          |
-| `404`  | Asset not found.                                                                           |
-| `500`  | Internal server error.                                                                     |
-| `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
+| Status | Description                                                                                                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, validation error, or schema validation failure, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized to create metadata for this asset.                                                                                                                            |
+| `500`  | Internal server error.                                                                                                                                                       |
+| `503`  | The existing record count could not be checked, so nothing was written. Retry the request.                                                                                   |
 
 ---
 
@@ -214,6 +214,8 @@ Updates existing metadata items for an asset. Supports two update modes.
 
 :::warning[REPLACE_ALL Mode]
 The `replace_all` update type deletes all existing metadata and replaces it with the provided items. This mode requires the user to have `PUT`, `POST`, and `DELETE` permissions on the entity. It is limited to 500 items per operation and includes automatic rollback on failure.
+
+A `replace_all` that removes stored keys (keys the entity holds that the request leaves out) also requires the `DELETE` method on the same API route, the permission the route's delete operation needs. Without it the request returns `403` and nothing is written. A `replace_all` that only adds or updates keys needs only `PUT` on the route. The same rule applies to the file, database and asset link metadata update endpoints.
 :::
 
 **Response:**
@@ -233,12 +235,11 @@ The `replace_all` update type deletes all existing metadata and replaces it with
 
 **Error Responses:**
 
-| Status | Description                                       |
-| ------ | ------------------------------------------------- |
-| `400`  | Invalid parameters or validation error.           |
-| `403`  | Not authorized to update metadata for this asset. |
-| `404`  | Asset not found.                                  |
-| `500`  | Internal server error.                            |
+| Status | Description                                                                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or validation error, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized to update metadata for this asset.                                                                                                |
+| `500`  | Internal server error.                                                                                                                           |
 
 ---
 
@@ -284,18 +285,19 @@ Removes metadata items from an asset by key.
 
 **Error Responses:**
 
-| Status | Description                                       |
-| ------ | ------------------------------------------------- |
-| `400`  | Invalid parameters.                               |
-| `403`  | Not authorized to delete metadata for this asset. |
-| `404`  | Asset not found.                                  |
-| `500`  | Internal server error.                            |
+| Status | Description                                                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized to delete metadata for this asset.                                                                            |
+| `500`  | Internal server error.                                                                                                       |
 
 ---
 
 ## File Metadata
 
 File-level metadata is attached to individual files within an asset. The same endpoint path handles both file metadata and file attributes, distinguished by a `type` query parameter.
+
+A file's records are keyed by the path the file list shows the file at (`relativePath` in [List Files](files.md#list-files)). `filePath` names the file by that path or by the file's full S3 key (`key` in the file list), and both forms read and write the same records for every kind of asset: an asset in its own folder, an asset created on an existing folder or object, and an asset in a bucket with a base prefix. `filePath` follows the [file path](files.md#concepts) rule: a value with a leading `/` is the file's path in the asset, so `/{assetId}/x.glb` in an asset stored at `{assetId}/` names the file in the subfolder `{assetId}/`, and a value without one is the file's full key when it is one of the asset's keys.
 
 ### Get File Metadata
 
@@ -309,12 +311,13 @@ Retrieves metadata for a specific file within an asset.
 | ---------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------- |
 | `databaseId`     | path     | string  | Yes      | Database identifier.                                                                              |
 | `assetId`        | path     | string  | Yes      | Asset identifier.                                                                                 |
-| `filePath`       | query    | string  | Yes      | Relative file path.                                                                               |
+| `filePath`       | query    | string  | Yes      | The file's listed path (`relativePath`) or its full key (`key`).                                  |
 | `type`           | query    | string  | Yes      | `"metadata"` to retrieve file metadata, or `"attribute"` to retrieve file attributes.             |
 | `maxItems`       | query    | integer | No       | Maximum items to return. Default: `1000`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `pageSize`       | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `startingToken`  | query    | string  | No       | Continuation token.                                                                               |
 | `assetVersionId` | query    | string  | No       | Retrieve metadata from a specific asset version snapshot.                                         |
+| `showArchived`   | query    | boolean | No       | When `true`, also reads the file metadata of an archived asset. Default: `false`.                 |
 
 **Response:**
 
@@ -335,12 +338,11 @@ Retrieves metadata for a specific file within an asset.
 
 **Error Responses:**
 
-| Status | Description                               |
-| ------ | ----------------------------------------- |
-| `400`  | Invalid parameters or missing `filePath`. |
-| `403`  | Not authorized.                           |
-| `404`  | Asset or file not found.                  |
-| `500`  | Internal server error.                    |
+| Status | Description                                                                                                                                        |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters or missing `filePath`, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized.                                                                                                                                    |
+| `500`  | Internal server error.                                                                                                                             |
 
 ---
 
@@ -373,11 +375,11 @@ Adds metadata items to a specific file.
 }
 ```
 
-| Field      | Type   | Required | Description                    |
-| ---------- | ------ | -------- | ------------------------------ |
-| `filePath` | string | Yes      | Relative file path.            |
-| `type`     | string | Yes      | `"metadata"` or `"attribute"`. |
-| `metadata` | array  | Yes      | List of metadata items.        |
+| Field      | Type   | Required | Description                                                      |
+| ---------- | ------ | -------- | ---------------------------------------------------------------- |
+| `filePath` | string | Yes      | The file's listed path (`relativePath`) or its full key (`key`). |
+| `type`     | string | Yes      | `"metadata"` or `"attribute"`.                                   |
+| `metadata` | array  | Yes      | List of metadata items.                                          |
 
 **Response:**
 
@@ -385,13 +387,12 @@ Returns a bulk operation response (same format as asset metadata).
 
 **Error Responses:**
 
-| Status | Description                                                                                |
-| ------ | ------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters.                                                                        |
-| `403`  | Not authorized.                                                                            |
-| `404`  | Asset or file not found.                                                                   |
-| `500`  | Internal server error.                                                                     |
-| `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
+| Status | Description                                                                                                                                                                                          |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`) or the file does not exist (`VAMS General Error: File not found in S3`). |
+| `403`  | Not authorized.                                                                                                                                                                                      |
+| `500`  | Internal server error.                                                                                                                                                                               |
+| `503`  | The existing record count could not be checked, so nothing was written. Retry the request.                                                                                                           |
 
 ---
 
@@ -418,7 +419,7 @@ Updates metadata items for a specific file.
 }
 ```
 
-`filePath` and `type` are required. `type` is `"metadata"` or `"attribute"`; `updateType` is `"update"` (default) or `"replace_all"`.
+`filePath` and `type` are required. `type` is `"metadata"` or `"attribute"`; `updateType` is `"update"` (default) or `"replace_all"`. A `replace_all` that removes stored keys also requires `DELETE` on this route and returns `403` without it (see [Update Asset Metadata](#update-asset-metadata)).
 
 **Response:**
 
@@ -426,12 +427,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description              |
-| ------ | ------------------------ |
-| `400`  | Invalid parameters.      |
-| `403`  | Not authorized.          |
-| `404`  | Asset or file not found. |
-| `500`  | Internal server error.   |
+| Status | Description                                                                                                                                                                                          |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`) or the file does not exist (`VAMS General Error: File not found in S3`). |
+| `403`  | Not authorized.                                                                                                                                                                                      |
+| `500`  | Internal server error.                                                                                                                                                                               |
 
 ---
 
@@ -459,12 +459,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description              |
-| ------ | ------------------------ |
-| `400`  | Invalid parameters.      |
-| `403`  | Not authorized.          |
-| `404`  | Asset or file not found. |
-| `500`  | Internal server error.   |
+| Status | Description                                                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the asset, the asset does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized.                                                                                                              |
+| `500`  | Internal server error.                                                                                                       |
 
 ---
 
@@ -511,12 +510,11 @@ Retrieves metadata items for the specified database, one page at a time.
 
 **Error Responses:**
 
-| Status | Description                                        |
-| ------ | -------------------------------------------------- |
-| `400`  | Invalid parameters.                                |
-| `403`  | Not authorized to view metadata for this database. |
-| `404`  | Database not found.                                |
-| `500`  | Internal server error.                             |
+| Status | Description                                                                                                                           |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the database, the database does not exist (`VAMS General Error: Database not found`). |
+| `403`  | Not authorized to view metadata for this database.                                                                                    |
+| `500`  | Internal server error.                                                                                                                |
 
 ---
 
@@ -552,13 +550,12 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description                                                                                |
-| ------ | ------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters or schema validation failure.                                           |
-| `403`  | Not authorized.                                                                            |
-| `404`  | Database not found.                                                                        |
-| `500`  | Internal server error.                                                                     |
-| `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
+| Status | Description                                                                                                                                                        |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or schema validation failure, or, for a caller allowed on the database, the database does not exist (`VAMS General Error: Database not found`). |
+| `403`  | Not authorized.                                                                                                                                                    |
+| `500`  | Internal server error.                                                                                                                                             |
+| `503`  | The existing record count could not be checked, so nothing was written. Retry the request.                                                                         |
 
 ---
 
@@ -583,18 +580,19 @@ Updates metadata items for a database.
 }
 ```
 
+`updateType` is `"update"` (default) or `"replace_all"`. A `replace_all` that removes stored keys also requires `DELETE` on this route and returns `403` without it (see [Update Asset Metadata](#update-asset-metadata)).
+
 **Response:**
 
 Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `400`  | Invalid parameters.    |
-| `403`  | Not authorized.        |
-| `404`  | Database not found.    |
-| `500`  | Internal server error. |
+| Status | Description                                                                                                                           |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the database, the database does not exist (`VAMS General Error: Database not found`). |
+| `403`  | Not authorized.                                                                                                                       |
+| `500`  | Internal server error.                                                                                                                |
 
 ---
 
@@ -618,12 +616,11 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `400`  | Invalid parameters.    |
-| `403`  | Not authorized.        |
-| `404`  | Database not found.    |
-| `500`  | Internal server error. |
+| Status | Description                                                                                                                           |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or, for a caller allowed on the database, the database does not exist (`VAMS General Error: Database not found`). |
+| `403`  | Not authorized.                                                                                                                       |
+| `500`  | Internal server error.                                                                                                                |
 
 ---
 
@@ -645,6 +642,7 @@ Retrieves metadata items for the specified asset link, one page at a time.
 | `maxItems`      | query    | integer | No       | Maximum items to return. Default: `1000`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `pageSize`      | query    | integer | No       | Page size for pagination. Default: `100`. Maximum: `1000`; a larger value is rejected with `400`. |
 | `startingToken` | query    | string  | No       | Continuation token.                                                                               |
+| `showArchived`  | query    | boolean | No       | When `true`, also reads the metadata of a link whose linked asset is archived. Default: `false`.  |
 
 **Response:**
 
@@ -665,12 +663,11 @@ Retrieves metadata items for the specified asset link, one page at a time.
 
 **Error Responses:**
 
-| Status | Description                                          |
-| ------ | ---------------------------------------------------- |
-| `400`  | Invalid parameters or pagination token.              |
-| `403`  | Not authorized to view metadata for this asset link. |
-| `404`  | Asset link not found.                                |
-| `500`  | Internal server error.                               |
+| Status | Description                                                                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or pagination token, or the asset link does not exist (`VAMS General Error: Asset link not found`), or, for a caller allowed on both linked assets, one of them does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized to view metadata for this asset link.                                                                                                                                                                                       |
+| `500`  | Internal server error.                                                                                                                                                                                                                     |
 
 ---
 
@@ -706,13 +703,12 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description                                                                                |
-| ------ | ------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters or validation error.                                                    |
-| `403`  | Not authorized.                                                                            |
-| `404`  | Asset link not found.                                                                      |
-| `500`  | Internal server error.                                                                     |
-| `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
+| Status | Description                                                                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or validation error, or the asset link does not exist (`VAMS General Error: Asset link not found`), or, for a caller allowed on both linked assets, one of them does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized.                                                                                                                                                                                                                            |
+| `500`  | Internal server error.                                                                                                                                                                                                                     |
+| `503`  | The existing record count could not be checked, so nothing was written. Retry the request.                                                                                                                                                 |
 
 ---
 
@@ -748,18 +744,21 @@ Updates metadata items for an asset link.
 | `metadata`   | array  | Yes      | List of metadata items to update.        |
 | `updateType` | string | No       | `"update"` (default) or `"replace_all"`. |
 
+When the database of either linked asset sets `restrictMetadataOutsideSchemas` and an `assetLinkMetadata` schema applies, both update types refuse a key that is new to the link and not defined by the schema, as create does. A key already stored on the link passes, including when its value changes. Pipeline write-backs are not restricted.
+
+A `replace_all` that removes stored keys also requires `DELETE` on this route and returns `403` without it (see [Update Asset Metadata](#update-asset-metadata)).
+
 **Response:**
 
 Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `400`  | Invalid parameters.    |
-| `403`  | Not authorized.        |
-| `404`  | Asset link not found.  |
-| `500`  | Internal server error. |
+| Status | Description                                                                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or validation error, or the asset link does not exist (`VAMS General Error: Asset link not found`), or, for a caller allowed on both linked assets, one of them does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized.                                                                                                                                                                                                                            |
+| `500`  | Internal server error.                                                                                                                                                                                                                     |
 
 ---
 
@@ -789,18 +788,19 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description            |
-| ------ | ---------------------- |
-| `400`  | Invalid parameters.    |
-| `403`  | Not authorized.        |
-| `404`  | Asset link not found.  |
-| `500`  | Internal server error. |
+| Status | Description                                                                                                                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or the asset link does not exist (`VAMS General Error: Asset link not found`), or, for a caller allowed on both linked assets, one of them does not exist (`VAMS General Error: Asset not found`). |
+| `403`  | Not authorized.                                                                                                                                                                                                        |
+| `500`  | Internal server error.                                                                                                                                                                                                 |
 
 ---
 
 ## Metadata Schemas
 
-A metadata schema declares the fields that metadata on a given entity type should carry, along with each field's value type, display order, dependencies, and default value. Schemas drive the schema-enrichment fields on the metadata `GET` responses, and a database that sets `restrictMetadataOutsideSchemas` accepts only metadata keys an applicable schema declares.
+A metadata schema declares the fields that metadata on a given entity type should carry, along with each field's value type, display order, dependencies, and default value. Schemas drive the schema-enrichment fields on the metadata `GET` responses, and a database that sets `restrictMetadataOutsideSchemas` refuses a user or API write that adds a metadata key no applicable schema declares. A key already stored on the record passes, including when its value changes, and pipeline write-backs are not restricted.
+
+On a user or API create or update, value types and controlled lists are checked for the keys the write adds or changes, and for schema defaults it adds. A stored value the schema would refuse (for example one a pipeline wrote back) does not refuse a write that leaves it unchanged, including a `replace_all` that sends it back as read, and changing it to the type the schema declares is not refused as a type change. Required fields and `dependsOnFieldKeyName` dependencies are checked on the whole record as it will be after the write.
 
 A schema is scoped to one database and one entity type. Use `GLOBAL` as the `databaseId` for a schema that applies across every database. Schemas are authorized with the `metadataSchema` object type on `databaseId`, `metadataSchemaName`, and `metadataSchemaEntityType`.
 
@@ -949,7 +949,7 @@ POST /metadataschema
 | `fileKeyTypeRestriction`   | string  | No       | Comma-delimited file extensions the schema applies to, each written with its leading dot (`.glb`). Accepted only for `fileMetadata` and `fileAttribute` entity types. |
 | `enabled`                  | boolean | No       | Whether the schema is enforced. Defaults to `true`.                                                                                                                   |
 
-Write each `fileKeyTypeRestriction` entry with its leading dot (for example `.glb,.usd`). A file is matched by its dotted extension, so an entry without the dot, with a second dot or with a path separator is rejected with a `400`. See [File type restriction matching](../user-guide/metadata-management.md#file-type-restriction-matching).
+Write each `fileKeyTypeRestriction` entry with its leading dot (for example `.glb,.usd`). A file is matched by its dotted extension, so an entry without the dot, with a second dot or with a path separator is rejected with a `400`. A file with no extension is validated only against schemas with no file type restriction. See [File type restriction matching](../user-guide/metadata-management.md#file-type-restriction-matching).
 
 #### Request body example
 
@@ -1143,6 +1143,8 @@ Bulk operations can partially succeed. Check both `successCount` and `failureCou
 | Maximum key length                  | 256 characters | Maximum length of a `metadataKey`.                                                   |
 | Maximum items per REPLACE_ALL       | 500            | Maximum metadata items in a single `replace_all` operation.                          |
 | Maximum `pageSize` and `maxItems`   | 1,000          | Largest value either metadata pagination parameter may carry on a read.              |
+
+The record limits apply to user and API writes. Pipeline write-backs are exempt and can store more than 500 records on an entity. While an entity holds more than 500 records, a create or `update` request on it returns `400`, even one that changes only existing keys; a `replace_all` of 500 items or fewer and delete requests are accepted.
 
 :::note[Paging a metadata read]
 `pageSize` and `maxItems` each size a single response, and the page served is the smaller of the two. `pageSize` defaults to 100 and `maxItems` to 1,000, so a read with no pagination parameters returns 100 records. A value above the maximum in the table above is rejected with `400` rather than reduced to it, so a caller asking for more than one response can hold learns that from the answer instead of reading a shortened page as the complete set. When records remain beyond the page, the response carries a `NextToken`; pass it as `startingToken` to read the next page, and repeat until no `NextToken` is returned — the whole set is reachable that way whatever the page size.

@@ -14,7 +14,9 @@
                 { "name": "RestrictedExtensions_QUERYARGUMENTS", "action": "count" },
                 { "name": "GenericLFI_URIPATH", "action": "count" },
                 { "name": "GenericLFI_QUERYARGUMENTS", "action": "count" },
-                { "name": "GenericLFI_BODY", "action": "count" }
+                { "name": "GenericLFI_BODY", "action": "count" },
+                { "name": "GenericRFI_QUERYARGUMENTS", "action": "count" },
+                { "name": "GenericRFI_BODY", "action": "count" }
             ]
         },
         {

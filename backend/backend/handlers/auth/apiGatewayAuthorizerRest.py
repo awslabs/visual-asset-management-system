@@ -7,14 +7,27 @@ paths). Differs from the HTTP authorizer only in I/O: REST input (methodArn, ide
 and IAM-policy output. An authenticated Allow uses a wildcard Resource scoped to the
 API+stage so a cached Allow applies to every method (authorization caching correctness);
 an ignored-path Allow establishes no identity and is scoped to the ignored paths.
-"""
-from aws_lambda_powertools import Logger
-from common.auth.apiEvent import normalize_event
-from common.auth.authorizerCore import authenticate_request, API_FRONTED, IGNORED_PATHS
-from common.auth.clientIp import resolve_client_ip
-from customLogging.auditLogging import log_authorization_gateway
 
-logger = Logger()
+A credential that does not authenticate (missing, malformed, expired, rejected, or an
+unknown, disabled or expired API key) is answered with 401 by raising "Unauthorized"; every
+other denial is a Deny policy, which API Gateway answers with 403 (issue #1212).
+"""
+import json
+
+from common.auth.apiEvent import normalize_event
+from common.auth.authorizerCore import (
+    authenticate_request,
+    API_FRONTED,
+    FAILURE_UNAUTHENTICATED,
+    IGNORED_PATHS,
+    external_user_id_claim_configured,
+)
+from common.auth.clientIp import origin_verify_audit_context, resolve_client_ip
+from common.auth.viewerAddress import ORIGIN_VERIFY_DIGEST_CONTEXT_KEY
+from customLogging.auditLogging import log_authorization_gateway
+from customLogging.logger import safeLogger
+
+logger = safeLogger(service_name="ApiGatewayAuthorizerRest")
 
 
 def _api_stage_prefix(method_arn: str) -> str:
@@ -55,6 +68,25 @@ def _wildcard_resource(method_arn: str) -> str:
     return f"{_api_stage_prefix(method_arn)}/*"
 
 
+def _principal_id(ctx: dict) -> str:
+    """The principalId of an authenticated Allow.
+
+    Unchanged unless lambdaAuthorizorJWTUserIdClaim is set: the token's sub, else its
+    cognito:username, else "user", as in every earlier release. With the claim set the principal is
+    the user id the authorizer resolved (vams:tokens), the id used for roles, audit and handlers.
+    Nothing reads principalId as a decision input and the authorizer result cache is keyed on the
+    identity source, not on the principal.
+    """
+    if external_user_id_claim_configured():
+        try:
+            tokens = json.loads(ctx.get("vams:tokens") or "[]")
+            if isinstance(tokens, list) and tokens and isinstance(tokens[0], str) and tokens[0].strip():
+                return tokens[0]
+        except (TypeError, ValueError):
+            pass
+    return ctx.get("sub") or ctx.get("cognito:username") or "user"
+
+
 def _policy(principal_id: str, effect: str, resource, context: dict = None) -> dict:
     # resource is a single ARN or a list of ARNs (IAM accepts either form).
     out = {
@@ -84,10 +116,10 @@ def _set_audit_client_ip(event) -> None:
     address ``resolve_client_ip`` resolved — the same address the IP allow-list decision
     was made on, so a denial reason and the IP it refers to always agree.
 
-    Trust follows resolve_client_ip exactly: forwarding headers count only on a CloudFront
-    deployment, where the record names the viewer rather than the edge; on ALB and direct
-    execute-api deployments every header is caller-controlled and the unforgeable TCP peer
-    is used. ``requestContext.identity.sourceIp`` is left untouched, so the immediate peer
+    Trust follows resolve_client_ip exactly: forwarding headers count only for a request
+    CloudFront forwarded on a CloudFront deployment (it carries the origin verification value),
+    where the record names the viewer rather than the edge; for every other request the TCP
+    peer is used. ``requestContext.identity.sourceIp`` is left untouched, so the immediate peer
     stays visible in the event echo the audit entry carries.
 
     Best-effort: a failure here degrades the audit record rather than the authorization
@@ -110,7 +142,21 @@ def _set_audit_client_ip(event) -> None:
         logger.warning(f"Could not resolve client IP for the authorization audit record: {str(e)}")
 
 
+# The exact message API Gateway maps to a 401 UNAUTHORIZED response. A Lambda authorizer
+# that raises with any other message produces a 500, so this string must not change.
+_UNAUTHORIZED_MESSAGE = "Unauthorized"
+
+
 def lambda_handler(event, context):
+    """Return an IAM policy, or raise Exception("Unauthorized") for a 401.
+
+    API Gateway answers a Deny policy with 403 and the exception "Unauthorized" with 401
+    (issue #1212). Only a result whose failure kind is FAILURE_UNAUTHENTICATED (the
+    credential did not authenticate, so signing in again can fix it) is raised. Every other
+    denial, a result without a failure kind, and any unexpected error stay a Deny. The audit
+    record is written before either answer, and in both cases the client body is API
+    Gateway's own generic message: the internal reason is never returned.
+    """
     method_arn = event.get("methodArn", "*")
     resource = _wildcard_resource(method_arn) if method_arn != "*" else "*"
     try:
@@ -118,17 +164,31 @@ def lambda_handler(event, context):
         # After authenticate_request so nothing the auth decision reads is touched first.
         _set_audit_client_ip(event)
         log_authorization_gateway(event, res["authorized"], res.get("reason"),
+                                  token_audience=res.get("tokenAudience"),
                                   verified_context=res.get("context"))
         if not res["authorized"]:
-            return _policy("user", "Deny", resource)
-        if res.get("ignoredPath"):
-            ignored_resource = (
-                _ignored_path_resources(method_arn) if method_arn != "*" else "*"
-            )
-            return _policy("user", "Allow", ignored_resource)
-        ctx = res.get("context") or {}
-        principal = ctx.get("sub") or ctx.get("cognito:username") or "user"
-        return _policy(principal, "Allow", resource, ctx)
+            if res.get("failure") != FAILURE_UNAUTHENTICATED:
+                return _policy("user", "Deny", resource)
+            # Unauthenticated: leave the try and raise below.
+        else:
+            if res.get("ignoredPath"):
+                ignored_resource = (
+                    _ignored_path_resources(method_arn) if method_arn != "*" else "*"
+                )
+                return _policy("user", "Allow", ignored_resource)
+            ctx = dict(res.get("context") or {})
+            principal = _principal_id(ctx)
+            # Lets the handler's audit records name the CloudFront viewer (audit only; see
+            # common/auth/viewerAddress.py). Added after the decision, never read by one. The
+            # context is built from the verified token's claims, so a claim of the same name is
+            # removed first: only this authorizer sets the key, and only for an accepted value.
+            ctx.pop(ORIGIN_VERIFY_DIGEST_CONTEXT_KEY, None)
+            ctx.update(origin_verify_audit_context(event, fronted=API_FRONTED))
+            return _policy(principal, "Allow", resource, ctx)
     except Exception as e:
         logger.error(f"Authorizer error: {str(e)}")
         return _policy("user", "Deny", resource)
+
+    # Only an unauthenticated result reaches this point. It is raised outside the try so the
+    # catch-all above cannot turn the 401 back into a Deny.
+    raise Exception(_UNAUTHORIZED_MESSAGE)

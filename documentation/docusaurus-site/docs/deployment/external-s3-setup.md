@@ -10,6 +10,7 @@ Consider using external S3 buckets in the following scenarios:
 -   **Shared buckets** -- Multiple applications or teams share the same S3 bucket and you need VAMS to access a specific prefix.
 -   **Cross-account access** -- Assets reside in a different AWS account and must remain there for organizational or billing reasons.
 -   **Compliance requirements** -- Data residency or governance policies require assets to stay in specific buckets or accounts.
+-   **Cross-Region data** -- Assets reside in a bucket in another AWS Region of the same partition and are managed from one VAMS deployment.
 
 ## Architecture overview
 
@@ -17,27 +18,34 @@ The following diagram illustrates how VAMS interacts with external S3 buckets.
 
 ```mermaid
 graph LR
-    subgraph "Account A - VAMS"
-        VAMS_Lambdas["VAMS Lambda Functions"]
+    subgraph "Account A - VAMS deployment Region"
+        VAMS_Lambdas["VAMS Lambda Functions<br/>(S3 client per bucket Region)"]
         API["API Gateway"]
-        DDB["DynamoDB<br/>S3 Asset Buckets Table"]
-        SNS["SNS Topics<br/>S3 Event Notifications"]
+        DDB["DynamoDB<br/>S3 Asset Buckets Table<br/>(bucketRegion per row)"]
+        SQS["SQS queues<br/>bucket sync, indexers, triggers"]
+        SNS_A["SNS Topics<br/>same-Region buckets"]
     end
 
-    subgraph "Account B - External (or same account)"
-        ExtBucket["External S3 Bucket"]
-        KMS_B["KMS Key<br/>(optional)"]
+    subgraph "Bucket Region (same or another Region)"
+        subgraph "Account B - External (or same account)"
+            ExtBucket["External S3 Bucket"]
+            KMS_B["KMS Key<br/>(optional)"]
+        end
+        SNS_B["SNS Topics<br/>cross-Region notification stack<br/>regional CMK (optional)"]
     end
 
     API --> VAMS_Lambdas
-    VAMS_Lambdas -->|"Read/Write assets<br/>Generate presigned URLs"| ExtBucket
-    ExtBucket -->|"S3 Event Notifications"| SNS
-    SNS --> VAMS_Lambdas
+    VAMS_Lambdas -->|"Read/Write assets<br/>Generate presigned URLs<br/>signed for the bucket Region"| ExtBucket
+    ExtBucket -->|"S3 Event Notifications<br/>(bucket in the deployment Region)"| SNS_A
+    ExtBucket -->|"S3 Event Notifications<br/>(bucket in another Region)"| SNS_B
+    SNS_A --> SQS
+    SNS_B -->|"cross-Region subscription"| SQS
+    SQS --> VAMS_Lambdas
     VAMS_Lambdas --> DDB
     ExtBucket -.->|"Encrypted with"| KMS_B
 ```
 
-**Account A** is the AWS account where VAMS is deployed. **Account B** is the AWS account containing the external S3 bucket. Account A and Account B can be the same account.
+**Account A** is the AWS account where VAMS is deployed. **Account B** is the AWS account containing the external S3 bucket. Account A and Account B can be the same account, and the bucket can be in the deployment Region or in another Region of the same partition. Amazon S3 delivers a bucket's event notifications only to a destination in the bucket's own Region, so the notification topics for a bucket in another Region live in a separate CloudFormation stack deployed into that Region, and the deployment-Region queues subscribe to them across Regions (see [Cross-Region buckets](#cross-region-buckets)).
 
 :::warning[Cross-account responsibilities differ from same-account]
 When the external bucket lives in a **different** AWS account, VAMS cannot configure the bucket on your behalf the way it does for buckets it owns. Because VAMS imports the bucket by Amazon Resource Name (ARN) only, several policies that VAMS applies automatically to its own buckets must instead be applied **by the bucket owner in Account B before deployment**:
@@ -58,15 +66,15 @@ External buckets are defined in the VAMS CDK configuration file at `infra/config
 
 Each entry in the `externalAssetBuckets` array supports the following fields:
 
-| Field                   | Type    | Required                            | Description                                                                                                                                                                                                                                                                                                                     |
-| ----------------------- | ------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bucketArn`             | String  | Yes                                 | The full Amazon Resource Name (ARN) of the external S3 bucket.                                                                                                                                                                                                                                                                  |
-| `baseAssetsPrefix`      | String  | Yes                                 | The S3 key prefix under which VAMS manages assets. Must end with `/` or be `/` for the bucket root.                                                                                                                                                                                                                             |
-| `defaultSyncDatabaseId` | String  | Yes                                 | The VAMS database ID that assets discovered in this bucket are assigned to.                                                                                                                                                                                                                                                     |
-| `bucketAccountId`       | String  | Recommended for cross-account       | The 12-digit AWS account ID that owns the bucket. Enables VAMS to import the bucket as cross-account and to scope event-notification source policies.                                                                                                                                                                           |
-| `bucketRegion`          | String  | Optional                            | The AWS Region of the bucket. **Must equal the VAMS deployment Region** — Amazon S3 requires an event-notification destination to be in the bucket's Region, and VAMS creates its notification topics in the deployment Region. Defaults to the deployment Region when omitted; a differing value is rejected at synth.         |
-| `bucketKmsKeyArn`       | String  | Required for a customer managed key | The key ARN (not an alias ARN) of the customer managed AWS KMS key the bucket is encrypted with. VAMS grants this key to its Lambda and pipeline roles so they can read and write objects. Not needed for SSE-S3 or for the AWS managed key `aws/s3`, which works only when the bucket is in the VAMS account.                  |
-| `isDefault`             | Boolean | Required if no bucket is created    | Marks this bucket as the VAMS default asset bucket, which holds every pipeline template body and all workflow run I/O. At most one entry may set it to `true`. When `app.assetBuckets.createNewBucket` is `false`, exactly one entry must set it; when a bucket is created, an entry that sets it overrides the created bucket. |
+| Field                   | Type    | Required                            | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------------------- | ------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bucketArn`             | String  | Yes                                 | The full Amazon Resource Name (ARN) of the external S3 bucket, in the form `arn:<partition>:s3:::<bucket-name>`. It names one bucket, with a name of 3 to 63 letters, digits, `.`, `_` and `-` that the CDK bucket import accepts; any other value is rejected at configuration load with `Configuration Error: external bucket ARN "<arn>" is not valid.` A wildcard (`*` or `?`) never synthesized. A trailing slash or key path (`arn:aws:s3:::my-bucket/scans`) fails validation: list the bucket as `arn:<partition>:s3:::<bucket-name>` and set the key prefix in `baseAssetsPrefix`. |
+| `baseAssetsPrefix`      | String  | Yes                                 | The S3 key prefix under which VAMS manages assets. Must end with `/` or be `/` for the bucket root.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `defaultSyncDatabaseId` | String  | Yes                                 | The VAMS database ID that assets discovered in this bucket are assigned to.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `bucketAccountId`       | String  | Recommended for cross-account       | The 12-digit AWS account ID that owns the bucket. Enables VAMS to import the bucket as cross-account and to scope event-notification source policies.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `bucketRegion`          | String  | Required for a cross-Region bucket  | The AWS Region the bucket is in; defaults to the deployment Region when omitted. A bucket in another Region of the deployment's partition is supported: its notification topics are created in that Region by a per-Region stack, and VAMS signs every request for that Region ([Cross-Region buckets](#cross-region-buckets)). The default asset bucket (`isDefault`) must be in the deployment Region; a malformed Region or one in another partition is rejected at synth.                                                                                                               |
+| `bucketKmsKeyArn`       | String  | Required for a customer managed key | The key ARN (not an alias ARN) of the customer managed AWS KMS key the bucket is encrypted with. VAMS grants this key to its Lambda and pipeline roles so they can read and write objects. Not needed for SSE-S3 or for the AWS managed key `aws/s3`, which works only when the bucket is in the VAMS account.                                                                                                                                                                                                                                                                              |
+| `isDefault`             | Boolean | Required if no bucket is created    | Marks this bucket as the VAMS default asset bucket, which holds every pipeline template body and all workflow run I/O. At most one entry may set it to `true`. When `app.assetBuckets.createNewBucket` is `false`, exactly one entry must set it; when a bucket is created, an entry that sets it overrides the created bucket.                                                                                                                                                                                                                                                             |
 
 :::note[Registering a bucket under multiple prefixes]
 The same `bucketArn` may appear more than once in the `externalAssetBuckets` array — for example to map two databases to two different prefixes within one bucket — **provided the prefixes do not overlap**. Two prefixes overlap when one is a path-prefix of the other (for example, `data/` and `data/sub/`), and the bucket root (`/`) overlaps every other prefix. Overlapping prefixes are rejected because Amazon S3 permits only one notification configuration per bucket and cannot route an object event to an ambiguous prefix.
@@ -137,6 +145,156 @@ To map two databases to two non-overlapping prefixes within the same bucket, rep
 }
 ```
 
+### Example: a bucket in another Region
+
+A bucket in another Region of the same partition is registered the same way, with `bucketRegion` naming its Region. VAMS creates that bucket's notification topics in `us-east-1` and the deployment-Region queues subscribe to them.
+
+```json
+{
+    "app": {
+        "assetBuckets": {
+            "createNewBucket": true,
+            "defaultNewBucketSyncDatabaseId": "default-database",
+            "externalAssetBuckets": [
+                {
+                    "bucketArn": "arn:aws:s3:::east-coast-scans",
+                    "baseAssetsPrefix": "/",
+                    "defaultSyncDatabaseId": "east-coast-db",
+                    "bucketRegion": "us-east-1"
+                }
+            ]
+        },
+        "useGlobalVpc": {
+            "enabled": true,
+            "useForAllLambdas": true,
+            "addVpcEndpoints": true,
+            "addCrossRegionS3Endpoints": true
+        }
+    }
+}
+```
+
+## Cross-Region buckets
+
+An external bucket may be in a Region other than the one VAMS is deployed in, as long as both are in the same AWS partition. Registering it needs nothing beyond `bucketRegion`; the sections below describe what VAMS deploys for such a bucket, what the bucket owner still grants, and which network path the deployment's Lambda functions and pipelines take to reach it.
+
+### The per-Region notification stack
+
+Amazon S3 delivers a bucket's event notifications only to a destination in the bucket's Region. For every Region that holds at least one external asset bucket outside the deployment Region, VAMS therefore deploys an additional CloudFormation stack into that Region, named `<name>-xregion-<baseStackName>-<region>-<bucketRegion>`, where `<baseStackName>` is the configured `app.baseStackName` and `<region>` the deployment Region, the same suffix the core stack name carries: a deployment with `name: vams`, `app.baseStackName: prod`, `region: us-west-2` and a bucket in `us-east-1` has the core stack `vams-core-prod-us-west-2` and the per-Region stack `vams-xregion-prod-us-west-2-us-east-1` (deployment Region first, bucket Region last). The stack owns, for each registered bucket entry in that Region:
+
+-   the object-created and object-removed Amazon SNS topics, with TLS enforced;
+-   the bucket's event notification configuration, merged with any entries another consumer owns exactly as for a same-Region bucket ([Event notifications on a shared bucket](#event-notifications-on-a-shared-bucket));
+-   for a cross-account bucket, the topic policy statement that lets the Amazon S3 service publish on behalf of that bucket and account.
+
+The core stack in the deployment Region receives the topic ARNs through CloudFormation cross-Region references and subscribes its existing Amazon SQS queues — bucket sync, the file and asset indexers, the add-on indexers and the workflow trigger queues — to those topics with an `AWS::SNS::Subscription` whose `Region` is the bucket Region. The notification envelope the queues receive is the same as for a same-Region bucket, so every consumer downstream is unchanged. The core stack depends on the per-Region stacks, so `cdk deploy --all` creates them first and deletes them last.
+
+The S3 Asset Buckets table row for every bucket carries `bucketRegion` and, for a cross-account bucket, `bucketAccountId`; `GET /buckets`, the web create-database bucket picker, `vamscli database list-buckets` and the MCP `list_buckets` tool show both. For a bucket with Transfer Acceleration on (the `useS3TransferAcceleration` key of an external bucket entry, or `app.assetBuckets.useS3TransferAcceleration` for the VAMS-created bucket), `GET /buckets` and the web picker also show `isAccelerated` (the picker marks it `(accelerated)`).
+
+### The regional encryption key
+
+With `app.useKmsCmkEncryption.enabled`, the topics in a bucket Region are encrypted with a key **in that Region**, because an AWS KMS key is regional and the deployment Region's key cannot encrypt them. Which key depends on how the deployment's CMK is configured:
+
+| `useKmsCmkEncryption` configuration                                               | Key used for the topics in the bucket Region                                                                                                                                                                                                                |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled: true`, no `optionalExternalCmkArn` (VAMS generates its key)             | VAMS generates one key per bucket Region in the per-Region stack, with the same key policy as the deployment-Region key, annual rotation and `RemovalPolicy.RETAIN`. It carries no alias, so a retained key never collides with the one a redeploy creates. |
+| `optionalExternalCmkArn` names a **multi-Region** key (key id begins with `mrk-`) | The replica of that key in the bucket Region (same key id, Region swapped). Replicate the key into every bucket Region before deploying; a missing replica fails the per-Region stack's deployment.                                                         |
+| `optionalExternalCmkArn` names a **single-Region** key                            | A single-Region key cannot encrypt topics in another Region, so VAMS generates a key in the bucket Region for the topics only and prints a synth warning. The topic payload is the Amazon S3 event envelope (bucket, key, size, ETag), not object content.  |
+| `enabled: false`                                                                  | The topics have no server-side encryption, as in the deployment Region.                                                                                                                                                                                     |
+
+`bucketKmsKeyArn` is never used for the topics: it is the bucket owner's object key, usually in another account.
+
+The deployment-Region queues keep their own CMK; a cross-Region topic delivers into a CMK-encrypted queue through the key policy's `sns.amazonaws.com` grant, which needs no `kms:ViaService` condition.
+
+A generated regional key is retained when the stack is deleted ([Uninstall](./uninstall.md)) and is listed under the cross-Region stack in the [AWS resources](../architecture/aws-resources.md) reference.
+
+### The browser needs no CSP change
+
+The browser downloads and uploads through presigned Amazon S3 URLs, so the web application's Content Security Policy must admit the bucket's host. It does for a bucket in any Region: `connect-src`, `img-src`, `media-src` and `frame-src` carry the partition's AWS service-host wildcard (see [Content Security Policy](../architecture/security.md#content-security-policy-csp)). If you added a bucket Region's S3 host to `cspAdditionalConfig.json` to work around earlier blocking, you can remove it.
+
+### What the bucket owner grants
+
+The cross-account steps in this guide apply unchanged to a cross-Region bucket: the bucket policy ([Step 1](#step-1-configure-the-s3-bucket-policy)), CORS ([Step 2](#step-2-configure-cors)), the bucket key policy ([Step 3a](#3a-external-bucket-cmk-in-account-b-if-the-bucket-uses-sse-kms)) and the IAM policy ([Step 4](#step-4-configure-cross-account-iam-conditional)). Two details differ:
+
+-   The notification handler that writes the bucket's notification configuration runs in the **per-Region stack**, so the `s3:GetBucketNotification` and `s3:PutBucketNotification` grant in the bucket policy must admit the VAMS account for that stack's role as well — the account-root grant in Step 1 already does.
+-   With a VAMS-generated CMK, the key the Amazon S3 service needs for a cross-account bucket's notifications is the **regional** key in the per-Region stack, and VAMS adds the `aws:SourceAccount` statement for the bucket's account to that key. [Step 3b](#3b-vams-owned-cmk-in-account-a-if-usekmscmkencryption-is-enabled) applies to an imported key: replicate your multi-Region key into the bucket Region and add the statement to it there.
+
+### The default asset bucket stays in the deployment Region
+
+The default asset bucket (`isDefault`, or the bucket VAMS creates) holds every pipeline template body and all workflow run I/O, which the workflow Lambda functions and the pipeline compute read and write from the deployment Region. An entry that sets `isDefault: true` with a `bucketRegion` other than the deployment Region is rejected at synth with a message naming both Regions. A cross-Region bucket is registered as a non-default bucket whose databases hold assets; workflow runs on those assets read their inputs from the bucket Region and write their run I/O to the default bucket.
+
+### How the deployment reaches the bucket Region
+
+Every VAMS Lambda function and pipeline signs its Amazon S3 requests for the bucket's Region (the row's `bucketRegion`), builds no fixed endpoint hostname, and uses the regional endpoint for `us-east-1` rather than the global one. Where those requests travel depends on the deployment's network placement. Three variations cover it:
+
+#### Variation A: every bucket in the deployment Region
+
+The configuration most deployments run. With `app.useGlobalVpc.enabled`, the VPC's Amazon S3 **gateway** endpoint serves every bucket, because a gateway endpoint reaches Amazon S3 in its own Region only. Nothing else in this section applies.
+
+#### Variation B: a cross-Region bucket with `addCrossRegionS3Endpoints` on (default, commercial partition)
+
+With `app.useGlobalVpc.enabled`, `app.useGlobalVpc.addCrossRegionS3Endpoints: true` and at least one bucket in another Region, the VPC builder adds one Amazon S3 **interface** endpoint per distinct bucket Region in the isolated subnets — a cross-Region AWS PrivateLink endpoint whose service is `com.amazonaws.<bucketRegion>.s3` with `ServiceRegion` set to the bucket Region, private DNS on, one network interface per Availability Zone (two or more), and the shared VPC endpoint security group (HTTPS from the VPC CIDR). Private DNS resolves `s3.<bucketRegion>.amazonaws.com` and `*.s3.<bucketRegion>.amazonaws.com` to the endpoint from inside the VPC, so Lambda functions in the VPC (`useForAllLambdas`) and pipeline compute in the isolated or private subnets reach the bucket without internet egress. The flag is `true` in every shipped template and is inert until a cross-Region bucket is configured.
+
+Three operating points to plan for:
+
+-   **Permissions and Regions.** Creating a cross-Region endpoint requires the permission-only action `vpce:AllowMultiRegion` on the deploying principal and no service control policy that denies it; an opt-in Region must be opted in. The deployment fails at the VPC nested stack otherwise ([Prerequisites](./prerequisites.md)).
+-   **Provisioning time and cost.** A cross-Region interface endpoint takes considerably longer to become available than a same-Region one (on the order of 10–15 minutes), which lengthens the first deployment. It is billed per endpoint hour per Availability Zone plus per gigabyte processed; data transfer between Regions is billed separately ([Networking](../architecture/networking.md)).
+-   **Copies between Regions.** An Amazon S3 interface endpoint does not serve `CopyObject` or `UploadPartCopy` between buckets in different Regions. When the Lambda functions run in the VPC, a copy from the default bucket into a cross-Region asset bucket (for example a workflow writing its outputs back onto an asset, or a file copied between databases in different Regions) is streamed instead — read from the source Region, multipart upload to the destination Region, same metadata, content headers and ACL. The data crosses the Lambda function, so such copies take roughly twice the transfer time of a same-Region copy.
+
+Cross-Region AWS PrivateLink to AWS services is offered in the **commercial partition only**. In AWS GovCloud (US), the AWS European Sovereign Cloud and the ISO partitions, a cross-Region bucket with the flag `true` is rejected at synth with a message naming the flag and both Regions; set the flag to `false` and provide the network path yourself (Variation C).
+
+#### Variation C: a cross-Region bucket with the flag off, or a restricted partition
+
+VAMS creates no endpoint for the bucket Region and the operator provides the path from the VPC to Amazon S3 in that Region: an interface endpoint created outside VAMS, a NAT gateway, or a proxy. Without one, every upload, download and index operation on that bucket fails from inside the VPC, and `getConfig()` prints a warning naming the bucket Regions when `useForAllLambdas` is on with the flag off. A deployment whose Lambda functions run **outside** the VPC (`useForAllLambdas: false`) reaches the bucket Region over the public Amazon S3 endpoints and needs nothing further for the API path; only the in-VPC consumers below are affected.
+
+### Pipelines and cross-Region inputs
+
+Whether a pipeline can process an asset in a cross-Region bucket depends on where its compute runs and on who owns the code that reads and writes Amazon S3. Three dispositions cover every built-in pipeline:
+
+-   **Supported through the manifest Region.** VAMS-owned code reads the input and writes the output, and it addresses each asset bucket in the Region the manifest names. In the VPC the traffic uses the cross-Region endpoint (Variation B) or the operator's path (Variation C); outside the VPC, the public Amazon S3 endpoints.
+-   **Supported through the cross-Region endpoint.** As above, but the compute runs in the isolated subnets, which reach another Region only through the cross-Region interface endpoint the VPC builder creates there. With the endpoint flag off, or in a restricted partition, the pipeline rejects the input and the operator [moves it to private subnets](#moving-an-isolated-subnet-pipeline-to-private-subnets).
+-   **Same-Region only.** A third-party container image reads the input and writes the output through its own AWS SDK, whose cross-Region behaviour VAMS neither controls nor verifies, so the pipeline rejects an input or output bucket outside the deployment Region.
+
+A rejection happens in the pipeline's `vamsExecute` function before the job is submitted and is reported through `SendTaskFailure`, so the execution fails fast with a message naming both Regions (and, for the isolated-subnet pipelines, both remedies) instead of after its compute is provisioned.
+
+| Pipeline                                                                                       | Compute                                                                                  | Cross-Region asset bucket                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 3D Basic Conversion                                                                            | Lambda container                                                                         | Supported through the manifest Region. The function reads the input with a client for the bucket's Region and writes outputs to the default bucket.                                                                                                                                                                                                                                                                                                                       |
+| Splat Toolbox, Isaac Lab Training, Image to 3D                                                 | AWS Batch GPU, private subnets                                                           | Supported through the manifest Region. The job definition carries each asset bucket's Region (`bucketRegions`); the container signs each bucket's requests for it.                                                                                                                                                                                                                                                                                                        |
+| NVIDIA Cosmos Predict, Reason, Transfer, Cosmos 3; NVIDIA GR00T                                | AWS Batch GPU, private subnets                                                           | Supported through the manifest Region. The job definition carries `bucketRegions`; every `aws s3` command the container issues against an asset bucket passes `--region`.                                                                                                                                                                                                                                                                                                 |
+| GenAI CAD STEP Agent                                                                           | Amazon Bedrock AgentCore Runtime, outside the VPC; or AWS Batch Fargate, private subnets | Supported through the manifest Region. The definition carries `bucketRegions`; the agent container reads the input and writes every output with a client for the bucket's Region.                                                                                                                                                                                                                                                                                         |
+| Potree viewer, 3D thumbnail and media previews, coordinate transform, Video SOP/BOM Extraction | AWS Batch Fargate, **isolated** subnets                                                  | Supported through the cross-Region endpoint (`CROSS_REGION_S3_ENDPOINT_REGIONS` on the `vamsExecute` function); an input in a Region without one is rejected.                                                                                                                                                                                                                                                                                                             |
+| SYSTEM GenAI metadata                                                                          | Lambda containers; AWS Batch Fargate renderer in **isolated** subnets                    | Supported through the manifest Region while its Lambda functions run outside the VPC (the default); with `app.useGlobalVpc.useForAllLambdas`, through the cross-Region endpoint, as the row above. The Fargate renderer is used only for a Region the VPC reaches; elsewhere an over-limit file is described from its attributes. The state carries `bucketRegions` and every reader of the input file (classifier, extractors, renderers) signs for its bucket's Region. |
+| ModelOps (VNTANA)                                                                              | Amazon ECS on AWS Fargate, private subnets                                               | **Same-Region only.** The VNTANA image reads and writes Amazon S3 itself; a cross-Region input or output bucket is rejected.                                                                                                                                                                                                                                                                                                                                              |
+| RapidPipeline (Amazon ECS and Amazon EKS)                                                      | Amazon ECS / Amazon EKS, private subnets                                                 | **Same-Region only.** The RapidPipeline image reads and writes Amazon S3 itself; a cross-Region input or output bucket is rejected.                                                                                                                                                                                                                                                                                                                                       |
+
+The workflow manifest names the Region of every input file (`inputFiles[].bucketRegion`) and of the output bucket (`outputs.bucketRegion`), and the vendored `manifestHelper` exposes them to a pipeline (`inputBucketRegion`, `outputBucketRegion`, `s3_client_for_region`). A Batch pipeline's `vamsExecute` function passes both Regions to `openPipeline` and on to `constructPipeline`, which writes the job definition's `bucketRegions` map (bucket name to Region, deployment-Region buckets left out). The Fargate and Splat Toolbox containers register that map before their first Amazon S3 call and sign each registered bucket's requests with a client for its Region; the NVIDIA containers, which run the AWS CLI, add `--region` to every `aws s3` command that addresses a registered bucket. The auxiliary and model-cache buckets are in the deployment Region and use the default client. A job definition from an older function carries no map, and the container then addresses every bucket in the deployment Region. The same-Region-only pipelines call `manifestHelper.enforce_same_region_io` in `vamsExecute`; every Amazon S3 call VAMS itself makes in those pipelines — reading the manifest and the input configuration, writing the `rp_config` object — addresses the default run bucket or the auxiliary bucket, both in the deployment Region.
+
+#### Moving an isolated-subnet pipeline to private subnets
+
+A deployment without the cross-Region endpoint (the flag off, or a restricted partition — Variation C) that needs one of the isolated-subnet pipelines to process cross-Region inputs moves its compute to the private subnets, which have egress to the bucket Region. The change is in the CDK code and is deployed like any other:
+
+1. In `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`, add the pipeline's `app.pipelines.*.enabled` flag to the **subnet-creation condition** (the `if` block that pushes `subnetPublicConfig` and `subnetPrivateConfig`) and to the **`needsEcsPrivate`** condition. The first adds public subnets and one NAT gateway per Availability Zone when the pipeline is enabled; the second adds the Amazon ECS control-plane endpoint the private-subnet compute uses. The pipeline-only endpoint block already lists it.
+2. In `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`, pass `pipelineNetwork.privateSubnets.pipeline` instead of `pipelineNetwork.isolatedSubnets.pipeline` as that pipeline's subnets.
+3. In the pipeline's `vamsExecute` function, remove the `manifestHelper.enforce_inputs_in_region(resolved)` call: the gate describes isolated-subnet reachability, which no longer applies.
+4. Confirm the egress to Amazon S3 in the bucket Region: an interface endpoint you create, or the NAT gateway created in step 1, which carries the traffic over the public endpoints.
+5. Run the infra tests (`cd infra && npm test`), which include the VPC placement assertions for each pipeline, then `npx cdk deploy`.
+
+The container itself needs no change: its job definition already carries the asset buckets' Regions (`bucketRegions`) and it signs each bucket's requests with a client for that bucket's Region. Expect NAT gateway hourly and data-processing charges for the pipeline's traffic ([Networking](../architecture/networking.md)).
+
+### Latency and data transfer
+
+Every read and write of an asset in a cross-Region bucket crosses a Region boundary, which adds latency and inter-Region data transfer cost to operations that routinely move multi-gigabyte 3D assets; a workflow's outputs are written to the default bucket in the deployment Region and then copied onto the asset in its own Region. Where a bucket's Region was chosen for data-residency reasons, note that pipeline compute processes its data in the deployment Region. For a workload that is mostly in one Region, deploy VAMS into that Region.
+
+### Verifying a cross-Region bucket
+
+After the deployment completes:
+
+1. Confirm the per-Region stack exists in the bucket Region (`aws cloudformation describe-stacks --region <bucketRegion> --stack-name <name>-xregion-<baseStackName>-<region>-<bucketRegion>`) and that the bucket's notification configuration names its topics (`aws s3api get-bucket-notification-configuration --bucket <bucket>`).
+2. Upload a file directly to the bucket under the registered prefix and confirm the asset appears in VAMS: the cross-Region subscription delivered the event into the deployment-Region queue.
+3. Request a download or upload URL for a file in that bucket through the web interface, the API or `vamscli`; the URL's host is `s3.<bucketRegion>.amazonaws.com` (or the bucket's virtual-hosted name in that Region) and its `X-Amz-Credential` scope names the bucket Region.
+4. With `useKmsCmkEncryption.enabled`, confirm the regional key in the per-Region stack's outputs and that the deployment-Region queue received the message (a topic whose deliveries are refused shows them in its `NumberOfNotificationsFailed` metric in the bucket Region).
+5. In a VPC deployment with `addCrossRegionS3Endpoints`, confirm the endpoint is `available` (`aws ec2 describe-vpc-endpoints --filters Name=service-name,Values=com.amazonaws.<bucketRegion>.s3`) before testing uploads from in-VPC Lambda functions.
+
 ## Step-by-step setup
 
 Follow these steps to connect an external S3 bucket to VAMS. Complete Steps 1-4 **before** deploying the VAMS CDK stack.
@@ -179,7 +337,11 @@ Replace the following placeholder values:
 -   `<VAMS_ACCOUNT_ID>` -- The 12-digit AWS account ID where VAMS is deployed.
 -   `<BUCKET_NAME>` -- The name of the external S3 bucket.
 
-The `s3:*` grant intentionally includes `s3:GetBucketNotification`, `s3:PutBucketNotification`, and `s3:GetBucketVersioning`. VAMS calls these during deployment from AWS CloudFormation custom resource Lambda functions in Account A to wire event notifications and detect versioning. If you scope the grant down from `s3:*`, you must include these actions explicitly or deployment will fail.
+The `s3:*` grant intentionally includes `s3:GetBucketNotification`, `s3:PutBucketNotification`, and `s3:GetBucketVersioning`. VAMS calls these during deployment from AWS CloudFormation custom resource Lambda functions in Account A to wire event notifications and detect versioning. If you scope the grant down from `s3:*`, you must include these actions explicitly or deployment will fail. Include `s3:GetObjectVersion` as well: file version downloads and every pipeline read the version selected or recorded at launch, and Amazon S3 authorizes such a read as `s3:GetObjectVersion`, not `s3:GetObject`.
+
+Bucket sync reads and writes the [VAMS object tags](#vams-object-tags) on each synced file version. The `s3:*` grant includes the four actions it uses. If you replace `s3:*` with a list of actions, add `s3:GetObjectTagging`, `s3:GetObjectVersionTagging`, `s3:PutObjectTagging` and `s3:PutObjectVersionTagging`; without them files are still synced and indexed, but not tagged.
+
+When you use [S3 Transfer Acceleration](#step-5b-enable-s3-transfer-acceleration-optional) on the bucket, the deployment also calls `s3:GetAccelerateConfiguration`. The `s3:*` grant includes it. If you replace `s3:*` with a list of actions, add `s3:GetAccelerateConfiguration` to that list, the same as `s3:GetBucketVersioning`.
 
 The grant also covers `s3:PutObject` and `s3:PutObjectAcl`. Every VAMS write into the bucket — uploads, folder markers, and the in-place object copies that back file move, rename, revert, unarchive, set-primary-type, and pipeline-output ingestion — sets the `bucket-owner-full-control` canned ACL so the object is owned by Account B rather than by the writing Account A role. `s3:PutObjectAcl` authorizes that canned ACL. If you scope the grant down from `s3:*` and the bucket has ACLs enabled (see [object ownership](#object-ownership-cross-account-writes) below), include both `s3:PutObject` and `s3:PutObjectAcl` or writes fail with `AccessDenied`.
 
@@ -187,6 +349,8 @@ The grant also covers `s3:PutObject` and `s3:PutObjectAcl`. Every VAMS write int
 Avoid narrowing this grant with an `aws:PrincipalArn` condition that matches only `role/<APP_NAME>*`. The IAM roles that configure event notifications and check versioning are **CDK-generated custom resource roles** (for example `BucketNotificationsHandler...` and the S3 asset buckets table populator provider role). These roles are **not** named with your application prefix, so such a condition denies them and deployment fails with `AccessDenied`.
 
 If you require principal scoping, grant the VAMS account root (as shown above) and rely on Account A's IAM policies to constrain which roles use the access, or enumerate the specific CDK-generated role ARNs after a first deployment and add them explicitly.
+
+From v2.7 the large object copy engine writes workflow outputs over 1 GiB and API uploads over 5 GiB into the bucket, with its own role: the service role of the `largeObjectCopy` Lambda function. A policy that lists role ARNs must add that role, or those files fail to land after the update. A grant to the VAMS account root needs no change.
 :::
 
 #### Object ownership (cross-account writes)
@@ -225,7 +389,24 @@ Apply a Cross-Origin Resource Sharing (CORS) configuration to the external bucke
 }
 ```
 
-`AllowedMethods` accepts only `GET`, `PUT`, `POST`, `DELETE`, and `HEAD`. Amazon S3 answers the browser's `OPTIONS` preflight request from these rules, so `OPTIONS` is not listed. `ExposeHeaders` makes response headers readable by the VAMS web application: `ETag` for multipart uploads, which read each part's ETag from the upload response, and `Accept-Ranges`, `Content-Range`, `Content-Length`, and `Content-Encoding`, the range and streaming headers the VAMS-created asset bucket exposes, so a ranged read returns the same readable headers from either bucket.
+`AllowedMethods` accepts only `GET`, `PUT`, `POST`, `DELETE`, and `HEAD`. Amazon S3 answers the browser's `OPTIONS` preflight request from these rules, so `OPTIONS` is not listed. `ExposeHeaders` makes response headers readable by the VAMS web application: `ETag` for multipart uploads, which read each part's ETag from the upload response, and `Accept-Ranges`, `Content-Range`, `Content-Length`, and `Content-Encoding`, the range and streaming headers the VAMS-created asset bucket exposes, so a ranged read returns the same readable headers from either bucket. The Robotics Data Viewer reads `.mcap` and `.bag` files through these range headers.
+
+A viewer that reads a file straight from the bucket through a presigned URL sends the VAMS web origin with each request, so the single origin listed in `AllowedOrigins` is all the rule needs for it. The Three.js, Needle USD, ThatOpen IFC and Cesium 3D Tileset viewers read this way. The GeoTIFF Map Viewer and the Search map's **Show raster** action also read this way: they read a GeoTIFF or Cloud Optimized GeoTIFF (COG) in byte ranges from a presigned URL, and take the file's size from the `Content-Range` header of the first ranged read. The Cesium viewer does so through a request hook it installs when it opens; if a viewer cannot install the hook, it reads through the streaming route as the VEERUM viewer does, and the bucket then needs `null` too. For a tileset the Cesium viewer asks the API for a presigned URL for each file the tileset names (the tileset JSON, nested tilesets, subtree files, tiles, and the buffers and textures a tile references), with no `Authorization` header on the request to Amazon S3.
+
+#### Viewers that need `null` in AllowedOrigins
+
+The VEERUM 3D Viewer (an [add-on](../developer/addons-overview.md) with a vendor library) is the one viewer that reads its files through the VAMS streaming route. The route answers each request with a redirect to a presigned Amazon S3 URL, and a browser follows a cross-origin redirect with `Origin: null`. A bucket whose rule lists only the web origin sends no `Access-Control-Allow-Origin` for `null`, so the read fails. If you use the VEERUM viewer with files in this bucket, add `null` to `AllowedOrigins` next to the web origin:
+
+```json
+"AllowedOrigins": ["https://your-vams-domain.example.com", "null"]
+```
+
+Prefer `null` over `*`: it admits only requests that carry a `null` origin (a redirected request, a sandboxed frame, a `file:` page) and keeps the rule closed to named sites. Both values mean a page the user has opened can read the response of a request for a URL it already holds. A presigned URL is a bearer capability that anyone holding it can already read with a command-line tool, and a browser attaches no credentials (cookies or `Authorization`) to a request to Amazon S3, so the rule adds no access that the URL does not already give. The exception is a bucket that also grants access by network location, such as an `aws:SourceIp` or VPC endpoint condition in its bucket policy, or objects that are publicly readable. There a hostile page could use a visitor's browser, which sits inside that network, to read objects without holding a URL. Do not add `null` or `*` to a bucket of that kind.
+
+| Viewer                                                | Reads through             | `AllowedOrigins` needs         |
+| ----------------------------------------------------- | ------------------------- | ------------------------------ |
+| Three.js, Needle USD, ThatOpen IFC, Cesium 3D Tileset | A presigned URL, per file | The VAMS web origin only       |
+| VEERUM 3D Viewer                                      | The streaming route (307) | The VAMS web origin and `null` |
 
 Apply the CORS configuration using the AWS Command Line Interface (AWS CLI):
 
@@ -238,7 +419,7 @@ aws s3api put-bucket-cors \
 To configure CORS in the Amazon S3 console instead, paste only the array inside `CORSRules` into the bucket's CORS editor.
 
 :::warning[Production origins]
-Replace `https://your-vams-domain.example.com` with your actual VAMS Amazon CloudFront distribution domain or Application Load Balancer (ALB) domain. Avoid using `*` in production environments.
+Replace `https://your-vams-domain.example.com` with your actual VAMS Amazon CloudFront distribution domain or Application Load Balancer (ALB) domain. Avoid using `*` in production environments. If you need the VEERUM 3D Viewer on this bucket, add `null` as described above rather than `*`.
 :::
 
 ### Step 3: Configure KMS key policy (conditional)
@@ -371,7 +552,7 @@ Also ensure the IAM identity used to deploy VAMS can access the external bucket 
 
 ### Step 5: Update VAMS configuration and deploy
 
-1. Edit `infra/config/config.json` and add your external bucket entries to the `externalAssetBuckets` array as shown in the [example configuration](#example-configuration).
+1. Edit `infra/config/config.json` and add your external bucket entries to the `externalAssetBuckets` array as shown in the [example configuration](#example-configuration). If you set `useS3TransferAcceleration` on an entry, complete [Step 5b](#step-5b-enable-s3-transfer-acceleration-optional) on that bucket first, because the deployment fails when acceleration is not enabled on it.
 
 2. Deploy the VAMS stack:
 
@@ -384,9 +565,50 @@ Also ensure the IAM identity used to deploy VAMS can access the external bucket 
 For external buckets, the CDK deployment imports the bucket by ARN, creates Amazon Simple Notification Service (Amazon SNS) topics and configures S3 event notifications on the bucket, populates the S3 Asset Buckets DynamoDB table with bucket metadata, and grants the VAMS Lambda and pipeline IAM roles permission to access the bucket. When the bucket entry sets `bucketKmsKeyArn`, it also grants those roles `kms:Decrypt`, `kms:GenerateDataKey*`, and `kms:DescribeKey` on that key; without the field, no key grant is generated. It does **not** apply bucket-level policies (TLS enforcement, additional policies), the CORS configuration, or the external key's key policy — those are the bucket owner's responsibility in Account B (Steps 1, 2, and 3a).
 :::
 
+### Step 5b: Enable S3 Transfer Acceleration (optional)
+
+Skip this step unless you set `useS3TransferAcceleration: true` on a bucket entry. Complete it **before** the deployment in [Step 5](#step-5-update-vams-configuration-and-deploy) (Step 5 points back here). VAMS does not enable acceleration on a bucket it does not own, so the bucket owner does. See [Amazon S3 Transfer Acceleration](s3-transfer-acceleration.md) for what the option does, its cost and when it helps. The commercial partition is the only one that offers it.
+
+**Prerequisite checklist (bucket owner, Account B, before deploying):**
+
+1. **Bucket name and Region.** The bucket is a general purpose bucket in a Region where S3 supports Transfer Acceleration (AWS keeps the list on the [requirements page](https://docs.aws.amazon.com/AmazonS3/latest/userguide/transfer-acceleration.html#transfer-acceleration-requirements); not every commercial Region is on it). The bucket name is 3 to 63 characters of lowercase letters, digits and hyphens, and has no period. This is an Amazon S3 requirement for acceleration; the VAMS configuration check rejects any other name.
+2. **Enable acceleration on the bucket.** The bucket owner (the principal that holds `s3:PutAccelerateConfiguration` on the bucket; VAMS does not need and is not given this permission) runs:
+
+    ```bash
+    aws s3api put-bucket-accelerate-configuration \
+        --bucket <BUCKET_NAME> \
+        --accelerate-configuration Status=Enabled \
+        --region <BUCKET_REGION> \
+        --profile <ACCOUNT_B_PROFILE>
+    ```
+
+    In the console: **Amazon S3 > Buckets > `<BUCKET_NAME>` > Properties > Transfer acceleration > Edit > Enable > Save changes**.
+
+3. **Allow VAMS to read the setting.** The deployment calls `s3:GetAccelerateConfiguration` on the bucket from Account A. The `s3:*` grant in the [Step 1](#step-1-configure-the-s3-bucket-policy) policy already includes it. If you narrowed that grant to a list of actions, add `s3:GetAccelerateConfiguration`, the same as `s3:GetBucketVersioning`. It is a bucket-level action, so the bucket ARN without `/*` is the resource.
+4. **Check the status.** The deployment reads the status, so it must already be `Enabled` when you deploy. AWS says the transfer speed can take up to 20 minutes to improve after you enable acceleration ([Amazon S3 requirements for Transfer Acceleration](https://docs.aws.amazon.com/AmazonS3/latest/userguide/transfer-acceleration.html#transfer-acceleration-requirements)); you do not need to wait for that before deploying. Check the status:
+
+    ```bash
+    aws s3api get-bucket-accelerate-configuration --bucket <BUCKET_NAME> --region <BUCKET_REGION> --profile <ACCOUNT_B_PROFILE>
+    ```
+
+    The answer must be `{"Status": "Enabled"}`. An empty answer means it was never configured, and `Suspended` means it was turned off.
+
+5. **CORS.** No new rule. The CORS configuration from [Step 2](#step-2-configure-cors) applies to the accelerate host too. Confirm that it exposes `ETag`, because the web application reads it from each multipart upload part.
+6. **Set the flag.** In Step 5, set `"useS3TransferAcceleration": true` on that bucket entry. Every entry for the same bucket ARN must carry the same value.
+
+**Cross-account and cross-Region buckets.** The accelerate endpoint (`<BUCKET_NAME>.s3-accelerate.amazonaws.com`) is global and the same for any Region. VAMS still signs the URL for the bucket's own Region, and the deployment check calls Amazon S3 in the bucket's Region, so for a bucket in another Region the deployment's Lambda function needs a [network path to that Region](#how-the-deployment-reaches-the-bucket-region). For a bucket in another account, the bucket policy in item 3 is what lets the check read the setting.
+
+**What VAMS does at deployment.** For each flagged bucket, the deployment reads the acceleration status in the bucket's Region. If it is not `Enabled`, or the status cannot be read, the deployment fails and the message names the bucket and the fix. When it is `Enabled`, VAMS records the setting in its bucket table, and download, stream, preview and upload URLs for that bucket use the accelerate host. **VAMS never enables, suspends or otherwise changes acceleration on a bucket it does not own.**
+
+:::warning[Do not enable acceleration on VAMS-created buckets by hand]
+For the asset and auxiliary buckets VAMS creates, set `app.assetBuckets.useS3TransferAcceleration` and deploy. AWS CDK owns the setting, and a change made by hand drifts from the stack and is reverted or conflicts at the next deployment.
+:::
+
+**Turning it off.** Set the key to `false` (or remove it) and deploy. URLs return to the regional endpoint. VAMS does not suspend acceleration on your bucket, and leaving it `Enabled` is harmless (it only adds cost for requests that use the accelerate host).
+
 ### Step 6: Configure lifecycle rules for upload staging
 
-VAMS adds no lifecycle rule to a bucket it does not own. The VAMS-created asset bucket aborts incomplete multipart uploads after 7 days, and nothing else removes what an abandoned upload leaves behind: VAMS stages each upload under `{baseAssetsPrefix}temp-uploads/` and deletes the staged objects only when the upload is completed. Without lifecycle rules, an external bucket keeps the parts of every multipart upload that is never completed, and the staged objects of every upload that is never completed, and bills for their storage.
+VAMS adds no lifecycle rule to a bucket it does not own. The VAMS-created asset bucket aborts incomplete multipart uploads after 7 days, and nothing else removes what an abandoned upload leaves behind: VAMS stages each upload under `{baseAssetsPrefix}temp-uploads/` and deletes the staged objects only when the upload is completed. Without lifecycle rules, an external bucket keeps the parts of every multipart upload that is never completed, and the staged objects of every upload that is never completed, and bills for their storage. The large object copy engine removes the partial upload of a copy that is cancelled, stopped or fails itself, including parts that were still being copied when it stopped (it checks again about 5 and 16 minutes later), so these rules cover the uploads a client abandons. The copy engine lists the bucket's incomplete multipart uploads for that check (`s3:ListBucketMultipartUploads`), which the read and write access VAMS needs on an external bucket already includes.
 
 Add two lifecycle rules to the external bucket, for each `baseAssetsPrefix` that VAMS uses in it:
 
@@ -426,8 +648,10 @@ For a bucket VAMS owns, the deployment applies the full set of bucket policies a
 VAMS configures automatically (from Account A) for each external bucket entry:
 
 -   **Bucket import** -- Imports the Amazon S3 bucket reference using the provided ARN.
--   **Event notifications** -- Creates Amazon SNS topics and configures Amazon S3 event notifications on the bucket to enable automatic file synchronization. This requires bucket-owner permissions in Account B. Notification entries that VAMS does not own are preserved (see [Event notifications on a shared bucket](#event-notifications-on-a-shared-bucket)).
--   **DynamoDB registration** -- Populates the S3 Asset Buckets Amazon DynamoDB table with bucket metadata (bucket name, prefix, sync database ID, versioning status).
+-   **Event notifications** -- Creates Amazon SNS topics and configures Amazon S3 event notifications on the bucket to enable automatic file synchronization. For a bucket in another Region the topics and the notification configuration live in the per-Region stack deployed into that Region ([Cross-Region buckets](#cross-region-buckets)). This requires bucket-owner permissions in Account B. Notification entries that VAMS does not own are preserved (see [Event notifications on a shared bucket](#event-notifications-on-a-shared-bucket)).
+-   **DynamoDB registration** -- Populates the S3 Asset Buckets Amazon DynamoDB table with bucket metadata (bucket name, prefix, sync database ID, versioning status, Region, owning account, the declared KMS key and `source` `static`). The deployment updates only the attributes it owns on each row and never changes a row registered at run time. When you remove an entry from `externalAssetBuckets`, the next deployment keeps its registration as **retired**: it is no longer the default bucket, bucket sync no longer matches it, a new database cannot use it, and the deployment no longer grants access to the bucket, so the files of its assets are not served. Adding the entry back restores the registration under the same `bucketId`.
+-   **Transfer Acceleration check** -- For an entry that sets `useS3TransferAcceleration`, reads the bucket's acceleration status in the bucket's Region, fails the deployment naming the bucket when it is not `Enabled`, and records the setting. VAMS never enables or disables acceleration on an external bucket ([Step 5b](#step-5b-enable-s3-transfer-acceleration-optional)).
+-   **Cross-Region network path** -- With `app.useGlobalVpc.enabled` and `addCrossRegionS3Endpoints`, creates one Amazon S3 interface endpoint per bucket Region outside the deployment Region ([Variation B](#variation-b-a-cross-region-bucket-with-addcrossregions3endpoints-on-default-commercial-partition)).
 -   **Lambda and pipeline permissions** -- Grants the VAMS Lambda and pipeline IAM roles permission to read from and write to the external bucket ARN.
 -   **External KMS key grant** -- When the bucket entry sets `bucketKmsKeyArn`, grants the VAMS Lambda and pipeline IAM roles `kms:Decrypt`, `kms:GenerateDataKey*`, and `kms:DescribeKey` on that key. Without the field, no grant is generated.
 
@@ -477,6 +701,24 @@ must not overlap — Amazon S3 cannot route an object event to an ambiguous pref
 rejects overlapping prefixes during configuration validation, before any notification is written.
 :::
 
+## Overlapping bucket registrations
+
+A registration stays in the S3 Asset Buckets table after its entry leaves the configuration (it is **retired**), so the assets and databases that name its `bucketId` keep resolving. Their files stay under its prefix. A new registration whose prefix equals or nests with that prefix would cover the same objects, and a file would have two owners.
+
+The deployment therefore checks every registration it makes active (a bucket and prefix with no stored row, or a retired registration configured again) against the stored rows of the same bucket that the configuration does not include: retired rows, rows the same deployment retires, and rows registered at run time. Prefixes are compared with one trailing `/`, and the bucket root (`/`) overlaps every prefix. On an overlap the deployment fails before it writes any row, with a message such as:
+
+```text
+Configuration Error: bucket my-bucket cannot be registered under the prefix assets/team1/: it overlaps the prefix assets/ of the stored registration 1a2b... (retired), and two registrations of one bucket cannot hold the same objects. Choose a prefix that does not overlap assets/, or configure assets/ again in place of this entry.
+```
+
+The stack update rolls back. A registration that already has an active row is not refused, and neither is a rollback to the previous configuration, so an overlap stored before this check existed (for example a prefix moved inside an earlier one before v2.7, when the earlier row stayed active) blocks neither the upgrade nor its rollback. The deployment tells a rollback from the CloudFormation status of the stack (an update rollback in progress), not from when the template was synthesized, so every forward deployment is checked, including one of an assembly synthesized before the stack's last deployment. If the status cannot be read, the check runs. If a rollback then ends in `UPDATE_ROLLBACK_FAILED` with the overlap message from `PopulateS3AssetBucketsTable` because that status read failed, run `aws cloudformation continue-update-rollback --stack-name <CORE_STACK_NAME> --region <REGION>` on the core stack (not the nested storage stack), skipping no resources: the rollback runs again and the status is read again. The deployment logs each such overlap as a warning in the `PopulateS3AssetBucketsTable` function's log group; review the assets of the stored registration it names.
+
+To deploy:
+
+-   **Choose a prefix that does not overlap** the stored one, for example `team1/` instead of `assets/team1/`.
+-   **Register the stored prefix again** in place of the new entry. The registration keeps its `bucketId`, so its assets and databases are connected again.
+-   **Remove the stored row** only when nothing uses it: no database names it as `defaultBucketId` (`vamscli database list --json-output`) and no asset row names its `bucketId` (query the asset table's `BucketIdGSI` index for it). Take an on-demand backup of the S3 Asset Buckets table first; removing the row cannot be undone, and an asset that still names it no longer resolves.
+
 ## Verification
 
 After deployment, use the following checklist to verify the external bucket integration end to end.
@@ -493,7 +735,7 @@ After deployment, use the following checklist to verify the external bucket inte
 
 2. **Test direct Amazon S3 operations.** Verify that VAMS Lambda functions can list, read, and write objects in the external bucket by creating an asset via the VAMS API and confirming the file is stored under the configured prefix.
 
-3. **Test presigned URL generation.** Upload a test file through the VAMS web interface or API and confirm the presigned URL is generated for the external bucket. Download the file using the generated URL and verify the content is correct.
+3. **Test presigned URL generation.** Upload a test file through the VAMS web interface or API and confirm the presigned URL is generated for the external bucket, with the bucket's Region in its host and credential scope. Download the file using the generated URL and verify the content is correct.
 
 4. **Test Amazon S3 event notifications.** Upload a file directly to the external bucket under the configured prefix (bypassing VAMS) and verify it appears in VAMS after the Amazon S3 event notification triggers the sync Lambda function.
 
@@ -510,27 +752,36 @@ Because VAMS imports external buckets by ARN — which carries no account identi
 -   **External KMS access depends on the `bucketKmsKeyArn` field.** When the bucket entry sets `bucketKmsKeyArn`, VAMS grants `kms:Decrypt`, `kms:GenerateDataKey*`, and `kms:DescribeKey` on that key to its Lambda execution roles and pipeline task roles during deployment. The key policy in Account B must still admit the VAMS account ([Step 3a](#3a-external-bucket-cmk-in-account-b-if-the-bucket-uses-sse-kms)) — an IAM grant alone does not cross the account boundary. If you omit `bucketKmsKeyArn`, no grant is generated and KMS-encrypted objects fail with `KMS.AccessDeniedException`; the IAM policy in [Step 4](#step-4-configure-cross-account-iam-conditional) is only for an additional key that the field cannot name.
 -   **SNS source-account scoping.** Event notifications from a cross-account bucket publish to VAMS-owned SNS topics. If VAMS uses a CMK, the VAMS key policy must admit the external bucket's account as an S3 notification source ([Step 3b](#3b-vams-owned-cmk-in-account-a-if-usekmscmkencryption-is-enabled)). Delivery failures here are silent — notifications simply do not arrive.
 -   **Object ownership on writes.** VAMS writes objects using its Account A execution-role credentials and sets the `bucket-owner-full-control` canned ACL so the bucket owner (Account B) retains control. On a bucket with ACLs enabled, the bucket policy must allow `s3:PutObjectAcl` for this to succeed; on a bucket with Object Ownership set to _Bucket owner enforced_, ownership is automatic and the ACL is a no-op ([object ownership](#object-ownership-cross-account-writes)).
--   **The bucket must be in the same AWS Region as the deployment. Cross-account is supported; cross-Region is not.** This is an Amazon S3 constraint rather than a VAMS preference: S3 requires an event-notification destination to be in the same Region as the bucket, and VAMS creates its notification topics in the deployment Region. A bucket in another Region therefore cannot be wired for synchronization at all. The CDK deployment rejects a `bucketRegion` that does not match the deployment Region during configuration validation, so the mismatch fails at synth with a message naming both Regions rather than part-way through the deploy.
-
-    Separately from the S3 constraint, serving asset files across Regions is not a good pattern for this workload: every read and write would cross a Region boundary, adding latency and data-transfer cost to operations that routinely move multi-gigabyte 3D assets, and pipeline containers would pull their inputs cross-Region. Where a bucket's Region was chosen for data-residency reasons, processing the data in another Region also works against that choice. If assets must stay in a Region other than the deployment's, deploy VAMS into that Region.
-
+-   **A cross-Region bucket cannot be the default asset bucket; the isolated-subnet pipelines read it through the cross-Region endpoint only, and ModelOps and RapidPipeline do not process it.** Both constraints, the per-Region notification stack, the regional key, the network variations and the per-pipeline support table are described in [Cross-Region buckets](#cross-region-buckets). Cross-Region AWS PrivateLink is available in the commercial partition only, so a restricted-partition deployment sets `app.useGlobalVpc.addCrossRegionS3Endpoints` to `false` and supplies its own path to Amazon S3 in the bucket Region.
 -   **Partition must match the deployment.** The external bucket ARN must use the same AWS partition as the VAMS deployment — for example both `arn:aws`, or both `arn:aws-us-gov`. This also keeps `kms:ViaService` conditions resolvable.
 -   **Prefixes on a shared bucket must not overlap.** A bucket ARN may be registered under multiple prefixes, but Amazon S3 permits only one notification configuration per bucket, so the prefixes must be mutually non-overlapping (no prefix may be a path-prefix of another, and the bucket root cannot be combined with any other prefix). VAMS merges the registrations into a single notification configuration with one prefix-filtered entry per prefix. The CDK deployment fails validation if it detects overlapping prefixes or inconsistent per-bucket attributes (account, region, KMS key) across entries for the same ARN.
 
 ## Troubleshooting
 
-| Issue                                                            | Possible cause                                                                                                                                    | Resolution                                                                                                                                                                                                                                                 |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CDK deployment fails with `Access Denied`                        | Bucket policy not applied before deployment, or scoped too narrowly to exclude CDK custom resource roles.                                         | Apply the bucket policy from [Step 1](#step-1-configure-the-s3-bucket-policy), grant the VAMS account root, and remove any `aws:PrincipalArn` role-prefix condition, then redeploy.                                                                        |
-| CDK deployment fails configuring bucket notifications            | The notification handler role lacks `s3:PutBucketNotification`/`s3:GetBucketNotification` in Account B.                                           | Ensure the [Step 1](#step-1-configure-the-s3-bucket-policy) grant covers these actions (included in `s3:*`) and is not restricted by a principal condition.                                                                                                |
-| CDK deployment fails with `baseAssetsPrefix must end in a slash` | The prefix value does not end with `/`.                                                                                                           | Update the prefix in `config.json` to end with `/`.                                                                                                                                                                                                        |
-| CDK deployment fails with `overlapping baseAssetsPrefix`         | The same bucket is registered with prefixes where one contains the other (or the root with any prefix).                                           | Choose non-overlapping prefixes for each registration of the bucket, or register the bucket once at the root.                                                                                                                                              |
-| CDK deployment fails with `inconsistent bucket...` attributes    | The same bucket ARN is registered with differing `bucketAccountId` / `bucketRegion` / `bucketKmsKeyArn`.                                          | Make the cross-account and KMS attributes identical across every entry for that bucket ARN.                                                                                                                                                                |
-| Presigned URLs return CORS errors                                | CORS configuration missing or incorrect.                                                                                                          | Verify the CORS policy from [Step 2](#step-2-configure-cors) is applied and `AllowedOrigins` matches your VAMS domain.                                                                                                                                     |
-| Files uploaded to bucket do not appear in VAMS                   | SNS event notifications not configured, source-account mismatch, or topic KMS access denied.                                                      | Confirm notifications are configured on the bucket and the VAMS CMK admits the external bucket account ([Step 3b](#3b-vams-owned-cmk-in-account-a-if-usekmscmkencryption-is-enabled)). Review AWS CloudTrail logs for access-denied errors.                |
-| `KMS.AccessDeniedException` in Lambda logs                       | `bucketKmsKeyArn` is not set, the object uses a key other than the one it names, or the key policy does not grant VAMS access.                    | Set `bucketKmsKeyArn` and redeploy (for an additional key, attach the [Step 4](#step-4-configure-cross-account-iam-conditional) policy), and add the key policy statement from [Step 3a](#3a-external-bucket-cmk-in-account-b-if-the-bucket-uses-sse-kms). |
-| Uploads or file operations fail with `AccessDenied` on write     | The bucket has ACLs enabled but the bucket policy does not allow `s3:PutObjectAcl`, so the `bucket-owner-full-control` ACL VAMS sets is rejected. | Include `s3:PutObjectAcl` in the [Step 1](#step-1-configure-the-s3-bucket-policy) grant (covered by `s3:*`), or set the bucket's Object Ownership to _Bucket owner enforced_ to disable ACLs ([object ownership](#object-ownership-cross-account-writes)). |
-| Bucket owner cannot read objects VAMS wrote                      | The bucket has ACLs enabled (Object writer / Bucket owner preferred) and objects were written before the canned ACL was applied.                  | Ensure the bucket policy allows `s3:PutObjectAcl`; for objects already written, the bucket owner can reset ownership, or set Object Ownership to _Bucket owner enforced_ ([object ownership](#object-ownership-cross-account-writes)).                     |
+| Issue                                                                                                                                                                                                                           | Possible cause                                                                                                                                                                                         | Resolution                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CDK deployment fails with `Access Denied`                                                                                                                                                                                       | Bucket policy not applied before deployment, or scoped too narrowly to exclude CDK custom resource roles.                                                                                              | Apply the bucket policy from [Step 1](#step-1-configure-the-s3-bucket-policy), grant the VAMS account root, and remove any `aws:PrincipalArn` role-prefix condition, then redeploy.                                                                            |
+| CDK deployment fails configuring bucket notifications                                                                                                                                                                           | The notification handler role lacks `s3:PutBucketNotification`/`s3:GetBucketNotification` in Account B.                                                                                                | Ensure the [Step 1](#step-1-configure-the-s3-bucket-policy) grant covers these actions (included in `s3:*`) and is not restricted by a principal condition.                                                                                                    |
+| CDK deployment fails with `baseAssetsPrefix must end in a slash`                                                                                                                                                                | The prefix value does not end with `/`.                                                                                                                                                                | Update the prefix in `config.json` to end with `/`.                                                                                                                                                                                                            |
+| CDK deployment fails with `overlapping baseAssetsPrefix`                                                                                                                                                                        | The same bucket is registered with prefixes where one contains the other (or the root with any prefix).                                                                                                | Choose non-overlapping prefixes for each registration of the bucket, or register the bucket once at the root.                                                                                                                                                  |
+| CDK deployment fails with `S3 Transfer Acceleration is requested for bucket <name>`                                                                                                                                             | Acceleration is not enabled on the bucket, or the bucket policy does not allow `s3:GetAccelerateConfiguration`.                                                                                        | Complete [Step 5b](#step-5b-enable-s3-transfer-acceleration-optional), or set `useS3TransferAcceleration` to `false` for the entry.                                                                                                                            |
+| CDK deployment fails with `cannot be registered under the prefix ... it overlaps the prefix ... of the stored registration`                                                                                                     | The new prefix overlaps a retired, removed or run-time registration of the same bucket                                                                                                                 | See [Overlapping bucket registrations](#overlapping-bucket-registrations)                                                                                                                                                                                      |
+| CDK deployment fails with `inconsistent bucket...` attributes                                                                                                                                                                   | The same bucket ARN is registered with differing `bucketAccountId` / `bucketRegion` / `bucketKmsKeyArn`.                                                                                               | Make the cross-account and KMS attributes identical across every entry for that bucket ARN.                                                                                                                                                                    |
+| Presigned URLs return CORS errors                                                                                                                                                                                               | CORS configuration missing or incorrect.                                                                                                                                                               | Verify the CORS policy from [Step 2](#step-2-configure-cors) is applied and `AllowedOrigins` matches your VAMS domain.                                                                                                                                         |
+| Files uploaded to bucket do not appear in VAMS                                                                                                                                                                                  | SNS event notifications not configured, source-account mismatch, or topic KMS access denied.                                                                                                           | Confirm notifications are configured on the bucket and the VAMS CMK admits the external bucket account ([Step 3b](#3b-vams-owned-cmk-in-account-a-if-usekmscmkencryption-is-enabled)). Review AWS CloudTrail logs for access-denied errors.                    |
+| `KMS.AccessDeniedException` in Lambda logs                                                                                                                                                                                      | `bucketKmsKeyArn` is not set, the object uses a key other than the one it names, or the key policy does not grant VAMS access.                                                                         | Set `bucketKmsKeyArn` and redeploy (for an additional key, attach the [Step 4](#step-4-configure-cross-account-iam-conditional) policy), and add the key policy statement from [Step 3a](#3a-external-bucket-cmk-in-account-b-if-the-bucket-uses-sse-kms).     |
+| Uploads or file operations fail with `AccessDenied` on write                                                                                                                                                                    | The bucket has ACLs enabled but the bucket policy does not allow `s3:PutObjectAcl`, so the `bucket-owner-full-control` ACL VAMS sets is rejected.                                                      | Include `s3:PutObjectAcl` in the [Step 1](#step-1-configure-the-s3-bucket-policy) grant (covered by `s3:*`), or set the bucket's Object Ownership to _Bucket owner enforced_ to disable ACLs ([object ownership](#object-ownership-cross-account-writes)).     |
+| Bucket owner cannot read objects VAMS wrote                                                                                                                                                                                     | The bucket has ACLs enabled (Object writer / Bucket owner preferred) and objects were written before the canned ACL was applied.                                                                       | Ensure the bucket policy allows `s3:PutObjectAcl`; for objects already written, the bucket owner can reset ownership, or set Object Ownership to _Bucket owner enforced_ ([object ownership](#object-ownership-cross-account-writes)).                         |
+| CDK deployment fails with `is marked isDefault but is in '<Region>'`                                                                                                                                                            | The entry marked `isDefault: true` carries a `bucketRegion` other than the deployment Region.                                                                                                          | Keep the default asset bucket in the deployment Region; register the cross-Region bucket as a non-default bucket ([default bucket rule](#the-default-asset-bucket-stays-in-the-deployment-region)).                                                            |
+| CDK deployment fails with `addCrossRegionS3Endpoints is true, but cross-Region AWS PrivateLink ... commercial partition only`                                                                                                   | A cross-Region bucket is configured in AWS GovCloud (US), the AWS European Sovereign Cloud or an ISO partition with the endpoint flag on.                                                              | Set `app.useGlobalVpc.addCrossRegionS3Endpoints` to `false` and provide your own path from the VPC to Amazon S3 in the bucket Region ([Variation C](#variation-c-a-cross-region-bucket-with-the-flag-off-or-a-restricted-partition)).                          |
+| VPC nested stack fails creating `S3CrossRegionEndpoint-<Region>` with `UnauthorizedOperation` or `InvalidParameter`                                                                                                             | The deploying principal lacks `vpce:AllowMultiRegion`, a service control policy denies it, or the bucket Region is an opt-in Region that is not opted in.                                              | Grant `vpce:AllowMultiRegion` to the deployment role and check the SCPs; opt in to the Region ([Prerequisites](./prerequisites.md)). Alternatively set the flag to `false` and supply the path yourself.                                                       |
+| Per-Region stack fails with `NotFoundException` on the KMS key                                                                                                                                                                  | `optionalExternalCmkArn` names a multi-Region key (`mrk-`) with no replica in the bucket Region.                                                                                                       | Replicate the key into the bucket Region (`aws kms replicate-key --replica-region <bucketRegion>`) and redeploy ([regional key](#the-regional-encryption-key)).                                                                                                |
+| Files uploaded to a cross-Region bucket do not appear in VAMS                                                                                                                                                                   | The cross-Region subscription did not deliver: the queue policy or the queue's CMK key policy does not admit `sns.amazonaws.com`, or the subscription is `PendingConfirmation`.                        | Check the topic's `NumberOfNotificationsFailed` metric in the bucket Region and the subscription's status; confirm the queue's key policy grants `sns.amazonaws.com` (the VAMS-generated key does) ([regional key](#the-regional-encryption-key)).             |
+| `AuthorizationHeaderMalformed` ... `the region 'X' is wrong; expecting 'Y'` in Lambda logs or on a presigned URL                                                                                                                | A request for a bucket in another Region was signed for the deployment Region: the bucket's row in the S3 Asset Buckets table carries no `bucketRegion`, or a custom integration built its own client. | Redeploy so the populate custom resource rewrites every row with its Region; build any custom client for the Region `GET /buckets` reports for the bucket.                                                                                                     |
+| `PutBucketNotificationConfiguration` fails with `InvalidArgument: ... topic ... region`                                                                                                                                         | The bucket's `bucketRegion` in `config.json` does not match the Region the bucket is actually in, so its topics were created in the wrong Region.                                                      | Set `bucketRegion` to the bucket's real Region (`aws s3api get-bucket-location --bucket <bucket>`) and redeploy, so the topics are created there.                                                                                                              |
+| A workflow output copy or file copy fails with a cross-Region `CopyObject` error from an in-VPC Lambda function                                                                                                                 | The copy went through an Amazon S3 interface endpoint, which does not serve it between Regions; the Lambda function did not receive `VAMS_LAMBDAS_IN_VPC`.                                             | Redeploy so every handler Lambda carries `VAMS_LAMBDAS_IN_VPC`; the handlers then stream such copies ([Variation B](#variation-b-a-cross-region-bucket-with-addcrossregions3endpoints-on-default-commercial-partition)).                                       |
+| Potree, 3D thumbnail, media previews, SYSTEM GenAI metadata (with `useForAllLambdas`), coordinate transform or Video SOP/BOM execution fails with `runs in the VPC's isolated subnets and reads Amazon S3 in <Region> ... only` | The VPC has no cross-Region Amazon S3 endpoint for the input's Region: `addCrossRegionS3Endpoints` is off, the bucket is not registered, or the partition is restricted.                               | Enable `app.useGlobalVpc.addCrossRegionS3Endpoints` with the bucket registered (Variation B), move the pipeline to private subnets ([procedure](#moving-an-isolated-subnet-pipeline-to-private-subnets)), or run it on an asset in a deployment-Region bucket. |
+| ModelOps or RapidPipeline execution fails with `runs a third-party container image that reads and writes Amazon S3 in <Region> only`                                                                                            | The input or output bucket is in another Region; the vendor image's S3 access is same-Region only.                                                                                                     | Run the pipeline on an asset in a deployment-Region bucket ([support table](#pipelines-and-cross-region-inputs)).                                                                                                                                              |
 
 ## S3 bucket structure and key conventions
 
@@ -576,11 +827,11 @@ The run area is shared across the deployment: one execution resolves a single de
 
 The auxiliary bucket (a separate bucket managed by VAMS) stores:
 
-| Prefix                                    | Purpose                | Description                                                                                                                                                                     |
-| ----------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `{databaseId}/{assetFileKey}/preview/`    | Viewer data            | Previews and viewer data derived from one asset file, where `assetFileKey` is the file's full asset-bucket key (for example, Potree octree files under `preview/PotreeViewer/`) |
-| `pipelines/{pipelineName}/{executionId}/` | Pipeline working files | Temporary working files for one workflow execution                                                                                                                              |
-| `assetExports/{databaseId}/{assetId}/`    | Export staging         | Staged asset export payloads, delivered through a presigned URL                                                                                                                 |
+| Prefix                                      | Purpose                | Description                                                                                                                                                                     |
+| ------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{databaseId}/{assetFileKey}/preview/`      | Viewer data            | Previews and viewer data derived from one asset file, where `assetFileKey` is the file's full asset-bucket key (for example, Potree octree files under `preview/PotreeViewer/`) |
+| `pipelines/{pipelineName}/{executionId}/`   | Pipeline working files | Temporary working files for one workflow execution                                                                                                                              |
+| `vams.assetExports/{databaseId}/{assetId}/` | Export staging         | Staged asset export payloads, delivered through a presigned URL and expired 8 days after creation                                                                               |
 
 ### How databases, buckets, and assets relate
 
@@ -652,7 +903,7 @@ When a new file is placed directly in S3 under an archived asset's prefix, the b
 Each 3D model (and its supporting files) must reside in its own folder directly under the `baseAssetsPrefix`. The folder name becomes the `assetId` in VAMS.
 
 :::warning[Asset ID requirements]
-The folder name used as the asset ID must match VAMS validation rules: alphanumeric characters, hyphens, underscores, and periods only, with a maximum length of 256 characters. Folders with names containing spaces or special characters are skipped by the sync process.
+The folder name used as the asset ID must match the VAMS asset ID rule: letters (in any script), digits, spaces, underscores, hyphens, periods, commas and apostrophes, 2 to 255 characters, not ending in a period or a space. Bucket sync creates no asset for a folder whose name breaks the rule, and a file written there belongs to no asset. The bucket sync function logs `Asset ID <folder> is not valid, skipping processing but forwarding to indexers` at INFO level for each such file, not as an error. To import the files, copy them to a folder whose name the rule accepts. The asset's name is the folder name with each character an asset name does not allow (anything other than ASCII letters, digits, spaces, hyphens, underscores and periods) replaced by `_`, so a folder `site,a` becomes the asset `site,a` named `site_a`.
 :::
 
 :::warning[Reserved folder names]
@@ -821,14 +1072,18 @@ sequenceDiagram
     Sync->>S3: Detect "init" file → DELETE it
     Sync->>S3: Determine asset type from other files
     Sync->>DDB: Update asset type
+    Sync->>SQS: Queue the files already in the folder for import
     Note over Sync: init file is NOT sent to file indexer
 ```
 
+The files already in the folder raise no event of their own, so the sync Lambda lists the folder and queues them, a page per message, to its own queue. Each is then handled like a new file, as below, except that it starts no `fileUpload` workflow: it was already in the bucket. A file version VAMS has already synced is skipped, so writing an `init` file again into an imported folder only adds what is new. Files under another asset's location inside the folder stay that asset's files and are not imported. If the listing or a queue send fails, the `init` event is processed again and the import starts over without importing any file twice.
+
 For non-init files (regular asset files already present or uploaded later), the sync Lambda also:
 
--   Updates Amazon S3 object metadata with `databaseid` and `assetid` tags.
+-   Writes the object tags `VAMS:databaseId` and `VAMS:assetId` on the file version (see [VAMS object tags](#vams-object-tags)). It does not copy or rewrite the object.
 -   Publishes the event to the file indexer Amazon SNS topic for Amazon OpenSearch indexing.
 -   Publishes an `asset.file.uploaded` event to the VAMS orchestration Amazon EventBridge event bus, which routes it through an Amazon SQS queue to the dispatcher that starts matching `fileUpload` workflow triggers.
+-   Adds to each record it forwards, on the file indexer topic and on the `asset.file.uploaded` event, an optional `vamsBinding` object naming the asset the file belongs to: `databaseId`, `assetId`, `bucketId`, `relativePath` (the file's path in the asset, with a leading `/`) and `resolvedBy` (`fastPath` when the first folder under the prefix names the asset, `locationIndex` when the asset's stored location was found through the asset location index, `import` for a file of an imported folder). Every other field of the record is unchanged, and a record bucket sync could not attribute has no `vamsBinding`.
 
 ### Alternative: Use the API with bucketExistingKey
 
@@ -847,10 +1102,10 @@ curl -X POST "https://{VAMS_API}/database/my-3d-database/assets" \
   }'
 ```
 
-VAMS validates that the specified key exists in the bucket, then creates an asset record pointing to that S3 location without copying data. This approach gives you control over `assetName`, `description`, and `tags`, whereas the init-file approach auto-generates these fields from the folder name.
+VAMS validates that the specified key exists in the bucket, then creates an asset record pointing to that S3 location without copying data. The files already at that location are then imported by the sync Lambda (attributed, indexed and tagged, without starting `fileUpload` workflows), and the asset type is set from them. This approach gives you control over `assetName`, `description`, and `tags`, whereas the init-file approach auto-generates these fields from the folder name.
 
 :::warning[Key format requirements]
-The `bucketExistingKey` value must point to an existing S3 key (file or prefix) in the bucket. VAMS resolves the full path by combining the `baseAssetsPrefix` with the `bucketExistingKey`, intelligently avoiding duplication if the key already includes the prefix. The key should end with `/` if it represents a folder containing multiple files.
+The `bucketExistingKey` value must point to an existing S3 key (file or prefix) in the bucket. VAMS resolves the full path by combining the `baseAssetsPrefix` with the `bucketExistingKey`, intelligently avoiding duplication if the key already includes the prefix. When an object is stored at exactly that key, the asset is that object (a single-file location), even when other objects are stored under `{key}/`. Otherwise, when at least one object is stored under `{key}/`, the asset is that folder: a folder written with `aws s3 sync` or another tool needs no folder-marker object, and the location is recorded with a trailing `/`. When neither exists, the create is refused. End the key with `/` to name a folder explicitly. A key without a trailing `/` that names an object is a single-file location. The asset holds that object (at the path `/{file name}`), everything under `{key}/` (its companion folder, where uploads and pipeline outputs are written, except a path `/{file name}.previewFile.{ext}`, which writes the asset's own preview `{key}.previewFile.{ext}`) and its previews `{key}.previewFile.{ext}`. Its file list, downloads, file operations, archive and permanent delete act on those keys only, never on other keys that start with the same characters (such as `model.glb.bak` next to `model.glb`). An upload at `/{file name}` writes a new version of the object, a pipeline output at that path is refused, and such an asset cannot be downloaded as a zip.
 :::
 
 ### What happens after import
@@ -858,12 +1113,12 @@ The `bucketExistingKey` value must point to an existing S3 key (file or prefix) 
 After assets are created (via init files or API):
 
 1. **Viewing in VAMS**: The assets appear in the VAMS web interface under the specified database. You can browse files, view metadata, and use any compatible viewer plugin.
-2. **File listing**: VAMS lists files by querying Amazon S3 with the asset's `assetLocation.Key` prefix. All files under that prefix appear in the file manager.
-3. **Asset type detection**: The sync Lambda automatically determines the asset type based on the files present (file extension for single-file assets, `folder` for multi-file assets). It does not do so for an asset created with `bucketExistingKey` whose folder is not a top-level folder named after its asset ID; see **Ongoing sync** below.
+2. **File listing**: VAMS lists files by querying Amazon S3 with the asset's `assetLocation.Key` prefix. All files under that folder appear in the file manager; an asset created from a single object key lists that object, its previews and the files under its companion folder `{key}/`.
+3. **Asset type detection**: The sync Lambda automatically determines the asset type based on the files present (file extension for single-file assets, `folder` for multi-file assets), from the asset's stored location.
 4. **Presigned URLs**: Downloads and viewer access use presigned URLs generated against the original bucket location.
 5. **Pipelines**: You can run processing pipelines (for example, 3D preview generation) on imported assets. Pipeline outputs are written to the appropriate output paths within the same bucket.
-6. **Ongoing sync**: For an asset whose folder is a top-level folder named after its asset ID, which includes every asset created from an `init` file or without `bucketExistingKey`, files added to or deleted from the folder in Amazon S3 are automatically detected by the sync Lambda and reflected in VAMS (file indexing, asset type updates, metadata cleanup). Bucket sync identifies an asset from the first folder below `baseAssetsPrefix`. For an asset created with `bucketExistingKey` whose folder is not a top-level folder named after its asset ID (such as `projects/building-a/`), files added to or deleted from the folder directly in Amazon S3 are not attributed to the asset. They are not indexed for search, do not update the asset type, and do not start `fileUpload` workflow triggers. The same applies to files that were already in the folder when the asset was created. Files uploaded through VAMS (web interface, CLI, or API) are recorded against the asset and indexed, but when one of them is permanently deleted its search entry is not removed. Reindexing with index clearing removes those entries and restores the files uploaded through VAMS.
-7. **No data movement**: Files remain at their original S3 location. VAMS does not copy, move, or reorganize the files.
+6. **Ongoing sync**: Files added to or deleted from an asset's location directly in Amazon S3 are detected by the sync Lambda and reflected in VAMS (file indexing, semantic search, compliance, asset type, `fileUpload` workflow triggers and metadata cleanup), whatever the location. A file belongs to the asset whose stored location holds it. For a location that is not a top-level folder named after its asset ID (such as `projects/building-a/`), this works once the `assetLocationIndex` migration step has completed on an upgraded deployment (a new deployment needs no step). Files that were already at the location when an asset was created with `bucketExistingKey` raise no event of their own: VAMS asks the sync Lambda to import them, as for an `init` file, and the asset type is set from them once.
+7. **No data movement**: Files remain at their original S3 location. VAMS does not copy, move, or reorganize the files, and does not rewrite them to mark them: it writes two object tags on each synced file version.
 
 ### Common questions
 
@@ -881,7 +1136,7 @@ If your 3D models are individual files (not in folders), you need to reorganize 
 
 **Can I add files to an imported asset after creation?**
 
-Yes. After creating an asset, you can upload additional files to the asset through the VAMS web interface or API. New files are placed under the same S3 prefix as the original files. You can also add files directly to the asset folder in Amazon S3 and the sync Lambda will detect them automatically, except for an asset created with `bucketExistingKey` whose folder is not a top-level folder named after its asset ID. Add files to such an asset through VAMS; see **Ongoing sync** under [What happens after import](#what-happens-after-import).
+Yes. After creating an asset from a folder key, you can upload additional files to the asset through the VAMS web interface or API. New files are placed under the same S3 prefix as the original files. An asset created from a single object key keeps its file at that key, and files you add are placed under its companion folder `{key}/`. You can also add files directly to the asset folder in Amazon S3 and the sync Lambda will detect them automatically; see **Ongoing sync** under [What happens after import](#what-happens-after-import).
 
 **What if I have thousands of assets to import?**
 
@@ -890,6 +1145,20 @@ The init-file approach scales well. Add a short delay (0.5-1 second) between cre
 **Will the init files remain in my bucket?**
 
 Not in the folders VAMS imports. The sync Lambda deletes the `init` file of each folder it imports from Amazon S3 after processing. If bucket versioning is enabled, all versions of the `init` file (including delete markers) are also removed. Other files in the folder are kept, including files whose names start or end with `init`, such as `init.txt` or `postinit`. A folder whose name is reserved or is not a valid asset ID (see [Step 1](#step-1-organize-your-data-to-match-vams-conventions)) is not imported, so an `init` file written to it remains in the bucket until you delete it. The sample scripts above skip reserved folder names.
+
+## VAMS object tags
+
+When bucket sync attributes a file version to an asset, it writes two object tags on that version: `VAMS:databaseId` (the database ID) and `VAMS:assetId` (the asset ID). They tell your own tools which VAMS database and asset a file is synced to; S3 Lifecycle and Replication rules can select one database's files by tag. VAMS itself never reads them: attribution, triggers, indexing and authorization follow the asset's stored location. Anyone allowed `s3:PutObjectTagging` can change them.
+
+-   **Your tags are kept.** VAMS reads the version's tag set and writes it back with only the two `VAMS:` keys added or corrected. An object that already has more than 8 tags of its own is not tagged (S3 allows 10); VAMS never removes a tag of yours to make room. A file copied in S3 from another asset's folder arrives with that asset's tags and gets the correct ones.
+-   **Values.** A database ID is written as is. An asset ID with a character S3 tag values do not accept (such as `,` or `'`) is written as `b64:` followed by its base64url form. A value longer than 256 characters is left off.
+-   **No new version.** A tag write creates no object version and changes no ETag, LastModified or content. VAMS subscribes to no tagging notification, so it raises no bucket-sync event. A bucket with Amazon EventBridge notifications on sends "Object Tags Added" events to your own rules, and replication rules may carry the tags to replicas.
+-   **When a tag cannot be written** (the bucket policy denies tagging, or there is no room), the file is still attributed, indexed and triggered. The sync ledger records `vamsTags: skipped` with the reason, the `VamsTagsSkipped` metric (namespace `VAMS/BucketSync`, dimensions `Deployment`, the deployment's `<name>-<app.baseStackName>`, and `Reason`) counts it, and a denied bucket is logged as a warning once an hour.
+-   **Turning it off.** Set `tagSyncedObjects` to `false` on the bucket's `externalAssetBuckets` entry (or `app.assetBuckets.tagSyncedObjects` for the bucket VAMS creates) and deploy.
+-   **Files stamped with VAMS metadata.** Files synced before bucket sync wrote tags carry `databaseid` / `assetid` metadata, copied onto them, and no tags. `reindex_utility.py --tag-synced` tags them; see [Tag objects that carry VAMS metadata](../developer/utilities/reindex.md#tag-objects-that-carry-vams-metadata---tag-synced).
+-   **Race.** S3 has no conditional tagging write, so a tag change you make in the milliseconds between VAMS reading and writing a new version's tags is lost.
+
+A write into a location that two assets claim is attributed to neither: bucket sync sends it to the deployment's rejected-record queue and its alarm fires. So does a write into a top-level folder named by the ID of an asset stored somewhere else in the database bucket sync creates the bucket's assets in, which would otherwise become a second asset with that ID in that database; create the asset with `bucketExistingKey` on that folder instead. A folder whose name the asset ID rule refuses is skipped at INFO instead (see [Step 1](#step-1-organize-your-data-to-match-vams-conventions)), even when an asset that an earlier release created holds that ID somewhere else. An asset with that ID in another database does not stop the folder from becoming a new asset, so two buckets whose databases differ can each hold a top-level folder with the same name. See the troubleshooting guide for how to resolve the overlap and redrive the queue.
 
 ## Related resources
 

@@ -19,7 +19,7 @@ class VamsIgnoreMatcher:
 
     def __init__(self, patterns: Optional[List[str]] = None):
         self.patterns = list(patterns or [])
-        self._spec = pathspec.PathSpec.from_lines('gitwildmatch', self.patterns)
+        self._spec = pathspec.GitIgnoreSpec.from_lines(self.patterns)
 
     @classmethod
     def from_file(cls, ignore_file: Path,
@@ -66,4 +66,5 @@ class VamsIgnoreMatcher:
         normalized = relative_key.replace('\\', '/').lstrip('/')
         if not normalized:
             return False
-        return self._spec.match_file(normalized)
+        # pathspec 0.12 returns None rather than False when no pattern matches.
+        return bool(self._spec.match_file(normalized))

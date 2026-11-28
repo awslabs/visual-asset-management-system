@@ -128,7 +128,13 @@ class TestCreateWorkflowStage2ASL:
             if k in ("HandleExecutionError", "WorkflowProcessingJobFailed"):
                 continue
             for c in s.get("Catch", []):
-                assert c["Next"] == "HandleExecutionError"
+                # The output-ingestion wait's timeout passes through a Pass state that names the
+                # timeout in $.errorInfo, then reaches the handler like every other Catch.
+                target = c["Next"]
+                if states[target]["Type"] == "Pass":
+                    assert states[target]["ResultPath"] == "$.errorInfo"
+                    target = states[target]["Next"]
+                assert target == "HandleExecutionError"
                 assert c.get("ResultPath") == "$.errorInfo"
 
     def test_interim_state_between_each_pipeline_pair(self):
@@ -350,12 +356,12 @@ class TestCallbackTaskRetryPolicy:
         # Transient delivery faults still retry. An application failure the pipeline reported through
         # SendTaskFailure does not, so a failed run is not re-invoked while its outputs may be draining.
         assert state["Retry"][-1]["ErrorEquals"] == list(
-            sfb.CALLBACK_TRANSIENT_RETRYABLE_ERRORS)
+            sfb.TRANSIENT_DELIVERY_RETRYABLE_ERRORS)
         assert "States.ALL" not in state["Retry"][-1]["ErrorEquals"]
         assert state["Retry"][-1]["MaxAttempts"] > 0
 
-    def test_fire_and_forget_states_keep_the_single_catch_all_retrier(self):
+    def test_fire_and_forget_states_retry_only_transient_delivery_faults(self):
         definition, _jobs = cw.generate_workflow_asl(_pipelines(1), "db", "wf")
         state = _pipeline_states(definition["States"])[0]
         assert len(state["Retry"]) == 1
-        assert state["Retry"][0]["ErrorEquals"] == ["States.ALL"]
+        assert state["Retry"][0]["ErrorEquals"] == list(sfb.TRANSIENT_DELIVERY_RETRYABLE_ERRORS)

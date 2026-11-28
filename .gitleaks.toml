@@ -164,8 +164,69 @@ regexes = [
     # the vendored PlayCanvas bundle (history only). Each is anchored on the surrounding code so it
     # matches the identifier, not a value assigned to it.
     '''s3_key = s3_bucket_prefix ''',
+    # `legacy_temp_s3_key` is a Python variable in backend/handlers/assets/uploadFile.py
+    # (`abort_staged_multipart_upload`, #1928) whose value is assigned to the local `key`; the rule reads
+    # the variable name as the secret. Anchored at both ends of the rule's match, so only that exact
+    # assignment is skipped and any other value assigned to `key` is still reported.
+    '''^key = legacy_temp_s3_key$''',
     '''tagKey:'COSMOS3_(GUIDANCE|NEGATIVE_PROMPT)[']''',
     '''(t|e)\._sortKey(Forward|Shadow),i=e\._sortKey(Forward|Shadow);''',
     '''this\._keys0,r=this\._indices0;''',
     '''this\.keyGenerator,s=this\.gpuSorter;''',
+
+    # ---- 2.7.0 release-candidate scan (gitleaks 8.30.1, git mode origin/main..e4c3c278f) ----
+    #
+    # Every value in this block is anchored at both ends, on the opening quote before it and the closing
+    # quote after it. Two entries differ because their rule's match is the bare value: the JWT entry may
+    # also start where the match starts, and the key-id entry may also start or end there or at a space
+    # (the tests separate key ids with spaces). The PEM stub is matched whole, and the EDH entries at the
+    # end sit between both quotes. A built-in rule's match that runs past a listed value on either side
+    # (a JWT with a real signature, a password with a prefix) is therefore still reported.
+
+    # Example pagination tokens in docs/api/compliance.md (startingToken / NextToken samples). Each is
+    # base64 of a small JSON cursor ({"offset": n}, a cascadeId, an evaluationId, a complianceState and
+    # databaseId pair) or such a cursor cut off with a literal ellipsis. A cursor is not a credential.
+    '''["](?:eyJjYXNjYWRlSWQiOiAiLi4uIn0=|eyJjb21wbGlhbmNlU3RhdGUiOiAicXVhcmFudGluZWQiLCAiZGF0YWJhc2VJZCI6ICIuLi4ifQ==|eyJldmFsdWF0aW9uSWQiOiAiLi4uIn0=|eyJsYXRlc3RWZXJzaW9uIjoi\.\.\.|eyJvZmZzZXQiOiAxfQ==|eyJwYXJ0aXRpb24iOiAiY29tcGxpYW5jZV9jaGVjayIsICJrZXkiOiB7Li4ufX0=)["]''',  # pragma: allowlist secret
+
+    # Example pagination token in docs/api/zip-downloads.md, cut off with a literal ellipsis. Anchored on
+    # the closing quote.
+    '''["]eyJ1c2VySWQiOi\.\.\.["]''',  # pragma: allowlist secret
+
+    # Test pagination cursors in web/src/features/orchestration/api/executions.test.ts: base64 of
+    # {"stepIndex": n}.
+    '''["]eyJzdGVwSW5kZXgiOiAwfQ==["]''',  # pragma: allowlist secret
+
+    # AWS access key ids written as redaction-test input in backend/tests/common/auditSearch/
+    # test_audit_search_parsers.py, test_audit_search_redaction_export_matcher.py and
+    # backend/tests/handlers/workflows/test_execution_list_log_bound.py. Each has the AKIA or ASIA prefix
+    # and a body of plain English words; a real key id body is random. Listed in full.
+    # nosemgrep: detected-aws-access-key-id-value -- the test words above, listed so gitleaks skips them
+    '''(?:^|["\s])(?:AKIAABCDEFGHIJKLMNOP|ASIAABCDEFGHIJKLMNOP)(?:$|["\s])''',  # pragma: allowlist secret
+
+    # JWT-shaped strings in the audit-search, workflow-log and CLI/MCP token tests
+    # (test_audit_search_parsers.py, test_audit_search_redaction_export_matcher.py,
+    # test_executionLogCompleteness.py, test_reconcile_details_log_capture.py,
+    # test_execution_list_log_bound.py, tools/VamsCLI/tests/test_api_client_injected_token.py and
+    # test_verbose_echo_credentials.py, tools/VamsMCP/tests/test_remote_http.py). Their signature
+    # segments are 0 to 24 characters, or the header says alg none; an HS256 signature is 43 characters
+    # and an RS256 one 342, so none was ever a valid token. Listed in full.
+    '''(?:^|["])(?:eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJ1MSIsInBhZCI6IiJ9\.|eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJ4In0\.c2lnbmF0dXJl(?:c2lnbmF0dXJl)?|eyJhbGciOiJSUzI1NiJ9\.eyJzdWIiOiJ1c2VyLWEifQ\.c2lnbmF0dXJlLWE|eyJhbGciOiJSUzI1NiJ9\.eyJzdWIiOiJ1c2VyLWIifQ\.c2lnbmF0dXJlLWI|eyJhbGciOiJSUzI1NiJ9\.eyJzdWIiOiJleGFtcGxlLXVzZXIifQ\.c2lnbmF0dXJlLXZhbHVl|eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0\.eyJ1c2VybmFtZSI6ImFsaWNlIn0\.)["]''',  # pragma: allowlist secret
+
+    # LOCAL_ADMIN_PASSWORD in backend/tests/handlers/addon/edh/test_edh_log_redaction_keys.py: a
+    # readable lowercase test word used as redaction-test input. Anchored on the closing quote.
+    '''["]l0cal\-adm1n\-passw0rd["]''',  # pragma: allowlist secret
+
+    # Test API key in tools/VamsCLI/tests/test_api_client_injected_token.py: the vams prefix, a plain
+    # word and digits, 21 characters; a minted key is 69 (see above). Anchored on the closing quote.
+    '''["]vams_abcdef0123456789["]''',  # pragma: allowlist secret
+
+    # Private-key stub in test_audit_search_redaction_export_matcher.py that the redaction matcher is
+    # tested against: a PEM header and a body of a few characters, which no key can be. Listed in full.
+    '''\-\-\-\-\-BEGIN\ RSA\ PRIVATE\ KEY\-\-\-\-\-\\nMIIEowIBAAKCAQEA\\n\-\-\-\-\-END\ RSA\ PRIVATE\ KEY\-\-\-\-\-''',  # pragma: allowlist secret
+
+    # CURRENT_KEY and NEW_KEY of backend/tests/handlers/addon/edh/test_edhRootKeySync.py as they stand in
+    # the file's history (the tree now uses made-up words): owner-confirmed test sentinel, 2026-11-21.
+    # One entry per key, the exact 32-character value anchored on both quotes.
+    '''["]Kq3ZtR8mWv2NpXc7LbYd5HsJf9GaUe4E["]''',  # pragma: allowlist secret
+    '''["]Pz7XwQ2rTn5VbMc8LkJh3GdFs6AyUe9R["]''',  # pragma: allowlist secret
 ]

@@ -28,6 +28,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_FILE_UNARCHIVE,
     VAMS_CHANGE_SOURCE_FILE_REVERT,
     VAMS_CHANGE_SOURCE_UPLOAD,
+    VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY,
 )
 
 # Env vars assetFiles and uploadFile read at import time (set before importing them).
@@ -107,6 +108,14 @@ class _FakeS3:
                 return _Object(bucket, key)
 
         self.resource = _Resource()
+
+    def repeat_safe_copy(self, source_bucket, source_key, dest_bucket, dest_key, extra_args, write_token,
+                         source_size, source_version_id=None, **kwargs):
+        """Stands in for common.s3.copy_s3_object_repeat_safe, the upload finalize copy (#1848)."""
+        self.copies.append({"CopySource": {"Bucket": source_bucket, "Key": source_key}, "Bucket": dest_bucket,
+                            "Key": dest_key, "ExtraArgs": extra_args, "WriteToken": write_token,
+                            "SourceSize": source_size})
+        return "v-final"
 
     def head_object(self, Bucket, Key, VersionId=None, **kwargs):
         self.head_calls.append((Bucket, Key, VersionId))
@@ -210,7 +219,7 @@ class TestFileOperationCopiesKeepContentHeaders:
                 {"versionId": "v1", "isLatest": False, "isArchived": False},
             ],
         })
-        monkeypatch.setattr(af, "delete_assetAuxiliary_files", lambda prefix: None)
+        monkeypatch.setattr(af, "delete_assetAuxiliary_files", lambda prefix, keep=None: None)
 
         result = af.revert_file_version("db1", "a1", REL_PATH, "v1", {"tokens": ["alice"]})
 
@@ -245,7 +254,7 @@ class TestUploadFinalizeCopiesKeepContentHeaders:
         fake = _FakeS3(_source_head())
         uf = uploadFile
         monkeypatch.setattr(uf, "s3", fake)
-        monkeypatch.setattr(uf, "s3_resource", fake.resource)
+        monkeypatch.setattr(uf, "copy_s3_object_repeat_safe", fake.repeat_safe_copy)
 
         assert uf.copy_s3_object(
             "run-bucket", "temp/up-1/part.glb", BUCKET, FULL_KEY, "db1", "a1",
@@ -254,10 +263,14 @@ class TestUploadFinalizeCopiesKeepContentHeaders:
         extra = fake.copies[0]["ExtraArgs"]
         _assert_content_headers_kept(extra)
         assert fake.head_calls == [("run-bucket", "temp/up-1/part.glb", None)]
-        # The final object's user metadata is built fresh, not copied from the staged object.
+        # The final object's user metadata is built fresh, not copied from the staged object, and
+        # carries the copy's own write token (#1848).
+        token = fake.copies[0]["WriteToken"]
         assert extra["Metadata"] == {DATABASE_ID_METADATA_KEY: "db1", ASSET_ID_METADATA_KEY: "a1",
-                                     VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_UPLOAD}
+                                     VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_UPLOAD,
+                                     VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY: token}
         assert extra["ACL"] == "bucket-owner-full-control"
+        assert fake.copies[0]["SourceSize"] == 10
 
     def test_upload_finalize_copy_reuses_the_callers_head(self, monkeypatch):
         # The completion loops already HEAD the staged object; handing that response to the copy
@@ -265,7 +278,7 @@ class TestUploadFinalizeCopiesKeepContentHeaders:
         fake = _FakeS3({})
         uf = uploadFile
         monkeypatch.setattr(uf, "s3", fake)
-        monkeypatch.setattr(uf, "s3_resource", fake.resource)
+        monkeypatch.setattr(uf, "copy_s3_object_repeat_safe", fake.repeat_safe_copy)
 
         assert uf.copy_s3_object(
             "run-bucket", "temp/up-1/part.glb", BUCKET, FULL_KEY, "db1", "a1",

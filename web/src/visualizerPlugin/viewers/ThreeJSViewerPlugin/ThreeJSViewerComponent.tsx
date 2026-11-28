@@ -7,16 +7,30 @@ import React, { useEffect, useRef, useState } from "react";
 import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { ThreeJSDependencyManager } from "./dependencies";
-import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 import { MouseControls } from "./MouseControls";
 import ThreeJSPanel from "./ThreeJSPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
+import { useKeptSceneTreeHeight } from "../../components/useKeptSceneTreeHeight";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
 import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
-import { isCadSupportError, loadFile } from "./utils/fileLoaders";
-import { preloadGLTFDependencies, cleanupBlobUrls } from "./utils/gltfDependencyLoader";
+import Alert from "@cloudscape-design/components/alert";
+import { isCadSupportError } from "./utils/fileLoaders";
+import { isOcctNoGeometryError } from "./utils/occtLoader";
+import { AssetDependencyResolver, isAbortError } from "./utils/assetDependencyResolver";
+import { loadWithDependencies, USD_NO_GEOMETRY_MESSAGE } from "./utils/dependencyLoading";
 import { applySceneEnvironment, applySceneLighting, SceneEnvironment } from "./utils/sceneLighting";
+import { ApiRefusalError, isApiRefusalError } from "../../core/streamFailure";
+import { fetchPresignedFile } from "../../core/presignedFetch";
+import {
+    applySelectionHighlight,
+    createHighlightMaterial,
+    supportsWireframe,
+    syncSelectionHighlight,
+} from "./utils/selectionHighlight";
+
+/** Referenced files listed by name in the notice before the rest are counted. */
+const NOTICE_LISTED_FILES = 10;
 
 /**
  * Lays the loaded files out in a row, or returns them to their authored placement.
@@ -88,7 +102,11 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
     const [error, setError] = useState<string | null>(null);
+    // Whether `error` is the API's refusal of the file with its own reason (D170): shown alone.
+    const [errorIsRefusal, setErrorIsRefusal] = useState(false);
     const [fileErrors, setFileErrors] = useState<Array<{ file: string; error: string }>>([]);
+    // Referenced files (textures, material libraries, USD layers) that were not loaded.
+    const [unloadedReferences, setUnloadedReferences] = useState<string[]>([]);
     const viewerInstanceRef = useRef<any>(null);
     const [showPanel, setShowPanel] = useState(true);
     const { panelRef, infoBoxRef, infoBoxVisibility } = useInfoBoxClearOfPanel();
@@ -113,9 +131,11 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         versionId,
         assetVersionId,
     });
-    // Render loop handle and the in-flight download, both torn down on unmount.
+    // Scene tree height the user picked. Held here, as the panel unmounts the scene tree when it
+    // switches tabs or is hidden; cleared when the viewer is given other files
+    const keptTreeHeight = useKeptSceneTreeHeight(loadTargetKey);
+    // Render loop handle, stopped on unmount.
     const animationFrameRef = useRef<number | null>(null);
-    const downloadAbortRef = useRef<AbortController | null>(null);
     const sceneEnvironmentRef = useRef<SceneEnvironment | null>(null);
 
     // 3D selection toggle
@@ -194,59 +214,21 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         console.log(`Material library initialized with ${library.size} materials`);
     }, [sceneReady]);
 
-    // Handle highlighting at parent level to persist across tab switches
+    // Handle highlighting at parent level to persist across tab switches. Highlight clones are
+    // tracked by identity in utils/selectionHighlight.ts, so point clouds (no emissive) are
+    // highlighted and restored as meshes are (#1275).
     useEffect(() => {
         if (!viewerInstanceRef.current?.scene) return;
 
         const THREE = (window as any).THREE;
         if (!THREE) return;
 
-        const scene = viewerInstanceRef.current.scene;
-        const selectedUuids = new Set(selectedObjects.map((obj) => obj.uuid));
-
-        // Remove highlighting from deselected objects
-        scene.traverse((obj: any) => {
-            if (obj.material && !selectedUuids.has(obj.uuid)) {
-                // Check if this object has a highlight (green emissive)
-                if (obj.material.emissive && obj.material.emissive.getHex() === 0x4caf50) {
-                    // Find the material in the library and restore it
-                    Array.from(materialLibrary.values()).forEach((item) => {
-                        if (item.usedBy.has(obj.uuid)) {
-                            obj.material = item.material;
-                        }
-                    });
-                }
-            }
-        });
-
-        // Add highlighting to selected objects
-        selectedObjects.forEach((obj) => {
-            if (obj.material) {
-                // Find the base material from library
-                let baseMaterial: any = null;
-                Array.from(materialLibrary.values()).forEach((item) => {
-                    if (item.usedBy.has(obj.uuid)) {
-                        baseMaterial = item.material;
-                    }
-                });
-
-                if (baseMaterial) {
-                    // Create highlight material
-                    const highlightMaterial = baseMaterial.clone
-                        ? baseMaterial.clone()
-                        : new THREE.MeshStandardMaterial({
-                              color: baseMaterial.color,
-                              metalness: baseMaterial.metalness || 0.5,
-                              roughness: baseMaterial.roughness || 0.5,
-                              opacity: baseMaterial.opacity || 1.0,
-                              transparent: baseMaterial.transparent || false,
-                          });
-                    highlightMaterial.emissive = new THREE.Color(0x4caf50);
-                    highlightMaterial.emissiveIntensity = 0.5;
-                    obj.material = highlightMaterial;
-                }
-            }
-        });
+        syncSelectionHighlight(
+            THREE,
+            viewerInstanceRef.current.scene,
+            selectedObjects,
+            materialLibrary.values()
+        );
     }, [selectedObjects, materialLibrary]);
 
     // Re-lays out the loaded files whenever the toggle changes, and re-frames the camera so the row
@@ -297,6 +279,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
             } catch (error) {
                 console.error("Failed to initialize ThreeJS:", error);
                 setError("Failed to load ThreeJS dependencies");
+                setErrorIsRefusal(false);
                 setIsLoading(false);
             }
         };
@@ -324,6 +307,21 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         // the abandoned first load carry on writing into the live scene. The closure gives each run
         // its own flag, so the abandoned one stops and the live one proceeds.
         let cancelled = false;
+        // This run's downloads, aborted by its cleanup so closing the viewer or giving it other
+        // files mid-download stops the transfer instead of letting it run to completion for a
+        // scene nobody is looking at. Per run, like `cancelled`, so a run never reads another run's
+        // signal. An abort from this controller is the run's own cancellation, not a failure: it is
+        // not logged or listed, and the rest of the load stops (#1643).
+        const runAbort = new AbortController();
+        const cancelledByCleanup = (error: unknown) =>
+            runAbort.signal.aborted && isAbortError(error);
+        // The renderer is created before any file loads, while viewerInstanceRef is set only once
+        // the scene is ready, so this run's renderer is held here: cleanup releases it after a
+        // load that failed or was cancelled too.
+        let runRenderer: any = null;
+        // One resolver per file. Held per run, like the renderer, so cleanup revokes the blob URLs
+        // they created whether the load succeeded, failed or was cancelled.
+        const runResolvers: AssetDependencyResolver[] = [];
 
         const loadAssets = async () => {
             try {
@@ -335,6 +333,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 await ThreeJSDependencyManager.loadThreeJS();
                 if (cancelled) return;
 
+                setUnloadedReferences([]);
                 setLoadingMessage("Initializing 3D scene...");
                 const THREE = (window as any).THREE;
 
@@ -352,6 +351,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 );
                 camera.position.set(5, 5, 5);
                 const renderer = new THREE.WebGLRenderer({ antialias: true });
+                runRenderer = renderer;
                 renderer.setSize(
                     containerRef.current!.clientWidth,
                     containerRef.current!.clientHeight
@@ -373,17 +373,10 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (filesToLoad.length === 0) throw new Error("No files specified");
 
                 const loadedGroups: any[] = [];
-                const errors: Array<{ file: string; error: string }> = [];
+                // `refusal`: the API refused the file with its own reason (an ApiRefusalError).
+                const errors: Array<{ file: string; error: string; refusal?: boolean }> = [];
                 const allAnimations: any[] = [];
-                const allBlobUrls: string[] = [];
-                const fileDependencyCounts = new Map<string, number>(); // Track dependency count per file
-
-                // Get authorization header for streaming endpoint
-                const authHeader = await getDualAuthorizationHeader();
-
-                // Aborted by cleanup so closing the viewer mid-download stops the transfer instead
-                // of letting it run to completion for a scene nobody is looking at.
-                downloadAbortRef.current = new AbortController();
+                const unloaded: string[] = [];
 
                 for (let i = 0; i < filesToLoad.length; i++) {
                     if (cancelled) {
@@ -414,74 +407,57 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                             return;
                         }
 
-                        // Download file using streaming endpoint
-                        const pathSegments = fileKey.split("/");
-                        const encodedSegments = pathSegments.map((segment) =>
-                            encodeURIComponent(segment)
-                        );
-                        const encodedFileKey = encodedSegments.join("/");
-                        let assetUrl = `${
-                            config.api
-                        }database/${fileDatabaseId}/assets/${encodeURIComponent(
-                            fileAssetId
-                        )}/download/stream/${encodedFileKey}`;
-
+                        // Read the file straight from S3 through a presigned URL from the
+                        // authorized download route. The streaming route's 307 makes the browser
+                        // send `Origin: null` to S3, which an external bucket's single-origin CORS
+                        // rule rejects (#1623). Nothing is sent to S3 but the signed URL.
                         // assetVersionId takes precedence (used for all files including deps)
                         // versionId is S3 file version, only for the primary file (isMainFile)
-                        if (assetVersionId) {
-                            assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
-                        } else if (versionId && fileKey === assetKey) {
-                            assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
-                        }
+                        const response = await fetchPresignedFile(
+                            {
+                                databaseId: fileDatabaseId,
+                                assetId: fileAssetId,
+                                key: fileKey,
+                                assetVersionId: assetVersionId || undefined,
+                                versionId:
+                                    !assetVersionId && versionId && fileKey === assetKey
+                                        ? versionId
+                                        : undefined,
+                                signal: runAbort.signal,
+                            },
+                            `Failed to load: ${fileName}`
+                        );
 
-                        const response = await fetch(assetUrl, {
-                            headers: { Authorization: authHeader },
-                            signal: downloadAbortRef.current?.signal,
-                        });
-
-                        if (!response.ok) {
-                            throw new Error(`Failed to load: ${fileName} (${response.status})`);
-                        }
-
-                        let arrayBuffer = await response.arrayBuffer();
+                        const arrayBuffer = await response.arrayBuffer();
                         console.log(`Downloaded: ${fileName} (${arrayBuffer.byteLength} bytes)`);
 
-                        // For GLTF files, pre-load dependencies
-                        // Note: Dependencies are loaded without versionId - they are part of the same asset version
-                        if (fileExtension === "gltf") {
-                            setLoadingMessage(`Resolving dependencies for ${fileName}...`);
-                            const depResult = await preloadGLTFDependencies(
-                                arrayBuffer,
-                                {
-                                    assetId: fileAssetId,
-                                    databaseId: fileDatabaseId,
-                                    baseFileKey: fileKey,
-                                    apiEndpoint: config.api,
-                                    assetVersionId: assetVersionId,
-                                },
-                                (current, total) => {
-                                    setLoadingMessage(
-                                        `Loading dependencies for ${fileName} (${current}/${total})...`
-                                    );
-                                }
-                            );
-                            arrayBuffer = depResult.gltfArrayBuffer;
-                            allBlobUrls.push(...depResult.blobUrls);
+                        // Referenced files come from the same asset version as this file, so the
+                        // resolver passes assetVersionId but never the file's own S3 versionId.
+                        const resolver = new AssetDependencyResolver({
+                            assetId: fileAssetId,
+                            databaseId: fileDatabaseId,
+                            assetVersionId: assetVersionId,
+                            signal: runAbort.signal,
+                        });
+                        runResolvers.push(resolver);
 
-                            // Track dependency count for this file
-                            const depCount = depResult.blobUrls.length;
-                            if (depCount > 0) {
-                                fileDependencyCounts.set(fileName, depCount);
-                                console.log(`Loaded ${depCount} dependencies for ${fileName}`);
-                            }
-                        }
-
-                        // Load file using appropriate loader
                         setLoadingMessage(`Processing ${fileName}...`);
-                        const result = await loadFile(arrayBuffer, fileExtension, fileName);
+                        const result = await loadWithDependencies({
+                            arrayBuffer,
+                            extension: fileExtension,
+                            fileKey,
+                            fileName,
+                            resolver,
+                            onProgress: setLoadingMessage,
+                        });
+                        if (cancelled) return;
 
                         if (!result.object) {
                             throw new Error("Failed to parse file");
+                        }
+
+                        if (result.warnings && result.warnings.length > 0) {
+                            unloaded.push(...result.warnings);
                         }
 
                         // Store animations if present
@@ -497,10 +473,11 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         fileGroup.name = fileName;
                         fileGroup.userData.sourceFile = fileKey;
 
-                        // Store dependency count if available
-                        const depCount = fileDependencyCounts.get(fileName);
-                        if (depCount !== undefined) {
-                            fileGroup.userData.dependencyCount = depCount;
+                        if (result.dependencyCount > 0) {
+                            fileGroup.userData.dependencyCount = result.dependencyCount;
+                            console.log(
+                                `Loaded ${result.dependencyCount} referenced files for ${fileName}`
+                            );
                         }
 
                         fileGroup.add(result.object);
@@ -510,14 +487,21 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
                         console.log(`Successfully loaded ${fileName}`);
                     } catch (fileError: any) {
+                        // This run's cleanup aborted the download: a cancellation, so nothing is
+                        // logged or listed and the rest of this load stops.
+                        if (cancelledByCleanup(fileError)) return;
                         // Console logging only: a % specifier in the interpolated value can at most
                         // garble this one log line; nothing is executed, stored or returned from
                         // it.
                         // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                         console.error(`Error loading ${fileKey}:`, fileError);
+                        if (Array.isArray(fileError?.warnings)) {
+                            unloaded.push(...fileError.warnings);
+                        }
                         errors.push({
                             file: fileKey,
                             error: fileError?.message || "Unknown error",
+                            refusal: isApiRefusalError(fileError),
                         });
                     }
                 }
@@ -526,7 +510,8 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (allAnimations.length > 0) {
                     setAnimations(allAnimations);
                     const mixer = new THREE.AnimationMixer(scene);
-                    const clock = new THREE.Clock();
+                    // THREE.Clock is deprecated; Timer advances only when update() is called.
+                    const clock = new THREE.Timer();
 
                     // Play first animation by default (but paused)
                     const action = mixer.clipAction(allAnimations[0]);
@@ -544,6 +529,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 if (cancelled) return;
                 if (errors.length > 0) setFileErrors(errors);
+                setUnloadedReferences(Array.from(new Set(unloaded)));
 
                 // If no files loaded, show the actual error message
                 if (loadedGroups.length === 0) {
@@ -554,8 +540,11 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         // Show CAD/WASM error prominently
                         throw new Error(cadError.error);
                     } else if (errors.length > 0) {
-                        // Show the first error if available
-                        throw new Error(errors[0].error);
+                        // Show the first error if available; the API's refusal stays one, so no
+                        // format hint is added under its reason (D170).
+                        throw errors[0].refusal
+                            ? new ApiRefusalError(errors[0].error)
+                            : new Error(errors[0].error);
                     } else {
                         throw new Error("No files loaded successfully");
                     }
@@ -707,7 +696,6 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     fileGroups: loadedGroups,
                     controls: mouseControls,
                     clickHandler: handleCanvasClick,
-                    blobUrls: allBlobUrls,
                 };
 
                 const animate = () => {
@@ -717,13 +705,12 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     animationFrameRef.current = requestAnimationFrame(animate);
 
                     // Update animation mixer if animations are playing
-                    if (
-                        animationMixerRef.current &&
-                        animationClockRef.current &&
-                        !animationPausedRef.current
-                    ) {
-                        const delta = animationClockRef.current.getDelta();
-                        animationMixerRef.current.update(delta);
+                    if (animationMixerRef.current && animationClockRef.current) {
+                        // Advanced every frame, so resuming does not replay the paused interval.
+                        animationClockRef.current.update();
+                        if (!animationPausedRef.current) {
+                            animationMixerRef.current.update(animationClockRef.current.getDelta());
+                        }
                     }
 
                     renderer.render(scene, camera);
@@ -752,6 +739,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
             } catch (error) {
                 console.error("Error loading ThreeJS assets:", error);
                 setError(error instanceof Error ? error.message : "Failed to load 3D files");
+                setErrorIsRefusal(isApiRefusalError(error));
                 setIsLoading(false);
             }
         };
@@ -767,11 +755,10 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 cancelAnimationFrame(animationFrameRef.current);
                 animationFrameRef.current = null;
             }
-            downloadAbortRef.current?.abort();
-            downloadAbortRef.current = null;
+            runAbort.abort();
 
             if (viewerInstanceRef.current) {
-                const { renderer, controls, clickHandler, blobUrls } = viewerInstanceRef.current;
+                const { renderer, controls, clickHandler } = viewerInstanceRef.current;
 
                 if (clickHandler && renderer?.domElement) {
                     renderer.domElement.removeEventListener("click", clickHandler);
@@ -782,24 +769,28 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 }
 
                 controls?.dispose();
-
-                if (renderer?.domElement?.parentNode) {
-                    renderer.domElement.parentNode.removeChild(renderer.domElement);
-                }
-
-                // Before the renderer: the environment is a render target that belongs to this
-                // renderer's context, so releasing it afterwards releases nothing.
-                sceneEnvironmentRef.current?.dispose();
-                sceneEnvironmentRef.current = null;
-
-                renderer?.dispose();
-
-                // Cleanup blob URLs
-                if (blobUrls && blobUrls.length > 0) {
-                    cleanupBlobUrls(blobUrls);
-                    console.log(`Cleaned up ${blobUrls.length} blob URLs`);
-                }
             }
+            viewerInstanceRef.current = null;
+
+            // Blob URLs for referenced files, revoked whatever the load outcome.
+            runResolvers.forEach((resolver) => resolver.revokeAll());
+            runResolvers.length = 0;
+
+            if (runRenderer?.domElement?.parentNode) {
+                runRenderer.domElement.parentNode.removeChild(runRenderer.domElement);
+            }
+
+            // Before the renderer: the environment is a render target that belongs to this
+            // renderer's context, so releasing it afterwards releases nothing.
+            sceneEnvironmentRef.current?.dispose();
+            sceneEnvironmentRef.current = null;
+
+            runRenderer?.dispose();
+            // dispose() frees the renderer's GPU resources but keeps the WebGL context until the
+            // canvas is garbage collected, and the browser caps live contexts per page. Called after
+            // dispose(), which has already removed the renderer's own context-lost listener.
+            runRenderer?.forceContextLoss?.();
+            runRenderer = null;
 
             // Clear global THREE.js reference to prevent contamination
             delete (window as any).THREE;
@@ -908,7 +899,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         }
         mat.opacity = materialState.opacity;
         mat.transparent = materialState.transparent;
-        mat.wireframe = materialState.wireframe;
+        if (supportsWireframe(mat)) mat.wireframe = materialState.wireframe;
         mat.needsUpdate = true;
 
         if (viewerInstanceRef.current?.scene) {
@@ -919,16 +910,15 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     if (isSelected) {
                         if (materialState.color)
                             obj.material.color = new THREE.Color(materialState.color);
-                        obj.material.emissive = new THREE.Color(0x4caf50);
-                        obj.material.emissiveIntensity = 0.5;
                         if (obj.material.metalness !== undefined)
                             obj.material.metalness = materialState.metalness;
                         if (obj.material.roughness !== undefined)
                             obj.material.roughness = materialState.roughness;
                         obj.material.opacity = materialState.opacity;
                         obj.material.transparent = materialState.transparent;
-                        obj.material.wireframe = materialState.wireframe;
-                        obj.material.needsUpdate = true;
+                        if (supportsWireframe(obj.material))
+                            obj.material.wireframe = materialState.wireframe;
+                        applySelectionHighlight(THREE, obj.material);
                     }
                 }
             });
@@ -953,7 +943,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         if (original.roughness !== undefined) mat.roughness = original.roughness;
         mat.opacity = original.opacity;
         mat.transparent = original.transparent;
-        mat.wireframe = original.wireframe;
+        if (supportsWireframe(mat)) mat.wireframe = original.wireframe;
         mat.needsUpdate = true;
 
         if (viewerInstanceRef.current?.scene) {
@@ -962,16 +952,15 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     const isSelected = selectedObjects.some((sel) => sel.uuid === obj.uuid);
                     if (isSelected && obj.material) {
                         if (original.color) obj.material.color = original.color.clone();
-                        obj.material.emissive = new THREE.Color(0x4caf50);
-                        obj.material.emissiveIntensity = 0.5;
                         if (original.metalness !== undefined)
                             obj.material.metalness = original.metalness;
                         if (original.roughness !== undefined)
                             obj.material.roughness = original.roughness;
                         obj.material.opacity = original.opacity;
                         obj.material.transparent = original.transparent;
-                        obj.material.wireframe = original.wireframe;
-                        obj.material.needsUpdate = true;
+                        if (supportsWireframe(obj.material))
+                            obj.material.wireframe = original.wireframe;
+                        applySelectionHighlight(THREE, obj.material);
                     }
                 }
             });
@@ -1049,10 +1038,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
         const isSelected = selectedObjects.some((sel) => sel.uuid === objectUuid);
         if (isSelected) {
-            const highlightMaterial = item.material.clone();
-            highlightMaterial.emissive = new THREE.Color(0x4caf50);
-            highlightMaterial.emissiveIntensity = 0.5;
-            object.material = highlightMaterial;
+            object.material = createHighlightMaterial(THREE, item.material);
         } else {
             object.material = item.material;
         }
@@ -1095,10 +1081,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
         const isSelected = selectedObjects.some((sel) => sel.uuid === objectUuid);
         if (isSelected) {
-            const highlightMaterial = uniqueMaterial.clone();
-            highlightMaterial.emissive = new THREE.Color(0x4caf50);
-            highlightMaterial.emissiveIntensity = 0.5;
-            object.material = highlightMaterial;
+            object.material = createHighlightMaterial(THREE, uniqueMaterial);
         } else {
             object.material = uniqueMaterial;
         }
@@ -1144,10 +1127,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         if (object) {
             const isSelected = selectedObjects.some((sel) => sel.uuid === objectUuid);
             if (isSelected) {
-                const highlightMaterial = newMaterial.clone();
-                highlightMaterial.emissive = new THREE.Color(0x4caf50);
-                highlightMaterial.emissiveIntensity = 0.5;
-                object.material = highlightMaterial;
+                object.material = createHighlightMaterial(THREE, newMaterial);
             } else {
                 object.material = newMaterial;
             }
@@ -1278,7 +1258,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (original.roughness !== undefined) mat.roughness = original.roughness;
                 mat.opacity = original.opacity;
                 mat.transparent = original.transparent;
-                mat.wireframe = original.wireframe;
+                if (supportsWireframe(mat)) mat.wireframe = original.wireframe;
                 mat.needsUpdate = true;
             }
         });
@@ -1296,6 +1276,49 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
         console.log("All materials reset to original");
     };
+
+    // Referenced files that were not loaded: shown over the scene, and over the error screen when
+    // nothing could be drawn.
+    const referencesNotice =
+        unloadedReferences.length > 0 && !isLoading ? (
+            <div
+                style={{
+                    position: "absolute",
+                    bottom: "8px",
+                    left: "8px",
+                    maxWidth: "min(560px, calc(100% - 16px))",
+                    zIndex: VIEWER_LAYER.notice,
+                }}
+                data-testid="threejs-unloaded-references"
+            >
+                <Alert
+                    type="info"
+                    dismissible
+                    dismissAriaLabel="Dismiss referenced files notice"
+                    onDismiss={() => setUnloadedReferences([])}
+                    header={`${unloadedReferences.length} referenced file${
+                        unloadedReferences.length === 1 ? " was" : "s were"
+                    } not loaded`}
+                >
+                    {/* Focusable so keyboard users can reach and scroll the list. */}
+                    <div
+                        tabIndex={0}
+                        role="region"
+                        aria-label="Referenced files that were not loaded"
+                        style={{ maxHeight: "120px", overflowY: "auto" }}
+                    >
+                        <ul style={{ margin: 0, paddingLeft: "18px" }}>
+                            {unloadedReferences.slice(0, NOTICE_LISTED_FILES).map((line) => (
+                                <li key={line}>{line}</li>
+                            ))}
+                        </ul>
+                        {unloadedReferences.length > NOTICE_LISTED_FILES && (
+                            <div>and {unloadedReferences.length - NOTICE_LISTED_FILES} more</div>
+                        )}
+                    </div>
+                </Alert>
+            </div>
+        ) : null;
 
     if (error) {
         // Keyed apart from the viewer root below so React does not reuse the scene container for
@@ -1329,17 +1352,24 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     }}
                 >
                     {error}
-                    {/* A CAD setup message is about the deployment or browser, not the file. */}
-                    {!isCadSupportError(error) && (
-                        <>
-                            <br />
-                            <br />
-                            <span style={{ fontSize: ".9em", color: "#d13212" }}>
-                                Please ensure the file is a supported 3D format
-                            </span>
-                        </>
-                    )}
+                    {/* A CAD setup message is about the deployment or browser, not the file, a
+                        USD scene or a CAD file with nothing to draw is a supported format whose
+                        message names what to do, and the API's refusal names its own reason
+                        (D170). */}
+                    {!errorIsRefusal &&
+                        !isCadSupportError(error) &&
+                        error !== USD_NO_GEOMETRY_MESSAGE &&
+                        !isOcctNoGeometryError(error) && (
+                            <>
+                                <br />
+                                <br />
+                                <span style={{ fontSize: ".9em", color: "#d13212" }}>
+                                    Please ensure the file is a supported 3D format
+                                </span>
+                            </>
+                        )}
                 </div>
+                {referencesNotice}
             </div>
         );
     }
@@ -1416,6 +1446,8 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 </div>
             )}
 
+            {referencesNotice}
+
             {isLoading && <LoadingSpinner message={loadingMessage} />}
 
             {sceneReady && viewerInstanceRef.current && showPanel && (
@@ -1454,6 +1486,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     animations={animations}
                     animationPaused={animationPaused}
                     onToggleAnimation={setAnimationPaused}
+                    keptTreeHeight={keptTreeHeight}
                 />
             )}
 

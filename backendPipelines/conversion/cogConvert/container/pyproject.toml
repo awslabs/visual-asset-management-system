@@ -1,0 +1,17 @@
+[project]
+name = "cogconvertcontainer"
+version = "0.1.0"
+description = "Python packages the COG conversion image installs with pip beside its conda GDAL stack"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "boto3==1.44.4",
+]
+
+# The GDAL stack is installed from conda-explicit.txt; only the packages below come from pip. The image
+# installs the committed requirements.txt, which is exported from uv.lock
+# (uv lock && uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.txt).
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"
+environments = ["sys_platform == 'linux'"]

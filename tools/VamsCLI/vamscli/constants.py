@@ -2,6 +2,9 @@
 Constants for VamsCLI
 """
 
+# Add-on constants are declared in vamscli/addon_constants.py; every name there is re-exported here.
+from vamscli.addon_constants import *  # noqa: F401,F403
+
 # CLI Configuration
 CLI_NAME = "vamscli"
 
@@ -14,6 +17,7 @@ API_DATABASE_ASSETS = "/database/{databaseId}/assets"
 API_DATABASE_ASSET = "/database/{databaseId}/assets/{assetId}"
 API_UPLOADS = "/uploads"
 API_UPLOADS_COMPLETE = "/uploads/{uploadId}/complete"
+API_UPLOAD_STATUS = "/uploads/{uploadId}"
 
 # File Management API Endpoints
 API_CREATE_FOLDER = "/database/{databaseId}/assets/{assetId}/createFolder"
@@ -36,6 +40,20 @@ API_DELETE_ASSET = "/database/{databaseId}/assets/{assetId}/deleteAsset"
 API_DOWNLOAD_ASSET = "/database/{databaseId}/assets/{assetId}/download"
 API_ASSET_EXPORT = "/database/{databaseId}/assets/{assetId}/export"
 API_GET_ASSET_HISTORY = "/database/{databaseId}/assets/{assetId}/assetHistory"
+
+# Download as Zip (prepared downloads) API Endpoints
+# A job belongs to the user who created it. The asset route carries POST (create) and GET (the
+# caller's jobs for that asset); the request route carries GET (one job) and DELETE, which CANCELS a
+# job that is still queued or running and DELETES one that has finished. The /url route issues a
+# short-lived presigned URL for a finished archive. Every route answers 404 with
+# ZIP_DOWNLOADS_DISABLED_API_MESSAGE while the deployment's app.pipelines.useZipDownloads is disabled.
+API_ZIP_DOWNLOADS_ASSET = "/database/{databaseId}/assets/{assetId}/download/zip"
+API_ZIP_DOWNLOADS_ASSET_REQUEST = "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}"
+API_ZIP_DOWNLOADS_ASSET_REQUEST_URL = (
+    "/database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url"
+)
+API_ZIP_DOWNLOADS_GLOBAL = "/download/zip"
+API_ZIP_DOWNLOADS_ASSET_ALL_USERS = "/database/{databaseId}/assets/{assetId}/download/zip-all-users"
 
 # Asset Version API Endpoints
 API_CREATE_ASSET_VERSION = "/database/{databaseId}/assets/{assetId}/createVersion"
@@ -75,18 +93,15 @@ API_FILE_METADATA = "/database/{databaseId}/assets/{assetId}/metadata/file"
 API_DATABASE_METADATA = "/database/{databaseId}/metadata"
 
 # Comments API Endpoints
-# The composite sort key `assetVersionId:commentId` is two values joined by a colon inside a single
-# path segment, so the third constant is not `str.format`-able: format() reads everything after the
-# colon as a format spec and raises. `build_comment_path()` in utils/api_client.py substitutes it.
-API_COMMENTS_ASSET = "/comments/assets/{assetId}"
-API_COMMENTS_ASSET_VERSION = "/comments/assets/{assetId}/assetVersionId/{assetVersionId}"
-API_COMMENTS_ASSET_VERSION_COMMENT = (
-    "/comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}"
-)
+# An asset's comments are addressed by its database and asset id; a comment by its own id. The asset
+# version a comment is about is a query filter on the listing and a body field on create.
+API_COMMENTS_ASSET = "/comments/database/{databaseId}/assets/{assetId}"
+API_COMMENTS_ASSET_COMMENT = "/comments/database/{databaseId}/assets/{assetId}/{commentId}"
 
 # Subscription API Endpoints
 # DELETE /subscriptions removes the whole subscription record (and its SNS topic); DELETE
 # /unsubscribe removes one subscriber from it. Two operations on the same record, not aliases.
+# Every write and the check name the asset's database (databaseId) in the body.
 API_SUBSCRIPTIONS = "/subscriptions"
 API_CHECK_SUBSCRIPTION = "/check-subscription"
 API_UNSUBSCRIBE = "/unsubscribe"
@@ -140,6 +155,7 @@ API_METADATA_SCHEMA_BY_ID = "/database/{databaseId}/metadataSchema/{metadataSche
 API_SEARCH = "/search"
 API_SEARCH_SIMPLE = "/search/simple"
 API_SEARCH_MAPPING = "/search"
+API_SEARCH_NLP = "/search/nlp"
 
 # Pipeline API Endpoints
 API_PIPELINES = "/pipelines"
@@ -168,9 +184,112 @@ API_WORKFLOW_EXECUTIONS_GLOBAL = "/workflows/executions"
 API_WORKFLOW_EXECUTION = "/workflows/executions/{executionId}"
 API_WORKFLOW_EXECUTION_DETAILS = "/workflows/executions/{executionId}/details"
 API_WORKFLOW_EXECUTION_DETAILS_METADATA = "/workflows/executions/{executionId}/details/metadata"
+API_WORKFLOW_EXECUTION_DETAILS_FILES = "/workflows/executions/{executionId}/details/files"
+API_WORKFLOW_EXECUTION_DETAILS_RESULTS = "/workflows/executions/{executionId}/details/results"
 API_WORKFLOW_EXECUTION_LOGS = "/workflows/executions/{executionId}/logs"
 API_WORKFLOW_EXECUTION_RERUN = "/workflows/executions/{executionId}/rerun"
 API_WORKFLOW_EXECUTION_PERMANENT = "/workflows/executions/{executionId}/permanent"
+
+# Compliance API Endpoints
+# Schema registry: the collection route lists (GET) and registers (POST); the named route reads
+# (GET), writes a new version (PUT) and removes an unbound schema (DELETE).
+API_COMPLIANCE_SCHEMAS = "/compliance/schemas"
+API_COMPLIANCE_SCHEMA_BY_NAME = "/compliance/schemas/{schemaName}"
+# Schema bindings: the database route reads the binding and its asset overrides (GET), binds (PUT)
+# and unbinds (DELETE); the asset route binds an override (PUT) and removes it (DELETE).
+API_COMPLIANCE_BIND_DATABASE = "/compliance/bind/{databaseId}"
+API_COMPLIANCE_BIND_ASSET = "/compliance/bind/{databaseId}/{assetId}"
+# Evaluation: evaluate one asset (POST); sweep re-evaluates every asset bound to a schema (POST);
+# the evaluations route is an asset's evaluation history (GET).
+API_COMPLIANCE_EVALUATE_ASSET = "/compliance/evaluate/{databaseId}/{assetId}"
+API_COMPLIANCE_EVALUATE_DATABASE = "/compliance/evaluate/{databaseId}"
+API_COMPLIANCE_SWEEP_SCHEMA = "/compliance/sweep/{schemaName}"
+API_COMPLIANCE_EVALUATIONS_ASSET = "/compliance/evaluations/{databaseId}/{assetId}"
+# Compliance state: one asset's record, and the per-database summary with every tracked asset.
+API_COMPLIANCE_STATE_ASSET = "/compliance/state/{databaseId}/{assetId}"
+API_COMPLIANCE_STATE_DATABASE = "/compliance/state/{databaseId}"
+# Quarantine: the listing, and the release / exception actions on one quarantined asset.
+API_COMPLIANCE_QUARANTINE = "/compliance/quarantine"
+API_COMPLIANCE_QUARANTINE_RELEASE = "/compliance/quarantine/{databaseId}/{assetId}/release"
+API_COMPLIANCE_QUARANTINE_EXCEPTION = "/compliance/quarantine/{databaseId}/{assetId}/exception"
+# Cascades: the collection lists pending cascades (GET) and creates one (POST); the id route reads
+# one (GET); approve / reject act on a pending cascade (POST).
+API_COMPLIANCE_CASCADES = "/compliance/cascades"
+API_COMPLIANCE_CASCADE_BY_ID = "/compliance/cascades/{cascadeId}"
+API_COMPLIANCE_CASCADE_APPROVE = "/compliance/cascades/{cascadeId}/approve"
+API_COMPLIANCE_CASCADE_REJECT = "/compliance/cascades/{cascadeId}/reject"
+# Audit trail: the global listing (filterable by eventType) and one asset's history.
+API_COMPLIANCE_AUDIT = "/compliance/audit"
+API_COMPLIANCE_AUDIT_ASSET = "/compliance/audit/{databaseId}/{assetId}"
+
+# Audit log search (core feature behind the AUDITLOGSEARCH switch, off in the EU Sovereign
+# template): the groups the caller may search, a search (POST starts it and answers a handle, GET
+# reads or long-polls it, DELETE stops it) and its export.
+API_AUDIT_LOG_GROUPS = "/audit/log-groups"
+API_AUDIT_QUERIES = "/audit/queries"
+API_AUDIT_QUERY = "/audit/queries/{queryId}"
+API_AUDIT_QUERY_EXPORT = "/audit/queries/{queryId}/export"
+
+# Defaults of the server's limits, used only to refuse an obviously bad value early. The operator can
+# configure the contains limits (up to 5 terms of 128 characters), so the CLI and the MCP tools read
+# them from `audit groups` (utils/audit_search.get_contains_limits) and fall back to these when that
+# read fails. The server stays authoritative.
+AUDIT_LONG_POLL_WAIT_SECONDS = 20
+AUDIT_MIN_POLL_GAP_SECONDS = 0.25
+AUDIT_MAX_POLL_GAP_SECONDS = 30
+AUDIT_NETWORK_RETRIES = 3
+# The server's search deadline is 5 minutes by default (queryDeadlineSeconds); the client gives up a
+# little after the longest deadline it allows.
+AUDIT_DEFAULT_WAIT_TIMEOUT_SECONDS = 360
+AUDIT_DEFAULT_PAGE_SIZE = 100
+AUDIT_MAX_PAGE_SIZE = 500
+AUDIT_DEFAULT_MAX_ROWS = 1000
+AUDIT_MAX_FILTER_VALUES = 20
+AUDIT_MAX_CONTAINS_TERMS = 3
+AUDIT_CONTAINS_MIN_LENGTH = 3
+AUDIT_CONTAINS_MAX_LENGTH = 64
+AUDIT_CONTAINS_ALLOWED_PATTERN = r"[A-Za-z0-9 ._:@+/-]+"
+AUDIT_EXPORT_FORMATS = ("csv", "ndjson")
+AUDIT_SORT_ORDERS = ("asc", "desc")
+AUDIT_OUTCOMES = ("success", "failed", "denied")
+AUDIT_DEFAULT_WINDOW = "24h"
+AUDIT_FINAL_STATUSES = ("Complete", "Failed", "Cancelled", "Timeout")
+
+# The audit routes page on `maxItems` (alias `limit`) + `startingToken`, returning a `NextToken`;
+# the handler applies the default when the request names no page size and clamps larger values to
+# the cap.
+COMPLIANCE_AUDIT_DEFAULT_LIMIT = 100
+MAX_COMPLIANCE_AUDIT_PAGE_SIZE = 200
+# A database binding change (bind, change, removal) is applied to the asset records in the
+# background; the request answers 202 with its `apply`, and the binding read reports its status:
+# `applying`, `stalled` (no progress for a while; the same command resumes it), `applied` or
+# `failed`. `compliance bind/unbind --wait` reads the binding with these delays (seconds, the last
+# one repeating) until the change ends, for at most the wait timeout.
+COMPLIANCE_BINDING_APPLY_APPLYING = "applying"
+COMPLIANCE_BINDING_APPLY_STALLED = "stalled"
+COMPLIANCE_BINDING_APPLY_APPLIED = "applied"
+COMPLIANCE_BINDING_APPLY_FAILED = "failed"
+COMPLIANCE_BINDING_APPLY_POLL_DELAYS = (2, 3, 5, 8, 10, 15)
+# The reason the API records on a change whose database was deleted while it was applied
+# (backend complianceBindingApply.FAILED_DATABASE_DELETED). When the database is gone during
+# `--wait`, the binding read answers not found; the change has failed, and the wait reports it
+# with this reason.
+COMPLIANCE_BINDING_APPLY_DATABASE_DELETED_REASON = (
+    "The database was deleted while the binding was being applied")
+DEFAULT_COMPLIANCE_BINDING_WAIT_TIMEOUT = 900
+MAX_COMPLIANCE_BINDING_WAIT_TIMEOUT = 86400
+# The evaluation-history route pages on `maxItems` (its page size) + `startingToken`, returning a
+# `NextToken`; the handler applies the default when none is given and clamps larger values to the cap.
+DEFAULT_COMPLIANCE_EVALUATIONS_PAGE_SIZE = 50
+MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE = 200
+# The database overview, the quarantine listing and the bindings route page their list field
+# (`assets`, `quarantinedAssets`, `assetOverrides`) on `maxItems` + `startingToken` the same way;
+# the overview's `summary`/`totalAssets` and the bindings' `assetOverrideCount` still cover the
+# full set.
+DEFAULT_COMPLIANCE_LIST_PAGE_SIZE = 100
+MAX_COMPLIANCE_LIST_PAGE_SIZE = 500
+# The overview, quarantine, cascade and audit listings filter on the server and cap a page at 200.
+MAX_COMPLIANCE_LISTING_PAGE_SIZE = 200
 
 # Workflow execution list page-size cap (Step Functions throttling on the asset-scoped list).
 MAX_WORKFLOW_EXECUTION_PAGE_SIZE = 50
@@ -178,19 +297,28 @@ MAX_WORKFLOW_EXECUTION_PAGE_SIZE = 50
 MAX_GLOBAL_EXECUTION_PAGE_SIZE = 100
 # Page ceiling for --auto-paginate on the execution list (rows are filtered after the page limit).
 MAX_EXECUTION_AUTO_PAGINATE_PAGES = 200
+# Query parameter both execution lists accept to include runs of system workflows, which they hide by
+# default (shown by default only when the list is scoped to one system workflow). Mirrors
+# INCLUDE_SYSTEM_PARAM in backend/backend/handlers/workflows/executionService.py.
+EXECUTION_LIST_INCLUDE_SYSTEM_PARAM = "includeSystem"
 # Paged execution-detail metadata: the collections the endpoint serves, and its page-size cap
 # (the handler clamps larger values rather than rejecting them).
 EXECUTION_DETAIL_METADATA_COLLECTIONS = ('input', 'inputDatabase', 'output')
 MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE = 500
+# Paged execution-detail FILES: the collections the endpoint serves (no inputDatabase — that split is
+# metadata-only). The page-size cap is shared with the metadata read.
+EXECUTION_DETAIL_FILE_COLLECTIONS = ('input', 'output')
 
 # Upload Configuration
 DEFAULT_CHUNK_SIZE_SMALL = 150 * 1024 * 1024  # 150MB
 DEFAULT_CHUNK_SIZE_LARGE = 1024 * 1024 * 1024  # 1GB
 MAX_FILE_SIZE_SMALL_CHUNKS = 15 * 1024 * 1024 * 1024  # 15GB
 MAX_SEQUENCE_SIZE = 3 * 1024 * 1024 * 1024  # 3GB
-MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5 MiB; a preview of exactly this size is accepted, as the API does
 DEFAULT_PARALLEL_UPLOADS = 10
 DEFAULT_RETRY_ATTEMPTS = 3
+# How long `file upload --wait-async` waits for files over 1 GiB to be ingested.
+DEFAULT_ASYNC_INGESTION_TIMEOUT_SECONDS = 3600
 
 # Upload limits. MAX_PART_SIZE and MAX_UPLOADS_PER_USER_PER_MINUTE are Amazon S3 and backend
 # limits. The other three are this client's own batch sizes: each stays within the backend's
@@ -222,7 +350,9 @@ DEFAULT_IGNORE_FILE_NAME = ".vamsignore"
 SYNC_MTIME_TOLERANCE_SECONDS = 2  # Filesystem timestamp granularity tolerance (FAT32 = 2s)
 
 # File Extensions
-ALLOWED_PREVIEW_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
+# Mirrors ALLOWED_PREVIEW_FILE_EXTENSIONS in backend/backend/common/s3PathPatterns.py
+# (tests/test_preview_extensions_contract.py checks it). .tga/.tif/.tiff are not previews of their own.
+ALLOWED_PREVIEW_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.bmp']
 
 # Profile Configuration
 PROFILE_DIR_NAME = "vamscli"
@@ -268,7 +398,8 @@ DEFAULT_RETRY_JITTER = 0.1
 
 # Feature Switch Constants
 # One per member of VAMS_APP_FEATURES (infra/common/vamsAppFeatures.ts), which is what a deployment
-# publishes through /secure-config. A missing member is a gate the CLI cannot name.
+# publishes through /secure-config. A missing member is a gate the CLI cannot name. The add-on
+# switches (ADDON_APP_FEATURES) are declared in vamscli/addon_constants.py and re-exported above.
 FEATURE_GOVCLOUD = "GOVCLOUD"
 FEATURE_ALLOWUNSAFEEVAL = "ALLOWUNSAFEEVAL"
 FEATURE_LOCATIONSERVICES = "LOCATIONSERVICES"
@@ -279,8 +410,60 @@ FEATURE_AUTHPROVIDER_COGNITO = "AUTHPROVIDER_COGNITO"
 FEATURE_AUTHPROVIDER_COGNITO_SAML = "AUTHPROVIDER_COGNITO_SAML"
 FEATURE_AUTHPROVIDER_COGNITO_OIDC = "AUTHPROVIDER_COGNITO_OIDC"
 FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP = "AUTHPROVIDER_EXTERNALOAUTHIDP"
-FEATURE_PHYSNA_ADDON = "PHYSNA_ADDON"
 FEATURE_DEADLINECLOUD_PIPELINES = "DEADLINECLOUD_PIPELINES"
+FEATURE_VECTORSEARCH = "VECTORSEARCH"
+FEATURE_ZIPDOWNLOADS = "ZIPDOWNLOADS"
+# Audit Log Search (the /audit API); present in the deployment's feature list unless
+# app.auditLogging.search.enabled is false (off in the EU Sovereign template).
+FEATURE_AUDITLOGSEARCH = "AUDITLOGSEARCH"
+AUDIT_SEARCH_DISABLED_MESSAGE = "Audit Log Search is not enabled on this deployment"
+# The deployment answered an /audit path as an unrouted one: the search is not available there, for
+# example because the switch was turned off after this profile read its feature list.
+AUDIT_SEARCH_UNAVAILABLE_MESSAGE = (
+    "Audit Log Search is not available on this deployment. Sign in again to refresh the feature list.")
+
+# Download as Zip. The archive formats and compressions the create route accepts
+# (CreateZipDownloadRequestModel in backend/backend/models/assetsV3.py), the job statuses, and
+# the two "feature off" texts: the API's 404 body, and the business error the CLI and the MCP server
+# raise for it (from the profile's feature switches first, the 404 body second).
+ZIP_DOWNLOAD_FORMATS = ("zip", "tar", "tar.gz")
+ZIP_DOWNLOAD_COMPRESSIONS = ("store", "deflate")
+ZIP_DOWNLOAD_MAX_SELECTION_ENTRIES = 1000
+ZIP_DOWNLOAD_ACTIVE_STATUSES = ("QUEUED", "RUNNING")
+ZIP_DOWNLOAD_TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "CANCELLED")
+# The DELETE request route's cancel intent (DeleteZipDownloadQueryModel in
+# backend/backend/models/assetsV3.py): with it the API never deletes a job that finished before
+# the cancel arrived; it keeps it and answers action "ended".
+ZIP_DOWNLOAD_INTENT_PARAM = "intent"
+ZIP_DOWNLOAD_CANCEL_INTENT = "cancel"
+ZIP_DOWNLOADS_DISABLED_API_MESSAGE = "Zip downloads are not enabled for this deployment"
+ZIP_DOWNLOADS_DISABLED_MESSAGE = "Zip downloads are not available for this deployment"
+ZIP_DOWNLOAD_NOT_FOUND_API_MESSAGE = "Zip download not found"
+# A 429 with this exact body is the per-user active-job cap, a business refusal that retrying in a
+# few seconds does not clear; the client's throttling backoff skips it.
+ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE = "You already have the maximum number of active zip downloads"
+# --wait: how often a job is polled, and how long the CLI waits by default before giving up (the job
+# keeps running; 'zip-download get' or 'download --wait' picks it up again).
+ZIP_DOWNLOAD_POLL_INTERVAL_SECONDS = 5
+ZIP_DOWNLOAD_DEFAULT_WAIT_TIMEOUT_SECONDS = 3600
+# Streaming an archive from its presigned URL: connect and per-read timeouts, chunk size, and how
+# often (in bytes) a text-mode progress line is printed.
+ZIP_DOWNLOAD_STREAM_TIMEOUT = (30, 300)
+ZIP_DOWNLOAD_STREAM_CHUNK_BYTES = 1024 * 1024
+ZIP_DOWNLOAD_PROGRESS_STEP_BYTES = 64 * 1024 * 1024
+
+# What an administrator does with a request the deployment's AWS WAF web ACL blocked.
+WAF_ADMIN_HINT = (
+    "Ask the VAMS administrator to find the request in the web ACL's sampled requests, or in its "
+    "aws-waf-logs-vams-* log group, which names the rule that matched."
+)
+
+# What to check for a bare 403 "Forbidden", which a web ACL block and a URL naming no deployed stage share.
+WAF_OR_STAGE_ADMIN_HINT = (
+    "If the deployment has an AWS WAF web ACL, ask the VAMS administrator to find the request in its "
+    "sampled requests, or in its aws-waf-logs-vams-* log group. Otherwise run 'vamscli profile info' and "
+    "check that the API Gateway URL ends in the REST API stage path."
+)
 
 # Legacy constants for backward compatibility
 CONFIG_FILE = CONFIG_FILE_NAME

@@ -1,5 +1,7 @@
 """Custom exceptions for VamsCLI."""
 
+from typing import Optional
+
 
 class VamsCLIError(Exception):
     """Base exception for VamsCLI errors."""
@@ -57,8 +59,46 @@ class TokenExpiredError(GlobalInfrastructureError):
 
 
 class PermissionDeniedError(GlobalInfrastructureError):
-    """Raised when user lacks permissions for the requested action (legitimate 403)."""
-    pass
+    """Raised when user lacks permissions for the requested action (legitimate 403).
+
+    ``code`` is the machine-readable ``code`` a handler's 403 body carried, None when it carried none.
+    A subclass that sets ``forbidden_code`` is the error ``for_code`` picks for a 403 coded that way
+    (an add-on may define its own); it stays a permission denial, so every
+    guard that lets a global error through lets it through too.
+    """
+
+    # The handler 403 `code` a subclass stands for; None on this class, which stands for every other.
+    forbidden_code: Optional[str] = None
+
+    def __init__(self, message: str = "", code: Optional[str] = None):
+        super().__init__(message)
+        self.code = code
+
+    @classmethod
+    def for_code(cls, code: Optional[str]) -> type:
+        """The class a handler's 403 coded ``code`` is raised as: the subclass whose ``forbidden_code``
+        it is, else this class."""
+        if code:
+            pending = list(cls.__subclasses__())
+            while pending:
+                subclass = pending.pop(0)
+                if subclass.__dict__.get("forbidden_code") == code:
+                    return subclass
+                pending.extend(subclass.__subclasses__())
+        return cls
+
+
+class RequestBlockedError(GlobalInfrastructureError):
+    """Raised when the deployment's AWS WAF web ACL blocked a request before VAMS handled it (HTTP 403)."""
+
+    def __init__(self, message: str, request_id: Optional[str] = None, confirmed: bool = True):
+        super().__init__(message)
+        self.request_id = request_id
+        self.confirmed = confirmed
+        # Carried into --json-output beside the error.
+        self.json_fields = {"blockedBy": "waf" if confirmed else "waf-or-stage"}
+        if request_id:
+            self.json_fields["requestId"] = request_id
 
 
 class VersionMismatchError(GlobalInfrastructureError):
@@ -89,6 +129,19 @@ class BusinessLogicError(VamsCLIError):
 # General API and validation errors
 class APIError(BusinessLogicError):
     """Raised when API calls fail."""
+    pass
+
+
+class RouteNotDeployedError(APIError):
+    """Raised when no deployed API route matches the request (HTTP 403 from API Gateway): the
+    deployment is older than this CLI, or the add-on that serves the route is not deployed. Final:
+    resending the request would not change it."""
+    pass
+
+
+class UploadStatusNotFoundError(APIError):
+    """Raised when an upload has no status the caller can read (a final answer, not a transient
+    failure: polling it again would not change it)."""
     pass
 
 
@@ -709,6 +762,80 @@ class InvalidSubscriptionDataError(SubscriptionError):
     pass
 
 
+# Download as Zip (prepared downloads) business logic exceptions
+class ZipDownloadError(BusinessLogicError):
+    """Base class for zip download errors."""
+    pass
+
+
+class ZipDownloadDisabledError(ZipDownloadError):
+    """Raised when the deployment does not offer zip downloads.
+
+    Decided from the profile's feature switches (ZIPDOWNLOADS absent) before any request, and from
+    the API's 404 body when the switches were never read."""
+    pass
+
+
+class ZipDownloadNotFoundError(ZipDownloadError):
+    """Raised when a zip download does not exist, has expired, or belongs to another user."""
+    pass
+
+
+class InvalidZipDownloadRequestError(ZipDownloadError):
+    """Raised when a zip download request is refused (selection, pin, limits, or eligibility)."""
+    pass
+
+
+class ZipDownloadLimitError(ZipDownloadError):
+    """Raised when the caller already has the maximum number of active zip downloads."""
+    pass
+
+
+class ZipDownloadNotReadyError(ZipDownloadError):
+    """Raised when the archive of a zip download has not been produced (yet)."""
+    pass
+
+
+class ZipDownloadExpiredError(ZipDownloadError):
+    """Raised when a finished archive is no longer stored."""
+    pass
+
+
+class ZipDownloadStateError(ZipDownloadError):
+    """Raised when cancel is asked of a finished job, or delete of one still running."""
+    pass
+
+
+class ZipDownloadFailedError(ZipDownloadError):
+    """Raised when a waited-on zip download ends FAILED or CANCELLED.
+
+    `json_fields` carries the job's requestId, status and (scrubbed) errorMessage."""
+
+    def __init__(self, message: str, job: dict = None):
+        super().__init__(message)
+        job = job or {}
+        self.json_fields = {
+            key: job[key] for key in ("requestId", "status", "errorMessage", "cancelledBy")
+            if job.get(key) is not None
+        }
+
+
+class ZipDownloadTimeoutError(ZipDownloadError):
+    """Raised when --wait gives up before the job finishes. The job keeps running."""
+
+    def __init__(self, message: str, job: dict = None):
+        super().__init__(message)
+        job = job or {}
+        self.json_fields = {
+            key: job[key] for key in ("requestId", "status") if job.get(key) is not None
+        }
+
+
+class ZipDownloadTransferError(ZipDownloadError):
+    """Raised when streaming a finished archive to a local file fails."""
+    pass
+
+
 # Metadata schema-related business logic exceptions
 class MetadataSchemaError(BusinessLogicError):
     """Base class for metadata schema errors."""
@@ -727,6 +854,28 @@ class MetadataSchemaDeletionError(MetadataSchemaError):
 
 class InvalidMetadataSchemaDataError(MetadataSchemaError):
     """Raised when metadata schema data is invalid."""
+    pass
+
+
+# Compliance-related business logic exceptions
+class ComplianceError(BusinessLogicError):
+    """Base class for compliance errors."""
+    pass
+
+
+class ComplianceSchemaNotFoundError(ComplianceError):
+    """Raised when a compliance schema is not found."""
+    pass
+
+
+class ComplianceCascadeNotFoundError(ComplianceError):
+    """Raised when a compliance cascade is not found, or is no longer awaiting approval."""
+    pass
+
+
+class InvalidComplianceDataError(ComplianceError):
+    """Raised when a compliance request is rejected (invalid schema body, asset not quarantined,
+    schema not visible to the database, and the other handler-side validation failures)."""
     pass
 
 
@@ -754,3 +903,49 @@ class UserRoleDeletionError(UserRoleError):
 class InvalidUserRoleDataError(UserRoleError):
     """Raised when user role data is invalid."""
     pass
+
+
+# Audit log search business logic exceptions
+class AuditSearchError(BusinessLogicError):
+    """Base class for audit log search errors."""
+    pass
+
+
+class AuditSearchNotSupportedError(AuditSearchError):
+    """Raised when the deployment does not have the audit search routes."""
+    pass
+
+
+class InvalidAuditRequestError(AuditSearchError):
+    """Raised when a search, page or export request is refused as invalid (400), or a value is
+    refused before any request is sent."""
+    pass
+
+
+class AuditQueryNotFoundError(AuditSearchError):
+    """Raised when a search handle is unknown, expired, not the caller's, or no longer allowed.
+
+    The API answers all of these with one 404, so this error never says which."""
+    pass
+
+
+class AuditSearchFailedError(AuditSearchError):
+    """Raised when a waited-on search ends Failed, Cancelled or Timeout.
+
+    `json_fields` carries the handle and the final status."""
+
+    def __init__(self, message: str, query_id: str = None, status: str = None):
+        super().__init__(message)
+        self.json_fields = {
+            key: value for key, value in (("queryId", query_id), ("status", status)) if value
+        }
+
+
+class AuditSearchTimeoutError(AuditSearchError):
+    """Raised when --wait gives up before the search finishes. The search keeps running on the
+    server; `json_fields` carries the handle so a script can read it later."""
+
+    def __init__(self, message: str, query_id: str = None):
+        super().__init__(message)
+        self.json_fields = {"queryId": query_id} if query_id else {}
+

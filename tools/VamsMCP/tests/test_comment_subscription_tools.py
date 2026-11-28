@@ -65,8 +65,10 @@ def _docstring_of(name):
 
 _COMMENTS_ENVELOPE = {
     "message": [
-        {"assetId": "a1", "assetVersionId:commentId": "v1:c1", "commentBody": "first"},
-        {"assetId": "a1", "assetVersionId:commentId": "v1:c2", "commentBody": "second"},
+        {"databaseId": "db1", "assetId": "a1", "commentId": "c1", "assetVersionId": "v1",
+         "commentBody": "first"},
+        {"databaseId": "db1", "assetId": "a1", "commentId": "c2", "assetVersionId": "v1",
+         "commentBody": "second"},
     ]
 }
 
@@ -76,7 +78,7 @@ _COMMENTS_ENVELOPE = {
 
 def test_list_asset_comments_lifts_the_bare_array_onto_items(mock_client):
     mock_client.api.list_asset_comments.return_value = _COMMENTS_ENVELOPE
-    result = server.list_asset_comments("a1")
+    result = server.list_asset_comments("db1", "a1")
     assert result["count"] == 2
     assert [row["commentBody"] for row in result["Items"]] == ["first", "second"]
 
@@ -85,30 +87,30 @@ def test_list_asset_comments_does_not_route_through_paginate(mock_client):
     """paginate() would send a startingToken and read `Items` off a page that has neither, returning
     a clean empty list for an asset that has comments. Pinned because the fix is to NOT use it."""
     mock_client.api.list_asset_comments.return_value = _COMMENTS_ENVELOPE
-    server.list_asset_comments("a1")
+    server.list_asset_comments("db1", "a1")
     assert not mock_client.paginate.called
 
 
 def test_list_asset_comments_forwards_both_bound_parameters(mock_client):
     mock_client.api.list_asset_comments.return_value = {"message": []}
-    server.list_asset_comments("a1", max_items=5, page_size=2)
+    server.list_asset_comments("db1", "a1", max_items=5, page_size=2)
     call = mock_client.api.list_asset_comments.call_args
-    assert call.args == ("a1",)
-    assert call.kwargs == {"max_items": 5, "page_size": 2}
+    assert call.args == ("db1", "a1")
+    assert call.kwargs == {"max_items": 5, "page_size": 2, "show_archived": False}
 
 
 def test_list_asset_comments_flags_a_result_that_reached_max_items(mock_client):
     """The route discards its pagination token, so this flag is the only thing between a bounded read
     and an agent reporting the count as a total."""
     mock_client.api.list_asset_comments.return_value = _COMMENTS_ENVELOPE
-    result = server.list_asset_comments("a1", max_items=2)
+    result = server.list_asset_comments("db1", "a1", max_items=2)
     assert result["truncated"] is True
     assert "no continuation token" in result["note"]
 
 
 def test_list_asset_comments_adds_no_bound_keys_below_the_limit(mock_client):
     mock_client.api.list_asset_comments.return_value = _COMMENTS_ENVELOPE
-    result = server.list_asset_comments("a1", max_items=50)
+    result = server.list_asset_comments("db1", "a1", max_items=50)
     assert "truncated" not in result and "note" not in result
 
 
@@ -116,7 +118,7 @@ def test_list_asset_comments_falls_back_to_page_size_as_the_bound(mock_client):
     """The handler sets maxItems from pageSize when only pageSize is given, so a full page is a
     bounded result even though the caller named no maximum."""
     mock_client.api.list_asset_comments.return_value = _COMMENTS_ENVELOPE
-    result = server.list_asset_comments("a1", page_size=2)
+    result = server.list_asset_comments("db1", "a1", page_size=2)
     assert result["truncated"] is True
 
 
@@ -144,10 +146,10 @@ def test_bounded_message_list_tolerates_a_wrong_message_shape(page):
 
 def test_list_asset_version_comments_scopes_to_one_version(mock_client):
     mock_client.api.list_asset_version_comments.return_value = _COMMENTS_ENVELOPE
-    result = server.list_asset_version_comments("a1", "v1", max_items=10)
+    result = server.list_asset_version_comments("db1", "a1", "v1", max_items=10)
     call = mock_client.api.list_asset_version_comments.call_args
-    assert call.args == ("a1", "v1")
-    assert call.kwargs == {"max_items": 10, "page_size": None}
+    assert call.args == ("db1", "a1", "v1")
+    assert call.kwargs == {"max_items": 10, "page_size": None, "show_archived": False}
     assert result["count"] == 2
     # Not the asset-wide route, which would also return the other versions' comments.
     assert not mock_client.api.list_asset_comments.called
@@ -176,9 +178,9 @@ def test_the_comment_listings_expose_no_show_deleted_flag(tool):
 def test_get_comment_unwraps_the_message_envelope(mock_client):
     mock_client.unwrap_message = server.VamsClient.unwrap_message
     mock_client.api.get_comment.return_value = {"message": {"commentBody": "hello"}}
-    result = server.get_comment("a1", "v1", "c1")
+    result = server.get_comment("db1", "a1", "c1")
     assert result == {"commentBody": "hello"}
-    assert mock_client.api.get_comment.call_args.args == ("a1", "v1", "c1")
+    assert mock_client.api.get_comment.call_args.args == ("db1", "a1", "c1")
 
 
 def test_get_comment_surfaces_not_found_rather_than_an_empty_success(mock_client):
@@ -188,7 +190,7 @@ def test_get_comment_surfaces_not_found_rather_than_an_empty_success(mock_client
 
     mock_client.unwrap_message = server.VamsClient.unwrap_message
     mock_client.api.get_comment.side_effect = CommentNotFoundError("Comment 'c1' not found")
-    result = server.get_comment("a1", "v1", "c1")
+    result = server.get_comment("db1", "a1", "c1")
     assert result["error_type"] == "CommentNotFoundError"
 
 
@@ -238,16 +240,16 @@ def test_check_subscription_reads_the_verdict_off_the_message(
     """Both real answers are HTTP 200, so the status says nothing. A third string must not read as
     "not subscribed" — that would silently invert the answer if the backend wording changed."""
     mock_client.api.check_subscription.return_value = {"message": message}
-    result = server.check_subscription("a1", "u1")
+    result = server.check_subscription("db1", "a1", "u1")
     assert result["subscribed"] is subscribed
     assert result["message"] == message
     assert result.get("unrecognizedResponse", False) is unrecognized
 
 
-def test_check_subscription_forwards_the_asset_and_user(mock_client):
+def test_check_subscription_forwards_the_database_asset_and_user(mock_client):
     mock_client.api.check_subscription.return_value = {"message": "success"}
-    server.check_subscription("a1", "u1")
-    assert mock_client.api.check_subscription.call_args.args == ("a1", "u1")
+    server.check_subscription("db1", "a1", "u1")
+    assert mock_client.api.check_subscription.call_args.args == ("db1", "a1", "u1")
 
 
 def test_the_subscription_verdict_strings_match_the_handler(mock_client):
@@ -286,6 +288,59 @@ def test_the_api_key_listings_route_the_page_params_to_the_client_kwargs(mock_cl
     getattr(mock_client.api, method).assert_called_once_with(page_size=50, starting_token="t1")
     other = "list_user_api_keys" if method == "list_api_keys" else "list_api_keys"
     getattr(mock_client.api, other).assert_not_called()
+
+
+# --- Addressing: every comment and subscription tool names the database -------
+
+
+def _parameters_of(name):
+    """The named function's parameter names, from the source, so the gated tools are covered too."""
+    import ast
+    from pathlib import Path
+
+    source = Path(server.__file__).read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return [arg.arg for arg in node.args.args]
+    raise AssertionError(f"no function named {name!r} in server.py")
+
+
+_DATABASE_ADDRESSED_TOOLS = [
+    "list_asset_comments",
+    "list_asset_version_comments",
+    "get_comment",
+    "check_subscription",
+    "add_comment",
+    "update_comment",
+    "delete_comment",
+    "create_subscription",
+    "update_subscription",
+    "delete_subscription",
+    "unsubscribe",
+]
+
+
+@pytest.mark.parametrize("tool", _DATABASE_ADDRESSED_TOOLS)
+def test_the_tool_takes_the_database_id_first(tool):
+    """The same asset id can exist in more than one database, so a tool that took the asset id alone
+    could read or change another database's comments or subscriptions under the same id."""
+    assert _parameters_of(tool)[0] == "database_id"
+
+
+@pytest.mark.parametrize("tool", ["get_comment", "update_comment", "delete_comment"])
+def test_one_comment_is_addressed_by_its_id_without_the_version(tool):
+    """The comment id is unique within the asset; the version is an attribute of the comment, not
+    part of its address."""
+    parameters = _parameters_of(tool)
+    assert "comment_id" in parameters
+    assert "asset_version_id" not in parameters
+
+
+def test_add_comment_lets_the_api_choose_the_comment_id():
+    """A caller-chosen id could replace an existing comment; the API generates it instead."""
+    parameters = _parameters_of("add_comment")
+    assert "comment_id" not in parameters
+    assert "asset_version_id" in parameters
 
 
 # --- Registration and gating ------------------------------------------------
@@ -339,8 +394,8 @@ async def test_the_new_mutating_tools_are_gated_off_by_default():
 # place an agent learns any of it.
 
 
-@pytest.mark.parametrize("fragment", ["UNCONDITIONAL", "REPLACES", "uuid4", "16384"])
-def test_add_comment_docstring_warns_that_a_reused_id_overwrites(fragment):
+@pytest.mark.parametrize("fragment", ["`commentId` the API generates", "16384"])
+def test_add_comment_docstring_states_that_the_api_assigns_the_id(fragment):
     assert fragment in _docstring_of("add_comment")
 
 

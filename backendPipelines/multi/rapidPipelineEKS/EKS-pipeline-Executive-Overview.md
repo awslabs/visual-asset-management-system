@@ -115,7 +115,7 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
 -   Visual workflow monitoring
 -   Built-in retry logic
 -   10-second polling for job status
--   4-hour maximum timeout protection
+-   6-hour maximum timeout protection
 -   Comprehensive error handling
 
 **States:** 15+ states with error handling at each step
@@ -162,7 +162,7 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
 
 -   **States:** 15+ with error handling
 -   **Polling:** 10-second intervals
--   **Timeout:** 4 hours maximum
+-   **Timeout:** 6 hours for the state machine; the Kubernetes job is bounded by `useEks.jobTimeout`
 -   **Retries:** 2 attempts per job
 
 ### 5. Networking
@@ -246,7 +246,7 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
 
 **Purpose:** Lambda layer with Kubernetes Python client  
 **Lines:** ~70  
-**Creates:** Kubernetes API client layer following global layer pattern with Poetry
+**Creates:** Kubernetes API client layer following the global layer pattern (pip install of the committed `requirements.txt`)
 
 #### 5. `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`
 
@@ -278,15 +278,15 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
 
 #### 9. `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/pyproject.toml`
 
-**Purpose:** Lambda layer Poetry configuration  
+**Purpose:** Lambda layer project file (direct dependencies)  
 **Lines:** ~20  
-**Dependencies:** kubernetes, boto3, PyYAML, requests, urllib3
+**Dependencies:** kubernetes, PyYAML, requests, urllib3. No AWS SDK: the consolidated handler also attaches the common base layer, which provides boto3, botocore and s3transfer, and the packages both layers carry are locked at the base layer's versions.
 
 #### 10. `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/requirements.txt`
 
-**Purpose:** Lambda layer Python dependencies  
-**Lines:** ~5  
-**Dependencies:** kubernetes==26.1.0, boto3, PyYAML, requests, urllib3
+**Purpose:** Lambda layer Python dependencies (the committed export of the layer's lock file; see Managing Python Dependencies in the developer guide)  
+**Lines:** ~25  
+**Dependencies:** kubernetes==36.0.3, PyYAML, requests, urllib3 and their dependencies
 
 ---
 

@@ -38,11 +38,13 @@ vamscli user cognito create --email user@example.com
 POST /user/cognito
 ```
 
-After creating the user, assign them to a role under **Admin - Auth > User Roles** to grant appropriate permissions.
+After creating the user, assign them to a role under **Admin - Auth > Users in Roles** to grant appropriate permissions.
 
 ### Why can I not see certain navigation pages?
 
 VAMS uses a two-tier permission system. Navigation pages are filtered based on your assigned role constraints. If a page is missing from your navigation menu, your role does not include a `web` object type constraint that grants access to that route. Contact your VAMS administrator to review your role assignments and constraints.
+
+Add-ons a deployment enables can add navigation sections of their own, which appear only to roles granted the add-on's web routes; see [Add-ons Overview](../developer/addons-overview.md).
 
 :::tip
 If no navigation items appear at all, a message will display indicating that your user does not have permissions to view any web navigation pages.
@@ -87,9 +89,10 @@ For full environment migration, use the data migration scripts provided in `infr
 Yes. Amazon OpenSearch is optional. When neither OpenSearch Serverless nor OpenSearch Provisioned is enabled:
 
 -   The `NOOPENSEARCH` feature flag is set automatically.
--   The web application hides search-specific UI elements.
+-   The web application hides keyword search, metadata filtering, and map view.
 -   Asset and file listing uses Amazon DynamoDB queries with pagination instead of full-text search.
--   Advanced search features (full-text search, metadata field filtering, relevance ranking) are not available.
+-   Advanced keyword features (full-text search, metadata field filtering, relevance ranking) are not available.
+-   Natural-language search remains available when `app.vectorSearch.enabled` is `true`: the search page shows the **Asset list** view and a **Search** view in natural-language mode, with database, file-type, and archived filters. See [Vector search](../concepts/vector-search.md).
 
 ---
 
@@ -108,11 +111,11 @@ Yes. VAMS supports AWS GovCloud (US) regions with specific configuration require
 7. Set `app.openSearch.useServerless.nextGen: false` (next-generation Serverless collections are not available).
 8. Use the ALB deployment mode for the web interface.
 
-Configuration validation rejects a deployment that violates any of these, naming the field. A GovCloud-specific configuration template is provided at `infra/config/config.template.govcloud.json`, and the full per-field list is in [Restricted-partition constraints](../deployment/configuration-reference.md#restricted-partition-constraints). Amazon Rekognition is not offered in AWS GovCloud (US-East) (`us-gov-east-1`), so keep the GenAI metadata labeling pipeline (`app.pipelines.useGenAiMetadata3dLabeling`) disabled in that Region.
+Configuration validation rejects a deployment that violates any of these, naming the field. A GovCloud-specific configuration template is provided at `infra/config/config.template.govcloud.json`, and the full per-field list is in [Restricted-partition constraints](../deployment/configuration-reference.md#restricted-partition-constraints).
 
 ### Can I deploy to the AWS European Sovereign Cloud?
 
-Yes. VAMS supports the AWS European Sovereign Cloud (Region `eusc-de-east-1`, partition `aws-eusc`). Deploy it using the GovCloud guardrails: set `app.govCloud.enabled: true` so the same constraints are enforced (VPC required, no Amazon CloudFront, no Amazon Location Service, no AWS Deadline Cloud, no Amazon Cognito SAML or OIDC federation). The Region exposes two Availability Zones, so a provisioned Amazon OpenSearch Service domain must set `availabilityZoneCount` to `2`. Amazon OpenSearch Serverless has no endpoint in the partition, so set `app.openSearch.useServerless.enabled: false` and use `app.openSearch.useProvisioned`. Amazon Rekognition is not offered either, so keep the GenAI metadata labeling pipeline (`app.pipelines.useGenAiMetadata3dLabeling`) disabled.
+Yes. VAMS supports the AWS European Sovereign Cloud (Region `eusc-de-east-1`, partition `aws-eusc`). Deploy it using the GovCloud guardrails: set `app.govCloud.enabled: true` so the same constraints are enforced (VPC required, no Amazon CloudFront, no Amazon Location Service, no AWS Deadline Cloud, no Amazon Cognito SAML or OIDC federation). The Region exposes two Availability Zones, so a provisioned Amazon OpenSearch Service domain must set `availabilityZoneCount` to `2`. Amazon OpenSearch Serverless has no endpoint in the partition, so set `app.openSearch.useServerless.enabled: false` and use `app.openSearch.useProvisioned`. The EU Sovereign template ships the SYSTEM GenAI metadata pipeline with its GenAI layer off (`app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis: false`), so it records file attributes without an Amazon Bedrock model; turn the layer on only with a model the partition offers, named in `useSystemGenAiMetadata.bedrockModels`. Amazon DynamoDB vector search is not available there, so `app.vectorSearch.enabled` stays `false`.
 
 A dedicated configuration template is provided at `infra/config/config.template.eusovereign.json`. See the [Configuration Reference](../deployment/configuration-reference.md) for the full deployment notes.
 
@@ -120,21 +123,19 @@ A dedicated configuration template is provided at `infra/config/config.template.
 
 The following file extensions are blocked by the VAMS upload API for security reasons:
 
-`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`
+`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.dotm`, `.xlsm`, `.xltm`, `.xlam`, `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm`, `.vbs`, `.bat`
 
-Additionally, the following MIME types are blocked:
-
-`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/x-php`, `application/javascript`, `application/x-powershell`, `application/vbscript`
+A list of blocked MIME types (`application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/x-php`, `application/x-powershell`, `application/vbscript` and others) is checked against the content type Amazon S3 reports for a stored file: when an upload completes, when a workflow output is ingested, when the large object copy engine copies a file into its asset, and when a file is downloaded, streamed, exported or zipped. The MIME type list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
 
 :::info
-These restrictions apply only to the upload API. Files placed directly into Amazon S3 buckets bypass these checks.
+The extension check applies only to the VAMS API. Files placed directly into Amazon S3 buckets bypass it at upload, and the extension and MIME type checks still apply when such a file is downloaded, streamed, exported or zipped.
 :::
 
 ### How do I connect VAMS to my existing authentication system?
 
 VAMS offers two paths. Federating an Amazon Cognito user pool with your identity provider is the lighter one and is the recommended starting point; bringing your own OAuth 2.0 provider without Amazon Cognito is the fallback for deployments that cannot use a Cognito user pool at all.
 
-**Amazon Cognito federation (SAML or OIDC).** VAMS keeps the Amazon Cognito user pool and adds your IdP as a federated provider, so Cognito-managed session tokens and the native username/password sign-in remain available:
+**Amazon Cognito federation (SAML or OIDC).** VAMS keeps the Amazon Cognito user pool and adds your IdP as a federated provider, so Amazon Cognito still issues the session tokens. The web login page then shows only a **Login with \{displayName\}** button that sends users to your IdP, with no username and password form. Native user pool accounts, including the initial administrator, keep their passwords and sign in with VamsCLI (`vamscli auth login -u <username>`, the sign-in VamsMCP and the connectors also use) instead of the web application:
 
 1. Keep `app.authProvider.useCognito.enabled: true`.
 2. Set `app.authProvider.useCognito.useSaml: true` **or** `useOidc: true` (they are mutually exclusive).
@@ -155,9 +156,12 @@ Cognito federation uses the Amazon Cognito hosted UI, which is available only in
     - `idpAuthProviderAuthorizationEndpoint` -- Authorization endpoint
     - `lambdaAuthorizorJWTIssuerUrl` -- JWT issuer URL for token validation
     - `lambdaAuthorizorJWTAudience` -- Expected JWT audience
-4. Deploy the stack with the updated configuration.
+4. Optionally, name the token claims VAMS reads:
+    - `lambdaAuthorizorJWTAudienceClaims` -- the claims compared with the audience, in order (default `["aud"]`; `["aud", "client_id"]` for an IdP whose access tokens carry `client_id` instead of `aud`, such as an Amazon Cognito user pool)
+    - `lambdaAuthorizorJWTUserIdClaim` -- the claim whose value is the VAMS user id (default: `cognito:username`, then `username`, then `sub`)
+5. Deploy the stack with the updated configuration.
 
-The IdP's access tokens must carry an `aud` claim equal to `lambdaAuthorizorJWTAudience`, and the web application and the authorizer must resolve the same user from them; see the token requirements in the [Configuration Guide](../deployment/configuration-reference.md).
+The authorizer compares the access-token claims `lambdaAuthorizorJWTAudienceClaims` names with `lambdaAuthorizorJWTAudience` (and any `additionalTokenAudiences`), and the web application and the authorizer identify the user by the same claim; see the token requirements in the [Configuration Guide](../deployment/configuration-reference.md).
 
 Refer to the [Configuration Guide](../deployment/configuration-reference.md) for the complete field list for both paths, and to [Plan your deployment](../deployment/plan-your-deployment.md) for the authentication decision table.
 

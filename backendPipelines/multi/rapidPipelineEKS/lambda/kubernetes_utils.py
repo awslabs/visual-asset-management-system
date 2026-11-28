@@ -13,6 +13,7 @@ import base64
 import tempfile
 import time
 from botocore.exceptions import ClientError
+from urllib3.util import Retry
 
 # Import custom logging utilities
 from customLogging.logger import safeLogger
@@ -61,6 +62,42 @@ except ImportError as e:
     client = None
     ApiException = Exception  # Fallback type for ApiException
     logger.warning("Will attempt to import kubernetes module at runtime")
+
+# Kubernetes API request settings. The client takes a per-request timeout only through each call's
+# _request_timeout argument, the user agent only on the ApiClient, and a retry policy only as a urllib3
+# Retry in Configuration.retries.
+K8S_REQUEST_TIMEOUT = (30, 60)  # (connect, read) seconds
+K8S_USER_AGENT = "vams-eks-pipeline/1.0"
+K8S_RETRY_TOTAL = 5
+
+
+def k8s_retry_policy():
+    """urllib3 retry policy for Kubernetes API requests: resend only when no response was received.
+
+    The client resends after a connection failure, the case where the request never reached the API
+    server. It does not resend after a read timeout or on any response status, Retry-After included:
+    with_retries() wraps the pipeline's Kubernetes API calls and already retries 429 and 5xx responses
+    and timeouts, and a second layer would multiply its attempts and the time a call can take.
+    """
+    return Retry(total=K8S_RETRY_TOTAL, read=0, respect_retry_after_header=False)
+
+
+def new_k8s_api_client(k8s_client, configuration):
+    """ApiClient that sends K8S_USER_AGENT and applies K8S_REQUEST_TIMEOUT to every call that sets none.
+
+    Every generated API method passes _request_timeout to ApiClient.call_api as a keyword, None when the
+    caller set no timeout.
+    """
+
+    class TimeoutApiClient(k8s_client.ApiClient):
+        def call_api(self, *args, **kwargs):
+            if kwargs.get("_request_timeout") is None:
+                kwargs["_request_timeout"] = K8S_REQUEST_TIMEOUT
+            return super().call_api(*args, **kwargs)
+
+    api_client = TimeoutApiClient(configuration)
+    api_client.user_agent = K8S_USER_AGENT
+    return api_client
 
 def validate_env_vars(required_vars):
     """
@@ -228,6 +265,32 @@ def with_retries(func, max_retries=3, backoff_base=2, operation_name="operation"
     logger.error(error_msg)
     raise RuntimeError(error_msg)
 
+def sts_host_for_region(region):
+    """Host of the Regional STS endpoint for ``region``, with that Region's partition DNS suffix.
+
+    The EKS token is a presigned STS ``GetCallerIdentity`` URL, and its host is part of what is
+    signed. The suffix depends on the partition (``amazonaws.com``, ``amazonaws.com.cn``, or
+    ``amazonaws.eu`` in the AWS European Sovereign Cloud), so it is taken from the endpoint botocore
+    resolves for the Region rather than written into the string. When botocore resolves the legacy
+    global host (``sts.amazonaws.com``, under ``AWS_STS_REGIONAL_ENDPOINTS=legacy``) or nothing,
+    the commercial Regional host is used, which matches the previous behaviour.
+    """
+    from urllib.parse import urlparse
+
+    regional_prefix = f'sts.{region}.'
+    # Only the partition's DNS suffix is wanted, so FIPS, dual-stack and configured endpoint URLs are ignored.
+    endpoint_config = Config(
+        use_fips_endpoint=False, use_dualstack_endpoint=False, ignore_configured_endpoint_urls=True
+    )
+    try:
+        host = urlparse(boto3.client('sts', region_name=region, config=endpoint_config).meta.endpoint_url).hostname or ''
+    except Exception as e:
+        logger.warning(f"Could not resolve the STS endpoint for {region}: {e}")
+        host = ''
+    if host.startswith(regional_prefix):
+        return host
+    return f'sts.{region}.amazonaws.com'
+
 def get_k8s_client():
     """
     Get a Kubernetes client configured for the EKS cluster
@@ -376,30 +439,16 @@ def get_k8s_client():
         # Note: We don't set ssl_context when using ssl_ca_cert - they're mutually exclusive
         # The Kubernetes client will create its own SSL context using the CA cert file
 
-        # Enhanced connection and timeout settings
-        configuration.connection_pool_maxsize = 20  # Increased pool size
-        configuration.retries = 5  # More retries for resilience
-        configuration.timeout = 120  # 2 minute timeout for large operations
-
-        # Add additional timeout configurations
-        configuration.socket_timeout = 60  # Socket timeout
-        configuration.connect_timeout = 30  # Connection timeout
-        logger.info("Configured connection timeouts and retry settings")
+        # Connection pool size and retry policy. The per-request timeout and the user agent are not
+        # Configuration settings; new_k8s_api_client() applies them to the ApiClient below.
+        configuration.connection_pool_maxsize = 20
+        configuration.retries = k8s_retry_policy()
+        logger.info("Configured connection pool and connection-retry settings")
 
         # Hostname verification is automatically enabled when verify_ssl=True
         # Don't set assert_hostname separately as it can cause issues with the Kubernetes client
         logger.info("⚠️ AUTH DEBUG: SSL verification and hostname validation enabled")
         logger.info("⚠️ SECURITY NOTE: Using proper security settings for EKS authentication")
-
-        # Add user agent for debugging
-        configuration.user_agent = "vams-eks-pipeline/1.0"
-
-        # Configure retry settings
-        configuration.retries_config = {
-            'total': 5,
-            'backoff_factor': 1,
-            'status_forcelist': [429, 500, 502, 503, 504]
-        }
 
         logger.info(f"Configured Kubernetes client for endpoint: {endpoint}")
         logger.info(f"SSL context configured with verify_ssl: {configuration.verify_ssl}")
@@ -524,6 +573,7 @@ def get_k8s_client():
                 session = boto3.Session()
                 credentials = session.get_credentials()
                 region = session.region_name or 'us-west-2'
+                sts_host = sts_host_for_region(region)
 
                 # Log credential details (without exposing secrets)
                 if credentials:
@@ -567,7 +617,7 @@ def get_k8s_client():
                 method = 'GET'
                 canonical_uri = '/'
                 canonical_querystring = '&'.join([f'{k}={urllib.parse.quote_plus(str(v))}' for k, v in sorted(params.items())])
-                canonical_headers = f'host:sts.{region}.amazonaws.com\nx-k8s-aws-id:{cluster_name}\n'
+                canonical_headers = f'host:{sts_host}\nx-k8s-aws-id:{cluster_name}\n'
                 signed_headers = 'host;x-k8s-aws-id'
                 payload_hash = hashlib.sha256(b'').hexdigest()
 
@@ -601,7 +651,7 @@ def get_k8s_client():
 
                 # Build final presigned URL
                 query_string = '&'.join([f'{k}={urllib.parse.quote_plus(str(v))}' for k, v in sorted(params.items())])
-                presigned_url = f'https://sts.{region}.amazonaws.com/?{query_string}'
+                presigned_url = f'https://{sts_host}/?{query_string}'
 
                 logger.warning(f"⚠️ AUTH DEBUG: Generated presigned URL length: {len(presigned_url)}")
                 logger.warning(f"⚠️ AUTH DEBUG: Contains X-Amz-Signature: {'X-Amz-Signature' in presigned_url}")
@@ -699,7 +749,7 @@ def get_k8s_client():
                     # Create request parameters
                     params = {
                         'method': 'GET',
-                        'url': 'https://sts.{}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15'.format(region),
+                        'url': 'https://{}/?Action=GetCallerIdentity&Version=2011-06-15'.format(sts_host_for_region(region)),
                         'body': {},
                         'headers': {
                             'x-k8s-aws-id': cluster_name
@@ -749,6 +799,7 @@ def get_k8s_client():
                         session = boto3.Session()
                         credentials = session.get_credentials()
                         region = session.region_name or 'us-west-2'
+                        sts_host = sts_host_for_region(region)
 
                         # Check credentials
                         if not credentials:
@@ -858,7 +909,7 @@ def get_k8s_client():
                             method = 'GET'
                             canonical_uri = '/'
                             canonical_querystring = '&'.join([f'{k}={urllib.parse.quote_plus(str(v))}' for k, v in sorted(params.items())])
-                            canonical_headers = f'host:sts.{region}.amazonaws.com\nx-k8s-aws-id:{cluster_name}\n'
+                            canonical_headers = f'host:{sts_host}\nx-k8s-aws-id:{cluster_name}\n'
                             signed_headers = 'host;x-k8s-aws-id'
                             payload_hash = hashlib.sha256(b'').hexdigest()
 
@@ -892,7 +943,7 @@ def get_k8s_client():
 
                             # Build final presigned URL
                             query_string = '&'.join([f'{k}={urllib.parse.quote_plus(str(v))}' for k, v in sorted(params.items())])
-                            presigned_url = f'https://sts.{region}.amazonaws.com/?{query_string}'
+                            presigned_url = f'https://{sts_host}/?{query_string}'
 
                             logger.warning(f"⚠️ AUTH DEBUG: Manual presigned URL length: {len(presigned_url)}")
 
@@ -956,7 +1007,7 @@ def get_k8s_client():
             logger.warning(f"⚠️ AUTH DEBUG: Could not get cluster info: {e}")
 
         # Create API client
-        api_client = client.ApiClient(configuration)
+        api_client = new_k8s_api_client(client, configuration)
         logger.warning("⚠️ AUTH DEBUG: Successfully created Kubernetes API client")
 
         # Test the connection
@@ -1033,7 +1084,8 @@ def create_job(job_manifest, namespace="default"):
         namespace (str): The Kubernetes namespace to create the job in
 
     Returns:
-        str: The name of the created job
+        str: The name of the created job, or of the job with the same name and job-id label that an
+        earlier create attempt made
 
     Raises:
         ValueError: If the job manifest is invalid
@@ -1171,6 +1223,39 @@ def create_job(job_manifest, namespace="default"):
         # Create the job with enhanced retry logic
         logger.info(f"Creating Kubernetes job: {job_name}")
 
+        # CONSTRUCT_PIPELINE generates a random 128-bit job-id per run, builds the job name from it and
+        # labels the job with it, so an existing job with this name and job-id label is this run's job.
+        # A create the API server applied can still fail on the client (a server error such as 504, a
+        # dropped connection, or the read timeout after the request was sent), and its resend is then
+        # answered 409.
+        manifest_job_id = (metadata.get('labels') or {}).get('job-id')
+
+        def job_from_earlier_create_attempt():
+            """The existing job named job_name when it carries this manifest's job-id label, else None."""
+            if not manifest_job_id:
+                logger.error(f"Job {job_name} already exists and the manifest has no job-id label to match it by")
+                return None
+
+            try:
+                def read_conflicting_job():
+                    return batch_v1.read_namespaced_job(name=job_name, namespace=namespace)
+
+                existing_job = with_retries(read_conflicting_job, max_retries=2, operation_name="read_conflicting_job")
+            except Exception as e:
+                logger.error(f"Job {job_name} already exists and could not be read to compare its job-id: {str(e)}")
+                return None
+
+            existing_job_id = (getattr(existing_job.metadata, 'labels', None) or {}).get('job-id')
+            if existing_job_id != manifest_job_id:
+                logger.error(
+                    f"Job {job_name} already exists with job-id {existing_job_id}, not this run's {manifest_job_id}")
+                return None
+
+            logger.warning(
+                f"Job {job_name} with job-id {manifest_job_id} already exists: an earlier create attempt "
+                "for this run created it, adopting it")
+            return existing_job
+
         def create_k8s_job():
             try:
                 result = batch_v1.create_namespaced_job(
@@ -1185,6 +1270,9 @@ def create_job(job_manifest, namespace="default"):
                 # Add specific error handling for common issues
                 if ApiException is not None and isinstance(e, ApiException):
                     if e.status == 409:
+                        existing_job = job_from_earlier_create_attempt()
+                        if existing_job is not None:
+                            return existing_job
                         raise ValueError(f"Job {job_name} already exists (conflict)")
                     elif e.status == 422:
                         raise ValueError(f"Job manifest validation failed: {e.body}")

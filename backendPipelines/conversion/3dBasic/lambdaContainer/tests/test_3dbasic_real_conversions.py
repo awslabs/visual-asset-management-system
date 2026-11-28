@@ -12,6 +12,10 @@ asset bucket, on models generated here (#506, #507, #508).
 - A buffer outside the asset, an absolute path, and a missing buffer each fail before the loader
   runs; a missing or rejected material library and a missing image are skipped with a warning and the
   geometry converts; the loader cannot read a file the fetch did not stage.
+- An input whose text is not UTF-8 -- binary data named as a text format, or an OBJ, ASCII STL, XYZ,
+  glTF or GLB JSON chunk saved in another encoding -- fails saying the file could not be read, and
+  fetches and writes nothing; the same text in UTF-8, and a binary STL whose header is not UTF-8, still
+  convert (#910). These cases also hold in an interpreter without charset_normalizer, as in the image.
 
 The cases run in one child interpreter because the other modules in this directory install a
 ``MagicMock`` in ``sys.modules['trimesh']`` at collection, which would otherwise be what this module
@@ -76,8 +80,7 @@ class Bucket:
 
 bucket = Bucket()
 mod.s3_client = bucket
-# This handler uploads through the boto3 resource's client.
-mod.s3 = types.SimpleNamespace(meta=types.SimpleNamespace(client=bucket))
+mod._s3_client_for_bucket = lambda name: bucket
 
 
 class Recorder:
@@ -136,7 +139,7 @@ def run(name, input_key, output_type, subdir, check=None):
         mod.convert_input_output(f"s3://abkt/{input_key}", f"s3://abkt/{FILES}", output_type, subdir)
     except Exception as e:
         results[name] = {"error": type(e).__name__, "message": str(e), "requested": bucket.requested,
-                         "warnings": mod.logger.warnings}
+                         "warnings": mod.logger.warnings, "written": sorted(set(bucket.objects) - before)}
         return
     written = sorted(set(bucket.objects) - before)
     model = [k for k in written if k.endswith(output_type)]
@@ -190,6 +193,30 @@ for folder, with_image in (("gltfimg", True), ("noimg", False)):
 run("gltf_external_image_to_glb", "xasset/gltfimg/model.gltf", ".glb", "gltfimg")
 run("gltf_missing_image_to_glb", "xasset/noimg/model.gltf", ".glb", "noimg")
 
+# Material names that are free text in a glTF, converted to OBJ, which names its texture file and
+# its newmtl line after the material. A name with a path separator or a colon or the name '..' must
+# neither fail the run nor become a file name.
+for tag, material_name in (("slash", "Mat/Wood"), ("colon", "Mat:1"), ("dots", ".."), ("plain", "BoomBox_Mat")):
+    named_doc = json.loads(json.dumps(textured_doc))
+    for material in named_doc["materials"]:
+        material["name"] = material_name
+    put(f"xasset/mat_{tag}/model.gltf", json.dumps(named_doc))
+    for name, data in textured.items():
+        if name != "model.gltf":
+            put(f"xasset/mat_{tag}/{name}", data)
+    put(f"xasset/mat_{tag}/tex/base.png", png.getvalue())
+    run(f"gltf_material_{tag}_to_obj", f"xasset/mat_{tag}/model.gltf", ".obj", f"mat_{tag}")
+    obj_mtl = [k for k in bucket.objects if k.startswith(FILES + f"mat_{tag}/") and k.endswith(".mtl")]
+    results[f"gltf_material_{tag}_to_obj"]["mtl"] = (
+        bucket.objects[obj_mtl[0]].decode("utf-8") if obj_mtl else None)
+# The same model written as GLB keeps the material's own name.
+run("gltf_material_slash_to_glb", "xasset/mat_slash/model.gltf", ".glb", "mat_slash")
+glb_key = [k for k in bucket.objects if k.endswith("model.glb") and "mat_slash" in k][0]
+glb_json_length = int.from_bytes(bucket.objects[glb_key][12:16], "little")
+glb_document = json.loads(bucket.objects[glb_key][20:20 + glb_json_length])
+results["gltf_material_slash_to_glb"]["glb_material_names"] = sorted(
+    {m.get("name") for m in glb_document.get("materials", [])})
+
 # The pipeline's own .gltf output, converted again from the run's output folder.
 put("xasset/round/ball.glb", trimesh.creation.icosphere().export(file_type="glb"))
 run("glb_to_gltf", "xasset/round/ball.glb", ".gltf", "round")
@@ -209,6 +236,58 @@ run("xyz_to_stl", "xasset/pc/cloud.xyz", ".stl", "pc")
 run("xyz_to_ply", "xasset/pc/cloud.xyz", ".ply", "pc")
 put("xasset/pc/points.ply", trimesh.PointCloud(rng.random((50, 3))).export(file_type="ply"))
 run("point_ply_to_stl", "xasset/pc/points.ply", ".stl", "pc")
+
+# Inputs whose text is not UTF-8 (#910): binary data named as a text format, and text saved in another
+# encoding ('Würfel' in Windows-1252), beside the same names in UTF-8. Each latin1 OBJ names a material
+# library that is in the asset, so the result shows whether anything was fetched for it.
+import struct
+TRIANGLE = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"
+NAMED = "mtllib w.mtl\n# W\u00fcrfel\no W\u00fcrfel\n" + TRIANGLE
+noise = bytes(rng.integers(0, 256, 4096, dtype=np.uint8))
+put("xasset/enc/w.mtl", "newmtl material_0\nKd 1 0 0\n")
+put("xasset/enc/noise.obj", noise)
+run("obj_binary_noise", "xasset/enc/noise.obj", ".glb", "enc")
+put("xasset/enc/latin1.obj", NAMED.encode("cp1252"))
+run("obj_latin1", "xasset/enc/latin1.obj", ".glb", "enc")
+put("xasset/enc/utf16.obj", NAMED.encode("utf-16"))
+run("obj_utf16", "xasset/enc/utf16.obj", ".glb", "enc")
+put("xasset/enc/utf8.obj", NAMED.encode("utf-8"))
+run("obj_utf8_non_ascii", "xasset/enc/utf8.obj", ".glb", "enc")
+# A material library that is not UTF-8, named by a UTF-8 OBJ.
+put("xasset/encmtl/w.obj", ("mtllib w.mtl\nusemtl m\n" + TRIANGLE).encode("utf-8"))
+put("xasset/encmtl/w.mtl", "newmtl m\n# W\u00fcrfel\nKd 1 0 0\nmap_Kd t.png\n".encode("cp1252"))
+run("obj_with_latin1_mtl", "xasset/encmtl/w.obj", ".glb", "encmtl")
+put("xasset/enc/noise.stl", noise)
+run("stl_binary_noise", "xasset/enc/noise.stl", ".glb", "enc")
+ascii_stl = trimesh.creation.box().export(file_type="stl_ascii")
+ascii_stl = ascii_stl.decode("utf-8") if isinstance(ascii_stl, bytes) else ascii_stl
+put("xasset/enc/latin1_ascii.stl", ascii_stl.replace("solid", "solid W\u00fcrfel", 1).encode("cp1252"))
+run("stl_ascii_latin1", "xasset/enc/latin1_ascii.stl", ".glb", "enc")
+put("xasset/enc/utf8_ascii.stl", ascii_stl.replace("solid", "solid W\u00fcrfel", 1).encode("utf-8"))
+run("stl_ascii_utf8", "xasset/enc/utf8_ascii.stl", ".glb", "enc")
+box_stl = trimesh.creation.box().export(file_type="stl")
+put("xasset/enc/latin1_header.stl", "W\u00fcrfel".encode("cp1252").ljust(80, b" ") + box_stl[80:])
+run("stl_binary_latin1_header", "xasset/enc/latin1_header.stl", ".glb", "enc")
+put("xasset/enc/latin1.xyz", ("# W\u00fcrfel\n" + "\n".join("{} {} {}".format(*row) for row in rng.random((10, 3))))
+    .encode("cp1252"))
+run("xyz_latin1", "xasset/enc/latin1.xyz", ".ply", "enc")
+gltf_doc = json.loads(exported["model.gltf"])
+gltf_doc.setdefault("asset", {})["generator"] = "W\u00fcrfel"
+for name, data in exported.items():
+    if name != "model.gltf":
+        put(f"xasset/encgltf/{name}", data)
+put("xasset/encgltf/model.gltf", json.dumps(gltf_doc, ensure_ascii=False).encode("cp1252"))
+run("gltf_latin1", "xasset/encgltf/model.gltf", ".glb", "encgltf")
+glb = trimesh.creation.icosphere().export(file_type="glb")
+json_length = struct.unpack("<I", glb[12:16])[0]
+glb_doc = json.loads(glb[20:20 + json_length])
+glb_doc.setdefault("asset", {})["generator"] = "W\u00fcrfel"
+glb_json = json.dumps(glb_doc, ensure_ascii=False).encode("cp1252")
+glb_json += b" " * (-len(glb_json) % 4)
+glb_rest = glb[20 + json_length:]
+put("xasset/enc/latin1.glb", struct.pack("<4sII", b"glTF", 2, 20 + len(glb_json) + len(glb_rest))
+    + struct.pack("<I4s", len(glb_json), b"JSON") + glb_json + glb_rest)
+run("glb_latin1_json", "xasset/enc/latin1.glb", ".obj", "enc")
 
 # A buffer in ANOTHER asset of the same bucket, which exists, named with a relative escape.
 document = json.loads(exported["model.gltf"])
@@ -323,6 +402,25 @@ def _ok(results, name):
     result = results[name]
     assert "error" not in result, result
     return result
+
+
+@pytest.mark.unit
+class TestMaterialNamesNeverBecomeFileNames:
+    """glTF material names are free text; an OBJ export writes a texture file and a newmtl line from
+    them (D2, D3)."""
+
+    @pytest.mark.parametrize("tag", ["slash", "colon", "dots", "plain"])
+    def test_a_gltf_with_that_material_name_converts_to_obj_with_the_old_names(self, results, tag):
+        result = _ok(results, f"gltf_material_{tag}_to_obj")
+        written = [name.rsplit("/", 1)[-1] for name in result["written"]]
+        assert "material_0.png" in written, result
+        assert "newmtl material_0" in result["mtl"], result
+        # Nothing was written under a folder the name made up.
+        assert all("Mat" not in name and ".." not in name for name in result["written"]), result
+
+    def test_a_glb_output_keeps_the_materials_own_name(self, results):
+        _ok(results, "gltf_material_slash_to_glb")
+        assert results["gltf_material_slash_to_glb"]["glb_material_names"] == ["Mat/Wood"]
 
 
 @pytest.mark.unit
@@ -441,3 +539,43 @@ class TestPointClouds:
     def test_a_point_cloud_to_ply_keeps_the_points(self, results):
         result = _ok(results, "xyz_to_ply")
         assert result["model"]["kinds"] == ["PointCloud"] and result["model"]["vertices"] == 100
+
+
+@pytest.mark.unit
+class TestInputsThatAreNotUtf8Text:
+    """An input whose text is not UTF-8 fails with a message saying it could not be read, instead of
+    trimesh's "No module named 'charset_normalizer'", and nothing is fetched or written (#910)."""
+
+    @pytest.mark.parametrize("name, file_name, read_as", [
+        ("obj_binary_noise", "noise.obj", "OBJ text"),
+        ("obj_latin1", "latin1.obj", "OBJ text"),
+        ("obj_utf16", "utf16.obj", "OBJ text"),
+        ("stl_binary_noise", "noise.stl", "STL: it is not a binary STL"),
+        ("stl_ascii_latin1", "latin1_ascii.stl", "STL: it is not a binary STL"),
+        ("xyz_latin1", "latin1.xyz", "XYZ text"),
+        ("gltf_latin1", "model.gltf", "glTF JSON"),
+        ("glb_latin1_json", "latin1.glb", "GLB: in its JSON chunk"),
+    ])
+    def test_it_fails_saying_the_file_could_not_be_read(self, results, name, file_name, read_as):
+        result = results[name]
+        assert result.get("error") == "InputTextError", result
+        assert result["message"].startswith(f"{file_name} could not be read as {read_as}"), result
+        assert "is not UTF-8" in result["message"] and "charset" not in result["message"], result
+        assert result["written"] == [], result
+
+    def test_nothing_the_obj_references_is_fetched(self, results):
+        # The material library it names is in the asset; only the input itself was downloaded.
+        # (The input is sized with a HEAD before it is downloaded, so it is requested twice.)
+        assert set(results["obj_latin1"]["requested"]) == {"xasset/enc/latin1.obj"}, results["obj_latin1"]
+
+    @pytest.mark.parametrize("name", ["obj_utf8_non_ascii", "stl_ascii_utf8", "stl_binary_latin1_header"])
+    def test_utf8_text_and_a_binary_stl_header_still_convert(self, results, name):
+        # The positive controls: the same names in UTF-8, and a binary STL, whose header trimesh reads
+        # only as metadata.
+        assert _ok(results, name)["model"]["vertices"] > 0
+
+    def test_a_material_library_that_is_not_utf8_is_skipped(self, results):
+        result = _ok(results, "obj_with_latin1_mtl")
+        assert result["model"]["vertices"] > 0, result
+        assert "xasset/encmtl/t.png" not in result["requested"], result
+        assert any("encmtl/w.mtl" in w for w in result["warnings"]), result

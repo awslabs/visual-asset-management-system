@@ -1,0 +1,184 @@
+# VAMS Image to 3D Pipeline Container -- VAST-AI TripoSR
+# Upstream: https://github.com/VAST-AI-Research/TripoSR (MIT)
+# Weights: https://huggingface.co/stabilityai/TripoSR (MIT)
+
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04@sha256:24c8e3581ea6330038b0d374920721983312627f8adbfcf390bdb4b399d280ed
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# The upstream repo is pinned to a reviewed commit so the image is reproducible. The clone below checks
+# the commit out and fails the build if HEAD is anything else.
+ARG TRIPOSR_COMMIT=107cefdc244c39106fa830359024f6a2f1c78871
+# The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects
+# which rungs it walks through the template's REPAIR_BACKENDS setting.
+ARG ENABLE_GPL_MESH_REPAIR=true
+
+# Non-root runtime user (the #327 design), created first so HOME is /home/vams for every step below:
+# anything a build step writes under HOME (git-lfs's .gitconfig, tool caches) lands where uid 10000 can
+# reach it at run time.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams
+
+# Install system dependencies. libgl1/libglib2.0-0 back pillow and trimesh's rendering paths,
+# libegl1/libgles2 back TripoSR's moderngl texture bake. The upgrade brings in the security updates
+# published since the digest-pinned base was built.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+    build-essential \
+    cmake \
+    curl \
+    git \
+    git-lfs \
+    ninja-build \
+    libegl1 \
+    xvfb \
+    libgl1 \
+    libopengl0 \
+    libglu1-mesa \
+    libgles2 \
+    libglib2.0-0 \
+    python3 \
+    python3-dev \
+    python3-venv \
+    unzip \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git lfs install
+
+# Install AWS CLI v2 at a fixed version, checked against its SHA-256 before it is installed. A
+# --build-arg that moves the version has to move the digest with it.
+ARG AWS_CLI_VERSION=2.36.39
+ARG AWS_CLI_SHA256=2b337174417c159f8fd825637841f5425308108bd6f99681664409fb0d7ebe01
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
+    echo "${AWS_CLI_SHA256}  awscliv2.zip" | sha256sum -c - && \
+    unzip -q awscliv2.zip && \
+    ./aws/install && \
+    rm -rf aws awscliv2.zip
+
+# Ubuntu 24.04 marks its system python as externally managed, so the pipeline and the upstream repo
+# share one virtualenv that fronts PATH.
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV VIRTUAL_ENV=/opt/venv
+# Every Python package of this image is installed from locks/triposr, hashed exports of its uv.lock (#1726): the
+# same versions, from the same files, on every build. The lock holds the image's whole set, so nothing is
+# resolved at build time and no later step can move a version -- not TripoSR's own requirements, which pin
+# trimesh 4.0.5 and would silently disable the manifold repair rung, and not the shared requirements. pip and
+# the tools torchmcubes builds with come first from their own lock, then the rest with --require-hashes
+# --no-deps: pip refuses a file whose hash is not in the lock and installs nothing the lock does not name.
+COPY locks/triposr/requirements-build.lock locks/triposr/requirements.lock locks/triposr/requirements-gpl.lock locks/triposr/out-of-lock.json /opt/locks/triposr/
+COPY locks/triposr/upstream /opt/locks/triposr/upstream
+COPY locks/tools/check_installed_set.py locks/tools/check_upstream_requirements.py /opt/locks/tools/
+RUN pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/triposr/requirements-build.lock
+
+# CUDA 12.8 torch stack, at fixed versions (2.11.0 and 0.26.0, locked as +cu128 builds from the PyTorch index;
+# every other package comes from the default index). TripoSR builds a CUDA extension (torchmcubes) against this
+# torch, so it is installed before the repo.
+RUN pip install --no-cache-dir --require-hashes --no-deps \
+    --extra-index-url https://download.pytorch.org/whl/cu128 \
+    -r /opt/locks/triposr/requirements.lock
+
+# GPL-3.0 mesh-repair rungs. Both VAMS build paths pass ENABLE_GPL_MESH_REPAIR=true, so every image
+# carries them; only a hand-run build that sets it to false leaves them out.
+RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
+        echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
+        pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/triposr/requirements-gpl.lock; \
+    else \
+        echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
+    fi
+
+# Clone TripoSR at its pinned commit. Its dependency stack is already installed from the lock; the check after
+# the clone fails the build when the upstream requirements.txt differs from the copy the lock was resolved from,
+# which is what a moved TRIPOSR_COMMIT without a re-lock looks like. torchmcubes is the marching-cubes CUDA
+# extension the triplane decoder surfaces through, and is not on PyPI; it is built below.
+RUN git clone https://github.com/VAST-AI-Research/TripoSR.git /opt/triposr && \
+    cd /opt/triposr && \
+    git checkout --detach ${TRIPOSR_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${TRIPOSR_COMMIT}" && \
+    git rev-parse HEAD > /opt/triposr/VAMS_UPSTREAM_COMMIT && \
+    python /opt/locks/tools/check_upstream_requirements.py \
+        --recorded /opt/locks/triposr/upstream --clone /opt/triposr requirements.txt
+WORKDIR /opt/triposr
+# Every GPU family the pipeline can schedule onto has to be in this list, or an extension
+# compiles for the wrong architecture and fails at runtime with "no kernel image is available
+# for execution on the device". Ampere (8.6) covers g5 / A10G, Ada (8.9) covers g6 / L4 and
+# g6e / L40S, and Hopper (9.0) covers H100.
+ENV TORCH_CUDA_ARCH_LIST="8.6;8.9;9.0"
+# The texture bake rasterizes the UV atlas through moderngl, which defaults to an X11 context and
+# fails with "XOpenDisplay: cannot open display" on a headless AWS Batch host. EGL renders offscreen
+# against the GPU with no display server, so the backend is selected explicitly.
+ENV MODERNGL_WINDOW=headless
+ENV PYOPENGL_PLATFORM=egl
+ENV GLCONTEXT_BACKEND=egl
+# torchmcubes is the marching-cubes CUDA extension, built here from a pinned commit. Its build has
+# three traps. Its scikit-build-core backend imports torch while preparing metadata, so an isolated
+# build has no torch and fails with "must be built against an installed PyTorch" -- the backend is
+# in the build lock and isolation is disabled. The repo's own requirements.txt pins the same
+# torchmcubes URL; that line is not in the lock, so no second, isolated build happens. And its
+# CMakeLists forces C++20, under which GCC 13's <cmath> declares std::lerp -- pulled into scope by the
+# torch/thrust headers the .cu files include -- and it collides with the global lerp in the vendored
+# NVIDIA helper_math.h; the extension compiles cleanly under C++17, so the standard is lowered before
+# the install. A plain set() in CMakeLists overrides a -D cache value, so the file is edited directly,
+# anchored on the exact lines so the build fails loudly if upstream changes them.
+ARG TORCHMCUBES_COMMIT=879926d0ef58e6ce0ac2630fdecb5e53af7ed3ff
+RUN git clone https://github.com/tatsy/torchmcubes.git /opt/torchmcubes && \
+    cd /opt/torchmcubes && \
+    git checkout --detach ${TORCHMCUBES_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${TORCHMCUBES_COMMIT}" && \
+    git rev-parse HEAD > /opt/torchmcubes/VAMS_UPSTREAM_COMMIT && \
+    grep -q 'set(CMAKE_CXX_STANDARD 20)' /opt/torchmcubes/CMakeLists.txt && \
+    grep -q 'set(CMAKE_CUDA_STANDARD 20)' /opt/torchmcubes/CMakeLists.txt && \
+    sed -i 's/set(CMAKE_CXX_STANDARD 20)/set(CMAKE_CXX_STANDARD 17)/; s/set(CMAKE_CUDA_STANDARD 20)/set(CMAKE_CUDA_STANDARD 17)/' /opt/torchmcubes/CMakeLists.txt && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /opt/torchmcubes
+
+# The upstream texture bake samples colours through a CPU tensor while the model is loaded on the
+# GPU, so it raises a device mismatch on every GPU run and the mesh ships untextured. The patch
+# script exits non-zero when the pinned revision no longer matches the text it rewrites, which fails
+# the build rather than producing an image whose bake silently cannot work.
+COPY patches/triposr_bake_texture_device.py /opt/ml/code/patches/triposr_bake_texture_device.py
+RUN python /opt/ml/code/patches/triposr_bake_texture_device.py /opt/triposr/tsr/bake_texture.py
+
+# The installed set is exactly the lock plus torchmcubes: this fails the build on any package that is missing,
+# extra or at another version than locks/triposr names (the GPL pair only when it was requested), and pip check
+# confirms the declared dependencies of what is installed. The import check confirms the locked trimesh is one
+# whose manifold backend works with the locked manifold3d, the version the pipeline's own code is written
+# against.
+RUN python /opt/locks/tools/check_installed_set.py --dir /opt/locks/triposr --gpl "$ENABLE_GPL_MESH_REPAIR" && \
+    pip check && python -c "import trimesh, manifold3d; print('trimesh', trimesh.__version__)"
+
+# rembg resolves its segmentation weights under U2NET_HOME and downloads them on first use,
+# defaulting to a home directory nothing carries between jobs -- which had the preprocessing stage
+# re-fetching 176 MB on every run and taking longer than the reconstruction itself. Pointing the
+# variable at a baked-in copy removes the download entirely. The file is checked against its SHA-256.
+ENV U2NET_HOME=/opt/rembg
+ARG U2NET_SHA256=8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491
+RUN mkdir -p /opt/rembg && \
+    curl -fsSL -o /opt/rembg/u2net.onnx \
+    https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx && \
+    echo "${U2NET_SHA256}  /opt/rembg/u2net.onnx" | sha256sum -c -
+
+# VAMS container code
+COPY __init__.py __main__.py model_manager.py preprocess.py framing.py generate.py benchmark.py meshcleanup.py printfeatures.py texturing.py export.py agent_broker.py config.json entrypoint.sh /opt/ml/code/
+COPY models /opt/ml/code/models
+COPY vams_utils /opt/ml/code/vams_utils
+COPY hfguard /opt/ml/code/hfguard
+# Strip CRLF line endings from entrypoint.sh in case the source was bundled from a Windows working
+# tree; otherwise the shebang becomes `/bin/bash\r` and the kernel returns ENOENT on exec. COPY keeps
+# the build host's mode bits, so a checkout made under umask 077 or 027 would leave files the runtime
+# user cannot read: a+rX normalizes them.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh && \
+    chmod -R a+rX /opt/ml/code
+# The upstream checkout is the working directory of the model's process, and an upstream tool may create
+# files relative to it. Group vams and mode 1775 let the runtime user add entries while the sticky bit
+# keeps the root-owned sources as they are. HOME belongs to the runtime user.
+RUN chgrp vams /opt/triposr && chmod 1775 /opt/triposr && chown -R vams:vams /home/vams
+# Every HuggingFace download in this image is held to its pinned commit (hfguard/hf_pins.py). Checked
+# at build time, so an image whose huggingface_hub lacks what the guard wraps fails here rather than on
+# its first run.
+RUN cd /opt/ml/code && python -c "from hfguard import hf_pins; assert hf_pins.install(), 'huggingface_hub is missing'"
+
+WORKDIR /opt/ml/code
+USER 10000:10000
+ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

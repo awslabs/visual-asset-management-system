@@ -29,7 +29,8 @@ from ..utils.exceptions import (
 from ..utils.download_manager import (
     DownloadManager, DownloadFileInfo, DownloadProgress, StreamingDownloadProgress,
     FileTreeBuilder, AssetTreeTraverser, format_file_size, format_duration,
-    parse_remote_timestamp, generate_presigned_urls
+    parse_remote_timestamp, generate_presigned_urls, confined_local_path, confined_local_paths,
+    DOWNLOAD_PATH_OUTSIDE_TARGET_REASON,
 )
 
 
@@ -661,6 +662,15 @@ def delete(ctx: click.Context, asset_id: str, database: str, reason: Optional[st
             json_output,
             error_type="Database Not Found",
             helpful_message="Use 'vamscli database list' to see available databases."
+        )
+        raise click.ClickException(str(e))
+    except InvalidAssetDataError as e:
+        output_error(
+            e,
+            json_output,
+            error_type="Delete Refused",
+            helpful_message=("The asset was not deleted. Follow the message above, then run the delete again; "
+                             f"'vamscli assets get -d {database} {asset_id} --show-archived' shows the asset.")
         )
         raise click.ClickException(str(e))
 
@@ -1493,7 +1503,13 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                         depth = asset_info['depth']
                         
                         # Create subdirectory for this asset
-                        asset_dir = Path(local_path) / asset_id
+                        asset_dir = confined_local_path(Path(local_path), asset_id)
+                        if asset_dir is None:
+                            output_warning(f"Skipping asset {asset_id}: {DOWNLOAD_PATH_OUTSIDE_TARGET_REASON}",
+                                           json_output)
+                            unavailable_downloads.append({
+                                'relative_key': asset_id, 'error': DOWNLOAD_PATH_OUTSIDE_TARGET_REASON})
+                            continue
                         
                         # Get files for this asset (with pagination)
                         asset_files = list_all_asset_files(api_client, asset_db, asset_id, {
@@ -1501,11 +1517,20 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                         })
                         target_files = [f for f in asset_files if not f.get('isFolder')]
                         
-                        # Generate download info for each file
-                        for file_item in target_files:
+                        # Generate download info for each file. No two files share a local path
+                        # (confined_local_paths), so '/x' and '//x' never replace each other on disk.
+                        placements = confined_local_paths(
+                            asset_dir, [(f.get('relativePath', ''),) * 2 for f in target_files])
+                        for file_item, (file_local_path, refusal) in zip(target_files, placements):
                             relative_path = file_item.get('relativePath', '')
-                            file_local_path = asset_dir / relative_path.lstrip('/')
-                            
+                            if file_local_path is None:
+                                output_warning(
+                                    f"Skipping file {relative_path} from asset {asset_id}: {refusal}",
+                                    json_output)
+                                unavailable_downloads.append({
+                                    'relative_key': f"{asset_id}/{relative_path}", 'error': refusal})
+                                continue
+
                             try:
                                 download_response = api_client.download_asset_file(asset_db, asset_id, relative_path)
                                 files_to_download.append(DownloadFileInfo(
@@ -1561,10 +1586,13 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                             asset_version_id=asset_version_id,
                                             asset_version_alias=asset_version_alias
                                         )
-                                        for file_item in target_files:
+                                        placements = confined_local_paths(
+                                            Path(local_path), [(f.get('relativePath', ''),) * 2 for f in target_files])
+                                        for file_item, (lp, refusal) in zip(target_files, placements):
                                             rp = file_item.get('relativePath', '')
-                                            lp = Path(local_path) / rp.lstrip('/')
                                             url_entry = url_map.get(rp, {})
+                                            if lp is None:
+                                                url_entry = {'error': refusal}
                                             if not url_entry.get('downloadUrl'):
                                                 reason = url_entry.get('error', 'URL generation failed')
                                                 output_warning(f"Skipping file {rp}: {reason}", json_output)
@@ -1603,15 +1631,20 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                 asset_version_id=asset_version_id,
                                 asset_version_alias=asset_version_alias
                             )
-                            for file_item in target_files:
+                            placements = confined_local_paths(Path(local_path), [
+                                (f.get('relativePath', ''),
+                                 Path(f.get('relativePath', '')).name if flatten_download_tree
+                                 else f.get('relativePath', ''))
+                                for f in target_files])
+                            # A preview is saved at its file's local path, so a file not placed takes none
+                            placed = {f.get('relativePath', '') for f, (lp, _) in zip(target_files, placements)
+                                      if lp is not None}
+                            for file_item, (file_local_path, refusal) in zip(target_files, placements):
                                 relative_path = file_item.get('relativePath', '')
 
-                                if flatten_download_tree:
-                                    file_local_path = Path(local_path) / Path(relative_path).name
-                                else:
-                                    file_local_path = Path(local_path) / relative_path.lstrip('/')
-
                                 url_entry = url_map.get(relative_path, {})
+                                if file_local_path is None:
+                                    url_entry = {'error': refusal}
                                 if not url_entry.get('downloadUrl'):
                                     reason = url_entry.get('error', 'URL generation failed')
                                     output_warning(f"Skipping file {relative_path}: {reason}", json_output)
@@ -1628,6 +1661,9 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                             if file_previews:
                                 for file_item in target_files:
                                     relative_path = file_item.get('relativePath', '')
+                                    if relative_path not in placed:
+                                        # Its file is already reported as not downloaded.
+                                        continue
                                     try:
                                         preview_response = api_client.download_asset_file(
                                             database, asset, f"{relative_path}_preview",
@@ -1636,9 +1672,13 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                         )
 
                                         if flatten_download_tree:
-                                            preview_local_path = Path(local_path) / Path(relative_path).name
+                                            preview_local_path = confined_local_path(
+                                                Path(local_path), Path(relative_path).name)
                                         else:
-                                            preview_local_path = Path(local_path) / relative_path.lstrip('/')
+                                            preview_local_path = confined_local_path(Path(local_path), relative_path)
+                                        if preview_local_path is None:
+                                            # Its file is already reported as not downloaded.
+                                            continue
 
                                         files_to_download.append(DownloadFileInfo(
                                             relative_key=f"{relative_path}_preview",
@@ -1650,17 +1690,19 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                         pass
                     else:
                         # Download single file
+                        if flatten_download_tree:
+                            file_local_path = confined_local_path(Path(local_path), Path(file_key).name)
+                        else:
+                            file_local_path = confined_local_path(Path(local_path), file_key)
+                        if file_local_path is None:
+                            raise FileDownloadError(f"{DOWNLOAD_PATH_OUTSIDE_TARGET_REASON}: {file_key}")
+
                         download_response = api_client.download_asset_file(
                             database, asset, file_key,
                             version_id=version_id,
                             asset_version_id=asset_version_id,
                             asset_version_alias=asset_version_alias
                         )
-
-                        if flatten_download_tree:
-                            file_local_path = Path(local_path) / Path(file_key).name
-                        else:
-                            file_local_path = Path(local_path) / file_key.lstrip('/')
 
                         files_to_download.append(DownloadFileInfo(
                             relative_key=file_key,
@@ -1718,10 +1760,13 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                                     asset_version_id=asset_version_id,
                                     asset_version_alias=asset_version_alias
                                 )
-                                for file_item in target_files:
+                                placements = confined_local_paths(
+                                    Path(local_path), [(f.get('relativePath', ''),) * 2 for f in target_files])
+                                for file_item, (lp, refusal) in zip(target_files, placements):
                                     rp = file_item.get('relativePath', '')
-                                    lp = Path(local_path) / rp.lstrip('/')
                                     url_entry = url_map.get(rp, {})
+                                    if lp is None:
+                                        url_entry = {'error': refusal}
                                     if not url_entry.get('downloadUrl'):
                                         reason = url_entry.get('error', 'URL generation failed')
                                         output_warning(f"Skipping file {rp}: {reason}", json_output)

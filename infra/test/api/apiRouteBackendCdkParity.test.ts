@@ -39,9 +39,15 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { SynthResult, synthTemplate } from "../support/templateSynth";
+import { SynthResult, restApiPairs, synthTemplate } from "../support/templateSynth";
+import { enableRouteContributingAddons } from "../addon/support/addonTestHooks";
 
 const API_ROUTES_PY = path.resolve(__dirname, "..", "../../backend/backend/common/apiRoutes.py");
+// The route lists apiRoutes.py splices into ALL_API_ROUTES from other files.
+const SPLICED_ROUTE_LISTS_PY = [
+    path.resolve(__dirname, "..", "../../backend/backend/common/addonApiRoutes.py"),
+    path.resolve(__dirname, "..", "../../backend/backend/custom/customApiRoutes.py"),
+];
 
 interface DeclaredRoute {
     name: string;
@@ -151,7 +157,9 @@ function groupedNames(code: string): Set<string> {
     return grouped;
 }
 
-const CODE = pythonCode(fs.readFileSync(API_ROUTES_PY, "utf-8"));
+const CODE = [API_ROUTES_PY, ...SPLICED_ROUTE_LISTS_PY]
+    .map((file) => pythonCode(fs.readFileSync(file, "utf-8")))
+    .join("\n");
 const DECLARED = declaredRoutes(CODE);
 const GROUPED = groupedNames(CODE);
 
@@ -160,49 +168,29 @@ const BACKEND_PAIRS = new Set(
     DECLARED.filter((r) => !r.internal).flatMap((r) => r.methodPathPairs)
 );
 
-/** Method+path pairs the synthesized REST API exposes, excluding the CORS preflight MOCKs. */
-function cdkPairs(synth: SynthResult): Set<string> {
-    const apis = synth.ofType("AWS::ApiGateway::RestApi");
-    expect(apis).toHaveLength(1);
-    const body = (apis[0].properties as any).Body;
-    expect(body?.paths).toBeDefined();
-
-    const pairs = new Set<string>();
-    for (const routePath of Object.keys(body.paths)) {
-        for (const method of Object.keys(body.paths[routePath])) {
-            // OPTIONS is the unauthenticated CORS MOCK the spec builder adds per path; it is not a
-            // backend route and apiRoutes.py correctly does not declare it.
-            if (method.toLowerCase() === "options") continue;
-            pairs.add(`${method.toUpperCase()} ${routePath}`);
-        }
-    }
-    return pairs;
-}
-
 /** Enable every optional feature that contributes an API route. */
 function withRouteContributingFeatures(c: any) {
     c.app.useGlobalVpc.enabled = true;
-    // The Physna add-on registers GET /addon/physna/viewer and ships disabled.
-    const physna = c.app.addons?.usePhysnaSync;
-    if (physna) {
-        physna.enabled = true;
-        physna.tenantId = "00000000-0000-4000-8000-000000000000";
-        physna.apiBaseEndpoint = "https://app-api.physna.com/v3/";
-        physna.authTokenEndpoint =
-            "https://physna-app.auth.us-east-2.amazoncognito.com/oauth2/token";
-        physna.authType = "cognito";
-        physna.clientId = "synth-only-client-id";
-        physna.clientSecret = "synth-only-client-secret"; // pragma: allowlist secret
-        physna.credentialsSecretArn = "";
-    }
+    // Vector search registers POST /search/nlp and ships disabled in the templates.
+    c.app.vectorSearch.enabled = true;
+    // Every add-on that registers routes ships disabled; the hook turns each one on.
+    enableRouteContributingAddons(c);
 }
 
 describe("apiRoutes.py parses as expected", () => {
     // The parse is the weak link in this file: a regex that silently matched nothing would make every
     // comparison below trivially true. These four assertions are what stop that.
-    test("the file was found and read", () => {
+    test("the files were found and read", () => {
         expect(fs.existsSync(API_ROUTES_PY)).toBe(true);
+        for (const file of SPLICED_ROUTE_LISTS_PY) expect(fs.existsSync(file)).toBe(true);
         expect(CODE.length).toBeGreaterThan(5000);
+    });
+
+    test("the spliced add-on route list was parsed", () => {
+        // apiRoutes.py imports ADDON_ROUTES rather than declaring it, so without the add-on file
+        // its routes would be neither declared nor grouped here.
+        expect(DECLARED.map((r) => r.name)).toContain("API_ADDON_PHYSNA_VIEWER");
+        expect(GROUPED.has("API_ADDON_PHYSNA_VIEWER")).toBe(true);
     });
 
     test("a plausible number of route constants were parsed", () => {
@@ -238,11 +226,11 @@ describe("every registered API Gateway route is known to the backend", () => {
     });
 
     test("[control] the REST API body carries paths", () => {
-        expect(cdkPairs(synth).size).toBeGreaterThan(150);
+        expect(restApiPairs(synth).size).toBeGreaterThan(150);
     });
 
     test("no registered route is missing from apiRoutes.py", () => {
-        const unknown = [...cdkPairs(synth)].filter((pair) => !BACKEND_PAIRS.has(pair)).sort();
+        const unknown = [...restApiPairs(synth)].filter((pair) => !BACKEND_PAIRS.has(pair)).sort();
         expect(unknown).toEqual([]);
     });
 });
@@ -263,16 +251,55 @@ describe("every backend route is registered with API Gateway", () => {
     test("[control] enabling the add-on added its route", () => {
         // Proves the mutation took effect. Without this, the parity assertion below could pass because
         // the feature never turned on AND the route was dropped from the backend at the same time.
-        expect(cdkPairs(synth).has("GET /addon/physna/viewer")).toBe(true);
+        expect(restApiPairs(synth).has("GET /addon/physna/viewer")).toBe(true);
     });
 
     test("no backend route is unregistered", () => {
-        const unregistered = [...BACKEND_PAIRS].filter((pair) => !cdkPairs(synth).has(pair)).sort();
+        const unregistered = [...BACKEND_PAIRS]
+            .filter((pair) => !restApiPairs(synth).has(pair))
+            .sort();
         expect(unregistered).toEqual([]);
     });
 
     test("the two surfaces are exactly equal with all route features enabled", () => {
-        const cdk = cdkPairs(synth);
+        const cdk = restApiPairs(synth);
         expect([...cdk].sort()).toEqual([...BACKEND_PAIRS].sort());
+    });
+});
+
+describe("with audit log search switched off the audit routes are in neither listing nor spec", () => {
+    // The five /audit method+path pairs carry the AUDITLOGSEARCH switch in apiRoutes.py (ApiRoute
+    // addon_feature), so a deployment with app.auditLogging.search.enabled false lists none of them and
+    // registers none with API Gateway. The backend listing and the spec must still agree on the rest.
+    const AUDIT_PAIRS = DECLARED.filter((r) => r.name.startsWith("API_AUDIT_")).flatMap(
+        (r) => r.methodPathPairs
+    );
+    const withoutAudit = (c: any) => {
+        withRouteContributingFeatures(c);
+        c.app.auditLogging.search.enabled = false;
+    };
+
+    test("[control] the audit routes were parsed, five method+path pairs", () => {
+        expect(AUDIT_PAIRS).toHaveLength(5);
+        for (const pair of AUDIT_PAIRS) expect(BACKEND_PAIRS.has(pair)).toBe(true);
+    });
+
+    test("commercial, all route features on, search off: exactly the backend minus the audit pairs", () => {
+        const synth = synthTemplate("commercial", {
+            mutate: withoutAudit,
+            mutateKey: "route-parity-search-off",
+        });
+        const cdk = restApiPairs(synth);
+        for (const pair of AUDIT_PAIRS) expect(cdk.has(pair)).toBe(false);
+        expect(cdk.has("GET /addon/physna/viewer")).toBe(true); // control: the mutation took effect
+        const expected = [...BACKEND_PAIRS].filter((pair) => !AUDIT_PAIRS.includes(pair)).sort();
+        expect([...cdk].sort()).toEqual(expected);
+    });
+
+    test("EU Sovereign as shipped (search off): no audit route, and nothing the backend lacks", () => {
+        const cdk = restApiPairs(synthTemplate("eusovereign"));
+        for (const pair of AUDIT_PAIRS) expect(cdk.has(pair)).toBe(false);
+        expect([...cdk].filter((pair) => !BACKEND_PAIRS.has(pair))).toEqual([]);
+        expect(cdk.size).toBeGreaterThan(100);
     });
 });

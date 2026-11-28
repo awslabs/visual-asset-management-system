@@ -128,15 +128,18 @@ describe("FIX-086: the subscription recipient behaviour is recorded in the devel
         expect(source).toContain("'validator': 'EMAIL'");
         expect(source).toContain("email = userId");
         expect(source).toContain("Protocol='email'");
-        // The removal asymmetry the page records: the update path unsubscribes by RESOLVED address,
-        // while `/unsubscribe` matches the value as submitted. If either side changes, the paragraph
-        // describing it is wrong.
-        expect(source).toContain('delete_sns_subscriptions(body["entityId"], list(emailsDeleted)');
+        // Both removal paths resolve the subscriber to the address the topic holds: the update
+        // path through emailsDeleted and `/unsubscribe` through get_userProfile_Email.
+        expect(source).toContain(
+            'delete_sns_subscriptions(body["databaseId"], body["entityId"], list(emailsDeleted)'
+        );
         const unsubscribe = readRepo(
             path.join("backend", "backend", "handlers", "subscription", "unsubscribeService.py")
         );
+        expect(unsubscribe).toContain("def _resolve_profile_email");
+        expect(unsubscribe).toContain("get_userProfile_Email(");
         expect(unsubscribe).toContain(
-            'delete_sns_subscriptions(body["entityId"], list(body["subscribers"])'
+            'delete_sns_subscriptions(body["databaseId"], body["entityId"], endpoints,'
         );
     });
 

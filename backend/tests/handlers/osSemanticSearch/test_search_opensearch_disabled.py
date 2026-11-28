@@ -1,0 +1,243 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""The /search handler imports without OpenSearch and answers 404 on every route when it is disabled;
+with OpenSearch enabled the three SSM parameters are read on first use, once, not at import.
+
+The module is loaded by file path with ``boto3.client`` replaced by a recorder and the auth surface
+stubbed, the way the other by-path search suites do it.
+"""
+
+import importlib.util
+import json
+import os
+import sys
+import types
+from unittest.mock import MagicMock, patch
+
+import botocore.session
+import pytest
+from botocore.exceptions import ClientError
+
+from backend.tests.ssmParametersStub import FakeClock, install_clock
+
+_SEARCH_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend", "handlers", "osSemanticSearch", "search.py")
+_ACCESS_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend", "common", "databaseAccess.py")
+SSM_ENV = {
+    "OPENSEARCH_ASSET_INDEX_SSM_PARAM": "/vams/aos/assetIndexName",
+    "OPENSEARCH_FILE_INDEX_SSM_PARAM": "/vams/aos/fileIndexName",
+    "OPENSEARCH_ENDPOINT_SSM_PARAM": "/vams/aos/endPoint",
+}
+
+
+class _Recorder:
+    """Stands in for ``boto3.client``: records every service asked for and serves one ssm stub."""
+
+    def __init__(self):
+        self.services = []
+        self.ssm_configs = []
+        self.ssm = MagicMock()
+        self.ssm.get_parameter.side_effect = lambda Name: {"Parameter": {"Value": f"value-of-{Name}"}}
+
+    def __call__(self, name, *args, **kwargs):
+        self.services.append(name)
+        if name == "ssm":
+            self.ssm_configs.append(kwargs.get("config"))
+        return self.ssm if name == "ssm" else MagicMock()
+
+
+def _load_search(monkeypatch, env, unset=()):
+    monkeypatch.setenv("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
+    monkeypatch.setenv("DATABASE_STORAGE_TABLE_NAME", "test-db-table")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    for key in unset:
+        monkeypatch.delenv(key, raising=False)
+    recorder = _Recorder()
+    saved = {name: sys.modules.get(name) for name in ("handlers.auth", "handlers.authz", "common.dynamodb", "common.databaseAccess")}
+    auth_stub = types.ModuleType("handlers.auth")
+    auth_stub.request_to_claims = MagicMock(return_value={"tokens": ["t"]})
+    authz_stub = types.ModuleType("handlers.authz")
+    enforcer = MagicMock()
+    enforcer.enforceAPI.return_value = True
+    authz_stub.CasbinEnforcer = MagicMock(return_value=enforcer)
+    dynamodb_stub = types.ModuleType("common.dynamodb")
+    dynamodb_stub.validate_pagination_info = MagicMock()
+    dynamodb_stub.batch_get_items = MagicMock(return_value=([], []))
+    sys.modules["handlers.auth"], sys.modules["handlers.authz"], sys.modules["common.dynamodb"] = auth_stub, authz_stub, dynamodb_stub
+    try:
+        with patch("boto3.client", side_effect=recorder), patch("boto3.resource", return_value=MagicMock()):
+            access_spec = importlib.util.spec_from_file_location("common.databaseAccess", os.path.abspath(_ACCESS_PATH))
+            access = importlib.util.module_from_spec(access_spec)
+            access_spec.loader.exec_module(access)
+            sys.modules["common.databaseAccess"] = access
+            spec = importlib.util.spec_from_file_location("search_under_test_a4", os.path.abspath(_SEARCH_PATH))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+    finally:
+        for name, saved_module in saved.items():
+            if saved_module is not None:
+                sys.modules[name] = saved_module
+            else:
+                sys.modules.pop(name, None)
+    return module, recorder
+
+
+def _event(method, path):
+    return {"requestContext": {"http": {"path": path, "method": method}}, "body": json.dumps({"query": "x"})}
+
+
+class TestOpenSearchDisabled:
+    @pytest.fixture
+    def loaded(self, monkeypatch):
+        return _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "true"}, unset=tuple(SSM_ENV))
+
+    def test_import_makes_no_ssm_call(self, loaded):
+        module, recorder = loaded
+        assert "ssm" not in recorder.services
+        assert module.opensearch_disabled is True
+
+    @pytest.mark.parametrize("method,path", [("POST", "/search"), ("GET", "/search"), ("POST", "/search/simple")])
+    def test_every_route_answers_404(self, loaded, method, path):
+        module, recorder = loaded
+        response = module.lambda_handler(_event(method, path), None)
+        assert response["statusCode"] == 404
+        assert json.loads(response["body"])["message"] == "Search is not available when OpenSearch feature is not enabled"
+        assert "ssm" not in recorder.services
+
+    def test_manager_is_unavailable_without_a_client(self, loaded):
+        module, _ = loaded
+        manager = module.DualIndexSearchManager()
+        assert manager.is_available() is False and manager.client is None
+
+
+class TestOpenSearchEnabled:
+    def test_ssm_is_read_once_on_first_use(self, monkeypatch):
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        assert "ssm" not in recorder.services
+        assert recorder.ssm.get_parameter.call_count == 0
+
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": MagicMock()}):
+            first = module.DualIndexSearchManager()
+            assert recorder.ssm.get_parameter.call_count == 3
+            second = module.DualIndexSearchManager()
+            assert recorder.ssm.get_parameter.call_count == 3
+        names = {call.kwargs["Name"] for call in recorder.ssm.get_parameter.call_args_list}
+        assert names == set(SSM_ENV.values())
+        assert first.asset_index == "value-of-/vams/aos/assetIndexName"
+        assert second.file_index == "value-of-/vams/aos/fileIndexName"
+
+    def test_the_client_retries_as_before_unless_the_caller_turns_retries_off(self, monkeypatch):
+        """Keyword search keeps three retries, timeouts included; natural-language search's OpenSearch step
+        asks for none, so a query that times out at its deadline is not started again."""
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        opensearchpy = MagicMock()
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": opensearchpy}):
+            module.DualIndexSearchManager()
+            module.DualIndexSearchManager(max_retries=0, retry_on_timeout=False)
+        keyword, nlp = (c.kwargs for c in opensearchpy.OpenSearch.call_args_list)
+        assert (keyword["max_retries"], keyword["retry_on_timeout"], keyword["timeout"]) == (3, True, 30)
+        assert (nlp["max_retries"], nlp["retry_on_timeout"], nlp["timeout"]) == (0, False, 30)
+
+    def test_client_failure_leaves_the_manager_unavailable(self, monkeypatch):
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        broken = MagicMock()
+        broken.OpenSearch.side_effect = RuntimeError("no network")
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": broken}):
+            manager = module.DualIndexSearchManager()
+        assert manager.is_available() is False
+        with pytest.raises(module.VAMSGeneralErrorResponse):
+            manager.search_dual_index({}, {}, ["file"])
+
+
+ROUTES = [("POST", "/search"), ("GET", "/search"), ("POST", "/search/simple")]
+
+
+class TestOpenSearchEnabledButUnavailable:
+    """With OpenSearch enabled, a setting that cannot be read or a client that cannot be created is a
+    fault of the service, not of the request and not a missing feature: every route answers 503 with a
+    generic try-again message, and the SSM parameter name stays in the log."""
+
+    @pytest.mark.parametrize("method,path", ROUTES)
+    def test_an_unreadable_setting_is_a_503_without_the_parameter_name(self, monkeypatch, method, path):
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        recorder.ssm.get_parameter.side_effect = RuntimeError("AccessDenied on /vams/aos/endPoint")
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": MagicMock()}):
+            response = module.lambda_handler(_event(method, path), None)
+        assert response["statusCode"] == 503
+        body = json.loads(response["body"])
+        assert body == {"message": module.SEARCH_UNAVAILABLE_MESSAGE}
+        assert "/vams/aos" not in response["body"] and "parameter" not in response["body"].lower()
+
+    @pytest.mark.parametrize("method,path", ROUTES)
+    def test_a_client_that_cannot_be_created_is_a_503_not_feature_off(self, monkeypatch, method, path):
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        broken = MagicMock()
+        broken.OpenSearch.side_effect = RuntimeError("no network")
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": broken}):
+            response = module.lambda_handler(_event(method, path), None)
+        assert response["statusCode"] == 503
+        assert json.loads(response["body"]) == {"message": module.SEARCH_UNAVAILABLE_MESSAGE}
+        assert module.SEARCH_NOT_AVAILABLE_MESSAGE not in response["body"]
+
+    def test_a_failed_read_is_retried_on_the_next_request(self, monkeypatch):
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        recorder.ssm.get_parameter.side_effect = RuntimeError("throttled")
+        with patch("boto3.client", side_effect=recorder):
+            with pytest.raises(module.SearchServiceUnavailable):
+                module.opensearch_settings()
+            recorder.ssm.get_parameter.side_effect = lambda Name: {"Parameter": {"Value": f"value-of-{Name}"}}
+            assert module.opensearch_settings()["endpoint"] == "value-of-/vams/aos/endPoint"
+
+
+def _always_throttled(Name):
+    raise ClientError({"Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"},
+                       "ResponseMetadata": {"HTTPStatusCode": 400}}, "GetParameter")
+
+
+class TestParameterStoreThrottling:
+    """#1820: the aos/* reads go through common.ssmParameters. A throttled first use answers the
+    existing 503 within the read budget, instead of after five adaptive retries per value (about 30 s
+    live), and the container then backs off: the next request inside the window reads nothing."""
+
+    @pytest.fixture
+    def throttled_search(self, monkeypatch):
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        recorder.ssm.get_parameter.side_effect = _always_throttled
+        # The helper this test's search module reads through (loaded fresh for every test), on a fake clock.
+        clock = install_clock(sys.modules["common.ssmParameters"], FakeClock(), monkeypatch)
+        return module, recorder, clock
+
+    @pytest.mark.parametrize("method,path", ROUTES)
+    def test_a_throttled_first_use_is_a_503_inside_the_read_budget(self, throttled_search, method, path):
+        module, recorder, clock = throttled_search
+        started = clock.now
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": MagicMock()}):
+            response = module.lambda_handler(_event(method, path), None)
+        assert response["statusCode"] == 503
+        assert json.loads(response["body"]) == {"message": module.SEARCH_UNAVAILABLE_MESSAGE}
+        assert recorder.ssm.get_parameter.call_count > 1, "the throttled read was never retried"
+        assert clock.now - started <= sys.modules["common.ssmParameters"].PARAMETER_READ_BUDGET_SECONDS
+
+    def test_the_next_request_inside_the_back_off_window_reads_nothing(self, throttled_search):
+        module, recorder, _ = throttled_search
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": MagicMock()}):
+            first = module.lambda_handler(_event("POST", "/search"), None)
+            calls = recorder.ssm.get_parameter.call_count
+            second = module.lambda_handler(_event("POST", "/search/simple"), None)
+        assert first["statusCode"] == second["statusCode"] == 503
+        assert recorder.ssm.get_parameter.call_count == calls
+
+    def test_search_reads_through_the_bounded_client(self, monkeypatch):
+        """Search used to build a new SSM client per read with Rule 6's config: 60 s timeouts, six
+        attempts. The client its reads use now has 1 s / 2 s timeouts and one attempt."""
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": MagicMock()}):
+            module.DualIndexSearchManager()
+        assert recorder.ssm_configs, "search read no setting"
+        for config in recorder.ssm_configs:
+            resolved = botocore.session.get_session().create_client(
+                "ssm", region_name="us-east-1", config=config).meta.config
+            assert (resolved.connect_timeout, resolved.read_timeout) == (1, 2)
+            assert resolved.retries.get("total_max_attempts") == 1
+        assert len(recorder.ssm_configs) == 1, "a client was built per read"

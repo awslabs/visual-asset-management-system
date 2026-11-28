@@ -1,10 +1,11 @@
-# Preview 3D Thumbnail Pipeline
+# Preview 3D Thumbnail Pipeline (and Media Preview Thumbnail)
 
 The Preview 3D Thumbnail pipeline generates animated GIF or static image preview thumbnails from 3D files. It uses CPU-based headless rendering via PyVista/VTK with Xvfb inside an AWS Batch Fargate container.
 
 ## Contents
 
 -   [Supported Formats](#supported-formats)
+-   [Media Formats](#media-formats)
 -   [Architecture](#architecture)
 -   [Output](#output)
 -   [Input Parameters](#input-parameters)
@@ -18,12 +19,50 @@ The Preview 3D Thumbnail pipeline generates animated GIF or static image preview
 
 ## Supported Formats
 
-| Category    | Extensions                                | Handler              |
-| :---------- | :---------------------------------------- | :------------------- |
-| Mesh        | .ply, .stl, .obj, .glb, .gltf, .fbx, .drc | trimesh              |
-| Point Cloud | .las, .laz, .e57, .ptx, .pcd, .fls, .fws  | laspy, pye57, open3d |
-| CAD         | .stp, .step                               | cadquery             |
-| USD         | .usd, .usda, .usdc, .usdz                 | usd-core (pxr)       |
+| Category       | Extensions                                                             | Handler                                          |
+| :------------- | :--------------------------------------------------------------------- | :----------------------------------------------- |
+| Mesh           | .ply, .stl, .obj, .glb, .gltf, .drc, .off                              | trimesh                                          |
+| Mesh (FBX)     | .fbx                                                                   | open3d (Assimp)                                  |
+| Mesh (XML)     | .3mf, .dae                                                             | built-in, hardened XML parsing                   |
+| Point Cloud    | .las, .laz, .e57, .ptx, .pts, .pcd, vertex-only .ply                   | laspy, pye57, open3d                             |
+| CAD            | .stp, .step                                                            | cadquery                                         |
+| USD            | .usd, .usda, .usdc, .usdz                                              | usd-core (pxr)                                   |
+| Gaussian splat | .ply (3DGS), .compressed.ply, .spz, .sog, .splat, .ksplat, .lcc, .lcc2 | numpy; PlayCanvas splat-transform for conversion |
+
+FARO scans (`.fls`, `.fws`) are not supported: reading them needs the proprietary FARO SDK. Convert them to E57 or LAS first.
+
+## Media Formats
+
+The same container also writes previews for images and video, through a second registered pipeline and workflow, **Media Preview Thumbnail** (`preview-media-thumbnail`). One deployment (container, Batch queue and state machine) serves both workflows and deploys when either `app.pipelines.usePreview3dThumbnail.enabled` or `app.pipelines.useMediaPreviews.enabled` is `true`; the flags only choose which workflow is registered, so a media-only deployment (3D off) works and takes its compute tiers from `usePreview3dThumbnail`. A deployment whose configuration has no `useMediaPreviews` block keeps today's behaviour (media previews off).
+
+| Category | Extensions                                                          | Handler                                                 |
+| :------- | :------------------------------------------------------------------ | :------------------------------------------------------ |
+| Image    | .png, .jpg, .jpeg, .gif, .webp, .bmp                                | Pillow                                                  |
+| Image    | .tga, .tif, .tiff                                                   | Pillow, with tifffile and imagecodecs for TIFF variants |
+| Video    | .mp4, .m4v, .mov, .mkv, .webm, .avi, .wmv, .mpg, .mpeg, .mts, .m2ts | PyAV (bundled FFmpeg libraries)                         |
+
+Not accepted: SVG, HEIC/HEIF, AVIF, EXR, HDR, PSD, DDS and MDL (MDL thumbnails are tracked in #1547).
+
+### What a run writes
+
+An image whose extension is one the web shows as its own preview (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`) and whose size is strictly under 5,242,880 bytes (5 MiB) is shown as its own preview, so the run writes nothing.
+
+| Input                                             | Default                                                                                                                                    | With `downscaleSelfPreviewableImages`                                                   |
+| :------------------------------------------------ | :----------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------- |
+| Displayable image under 5 MiB                     | No preview and no container job: the run completes successfully and says why                                                               | A JPEG when it is at least 25% smaller or the long edge is over 2048 px; otherwise none |
+| Displayable still image of 5 MiB or more          | A JPEG under 5 MiB (EXIF orientation applied, transparency on white)                                                                       | Same                                                                                    |
+| Animated GIF or WebP of 5 MiB or more             | A smaller animated GIF (fewer frames, then smaller size, then fewer colours); else a first-frame JPEG                                      | Same                                                                                    |
+| `.tga`, `.tif`, `.tiff`, any size                 | A JPEG under 5 MiB (16-bit, float and CMYK scaled to 8-bit RGB; first full-resolution page)                                                | Same                                                                                    |
+| Video                                             | An animated GIF of 12 frames sampled across the duration (at most 24, long edge 480 px, rotation applied), else the middle frame as a JPEG | Same                                                                                    |
+| Audio-only file or video with no decodable frames | Completes successfully, no preview                                                                                                         | Same                                                                                    |
+
+A run that writes no preview completes successfully and records why as `preview-not-generated.json` in the execution's results: for an image shown as its own preview the message reads "No preview was generated for '<name>': the file is under 5 MiB and is already shown as its own preview." With the downscale option on, an animated GIF or WebP under 5 MiB is still left alone (a JPEG would drop the animation), and the result says so. Every preview is strictly under 5 MiB. TGA and TIFF are never shown as their own preview because browsers cannot display them. A large still image, TGA or TIFF that cannot be decoded within the task's memory fails with a message that names the file type and the pixel limit.
+
+TIFF compressions: Pillow reads the common ones; a TIFF it cannot read (16-bit colour, float samples, BigTIFF, some predictors) is read with tifffile and its codec package imagecodecs, which the image installs from wheels only. The pipeline decodes the LZW, Deflate (Adobe and plain), PackBits, Zstandard, LZMA, JPEG and LERC (GeoTIFF) compressions, with or without a predictor, and refuses a TIFF in any other compression (JPEG XL, WebP, JPEG 2000, CCITT, vendor codecs) with a message that names it. The pixel budget and a byte budget for float and multi-sample images apply to this path as to the others. imagecodecs bundles about 90 codec libraries, all permissive licences plus the GCC OpenMP runtime; `NOTICE.md` lists them.
+
+### Safety limits
+
+The pixel count is read from the file header and checked against a budget derived from the task's memory before anything is decoded. Video is opened as a local file only (`protocol_whitelist=file`) through an allowlist of container formats, decoded for at most 10 minutes, and sampled by seeking rather than by decoding the whole file.
 
 ## Architecture
 
@@ -32,11 +71,11 @@ S3 Event / API Trigger
     --> Open Pipeline Lambda (starts Step Functions state machine)
         --> Construct Pipeline Lambda (builds stage definitions)
             --> AWS Batch Fargate Job (runs Docker container)
-                1. Download input file from S3
+                1. Download the input and the files it references from the same asset
                 2. Detect format, load with appropriate handler
                 3. Normalize up-axis to Y-up
-                4. Render 36-frame rotating preview (or single static frame fallback)
-                5. Save as GIF with size optimization (JPEG fallback for single frame)
+                4. Render 36-frame rotating preview (or the single still view)
+                5. Save in the requested format (auto, gif, jpg, png), keeping a GIF under 5 MiB
                 6. Upload preview file to S3
             --> Pipeline End Lambda (finalizes execution, sends SFN callback)
 ```
@@ -45,22 +84,24 @@ S3 Event / API Trigger
 
 The pipeline produces a single preview file alongside the original asset:
 
--   **Animated GIF** (`<filename>.previewFile.gif`): 36-frame rotation around the Y-axis at 800x600 resolution. If the GIF exceeds the size limit, frames are reduced by half iteratively. Maximum output size is approximately 5 MB.
--   **Static JPEG** (`<filename>.previewFile.jpg`): Single isometric-view frame. Used as a fallback when the rotating render fails or when only one frame is produced.
+-   **Animated GIF** (`<filename>.previewFile.gif`): 36-frame orbit around the Y-axis at 800x600 with a transparent background. If the GIF exceeds the 5 MB size limit, it is written again with 18, 12 and then 8 frames, then with those 8 frames at 75%, 50% and 37.5% resolution, and finally as a single PNG (then JPEG) of the still view.
+-   **Still PNG or JPEG** (`<filename>.previewFile.png` / `.jpg`): one front three-quarter view. Written when `outputType` asks for it, when `auto` gets a single frame, or when the orbit render fails.
 
 ## Input Parameters
 
 Input parameters are passed as a JSON string via the `inputParameters` field of the pipeline execution payload. All parameters are optional.
 
-| Parameter                       | Type    | Default | Description                                                                                                                                                |
-| :------------------------------ | :------ | :------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `overwriteExistingPreviewFiles` | boolean | `false` | When `false`, the pipeline will fail with an error if a preview file already exists for the input file. Set to `true` to overwrite existing preview files. |
+| Parameter                       | Type    | Default | Description                                                                                                                                                                             |
+| :------------------------------ | :------ | :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `overwriteExistingPreviewFiles` | boolean | `true`  | When `true`, a preview is generated even if one already exists for the input file. When `false`, a file that already has a preview is skipped and the run completes without writing.    |
+| `outputType`                    | enum    | `auto`  | `auto` writes an animated GIF when the renderer produces several frames and a JPEG otherwise; `gif`, `jpg` and `png` write that format for every input.                                 |
+| `computeTier`                   | enum    | `auto`  | The compute tier the job runs on. `auto` runs the large tier for an input at or above the large-tier threshold and the standard tier otherwise; `standard` and `large` force that tier. |
 
 ### Example
 
 ```json
 {
-    "inputParameters": "{\"overwriteExistingPreviewFiles\": true}"
+    "inputParameters": "{\"overwriteExistingPreviewFiles\": false, \"outputType\": \"png\"}"
 }
 ```
 
@@ -90,7 +131,23 @@ Enable the pipeline in `infra/config/config.json`:
 | `autoRegisterWithVAMS`                | Automatically registers the pipeline and workflow in the VAMS database during CDK deployment |
 | `autoRegisterAutoTriggerOnFileUpload` | When auto-registered, configures the workflow to trigger automatically on file upload        |
 
-Enabling this pipeline requires the Global VPC to be enabled (`useGlobalVpc.enabled: true`). The CDK configuration validation enforces this automatically.
+Media previews have their own block, beside this one:
+
+```json
+"useMediaPreviews": {
+    "enabled": true,
+    "autoRegisterAutoTriggerOnFileUpload": true,
+    "downscaleSelfPreviewableImages": false
+}
+```
+
+| Setting                                                | Default | Description                                                                                                                                                                                                                                                   |
+| :----------------------------------------------------- | :------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `useMediaPreviews.enabled`                             | `false` | Registers the Media Preview Thumbnail pipeline and workflow (images, TGA/TIFF, video) and deploys the shared container when `usePreview3dThumbnail` is off. Requires the Global VPC. The shipped config and templates ship `false` (it needs the Global VPC). |
+| `useMediaPreviews.autoRegisterAutoTriggerOnFileUpload` | `false` | Triggers the media workflow when a supported image or video is uploaded. Needs `useMediaPreviews.enabled`. The shipped config and templates ship `false` (it needs the Global VPC).                                                                           |
+| `useMediaPreviews.downscaleSelfPreviewableImages`      | `false` | Also writes a smaller JPEG for an image the web already shows as its own preview (under 5 MiB), when the JPEG is at least 25% smaller. Needs `useMediaPreviews.enabled`.                                                                                      |
+
+Enabling this pipeline, or media previews, requires the Global VPC to be enabled (`useGlobalVpc.enabled: true`). The CDK configuration validation enforces this automatically.
 
 ## Docker Notes
 
@@ -158,33 +215,117 @@ The output preview file will be written to the mounted output directory.
 
 ### Camera Framing
 
-The renderer uses percentile-based camera framing (2nd-98th percentile) instead of the full bounding box. This ensures that sparse scenes such as single-position LiDAR scans with distant outlier points are framed tightly around the dense content rather than zoomed out to include outliers.
+A mesh (glTF, OBJ, FBX, STL, PLY mesh, STEP, USD) is framed on its full bounding box. A point cloud uses percentile-based camera framing (2nd-98th percentile) instead of the full bounding box, so sparse scenes such as single-position LiDAR scans with distant outlier points are framed tightly around the dense content rather than zoomed out to include outliers. A scene that holds both meshes and points renders all of them and is framed as a mesh.
+
+A scene merged from several parts (USD prims, glTF/GLB scene geometries, OBJ objects that trimesh loads as separate geometries, for example objects with different materials, FBX meshes, STEP parts, 3MF and COLLADA instances) leaves a backdrop out of the preview: a near-flat sheet (smallest extent at most 0.5% of its largest, middle extent at least 10% of it) whose largest extent is at least 50 times that of the scene's other parts, and whose centre is within a quarter of its extent of their centre on its two large axes, such as the ground plane a simulation robot stands on or the walls of a skybox. The loader drops the backdrop before it bakes textures, fills colours across parts or merges them (`scene_parts.backdrop_keep`), so the backdrop is neither drawn nor framed and the rest draws exactly as a file holding it alone: the preview has a transparent background and its own lights, so a backdrop adds nothing, and drawn it filled the whole frame. A STEP model is tessellated again at its own size. The job log records one line with the number of parts left out and their extents. A scene made only of flat parts (a sign, a floor plan), a small part in the corner of a large board, floor tiles none of which is centred on the object, a sheet less than 50 times its centred content (a 1 m sheet-metal panel with one 40 mm bracket, a board with one 4 mm chip), a single-part file and any scene without such a part draw and frame exactly as before. Only the outermost sheet is a backdrop: a sheet lying on a larger backdrop sheet (the same thin axis, at most half its size, its footprint inside the larger one's), such as a model's own platform on a ground plane, is kept as part of the model and framed with it. Accepted limit: any near-flat sheet whose only solid content is one item centred on it and at most 1/50 of its largest extent is a backdrop by this rule, so the preview shows the item alone. Examples are a floor plan or a terrain tile with a single centred marker, a 1.6 m solar panel with only a centred 30 mm junction box, and an enclosure of thin panels (a room or a skybox) around a single small item, which loses every panel.
+
+A mesh's framing also leaves out a stray part, which is still drawn: the scene's core is its largest parts by points until they hold 95% of the points, and a part outside the core is a stray when it is at most half the core's largest extent and framing it with the core would widen the frame at least 10 times, such as a small cube left 50 m from a 6 cm model. Such a part would draw as a dot either way. A part larger than half the core is a second object and is framed, however few vertices it holds: a large low-poly model beside a small detailed label, or a distant second building. A part that repeats a pattern is not a stray either: one with a part of comparable size (within 1.5 times) at a comparable distance from the core's centre (within 2 times) in the core, or with at least two such other candidates, such as the parts of an exploded ring. A car's wheels near its middle do not make a cube 100 m away part of a pattern, and two twin leftovers are still left out. A near-flat sheet is never a stray; the backdrop rule alone decides sheets. One mesh holding a far-away piece, with no parts to tell apart, is framed on its 2nd-98th percentile bounds only when full-bounds framing provably loses the model: the full bounds are at least 25 times the percentile bounds, the dense region would project under 4 pixels, and a 160 x 120 still on the full bounds covers under 0.1% of its pixels. A long low-poly mast with a dense antenna at its top draws on its full bounds, so it keeps them. Other meshes frame as before. Each loader records its parts' bounds (`preview_pipeline/scene_parts.py`), one min and max over the points; a scene of more than 100,000 parts (fewer on a task with under about 610 MiB of memory) records none and is framed as before. The bounds follow the up-axis rotation and the triangle budget's decimation.
+
+### Still View
+
+A still preview (`outputType` `jpg` or `png`, the static fallback, and the size-limit fallback of an animated preview) shows the front three-quarter view: 45° around the orbit and 25° above it.
+
+### Mesh Colours
+
+A mesh is drawn with its UV texture, else its per-vertex colours, else its per-face colours, else in light blue. Per-face colours come from STEP, 3MF and COLLADA files and from a coloured or textured mesh decimated to the triangle budget, which keeps its colours as per-face colours. They are drawn as per-vertex colours on a copy of the mesh whose faces share no vertices: each face's colour is set on its own corners, and each corner keeps the smooth-shading normal of the original mesh. So no colour blends across a face edge, and the faces shade as smoothly as on the original mesh. VTK draws per-face colours directly through a buffer texture, which Mesa 26's software OpenGL renders as an empty frame. Per-vertex colours draw on every Mesa version.
+
+The copy holds three vertices per triangle. A 36-frame orbit of a mesh coloured per face peaks at about 0.75 GiB plus 350 to 475 bytes per triangle (about 130 bytes without the copy): at the 20 million triangle budget of a 4 vCPU, 16 GiB task, about 8.5 GiB instead of 3 GiB. Such a mesh therefore has its own triangle cap, `(60% of the memory limit - 0.75 GiB) / 475 bytes`, at most the triangle budget and at least 100,000 triangles, and is decimated to it. That is 1.0 million triangles on 2 GiB, 3.7 million on 4 GiB and 9.2 million on 8 GiB. On 4 vCPU the cap reaches the 20 million triangle budget at 16 GiB, so the default tiers keep their full budgets.
+
+### Referenced Files
+
+Before loading, `preview_pipeline/dependencies.py` fetches the files the input references from the input's own asset (glTF buffers and images; USD sublayers, references, payloads and asset-valued attributes, followed through each fetched layer; OBJ `mtllib` files and their `map_*`/`bump`/`disp` textures; FBX texture file names; an `.lcc` scene's `data.bin` and `index.bin`, and its `shcoef.bin` only when splat-transform reads it (`fileType` `Quality`, or a `shcoef` attribute in a scene without a `fileType`); `environment.bin` is never read and not fetched; the chunk files of the one level of detail an `.lcc2` scene is read at). The input and every fetched file land at their asset-relative paths under one local root, so relative references resolve locally as they do in the asset.
+
+Every reference is untrusted input. It is accepted only as a relative path that, normalised against the referring file's directory, stays inside the asset prefix (the key up to the asset id, the run's output files folder for a file an earlier step wrote, else the input's own directory; for an asset created on a single existing object, its companion folder `{key}/`, where the object sits at its file name); absolute paths, `..` escapes, URI schemes, control characters and over-long values are rejected. The fetch is bounded: 2,000 files, 50 GiB (HeadObject before each download, checked against free disk with 1 GiB headroom) and a recursion depth of 32. A rejected, missing or over-budget reference is logged and skipped; it never fails the run. When any was skipped, or the fetch stopped on an error, `dependencies.incomplete_preview` builds one WARNING summary that lists each skipped file, the file naming it and the reason (missing from the asset; outside the asset: absolute path, URI scheme or `..` escape; over the file, byte or disk budget), grouped as geometry layers (a USD layer's composition arcs to USD layer files: sublayers, references, payloads, from `Sdf.Layer.GetCompositionAssetDependencies()`), data files (glTF buffers, LCC data and chunk files, USD value clips) and textures and other files (images, materials, `asset`-typed attributes, and an arc to a non-USD file such as `.mtlx`). Only `asset`/`asset[]` attributes are read for this, never geometry or animation samples. Asset paths in layer or prim metadata (`assetInfo` `identifier`, `customLayerData`, `customData`), which load nothing, directory-less `.mdl` modules the renderer resolves itself, and FBX textures, which the FBX loader does not sample, are still looked up but not counted. A directory-less `.mdl` module that is not in the asset is also left out of the fetch's `missing` total and is logged once at INFO, with no HeadObject warning. A glTF or OBJ is loaded through a resolver confined to the same local root (`mesh_handler.asset_resolver`), so a `../textures/x.png` the fetch accepted inside the asset is read, an MTL's texture maps are looked up beside the MTL, and a name outside the asset is still refused. The summary is logged after the fetch; once the preview is written, the run completes with "Preview generated, but incomplete: N referenced files could not be fetched (G geometry layers, D data files, T textures/other files)" instead of the plain success message. When the run has an execution results folder (`outputS3AssetResultsPath`, carried to the container in the Batch command's second element as `outputResults` beside `inputVersions`, never in the definition, so an image or Lambda from before it still runs), the container also writes `preview-incomplete.json` there: the message, the counts by kind, at most 100 skipped files with a `truncated` flag, asset-relative paths, and, for a reference refused as outside the asset, only its reason and at most a sanitized base file name (`safe_base_name`: no scheme, authority, drive, share, query or folder). The workflow records it as an output result on the execution. A complete run writes none, and a failed write is logged as a warning and does not fail the run.
 
 ### Up-Axis Normalization
 
-All data is normalized to Y-up before rendering:
+All data is normalized to Y-up before rendering, from what the file or its format declares:
 
--   **Known Z-up formats** (LAS, LAZ, E57, PTX, PCD, FLS, FWS, STL): Rotated to Y-up automatically
--   **Known Y-up formats** (GLB, GLTF, STP, STEP, USD): No rotation
--   **Variable formats** (OBJ, FBX, PLY, DRC): Bounding-box heuristic determines up-axis
--   **USD files**: Up-axis read from stage metadata via `UsdGeom.GetStageUpAxis()`
+-   **Z-up formats** (LAS, LAZ, E57, PTX, PTS, PCD): rotated to Y-up
+-   **Y-up formats** (GLB, GLTF; STEP, rendered as authored since it carries no axis): no rotation
+-   **Formats with axis metadata**: USD (`UsdGeom.GetStageUpAxis()`), COLLADA (`<up_axis>`), 3MF (Z-up by specification) and FBX (`GlobalSettings` `UpAxis`) are converted by what they declare
+-   **Formats without a convention** (OBJ, PLY, DRC, STL, OFF, and FBX without `UpAxis`): rendered as authored. No bounding-box guess is made: it turned Y-up models that are long in depth (a car, a ship) onto their side.
+
+### XML and Archive Inputs
+
+3MF and COLLADA are XML. They are parsed with the standard library's expat parser with document type declarations, entity declarations and external entity references refused (ARCC BSC12), so a crafted file can neither expand entities nor read local files or URLs. A 3MF reads its build items, components (with their transforms) and `basematerials`/`colorgroup` colours; COLLADA reads the visual scene's node transforms, `triangles`, `polylist` and `polygons`, and each bound material's diffuse colour. Components and node instances are expanded until the placed geometry passes the run's triangle budget (or three vertices per triangle of it) or the walk has visited 1,000,000 nodes; the remaining placements are skipped with one warning, and each object or geometry is parsed once however often it is placed. A zip-based input (`.3mf`, `.sog`, and a texture read out of a `.usdz`) is checked from its central directory before anything is decompressed: the uncompressed total must fit the free disk and no member may be compressed more than 200:1 above 64 MiB.
+
+`.drc` files keep their vertex colours. `.pts` (Leica text) is streamed from Amazon S3 like PTX.
+
+### FBX Handling
+
+An FBX file (ASCII or binary, FBX 2011 / 7.1 and later) is read with Open3D's `read_triangle_model`, which uses Assimp: quad and n-gon faces are triangulated, every node's transform is applied, and the meshes are merged into one. A mesh keeps its vertex colours, or else takes its material's base colour; a scene in which no mesh has either (every mesh on Assimp's default material) is drawn in the default mesh colour, and a mesh without a colour beside coloured ones gets the default mesh colour. Textures are not sampled. Assimp places a model once under every parent it is connected to and copies a geometry for every model that uses it, all before it returns, so the placements are first counted from the file's `Objects` and `Connections` (`format_handlers/fbx_scene.py`, one pass): a file that places more than 1,000,000 models (a cycle counts as more), or whose placements add up to more triangles than the larger of the run's triangle budget and the triangles the file stores (or more vertices than three per triangle of the budget), fails before it is read. The count reads the file the way Assimp 5.4.2, the version Open3D 0.19 bundles, reads it (every connection type but `"PP"` links a model, comments and strings hold no structure, a zero word inside a binary record list is skipped), so an Open3D upgrade needs `fbx_scene.py` checked against the new Assimp's FBX reader. The same pass measures how deeply the file nests: the reader descends into each scope (ASCII `{ }` block) or node-record list (binary) as it opens, so a file whose scopes or records nest deeper than 256 levels — far more than any model an exporter produces — is refused before it is read.
 
 ### Point Cloud Handling
 
-Point clouds are downsampled to a maximum of 20 million points for rendering performance. Downsampling uses random subsampling with a fixed seed for reproducibility. Points are rendered as colored spheres using per-point RGB colors when available, or colored by elevation (Y-axis) using the viridis colormap.
+Every point cloud reader keeps at most the run's point budget (see [Compute and Limits](#compute-and-limits)), sampled uniformly at random with a fixed seed while it reads, so peak memory is one read chunk plus the sample whatever the file's size:
 
-### USD Texture Support
+-   **LAS/LAZ**: read in 2-million-point chunks and sampled with a uniform stride.
+-   **E57**: every scan is read through the libe57 reader in 1-million-point buffers, its pose (rotation and translation) is applied so all scans share the file's frame, points flagged invalid are dropped, and colours are scaled from the scan's declared colour limits to 8 bits.
+-   **PTX**: every scan's ten header lines are parsed and its 4x4 transform is applied to its points; `0 0 0` (no return) is dropped. In S3 mode a PTX file is streamed from Amazon S3 and parsed in blocks of one million lines, with no local copy.
+-   **PCD**: read with Open3D, then sampled.
 
-For USD files with material bindings, the pipeline traverses the UsdShade material graph to extract diffuse textures:
+Every reader drops points with a NaN or infinite coordinate, and their colours, before sampling and framing (`pointcloud_handler.finite_points`): an organized cloud, such as a PCD from a depth camera, stores NaN for each pixel that saw nothing. A cloud with no valid point fails with "The point cloud has no valid points". The point clouds the mesh handler loads (the point geometry of a glTF/GLB scene, a vertex-only OBJ, a Draco file without faces) go through the same filter; in a scene that also holds meshes, a point cloud with no valid point is left out and the meshes render.
 
-1. Extracts UV coordinates from mesh primvars (supports common names: `st`, `UVMap`, `st0`, `texCoord_0`, `Texture_uv`, `uv`)
-2. Traverses `MaterialBindingAPI` -> `UsdPreviewSurface` -> `diffuseColor` -> `UsdUVTexture` to find texture file paths
-3. Loads textures from the filesystem or from inside USDZ archives (zip extraction)
+Points are rendered as colored spheres using per-point RGB colors when available, or colored by elevation (Y-axis) using the viridis colormap.
+
+### CAD (STEP) Handling
+
+A STEP file is read through XCAF (`STEPCAFControl_Reader`), so assemblies keep their structure, every component is placed by the transforms of all assembly levels above it, and a colour set on a part, a component or a face colours that face's triangles (the nearest colour wins; uncoloured faces in a coloured file get the default mesh colour). Every face is tessellated, including free surfaces beside solids. The linear deflection is 0.2% of the model's bounding-box diagonal and the angular deflection 0.35 rad, so detail does not depend on the model's units. STEP carries no up-axis metadata, so the model is rendered as authored. A file XCAF cannot read falls back to `STEPControl_Reader` (geometry only). Before either reader transfers the file, its component placements are counted from its `NEXT_ASSEMBLY_USAGE_OCCURRENCE` entities, and a file that places more than 1,000,000 components fails, since OCCT's transfer visits every placement. Within that bound, parts stop being placed once the tessellated triangles pass the run's triangle budget.
+
+### Gaussian Splat Handling
+
+A `.ply` is routed by its header: a vertex element with `f_dc_0`, `opacity`, `scale_*` and `rot_*` is a 3D Gaussian Splatting scene, a PLY with faces is a mesh, and a vertex-only PLY is a point cloud (sampled to the point budget). A 3DGS PLY is read through a memory map; `.splat` (32-byte records) is decoded in numpy; `.spz`, `.sog`, `.ksplat`, `.lcc`, `.lcc2` and `.compressed.ply` are converted to a 3DGS PLY on the CPU with the PlayCanvas [`splat-transform`](https://github.com/playcanvas/splat-transform) CLI (MIT), pinned by `container/splat-transform/package-lock.json` and installed with `npm ci` on a pinned, SHA-256-verified Node.js 22 release. An XGRIDS scene is read at one level of detail: the finest whose splat count is at most twice the splat budget, else the coarsest. The counts come from the scene description (`format_handlers/lcc_meta.py`) and the level is passed to the converter as `--select-lod`. An `.lcc` scene keeps every level in one `data.bin`, so its `data.bin`, `index.bin`, `shcoef.bin` and `environment.bin` are fetched beside it as referenced files. An `.lcc2` scene is a JSON octree whose `root.splatFiles` names the chunk files (usually under `data/3dgs/`); only the chosen level's chunk files are fetched, not the other levels or the environment chunk. Chunk files are `.spz`, `.sog` or `.ply`, all accepted on their own, so the file-upload trigger excludes `*/data/3dgs/*`: uploading a scene starts one run for the `.lcc2` rather than one per chunk. The workflow's own filter does not exclude them, so a chunk can still be run by hand.
+
+Each splat is drawn as a flat, unlit disc in its degree-0 spherical-harmonic colour (`0.5 + 0.28209479 × f_dc`). The disc has the coverage of the splat's Gaussian: radius `σ × √(2α)`, where `σ = √(s_max × s_mid)` (the two larger of `exp(scale_*)`) and `α = sigmoid(opacity)`, so a faint or elongated splat does not draw as a large opaque blob. Splats with opacity below 0.2 are dropped and the rest are sampled to the splat budget (1 million per vCPU, at most 5 million) with probability proportional to opacity. Scenes are turned 180° about Z, the original 3DGS (COLMAP) Y-down convention to Y-up, as SuperSplat does. View-dependent colour and anisotropic splat shapes are not rendered.
+
+A captured scene surrounds its subject with background (room walls, sky, distant trees) built from large splats, and framing the whole scene put the camera among them. The handler renders the scene's core: the splats within 1.75 times the 60th-percentile distance from the scene's centre, with each splat weighted by `α / σ²` in both the centre and the percentile, so small opaque splats (the detail the capture looked at closely) decide where the core is. A compact subject (an object, a room, a slab of terrain) loses nothing, since all of it lies within 1.75 times its own 60th-percentile distance. Splats in the core whose disc is larger than 3% of the core radius and ten times the median disc are dropped as fog. When the core is a plane (its smallest spread under 35% of the middle one) tilted less than 60° from the up axis, as the ground of an outdoor capture is, it is levelled so the orbit circles the ground's normal. The log records the core radius, the splats kept and dropped, and any levelling. A scene of fewer than 1,000 splats is drawn whole.
+
+`splat-transform` runs `.mjs` generator scripts and downloads `http(s)://` inputs, so the container only ever passes it a local regular file inside the job's work directory whose name ends in an allowlisted splat extension, starts it with an argument list (no shell), `--gpu cpu` and a minimal environment, and stops it after 30 minutes. The converter opens an `.lcc2` scene's chunk files by the names its description lists, so before it starts, every name must be a relative path that stays inside the job's work directory (no absolute path, URL or scheme, `..` escape, backslash or control character), and every chunk of the chosen level must be present. Otherwise the run fails with a message naming the problem. The description is read up to 64 MiB and 1,000,000 octree nodes.
+
+### USD Stage Handling
+
+The USD handler walks the composed stage with `Usd.PrimRange(..., Usd.TraverseInstanceProxies())`, so instanced geometry is drawn at every instance. A `PointInstancer` is expanded with `ComputeInstanceTransformsAtTime` and its prototypes are drawn only through it. A prim whose computed visibility is `invisible`, or whose computed purpose is `guide` or `proxy`, is skipped with its subtree. When the stage has a default prim that is defined, active and a root prim, a root prim beside it is left out only when it looks like a thumbnail rig by both tests: it is at least 50 times larger than the default prim, and it holds both a camera and a light of any type. Every other root prim is drawn, as it is for a stage without a default prim, so a placeholder default prim beside the model, peer roots, a site plan beside a building and a root that holds lights only all show; when unsure the whole stage is drawn. The roots left out are named in the job log with their size, ratio and reason. Known limit: a model's own root that is at least 50 times larger than a tiny default prim and holds a camera and a light is left out. A prop uploaded without its shared rig folder (for example the SimReady `common_tools` layer) renders correctly but is still listed as an incomplete preview naming the missing rig layer; the rig is never drawn, so the listing is harmless. A referenced file that only a left-out root reaches, with nothing that is drawn depending on that root, is not reported in the incomplete-preview summary. A stage with no usable default prim, or whose default prim draws no geometry, is drawn whole. `Points`, `BasisCurves`, `NurbsCurves`, `HermiteCurves`, `NurbsPatch`, `Plane` and `TetMesh` prims are not drawn: each rendered one is counted, the job log names the count and the first five paths per type, and `preview-incomplete.json` records them as `counts.skippedPrimTypes` and `skippedPrims` (absent when none); a stage holding only such prims fails saying so. `Mesh` prims and the implicit `Cube`, `Sphere`, `Cylinder`, `Cone` and `Capsule` prims are tessellated. A stage that expands past 30,000,000 vertices is previewed from an evenly spaced sample: the loader counts its gprims and point-instancer instances without tessellating them, then reads every Nth in traversal order plus the ones holding the scene's outermost bounds, so the camera frames the whole scene; the sample keeps the outermost items, the small items (up to a quarter of the budget) and an evenly spread share of the rest, sized by each item's tessellated vertex count to stay under 90% of the limit, the same file always gives the same sample, and the job log says how many of the gprims and instances are shown. A stage under the limit is read in full. Values are read at the stage's `startTimeCode` when it declares a time range, else at each attribute's earliest time sample.
+
+### USD Colour and Texture Support
+
+Each prim's colour comes from, in order: the diffuse texture of the `UsdUVTexture` connected to the bound `UsdPreviewSurface`'s `diffuseColor`; that input's constant value; when the bound material has no `UsdPreviewSurface`, its NVIDIA MDL shader (below); the `displayColor` primvar (indices applied; constant, uniform, vertex/varying and faceVarying interpolation averaged onto vertices). A prim with no colour in a stage where others are coloured gets a neutral grey. Other textures of the material (normal, roughness, occlusion) are never used as colour.
+
+1. Extracts UV coordinates from the primvar the texture's `UsdPrimvarReader` names, else a common name (`st`, `UVMap`, `st0`, `texCoord_0`, `Texture_uv`, `uv`), else the mesh's first other UV set by name: a `texCoord2f[]` primvar, or a `float2[]` one named like a UV set (for example `st_0`)
+2. Traverses `MaterialBindingAPI` -> `UsdPreviewSurface` -> `diffuseColor` -> `UsdUVTexture` to find the texture file
+3. Loads the texture from the path USD resolved against the layer that authored it, only from inside the input's local asset directory, or from inside a USDZ archive (zip extraction), at most 1,024 pixels on its long side (a JPEG is decoded at a reduced scale, another format is decoded and reduced)
 4. Bakes texture colors to per-vertex RGB data for rendering
 
-### File Size Limits
+Each texture is decoded once per stage, and every prim that samples it reads the same copy. The decoded textures a stage holds while it loads take at most 10% of the task's memory limit (1.6 GiB on 16 GiB, room for about 540 textures of 1,024 by 1,024 pixels); a texture past that is not read, its prims take their material's constant colour or `displayColor`, and the job log counts the textures not read.
 
-The maximum input file size is 100 GB. Files exceeding this limit are rejected before download with a descriptive error message. The Fargate container has 200 GiB of ephemeral storage to accommodate large input files plus working space.
+NVIDIA Omniverse and Isaac Sim assets bind MDL materials instead: a shader with `info:mdl:sourceAsset` (usually connected to the material's `outputs:mdl:surface`). Its inputs are read, followed through connections to the material's own interface inputs and node graph outputs (at most 32 connections; a longer chain, or one that loops, is not read and is logged), by the module's file name for two module families, and by input name for any other module:
+
+| Module                                                             | Texture                                                                    | Else constant                              | Times                          |
+| :----------------------------------------------------------------- | :------------------------------------------------------------------------- | :----------------------------------------- | :----------------------------- |
+| `OmniPBR*.mdl` (`OmniPBR.mdl`, `OmniPBR_ClearCoat.mdl`, ...)       | `diffuse_texture`                                                          | `diffuse_color_constant`                   | `diffuse_tint`                 |
+| `OmniSurface*.mdl` (`OmniSurface.mdl`, `OmniSurfaceLite.mdl`, ...) | `diffuse_reflection_color_image`                                           | `diffuse_reflection_color`                 | —                              |
+| Any other module (an Unreal Engine export's `MI_*.mdl`, ...)       | `AlbedoTexture`, `BaseColor_Texture`, `BaseColorTexture`, `DiffuseTexture` | `ColorAlbedo`, `BaseColor`, `DiffuseColor` | `BaseColor_Tint`, `AlbedoTint` |
+
+The texture is sampled at the mesh's UVs (the common names above, `st` first) and read through the same path and asset-root check as a `UsdUVTexture`; an implicit gprim has no UVs and takes the constant. A texture that cannot be read falls back to the constant, as the MDL module does. Only authored values count: a material that sets neither the texture nor the constant takes `displayColor` or the neutral grey, not the module's default. Other `OmniPBR` adjustments (albedo brightness, add and desaturation, texture tiling, offset and rotation) are not applied. For any other module the first authored name in each column is used. Such a module combines those inputs in its own expression (for example `MI_CeilingA_06b.mdl` blends `ColorAlbedo` and `AlbedoTexture` through a mask texture), which is not evaluated, so its colour is an approximation. A material of any module that authors none of these inputs takes `displayColor` or the neutral grey, as does a prim whose texture cannot be sampled when its material sets no constant. The job log names each module once, with the first material that uses it, saying after its first prim is drawn whether its colour was approximated (and from which inputs) or not read, and ends the load with one line per outcome counting the prims per module: the ten modules with the most prims, then how many more modules and prims there are.
+
+MaterialX materials are not read (the `usd-core` build has no MaterialX plugin); their prims render in the default colour.
+
+### Compute and Limits
+
+The container sizes its work to the task it runs in, so it stays within whichever job size started it. Its memory limit is the smallest of its cgroup's limit, the task memory the state machine passes in `VAMS_TASK_MEMORY_MIB` and physical memory. On AWS Fargate the cgroup sets no limit and physical memory is the micro-VM's, larger than the task, so there the passed task memory sets the budgets. Its CPUs come from its cgroup (CPU quota and affinity). When the state machine sets `VAMS_COMPUTE_TIER` to the compute tier it chose, the value is logged; budgets never depend on it.
+
+| Budget    | Per vCPU  | Memory cap (35% of the limit) | Floor     | Ceiling    |
+| :-------- | :-------- | :---------------------------- | :-------- | :--------- |
+| Points    | 5 million | 120 bytes per point           | 1 million | 20 million |
+| Triangles | 5 million | 200 bytes per triangle        | 1 million | 30 million |
+| Splats    | 1 million | 200 bytes per splat           | 250,000   | 5 million  |
+
+On 4 vCPU and 16 GiB that is 20 million points or triangles. A point cloud above its budget is sampled; a mesh above its budget is decimated with VTK quadric clustering (a texture is baked to colours first, and colours are kept: a face's colour stays on every triangle made from that face, whatever lines and triangle strips the mesh also holds; strips are decimated with the faces, and lines are dropped). A mesh drawn with per-face colours is held to its own cap, which is lower than the triangle budget on smaller tasks: below 4.9 GiB on 1 vCPU, 8.6 GiB on 2 vCPU, 16 GiB on 4 vCPU and 23.4 GiB on 8 vCPU, for example 3.7 million triangles against a 5 million budget on 1 vCPU and 4 GiB, and 9.2 million against 10 million on 2 vCPU and 8 GiB (see [Mesh Colours](#mesh-colours)). VTK allocates the clustering grid densely, so the grid is also bounded to an eighth of the memory limit at 88 bytes per bin (at most 2^26 bins): a closed mesh far above the budget comes out with fewer triangles than the budget allows (a 20 million triangle sphere on 16 GiB becomes about 730,000). The rasteriser (Mesa llvmpipe) runs `LP_NUM_THREADS` = the task's vCPU count; on 4 vCPU a 36-frame 800x600 orbit of 20 million triangles renders in about 100 seconds.
+
+-   **Download**: parallel ranged GETs (64 MiB parts, four per vCPU, at most 32).
+-   **Disk**: before the download, the input's size plus 1 GiB of output headroom is checked against the work volume's free space; an input that does not fit fails at once with a message naming both. Referenced files are checked the same way as they are fetched. A streamed PTX needs no disk.
+-   **Memory**: a `MemoryError` while loading fails the run with a message naming the task's memory limit.
+-   **Timings**: the log records the input size, the budgets and the seconds spent in each phase (`download`, `fetch`, `load`, `render`, `encode`, `upload`).
 
 ## References
 

@@ -42,6 +42,7 @@ export class IsaacLabTrainingBuilderNestedStack extends NestedStack {
                 // Use private subnets (with NAT Gateway egress) so CodeBuild can pull base images
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
+                kmsKey: props.storageResources.encryption.kmsKey,
             });
         }
 

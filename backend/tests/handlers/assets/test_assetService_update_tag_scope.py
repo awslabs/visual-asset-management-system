@@ -68,6 +68,11 @@ def _load_asset_service():
 
     files_stub = types.ModuleType("handlers.assets.assetFiles")
     files_stub.delete_s3_prefix_all_versions = MagicMock()
+    files_stub.S3PrefixDeleteIncomplete = type("S3PrefixDeleteIncomplete", (Exception,), {})
+    files_stub.delete_files_metadata = MagicMock()
+    files_stub.delete_auxiliary_files_of_keys = MagicMock()
+    files_stub.delete_file_version_records = MagicMock()
+    files_stub.record_invocation_context = MagicMock()
     files_stub.aux_bucket_asset_file_base = (
         lambda db, key: f"{(db or '').strip('/')}/{(key or '').strip('/')}/"
     )
@@ -129,15 +134,18 @@ def _written_attributes(mock_asset_table):
     """The attributes an edit actually wrote, recovered from its targeted update expression.
 
     update_asset writes only the fields the request changed, so the written set is carried by
-    the UpdateExpression's name/value placeholders rather than by a whole-record Item.
+    the UpdateExpression's name/value placeholders rather than by a whole-record Item. The
+    `REMOVE` clause an edit of the name, description or tags appends for its change provenance
+    sets nothing and is left out.
     """
     kwargs = mock_asset_table.update_item.call_args.kwargs
     names = kwargs["ExpressionAttributeNames"]
     values = kwargs["ExpressionAttributeValues"]
     expression = kwargs["UpdateExpression"]
     assert expression.startswith("SET "), expression
+    set_clause = expression[len("SET "):].split(" REMOVE ")[0]
     written = {}
-    for assignment in expression[len("SET "):].split(", "):
+    for assignment in set_clause.split(", "):
         name_ref, value_ref = [part.strip() for part in assignment.split(" = ")]
         written[names[name_ref]] = values[value_ref]
     return written

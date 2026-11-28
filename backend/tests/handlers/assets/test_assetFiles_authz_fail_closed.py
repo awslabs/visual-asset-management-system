@@ -609,7 +609,7 @@ def _call_get_file_info(metadata, snapshot, file_path="/model.glb", snapshot_sid
             patch.object(af, "asset_version_files_table", version_files_table), \
             patch.object(af, "query_asset_version_history_map", return_value={}), \
             patch.object(af, "get_all_asset_versions", return_value=[]), \
-            patch.object(af, "find_preview_files_for_base", return_value=[]):
+            patch.object(af, "find_newest_preview_file_for_base", return_value=None):
         response = af.get_file_info(_DB, _ASSET, file_path, True, {"tokens": ["alice"]})
     return response, snapshot_stub
 
@@ -768,15 +768,17 @@ class TestFileInfoSnapshotLookupKey:
         [
             ("/model.glb", "model.glb"),
             ("model.glb", "model.glb"),
-            ("//model.glb", "model.glb"),
+            # '//model.glb' is not a spelling of this file: exactly one leading '/' marks a path in the
+            # asset, so it names the key 'a1//model.glb' (#1943)
             (f"{_ASSET}/model.glb", "model.glb"),
-            (f"/{_ASSET}/model.glb", "model.glb"),
+            # A leading slash marks a path in the asset: the subfolder named like the asset (#1943)
+            (f"/{_ASSET}/model.glb", f"{_ASSET}/model.glb"),
             ("/subdir/model.glb", "subdir/model.glb"),
             ("subdir/model.glb", "subdir/model.glb"),
             (f"{_ASSET}/subdir/model.glb", "subdir/model.glb"),
         ],
-        ids=["leading-slash", "no-leading-slash", "doubled-slash", "asset-prefixed",
-             "asset-prefixed-leading-slash", "nested", "nested-no-leading-slash",
+        ids=["leading-slash", "no-leading-slash", "asset-prefixed",
+             "asset-id-folder-path", "nested", "nested-no-leading-slash",
              "nested-asset-prefixed"],
     )
     def test_lookup_key_is_the_stored_file_key(self, caller_path, stored_file_key):

@@ -11,7 +11,7 @@ from common.validators import validate
 from models.metadata import _validate_geojson_value, _validate_lon_lat
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="SearchModels")
+logger = safeLogger()
 
 ######################## Request Bounds ##########################
 
@@ -464,12 +464,25 @@ class AggregationModel(BaseModel, extra='ignore'):
     """Model for search aggregations"""
     doc_count: Optional[int] = None
     buckets: Optional[List[AggregationBucketModel]] = None
+    # Records whose value is not among the returned buckets (a facet returns at most 1,000), as
+    # OpenSearch reports it for a terms aggregation and summed over both indexes; 0 when every value
+    # is listed. None for an aggregation that reports no such count (#1283).
+    sum_other_doc_count: Optional[int] = None
     
     # For nested aggregations (filtered aggregations) - using Dict to avoid forward reference
     filtered_assettype: Optional[Dict[str, Any]] = None
     filtered_fileext: Optional[Dict[str, Any]] = None
     filtered_databaseid: Optional[Dict[str, Any]] = None
     filtered_tags: Optional[Dict[str, Any]] = None
+
+
+class SearchWarningModel(BaseModel, extra='ignore'):
+    """One warning of a search answer, in the `{code, message}` shape of the natural-language search's
+    warnings. The keyword search sends `truncated:time` when its time bound stopped the per-hit checks
+    before the requested page was full (#1590)."""
+    code: str
+    message: str
+
 
 class SearchResponseModel(BaseModel, extra='ignore', allow_population_by_field_name=True):
     """Response model for search operations.
@@ -485,6 +498,8 @@ class SearchResponseModel(BaseModel, extra='ignore', allow_population_by_field_n
     hits: SearchHitsModel
     aggregations: Optional[Dict[str, AggregationModel]] = None
     aggregationTotal: Optional[int] = None  # True total from aggregation bucket sums
+    # Empty for a complete answer; see SearchWarningModel.
+    warnings: List[SearchWarningModel] = Field(default_factory=list)
 
 ######################## Index Mapping Models ##########################
 

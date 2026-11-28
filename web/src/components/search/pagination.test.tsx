@@ -139,3 +139,36 @@ describe("Search map view pagination", () => {
         expect(Math.max(...pageNumbers)).toBe(200);
     });
 });
+
+describe("Search map view result count", () => {
+    beforeEach(() => {
+        jest.spyOn(console, "log").mockImplementation(() => undefined);
+    });
+    afterEach(() => jest.restoreAllMocks());
+
+    const renderWithTotal = (total: { value: number; relation: string }) =>
+        render(
+            <MemoryRouter>
+                <SearchPageMapView
+                    state={{
+                        ...INITIAL_STATE,
+                        initialResult: true,
+                        recordType: "asset",
+                        result: { hits: { hits: [], total }, aggregationTotal: null },
+                        tablePreferences: { pageSize: 50, visibleContent: [] },
+                    }}
+                    dispatch={jest.fn()}
+                />
+            </MemoryRouter>
+        );
+
+    it("marks a minimum total with a plus sign", () => {
+        renderWithTotal({ value: 1234, relation: "gte" });
+        expect(document.body.textContent).toContain("0 of 1,234+ results with location data");
+    });
+
+    it("shows an exact total as it is", () => {
+        renderWithTotal({ value: 1, relation: "eq" });
+        expect(document.body.textContent).toContain("0 of 1 result with location data");
+    });
+});

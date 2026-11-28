@@ -6,7 +6,7 @@
 export type ExecutionType = "Lambda" | "SQS" | "EventBridge" | "DeadlineCloud";
 export type WaitForCallback = "Enabled" | "Disabled";
 export type InputFileArity = "none" | "one" | "multi";
-export type ConcurrencyRestriction = "none" | "perAsset" | "perInputFile";
+export type ConcurrencyRestriction = "none" | "perAsset" | "perInputFile" | "perInputFileVersion";
 export type OutputLocationType = "asset" | "none";
 export type ConfigFormat = "json" | "yaml" | "openjd" | "xml" | "raw";
 export type TagType = "string" | "integer" | "number" | "boolean" | "string-list" | "enum";
@@ -17,6 +17,10 @@ export type ExecutionStatus =
     | "FAILED"
     | "ABORTED"
     | "TIMED_OUT"
+    // A fileUpload trigger launch the workflow's concurrency restriction refused. One record per
+    // blocking run and lock counts every launch that run refused; it never ran, so it has no logs,
+    // no pipeline steps and nothing to abort.
+    | "SKIPPED"
     // Legacy terminal value. No row this module reads carries it — the v2.5 upgrade rewrites a stored
     // COMPLETE to SUCCEEDED before the row is written — so it is accepted and rendered as a success
     // only so an unmapped value from an older record cannot fall through as a blank status.
@@ -60,6 +64,8 @@ export interface Pipeline {
     description?: string;
     enabled?: boolean;
     archived?: boolean;
+    /** Shipped by a vamsSchema bundle; read-only through the API and UI except `enabled`. */
+    isSystem?: boolean;
     executionConfig: PipelineExecutionConfig;
     systemConfig?: PipelineSystemConfig;
     /** Count of saved templates for this pipeline (present on list + details responses). */
@@ -133,6 +139,8 @@ export interface Workflow {
     subDashboardUrl?: string;
     enabled?: boolean;
     archived?: boolean;
+    /** Shipped by a vamsSchema bundle; read-only through the API and UI except `enabled`. */
+    isSystem?: boolean;
     specifiedPipelines: SpecifiedPipelineRef[];
     systemConfig?: WorkflowSystemConfig;
     workflow_arn?: string;
@@ -241,6 +249,42 @@ export interface Execution {
     outputLocationType?: string;
     outputAssetId?: string;
     outputDatabaseId?: string;
+    // The output kinds the run produced, a subset of ["File","Metadata","Result"] (File->Metadata->
+    // Result order). Projected from the same configuration row; [] for a run that produced none and
+    // for a legacy run whose row predates the attribute. No output content is on the list.
+    outputTypes?: string[];
+    // True for a run of a system workflow (copied from the workflow at launch). The lists leave these
+    // out unless includeSystem applies; a run recorded before the flag existed reads false.
+    isSystem?: boolean;
+    // Present only on a SKIPPED record: how many trigger launches the blocking run refused, the lock
+    // scope ("asset" | "assetFile" | "assetFileVersion") and the fixed reason the API returned.
+    skippedLaunchCount?: number;
+    skipScope?: string;
+    skipReason?: string;
+}
+
+/** One file a refused trigger launch named, in the details `skip` block. */
+export interface ExecutionSkipFile {
+    databaseId: string;
+    assetId: string;
+    inputAssetFileKey: string;
+    versionId?: string;
+}
+
+/**
+ * The details view's `skip` block, sent only for a SKIPPED execution. `blockingExecutionId` is set
+ * only when the API decided the caller may read that run; the page shows it as given and never infers
+ * it.
+ */
+export interface ExecutionSkip {
+    reason: string;
+    scope: string;
+    count: number;
+    firstSkippedDate: string;
+    lastSkippedDate: string;
+    files: ExecutionSkipFile[];
+    filesTruncated: boolean;
+    blockingExecutionId?: string;
 }
 
 /** Status of a registered sub-process or of one of its stages, as resolved by the details API. */
@@ -282,6 +326,8 @@ export interface SubExecution {
     resourceType: string;
     label?: string;
     stageName?: string;
+    /** Whether VAMS can stop this type on abort; `false` for a type it only tracks and displays. */
+    abortable?: boolean;
     /** Name tail of the state machine or job, never its ARN. */
     resourceName?: string;
     status: SubExecutionStatus;
@@ -300,6 +346,21 @@ export interface SubExecution {
     /** The registered AWS Deadline Cloud job's farm, queue, and job ids, when resourceType is
      *  `deadlineCloudJob`. */
     deadline?: { farmId?: string; queueId?: string; jobId?: string };
+    /** The registered SageMaker training job's name, or pipeline execution's pipeline name and
+     *  execution id, when resourceType is `sageMakerTrainingJob` or `sageMakerPipelineExecution`.
+     *  Names and ids only, never an ARN. */
+    sageMaker?: { trainingJobName?: string; pipelineName?: string; pipelineExecutionId?: string };
+}
+
+/** A registered sub-process of a type VAMS cannot stop, as the abort response lists it. `locator` is
+ *  the registered id, or the final segment of a registered ARN — never the ARN itself. A group
+ *  abort's entries also carry `executionId`, the member execution the sub-process belongs to. */
+export interface NotAbortableSubExecution {
+    resourceType: string;
+    label?: string;
+    stageName?: string;
+    locator?: string;
+    executionId?: string;
 }
 
 /** One log a pipeline step's logs can be read from; `logId` is what the logs API takes to select it. */
@@ -353,7 +414,38 @@ export interface ExecutionDetailPipeline {
     [key: string]: any;
 }
 
+/** Status of one output file's copy into the asset (large object copy engine job). */
+export type OutputIngestionFileStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+
+export interface OutputIngestionFile {
+    relativeKey: string;
+    status: OutputIngestionFileStatus;
+    bytesTotal: number;
+    /** 0 while the copy is not planned yet (QUEUED). */
+    partsTotal: number;
+    partsDone: number;
+    /** Generic reason, set only for FAILED or CANCELLED. */
+    error?: string;
+}
+
+/** Progress of a RUNNING execution whose output files over 1 GiB are being copied into the asset. */
+export interface OutputIngestion {
+    filesTotal: number;
+    filesDone: number;
+    bytesTotal: number;
+    bytesDone: number;
+    /** At most 100 files; absent from older backends. */
+    files?: OutputIngestionFile[];
+    filesTruncated?: boolean;
+}
+
 export interface ExecutionDetail extends Execution {
+    /**
+     * "INGESTING_OUTPUTS" while the RUNNING execution's output files over 1 GiB are being copied
+     * into the asset; absent for every other execution, including every terminal one.
+     */
+    executionPhase?: string;
+    outputIngestion?: OutputIngestion;
     /**
      * The workflow's systemConfig, read LIVE from the workflow record — so it reflects the workflow as
      * it stands now, not necessarily as it was when this execution ran. Per-step settings below ARE the
@@ -362,6 +454,19 @@ export interface ExecutionDetail extends Execution {
     workflowSystemConfig?: Record<string, any>;
     workflowName?: string;
     workflowDescription?: string;
+    /**
+     * The published workflow state machine version this execution started on; null for a run started
+     * before versions were recorded.
+     */
+    workflowVersion?: number | null;
+    /**
+     * Whether the workflow still runs that version. False once its state machine has been redeployed
+     * since the run: every save from the workflow builder redeploys it, as does an API or CLI
+     * update that supplies the step list, and so does a pipeline change to a setting the state
+     * machine encodes. workflowSystemConfig and the pipeline names are read live and are not
+     * tracked by it. Null when either version is unrecorded.
+     */
+    workflowVersionCurrent?: boolean | null;
     pipelines?: ExecutionDetailPipeline[];
     inputFiles?: any[];
     inputMetadata?: any[];
@@ -379,6 +484,8 @@ export interface ExecutionDetail extends Execution {
     truncatedCollections?: string[];
     // outputLocationType / outputAssetId / outputDatabaseId are inherited from Execution.
     outputFileBaseExecutionPathExtension?: string;
+    /** Why, how often and for which files a SKIPPED record's launches were refused. */
+    skip?: ExecutionSkip;
 }
 
 export interface ExecuteResponse {

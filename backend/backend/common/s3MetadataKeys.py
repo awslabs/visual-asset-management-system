@@ -60,6 +60,31 @@ VAMS_STATUS_METADATA_KEY = "vams-status"
 VAMS_STATUS_ARCHIVED = "archived"
 VAMS_STATUS_DELETED = "deleted"
 
+# VAMS_COPY_UPLOAD_TOKEN: the per-write token a VAMS writer stamps on the object it creates, so it can
+#   tell the object its own write created from any earlier object at the same key
+#   (is_own_upload_object below; never presence or size). Three writers use it: the large object copy
+#   engine (handlers/assets/largeObjectCopy.py prepare, destUploadToken, on its multipart upload;
+#   common/largeObjectCopy.landed_object_version), the zipArchive container of Download as Zip
+#   (archiveUploadToken, common/zipDownloads.landed_archive; mirrored in
+#   backendPipelines/utility/zipArchive/container/zip_archive_pipeline/runner.py), and the final copy
+#   of an upload or workflow output (handlers/assets/uploadFile.copy_s3_object, a fresh token per copy;
+#   common/s3.copy_s3_object_repeat_safe looks for it after a failed attempt, so a copy that landed is
+#   never written again). Each writer compares only its own value. Other copies of a file can carry
+#   an earlier token forward, which never equals a new one. System-owned (``vams-`` prefix): not indexed.
+VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY = "vams-copyuploadtoken"
+
+
+def is_own_upload_object(head, token) -> bool:
+    """Whether a HeadObject response describes the object a job's own multipart upload created: the
+    object carries the job's upload token under VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY. False for no
+    object or no token. Never decided by presence or size: an earlier object of the same size (and
+    part count) can sit at the key, for example a re-run of the same output or archive."""
+    return (
+        bool(head)
+        and bool(token)
+        and (head.get("Metadata") or {}).get(VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY) == token
+    )
+
 # ---------------------------------------------------------------------------
 # Change-provenance keys (``vams-`` hyphen prefix).
 #
@@ -108,6 +133,19 @@ VAMS_CHANGE_SOURCE_VALUES: FrozenSet[str] = frozenset(
     }
 )
 
+# Change sources whose new S3 version RESTORES content the file already held: an unarchive copies the
+# newest content version forward under a new version id, so the bytes, the metadata and every vector
+# item derived from them already exist. Consumers that react to a new version (workflow triggers, the
+# vector indexer's latest-version rule) treat such a version as the same content, not as a new one.
+# ``fileRevert`` is deliberately absent: the version it copies forward may predate the triggers or a
+# run of it may have failed, so a revert stays an ordinary new version.
+VAMS_CHANGE_SOURCE_RESTORE_VALUES: FrozenSet[str] = frozenset(
+    {
+        VAMS_CHANGE_SOURCE_FILE_UNARCHIVE,
+        VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
+    }
+)
+
 # All change-provenance keys. Used to exclude from search and reset on new versions.
 CHANGE_PROVENANCE_METADATA_KEYS: FrozenSet[str] = frozenset(
     {
@@ -123,9 +161,30 @@ CHANGE_PROVENANCE_METADATA_KEYS: FrozenSet[str] = frozenset(
 )
 
 
+def folder_marker_metadata(database_id: str, asset_id: str) -> dict:
+    """Return the user metadata for a folder marker that VAMS writes under an asset's prefix.
+
+    These are the three keys the bucket-sync handler checks before it stamps an object. A folder
+    marker written without them is stamped by copying it onto itself, and that copy is one more
+    ObjectCreated event through the bucket-sync queue. ``direct`` is the change source the stamp has
+    always given a folder marker, so the stored metadata is the same as before; no version-history
+    row is written for a folder marker, so the value is never shown.
+    """
+    return {
+        DATABASE_ID_METADATA_KEY: database_id,
+        ASSET_ID_METADATA_KEY: asset_id,
+        VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_DIRECT,
+    }
+
+
 def normalize_history_file_path(file_path: str) -> str:
-    """Return the asset-relative file path with exactly one leading slash."""
-    return "/" + (file_path or "").lstrip("/")
+    """Return the asset-relative file path with a leading slash, adding one only when it has none.
+
+    One leading ``/`` marks a path in the asset, so ``//x`` is the listed path of the key with an empty segment
+    after the asset's location (``A1//x``), another file than ``/x``; its history rows are keyed apart (#1977).
+    Rows written before 2.7.0 for such a key are under ``/x`` and stay there."""
+    file_path = file_path or ""
+    return file_path if file_path.startswith("/") else "/" + file_path
 
 
 # ---------------------------------------------------------------------------

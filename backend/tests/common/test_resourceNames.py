@@ -17,6 +17,8 @@ ALL_OVERRIDE_ENV_VARS = [
     "AUTH_ENTITIES_TABLE", "TAG_STORAGE_TABLE_NAME", "TAGS_STORAGE_TABLE_NAME",
     "S3_ASSET_AUXILIARY_BUCKET", "ASSET_AUXILIARY_BUCKET_NAME",
     "S3_ASSETAUXILIARY_STORAGE_BUCKET", "AUDIT_LOG_AUTHENTICATION",
+    "VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME",
+    "WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME",
 ]
 
 
@@ -27,13 +29,14 @@ def rn(monkeypatch):
     for var in ALL_OVERRIDE_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
     import common.resourceNames as resourceNames
-    # Reset module state instead of reloading (reload doesn't work with import_module_from_path)
-    resourceNames._cache = {}
-    resourceNames._cache_fetched_at = 0.0
-    resourceNames._ssm_client = None
-    # Reset alongside the positive cache: a negative record carries its own timestamp, so
-    # zeroing _cache_fetched_at alone would leave a recorded miss live in the next test.
-    resourceNames._missing_keys = {}
+    # Reset module state instead of reloading (reload doesn't work with import_module_from_path),
+    # through monkeypatch so the next test gets the module back as it was. The negative record is
+    # reset with the positive cache because it carries its own timestamp, and the back-off state
+    # because a failed sweep would otherwise refuse the next test's lookups for its window.
+    for name, value in (("_cache", {}), ("_cache_fetched_at", 0.0), ("_ssm_client", None),
+                        ("_missing_keys", {}), ("_failed_sweeps", 0), ("_sweep_retry_after", 0.0),
+                        ("_window_logged_for", None), ("_cache_complete", True)):
+        monkeypatch.setattr(resourceNames, name, value, raising=False)
     return resourceNames
 
 
@@ -176,22 +179,29 @@ class TestMissingKeyNegativeCache:
         assert "dynamoTables/assetStorage" not in rn._missing_keys
 
     def test_ssm_failure_is_not_recorded_as_a_missing_key(self, rn, monkeypatch):
-        # A failed sweep says nothing about whether the parameter exists, so the next call
-        # must retry rather than serve a negative for the rest of the window.
+        # A failed sweep says nothing about whether the parameter exists: it is not reported as a
+        # KeyError, leaves no negative record, and the first sweep after the back-off window resolves it.
         ssm = boto3.client("ssm", region_name=self._region())
         _put(ssm, "dynamoTables/assetStorage", "v1")
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(rn, "_monotonic", lambda: clock["now"], raising=False)
         real_refresh = rn._refresh_cache
         state = {"fail": True}
 
         def flaky():
             if state["fail"]:
                 state["fail"] = False
-                raise RuntimeError("ssm down")
+                raise TimeoutError("ssm did not answer within the sweep budget")
             real_refresh()
 
         monkeypatch.setattr(rn, "_refresh_cache", flaky)
-        with pytest.raises(RuntimeError):
+        with pytest.raises(rn.ResourceNameUnavailableError) as failed:
             rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
+        assert not isinstance(failed.value, KeyError)
+        assert isinstance(failed.value.__cause__, TimeoutError)
+        assert "dynamoTables/assetStorage" not in rn._missing_keys
+
+        clock["now"] += rn.SWEEP_BACKOFF_MAX_SECONDS + 1
         assert rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE) == "v1"
 
     def test_negative_record_raises_the_same_error_as_a_fresh_miss(self, rn):
@@ -209,8 +219,13 @@ CANONICAL_KEYS_TS = (
 )
 
 # Categories only deployment and data-migration tooling resolves (through
-# infra/deploymentDataMigration/tools/ssm_resource_lookup.py), so no handler mirrors them.
-TOOLING_ONLY_PREFIXES = ("lambdaFunctions/",)
+# infra/deploymentDataMigration/tools/ssm_resource_lookup.py) or an externally owned pipeline bridge
+# stack reads at its own deploy time (integration/), so no handler mirrors them.
+TOOLING_ONLY_PREFIXES = ("lambdaFunctions/", "integration/")
+
+# The deploy-time values (OpenSearch endpoint and index names, web URL, map key ARN): mirrored by
+# common/deployTimeValues.py, not ResourceKeys (tests/common/test_deployTimeValues.py compares them).
+DEPLOY_TIME_PREFIXES = ("openSearch/", "web/", "location/")
 
 # Deprecated tables whose only consumer is a migration script. Named one by one rather than by
 # the dynamoTables/legacy/ prefix: a legacy key added upstream must be classified deliberately,
@@ -221,6 +236,8 @@ TOOLING_ONLY_LEGACY_KEYS = {
     "dynamoTables/legacy/assetLinksStorage",
     "dynamoTables/legacy/metadataStorage",
     "dynamoTables/legacy/metadataSchemaStorage",
+    "dynamoTables/legacy/commentStorageV1",
+    "dynamoTables/legacy/subscriptionsStorageV1",
 }
 
 # Legacy keys the mirror carries. No handler resolves either one -- the per-database tag
@@ -257,6 +274,10 @@ def _canonical_categories(keys):
 
 def _is_tooling_only(key):
     return key.startswith(TOOLING_ONLY_PREFIXES) or key in TOOLING_ONLY_LEGACY_KEYS
+
+
+def _is_mirrored_elsewhere(key):
+    return _is_tooling_only(key) or key.startswith(DEPLOY_TIME_PREFIXES)
 
 
 def _mirror_keys(rn):
@@ -300,7 +321,7 @@ class TestConstantsCompleteness:
         # report success, so floor both sides before comparing them.
         assert len(canonical) > 50
         assert len(mirrored) > 50
-        assert mirrored == {key for key in canonical if not _is_tooling_only(key)}
+        assert mirrored == {key for key in canonical if not _is_mirrored_elsewhere(key)}
 
     def test_omitted_keys_are_tooling_only_and_still_published(self, rn):
         canonical = _canonical_param_keys()
@@ -309,8 +330,10 @@ class TestConstantsCompleteness:
         assert TOOLING_ONLY_LEGACY_KEYS <= canonical
         assert MIRRORED_LEGACY_KEYS <= canonical
         # Every prefix-based exclusion must still cover a live key, or it excuses nothing.
-        for prefix in TOOLING_ONLY_PREFIXES:
+        for prefix in TOOLING_ONLY_PREFIXES + DEPLOY_TIME_PREFIXES:
             assert any(key.startswith(prefix) for key in canonical)
+        assert not {key for key in canonical if key.startswith(DEPLOY_TIME_PREFIXES)} & {
+            k.param_key for k in _mirror_keys(rn)}
         assert omitted
         assert omitted < canonical
         assert not omitted & {k.param_key for k in _mirror_keys(rn)}
@@ -319,3 +342,58 @@ class TestConstantsCompleteness:
         # Pinned rather than derived: no handler resolves them (see MIRRORED_LEGACY_KEYS), so
         # removing them is a deliberate registry + mirror + ssm_resource_lookup.py change.
         assert MIRRORED_LEGACY_KEYS <= {k.param_key for k in _mirror_keys(rn)}
+
+
+@pytest.mark.unit
+class TestVectorEmbeddingsStorageKey:
+    """ResourceKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE: the SSM suffix the storage stack registers
+    and the single env override the break-glass path honours."""
+
+    def test_names_its_ssm_suffix_and_override(self, rn):
+        key = rn.ResourceKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE
+        assert key.param_key == "dynamoTables/vectorEmbeddingsStorage"
+        assert key.env_var_names == ("VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME",)
+
+    def test_env_override_wins(self, rn, monkeypatch):
+        monkeypatch.setenv("VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME", "vectors-override")
+        assert rn.get_table_name(rn.ResourceKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE) == "vectors-override"
+
+    @mock_aws
+    def test_resolves_from_ssm_without_an_override(self, rn):
+        ssm = boto3.client("ssm", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+        _put(ssm, "dynamoTables/vectorEmbeddingsStorage", "ssm-vectors")
+        assert rn.get_table_name(rn.ResourceKeys.VECTOR_EMBEDDINGS_STORAGE_TABLE) == "ssm-vectors"
+
+
+@pytest.mark.unit
+class TestWorkflowExecutionLocksStorageKey:
+    """ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE: the lock table the perAsset, perInputFile
+    and perInputFileVersion restrictions write; resolved like every other table."""
+
+    def test_names_its_ssm_suffix_and_override(self, rn):
+        key = rn.ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE
+        assert key.param_key == "dynamoTables/workflowExecutionLocksStorage"
+        assert key.env_var_names == ("WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME",)
+
+    def test_env_override_wins(self, rn, monkeypatch):
+        monkeypatch.setenv("WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME", "locks-override")
+        assert rn.get_table_name(rn.ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE) == "locks-override"
+
+    @mock_aws
+    def test_resolves_from_ssm_without_an_override(self, rn):
+        ssm = boto3.client("ssm", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+        _put(ssm, "dynamoTables/workflowExecutionLocksStorage", "ssm-locks")
+        assert rn.get_table_name(rn.ResourceKeys.WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE) == "ssm-locks"
+
+
+@pytest.mark.unit
+class TestToolingOnlyLambdaKeys:
+    def test_vector_reindexer_key_is_published_but_not_mirrored(self, rn):
+        # lambdaFunctions/* names are published by the search stack for the data-migration tooling
+        # (SsmResourceLookup); no handler resolves them, so ResourceKeys must not carry the key.
+        canonical = _canonical_param_keys()
+        assert "lambdaFunctions/vectorReindexer" in canonical
+        assert "lambdaFunctions/crOsReindexer" in canonical
+        mirrored = {k.param_key for k in _mirror_keys(rn)}
+        assert "lambdaFunctions/vectorReindexer" not in mirrored
+        assert "lambdaFunctions/crOsReindexer" not in mirrored

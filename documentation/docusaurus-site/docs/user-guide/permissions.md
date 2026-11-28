@@ -23,6 +23,10 @@ Both tiers must allow access for a request to succeed. A user with Tier 1 API ac
 
 For the complete technical reference of all object types, constraint fields, operators, web routes, and API routes, see [Permissions Model](../concepts/permissions-model.md).
 
+:::note[Extension object types]
+A deployment that adds its own features can register object types of its own, which then appear in the constraint editor's **Object Type** list. No role has access to such a type until a constraint on it allows that access, the `admin` role included, because the default constraints cover only the built-in types and the types an enabled add-on seeds constraints for. An add-on's object types appear only while the deployment enables the add-on, and a type of an optional add-on feature only while that feature is enabled too. A constraint stored earlier with a type the deployment no longer offers opens with the notice **This object type is not offered on this deployment**: it is kept as stored, applies again once the add-on or feature is enabled, and can be deleted, but saving changes to it is refused. See [Extension object types](../concepts/permissions-model.md#extension-object-types).
+:::
+
 ## Roles
 
 A role is a named collection of constraints that can be assigned to users. Roles themselves do not grant any permissions -- they act as containers for constraints.
@@ -40,13 +44,16 @@ The deployment assigns the administrator account named by `app.adminUserId` to `
 `SYSTEM_USER` identity is also assigned to `admin` so system processes pass both authorization tiers.
 
 `basicReadOnly` reads assets, files, metadata, databases, pipelines, workflows, executions, tags,
-comments, subscriptions, and metadata schemas, opens files in the viewers and downloads them, and it
-may manage its own API keys. It cannot reach the
+comments, subscriptions, and metadata schemas, opens files in the viewers and downloads them, exports
+assets (`vamscli assets export`), and it may manage its own API keys. It cannot reach the
 administrative routes that `admin` holds: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
 (`DELETE /workflows/executions/{executionId}/permanent`). Because read access is granted through
 broad path prefixes such as `/workflows`, those two routes are withheld by explicit `deny` constraints,
-which override a matching `allow`.
+which override a matching `allow`. It holds no compliance constraint, so its users see no Compliance
+section in the navigation; grant compliance access with the `compliance-readonly`,
+`compliance-admin` or `compliance-global-admin` template. The Database Admin and Database User templates include compliance
+for their database (administration and read-only respectively).
 
 In the web interface a user without execution-log access still sees the **Logs** tab on an execution,
 and the tab reports that the logs are not viewable.
@@ -62,7 +69,7 @@ separate role with its own constraints.
 
 1. Navigate to **Roles** from the left navigation menu.
 2. Choose **Create Role**.
-3. Enter a **Role Name** (3-64 characters, letters, numbers, hyphens, and underscores).
+3. Enter a **Role Name** of 3-64 characters (the form's limit; the API and the CLI accept 1-256). The name can contain letters, numbers, spaces, hyphens (`-`), periods (`.`), and underscores (`_`). Spaces before and after the name are removed when it is saved.
 4. Enter a **Description** (4-256 characters).
 5. Optionally enable **MFA Required** -- when checked, this role is only active for users who have authenticated with multi-factor authentication.
 6. Choose **Create**.
@@ -71,7 +78,7 @@ separate role with its own constraints.
 A newly created role has no constraints and grants no permissions. You must add constraints to the role before it provides any access.
 :::
 
-![Roles page showing role definitions and management](/img/roles_page_20260323_v2.5.png)
+![Roles page showing role definitions and management](/img/roles_page_20261109_v2.7.png)
 
 ## Constraints
 
@@ -123,7 +130,7 @@ The authorization engine evaluates all constraints for a user. If any constraint
 5. Optionally assign to specific users in the **User Permissions** section.
 6. Choose **Create**.
 
-![Access control constraints page showing constraint definitions](/img/access_constraints_page_20260323_v2.5.png)
+![Access control constraints page showing constraint definitions](/img/access_constraints_page_20261109_v2.7.png)
 
 ![Constraint editor showing object type, criteria, and group permissions](/img/access_constraints_20260323_v2.5.png)
 
@@ -141,7 +148,7 @@ The ability to create and edit constraints lets a role define the authorization 
 
 A user can have multiple roles assigned. The effective permissions are the union of all constraints from all assigned roles, with deny effects taking precedence.
 
-![Users in Roles page showing user-role assignments](/img/users_in_role_page_20260323_v2.5.png)
+![Users in Roles page showing user-role assignments](/img/users_in_role_page_20261109_v2.7.png)
 
 ## MFA-required roles
 
@@ -150,18 +157,39 @@ Roles can be configured to require multi-factor authentication (MFA). When a rol
 -   The role's constraints are only active when the user has authenticated with MFA in their current session.
 -   If the user has not completed MFA, the role is effectively ignored during authorization.
 -   This is useful for elevating privileges that should only be available during high-assurance sessions.
+-   The requirement is evaluated only for sessions signed in through Amazon Cognito. It has no effect — the role is ignored — for a deployment that uses an external OAuth identity provider, for a deployment with `useGlobalVpc.useForAllLambdas` enabled, for a user who signs in through Amazon Cognito SAML or OIDC federation (Amazon Cognito does not manage a federated user's MFA), and for any request authenticated with a VAMS API key, such as a CLI or MCP session that uses an API key through `vamscli auth set-override` or `--token-override`. A CLI or MCP session signed in with `vamscli auth login` sends the user's Amazon Cognito token and carries the same MFA state as the web interface. See [MFA-Aware Roles](../architecture/security.md#mfa-aware-roles) for how the check works.
+-   The Amazon Cognito user pool offers MFA as optional, and VAMS has no page or command that registers a factor, so a factor is registered for the user in the user pool (see [TOTP software token MFA](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-mfa-totp.html) in the Amazon Cognito Developer Guide). From the user's next sign-in, the VAMS sign-in page and `vamscli auth login` ask for the code. A user whose only role requires MFA has no access until they sign in with it.
 
 ## Web route permissions
 
-Web route constraints control which pages appear in the navigation menu and are accessible by URL. If a user does not have a `web` constraint that allows GET access to a specific route path, that page is hidden from the navigation and returns a 403 error if accessed directly.
+Web route constraints control which pages appear in the navigation menu and are accessible by URL. If a user does not have a `web` constraint that allows GET access to a specific route path, that page is hidden from the navigation, and opening it directly shows **You do not have access to this page** with a **Go to Home** button. An address that matches no page shows **Page not found**.
 
-The landing page routes (`/` and `*`) are always allowed regardless of constraints, ensuring all users can reach the landing information page.
+The landing page route (`/`) is always allowed regardless of constraints, ensuring all users can reach the landing information page.
 
 For the complete list of web routes, see [Permissions Model: Web Route Reference](../concepts/permissions-model.md#web-route-reference).
 
 ## Permission templates
 
-VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny Tagged Assets. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, Deny Tagged Asset Editing, Compliance Admin, and Compliance Readonly. Add-ons can ship templates of their own; see each add-on's page. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+
+### Compliance permission templates
+
+Two templates set up compliance roles:
+
+| Template                | Description                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compliance Admin**    | Full compliance management scoped to a database: create, update and delete schemas, bind and unbind schemas on the database and its assets, trigger evaluations, release quarantines, approve cascades, plus read-only access to the database and its assets and the database list on the **Databases** page. |
+| **Compliance Readonly** | View-only compliance access scoped to a database: view schemas, evaluation results, quarantine list, and audit logs. Cannot modify compliance state.                                                                                                                                                          |
+
+Both templates require `DATABASE_ID` and `ROLE_NAME` variables. For details on compliance permissions including the four compliance object types (`complianceSchema`, `complianceBinding`, `complianceEvaluation`, `complianceCascade`), see [User Guide: Compliance > Permissions](compliance.md#permissions).
+
+### Audit log permissions
+
+Access to audit log records is set per audit log group through the `auditLog` object type, whose one field, `auditLogGroup`, is the group key. The seeded `admin` role holds it for every group. No other role does, including custom roles that mirror `admin` by listing each object type, until an administrator adds a constraint on `auditLog` or imports the **Audit Reader** template (`ROLE_NAME` and `ALLOWED_GROUPS`, a pattern matched against the whole group key, for example `auditActions` or `(auditActions|auditErrors)`; the keys are those `GET /audit/log-groups` lists: `auditAuthentication`, `auditAuthorization`, `auditFileUpload`, `auditFileDownload`, `auditFileDownloadStreamed`, `auditAuthOther`, `auditAuthChanges`, `auditActions` and `auditErrors`; the default `.*` allows every group). Audit records can name users and request details, so give the role to few people and prefer an MFA-required role.
+
+### Bucket permissions
+
+Which asset buckets a role sees and can put a database on is set through the `bucket` object type (fields `bucketId`, `bucketName`, `bucketRegion` and `source`). It is checked only on the bucket list (`GET /buckets`) and on the bucket chosen when a database is created or moved to another bucket; access to assets and files is still decided by the `database` and `asset` constraints. The seeded `admin` and read-only roles and every shipped role template read every bucket; the Deny Tagged Asset Editing overlay adds no `bucket` constraint, so a role it is applied to keeps its own. A custom role needs its own `bucket` constraint, for example `bucketName` `starts_with` `team-a-` with `GET`, or it lists no bucket and cannot choose one.
 
 For template details, JSON format, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 
@@ -176,8 +204,10 @@ If you receive a 403 Forbidden error or cannot see expected data, check both aut
 
 2. **Check Tier 2 (entity access):**
 
-    - Does the user's role have a constraint on the correct object type (for example, `asset`, `database`)?
+    - Does the user's role have a constraint on the correct object type (for example, `asset`, `database`)? For an object type the deployment registered itself, even an administrator needs a constraint on that type.
     - Does the criteria match the specific resource? Check `databaseId`, `assetName`, or other filter fields.
+    - For an archived asset or a deleted database's record, does the criteria also match its stored id `<databaseId>#deleted`? An archived record must pass on both its stored id and its database id (see [Permissions Model: Archived records](../concepts/permissions-model.md#archived-records)).
+    - For an asset rename or tag change, does the criteria also match the asset under its new name or tags? The update needs `GET` on the asset as stored and `GET` and `PUT` on the asset as it will be stored, so a role with asset `PUT` but no asset `GET` cannot rename or retag an asset (see [Permissions Model](../concepts/permissions-model.md)).
     - Is there a **deny** constraint that overrides the allow?
 
 3. **Check role assignment:**

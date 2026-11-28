@@ -9,7 +9,7 @@ tests/
 **/__pycache__/
 **/*.pyc
 .pytest_cache/
-poetry.lock
+uv.lock
 pyproject.toml
 .venv/
 venv/

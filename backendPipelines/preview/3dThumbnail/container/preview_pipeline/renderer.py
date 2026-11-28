@@ -3,16 +3,22 @@
 
 """
 Rendering logic for generating preview images from PyVista data.
-Uses PyVista with Xvfb for CPU-based headless offscreen rendering.
-Xvfb is started by the container entrypoint (see Dockerfile).
+Uses PyVista with Xvfb for CPU-based headless offscreen rendering. The X server is started by the
+Fargate container's entrypoint (see Dockerfile) or by ``analysis.display`` in the Lambda image.
 
 Camera framing uses percentile-based bounds (2nd-98th) instead of the full
 bounding box so that sparse scenes (e.g. single-position scans with distant
 outliers) are framed tightly around the dense content.
 """
 
+# Annotations stay unevaluated: pv.Plotter is a lazy attribute whose first access imports
+# pyvista.plotting and matplotlib, which creates matplotlib's config directory. The Render3D
+# Lambda image imports this module at cold start, before its per-invocation directories exist.
+from __future__ import annotations
+
 import numpy as np
 import pyvista as pv
+from . import scene_parts
 from .utils.logging import get_logger
 
 logger = get_logger()
@@ -20,6 +26,12 @@ logger = get_logger()
 # Default rendering parameters
 DEFAULT_N_FRAMES = 36
 DEFAULT_RESOLUTION = (800, 600)
+
+# Still frames for image analysis: a few views at fixed angles, square, bounded by the number of
+# images one analysis request may carry.
+DEFAULT_STILL_VIEWS = 4
+MAX_STILL_VIEWS = 8
+DEFAULT_STILL_RESOLUTION = (768, 768)
 POINT_SIZE = 2.0
 
 # Background color for rendering. Mid-gray minimizes visible halos on
@@ -31,35 +43,91 @@ _BG_COLOR = (128, 128, 128)
 _FOCUS_PERCENTILE_LO = 2
 _FOCUS_PERCENTILE_HI = 98
 
+# A mesh whose full bounds are at least this many times its percentile bounds may be framed on the
+# percentile bounds (``_percentile_bounds_if_sparse``); vertices sampled for that check.
+SPARSE_FRAMING_SCALE = 25.0
+_SPARSE_SAMPLE = 1_000_000
+# ... and only when, framed on its full bounds, its dense region would project under this many pixels
+# and a small still at SPARSE_CHECK_RESOLUTION would cover under SPARSE_COVERAGE of its pixels.
+SPARSE_CORE_PIXELS = 4.0
+SPARSE_CHECK_RESOLUTION = (160, 120)
+SPARSE_COVERAGE = 0.001
+
 # Camera elevation angle in degrees above the orbit plane.
 # 25 degrees is the industry standard for 3D product thumbnails.
 _CAMERA_ELEVATION_DEG = 25
+
+# Orbit angle of a still preview: the front three-quarter view. Orbit frame i is at
+# i * 360 / n_frames degrees, so the middle frame of an orbit shows the back of the model.
+STILL_VIEW_DEG = 45.0
+
+# Splats are drawn as flat, unlit discs of radius ``splat_radius`` (the splat handler sizes them to the
+# coverage of each splat's Gaussian). VTK's default splat shader darkens a disc toward its edge, which
+# rings every splat in a dark outline; this one only clips the quad to the disc.
+SPLAT_SCALE_FACTOR = 1.0
+SPLAT_DISC_SHADER = (
+    "//VTK::Color::Impl\n"
+    "  float dist2 = dot(offsetVCVSOutput.xy, offsetVCVSOutput.xy);\n"
+    "  if (dist2 > 1.0) { discard; }\n"
+)
+
+
+def is_point_cloud(pv_data) -> bool:
+    """True when the data has no surface cells: no cells at all, or vertex cells only.
+
+    A scene that mixes meshes and points holds both vertex and face cells, so it is not a point
+    cloud and renders through the mesh path, points included.
+    """
+    n_cells = pv_data.n_cells
+    if n_cells == 0:
+        return True
+    n_verts = getattr(pv_data, "n_verts", None)
+    if isinstance(n_verts, (int, np.integer)):
+        return int(n_verts) == n_cells
+    return n_cells == pv_data.n_points
+
+
+def still_view_frame_index(n_frames: int) -> int:
+    """The orbit frame nearest the still-preview angle, for a still taken from an orbit."""
+    if n_frames <= 1:
+        return 0
+    return int(np.floor(STILL_VIEW_DEG / (360.0 / n_frames) + 0.5)) % n_frames
+
+
+def _resolve_full_bounds(pv_data, use_full_bounds):
+    """Frame a mesh on its full bounds and a point cloud on its percentile bounds unless told.
+
+    Percentile framing exists to ignore stray points in scans and splats; on a mesh it crops the
+    coarser parts of a model whose vertices concentrate in a finely detailed region.
+    """
+    if use_full_bounds is None:
+        return not is_point_cloud(pv_data)
+    return bool(use_full_bounds)
 
 
 def generate_rotating_frames(
     pv_data: pv.PolyData,
     n_frames: int = DEFAULT_N_FRAMES,
     resolution: tuple = DEFAULT_RESOLUTION,
-    use_full_bounds: bool = False,
+    use_full_bounds=None,
 ) -> list:
     """
     Render a rotating sequence of frames around the Y-axis of the given PyVista data.
-    Returns RGBA frames with transparent background.
+    Returns RGBA frames with transparent background. ``use_full_bounds`` None frames a mesh on its
+    full bounds and a point cloud on its percentile bounds.
     """
     logger.info(f"Generating {n_frames} rotating frames at {resolution}")
 
     plotter = pv.Plotter(off_screen=True, window_size=resolution)
     plotter.set_background(_BG_COLOR)
 
-    is_point_cloud = pv_data.n_cells == 0 or pv_data.n_cells == pv_data.n_points
-
-    if is_point_cloud:
+    if is_point_cloud(pv_data):
         _add_point_cloud(plotter, pv_data)
     else:
         _add_mesh(plotter, pv_data)
 
     focal_point, radius, elevation = _compute_camera_framing(
-        pv_data, use_full_bounds=use_full_bounds, resolution=resolution
+        pv_data, use_full_bounds=_resolve_full_bounds(pv_data, use_full_bounds), resolution=resolution
     )
 
     # Compute stable clipping range from the actual max vertex distance
@@ -88,9 +156,7 @@ def generate_rotating_frames(
         plotter.camera.clipping_range = (near_clip, far_clip)
 
         plotter.render()
-        img = plotter.screenshot(return_img=True)
-        img = _add_alpha_from_depth(plotter, img)
-        frames.append(img)
+        frames.append(_capture_rgba(plotter))
 
     plotter.close()
     logger.info(f"Generated {len(frames)} frames")
@@ -100,31 +166,31 @@ def generate_rotating_frames(
 def generate_static_frame(
     pv_data: pv.PolyData,
     resolution: tuple = DEFAULT_RESOLUTION,
-    use_full_bounds: bool = False,
+    use_full_bounds=None,
+    _check_sparse: bool = True,
 ) -> np.ndarray:
     """
-    Render a single static frame of the given PyVista data.
-    Returns RGBA image with transparent background.
+    Render a single static frame of the given PyVista data from the front three-quarter view
+    (STILL_VIEW_DEG). Returns RGBA image with transparent background.
     """
     logger.info(f"Generating static frame at {resolution}")
 
     plotter = pv.Plotter(off_screen=True, window_size=resolution)
     plotter.set_background(_BG_COLOR)
 
-    is_point_cloud = pv_data.n_cells == 0 or pv_data.n_cells == pv_data.n_points
-
-    if is_point_cloud:
+    if is_point_cloud(pv_data):
         _add_point_cloud(plotter, pv_data)
     else:
         _add_mesh(plotter, pv_data)
 
     focal_point, radius, elevation = _compute_camera_framing(
-        pv_data, use_full_bounds=use_full_bounds, resolution=resolution
+        pv_data, use_full_bounds=_resolve_full_bounds(pv_data, use_full_bounds), resolution=resolution,
+        check_sparse=_check_sparse,
     )
 
     max_extent = float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
 
-    angle_rad = np.radians(45)
+    angle_rad = np.radians(STILL_VIEW_DEG)
     cam_x = focal_point[0] + radius * np.cos(angle_rad)
     cam_z = focal_point[2] + radius * np.sin(angle_rad)
     cam_y = focal_point[1] + elevation
@@ -140,17 +206,118 @@ def generate_static_frame(
     plotter.camera.clipping_range = (near_clip, far_clip)
 
     plotter.render()
-    img = plotter.screenshot(return_img=True)
-    img = _add_alpha_from_depth(plotter, img)
+    img = _capture_rgba(plotter)
     plotter.close()
 
     return img
 
 
+def generate_still_frames(
+    pv_data: pv.PolyData,
+    n_views: int = DEFAULT_STILL_VIEWS,
+    resolution: tuple = DEFAULT_STILL_RESOLUTION,
+    use_full_bounds=None,
+    start_angle_deg: float = STILL_VIEW_DEG,
+) -> list:
+    """
+    Render ``n_views`` still frames at evenly spaced orbit angles starting at ``start_angle_deg``.
+    Returns RGB frames (no alpha) on the renderer's neutral background: these are analysis inputs
+    rather than thumbnails, so the depth-mask transparency step is not applied. ``n_views`` is
+    clamped to [1, MAX_STILL_VIEWS]; ``use_full_bounds`` None frames a mesh on its full bounds and a
+    point cloud on its percentile bounds.
+    """
+    n_views = max(1, min(int(n_views), MAX_STILL_VIEWS))
+    logger.info(f"Generating {n_views} still frames at {resolution}")
+
+    plotter = pv.Plotter(off_screen=True, window_size=resolution)
+    plotter.set_background(_BG_COLOR)
+    if is_point_cloud(pv_data):
+        _add_point_cloud(plotter, pv_data)
+    else:
+        _add_mesh(plotter, pv_data)
+
+    focal_point, radius, elevation = _compute_camera_framing(
+        pv_data, use_full_bounds=_resolve_full_bounds(pv_data, use_full_bounds), resolution=resolution
+    )
+    max_extent = float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
+
+    frames = []
+    for i in range(n_views):
+        angle_rad = np.radians(start_angle_deg + i * (360.0 / n_views))
+        cam_x = focal_point[0] + radius * np.cos(angle_rad)
+        cam_z = focal_point[2] + radius * np.sin(angle_rad)
+        cam_y = focal_point[1] + elevation
+        cam_distance = float(np.linalg.norm(np.array([cam_x, cam_y, cam_z]) - focal_point))
+        plotter.camera.position = (cam_x, cam_y, cam_z)
+        plotter.camera.focal_point = tuple(focal_point)
+        plotter.camera.up = (0.0, 1.0, 0.0)
+        plotter.camera.clipping_range = (
+            max(cam_distance - max_extent * 1.1, cam_distance * 0.001),
+            cam_distance + max_extent * 1.5,
+        )
+        plotter.render()
+        img = plotter.screenshot(return_img=True)
+        frames.append(np.ascontiguousarray(np.asarray(img)[:, :, :3], dtype=np.uint8))
+
+    plotter.close()
+    logger.info(f"Generated {len(frames)} still frames")
+    return frames
+
+
+# vtkPolyData orders its cells, and so its cell data: vertices, lines, polygons, then strips.
+_CELL_KINDS = (("verts", "GetVerts"), ("lines", "GetLines"), ("faces", "GetPolys"), ("strips", "GetStrips"))
+
+
+def cell_colours_on_corners(pv_data: pv.PolyData) -> pv.PolyData:
+    """The mesh to draw for ``pv_data`` coloured by cell ``RGB``: the same cells, sharing no points, each
+    cell's colour on its own corners as point ``RGB``.
+
+    VTK draws cell scalars from a buffer texture read per primitive, and Mesa 26 draws such a mesh as
+    an empty frame without an error; point colours draw on every Mesa. Each corner keeps the point
+    normal of the shared mesh, computed as ``add_mesh``'s smooth shading computes it, so shading is
+    unchanged and no colour blends across a cell edge. The copy holds one point per cell corner: three
+    per triangle.
+    """
+    shaded = pv_data
+    if pv_data.point_data.active_normals is None and pv_data.n_verts + pv_data.n_lines < pv_data.n_cells:
+        shaded = pv_data.compute_normals(cell_normals=False)
+    rgb = np.asarray(shaded.cell_data["RGB"])
+    normals = shaded.point_data.active_normals
+    cell_arrays = [(keyword, getattr(shaded, getter)()) for keyword, getter in _CELL_KINDS]
+    # 32-bit cell indices when the corners fit (pyvista keeps them 32-bit), half the memory of 64-bit.
+    n_corners = sum(cell_array.GetNumberOfConnectivityIds() for _, cell_array in cell_arrays)
+    index_type = np.int32 if n_corners < 2 ** 31 else np.int64
+    corners, colours, cells = [], [], {}
+    first_cell = first_corner = 0
+    for keyword, cell_array in cell_arrays:
+        n_cells = cell_array.GetNumberOfCells()
+        if not n_cells:
+            continue
+        connectivity = pv.convert_array(cell_array.GetConnectivityArray())
+        offsets = pv.convert_array(cell_array.GetOffsetsArray())
+        corners.append(connectivity)
+        colours.append(np.repeat(rgb[first_cell:first_cell + n_cells], np.diff(offsets), axis=0))
+        cells[keyword] = pv.CellArray.from_arrays(
+            offsets.astype(index_type),
+            np.arange(first_corner, first_corner + len(connectivity), dtype=index_type))
+        first_cell += n_cells
+        first_corner += len(connectivity)
+    corners = np.concatenate(corners)
+    unshared = pv.PolyData(np.asarray(shaded.points)[corners], **cells)
+    unshared.point_data["RGB"] = np.concatenate(colours)
+    if normals is not None:
+        unshared.point_data["Normals"] = np.asarray(normals)[corners]
+        unshared.point_data.active_normals_name = "Normals"
+    logger.info(f"Drawing per-cell colours on cell corners: {first_cell:,} cells, {first_corner:,} corners")
+    return unshared
+
+
 def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):
     """Add a mesh to the plotter with appropriate styling."""
     texture = getattr(pv_data, '_preview_texture', None)
-    has_colors = "RGB" in pv_data.point_data
+    # Per-point colours, or per-cell colours (STEP and 3MF/COLLADA faces, and a mesh decimated to the
+    # triangle budget), which are drawn on the cells' own corners.
+    has_colors = "RGB" in pv_data.point_data or "RGB" in pv_data.cell_data
 
     if texture is not None:
         logger.info("Rendering with UV texture mapping")
@@ -164,11 +331,12 @@ def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):
         )
     elif has_colors:
         plotter.add_mesh(
-            pv_data,
+            pv_data if "RGB" in pv_data.point_data else cell_colours_on_corners(pv_data),
             scalars="RGB",
             rgb=True,
             smooth_shading=True,
             show_edges=False,
+            point_size=POINT_SIZE,  # vertex cells of a scene that mixes meshes and points
         )
     else:
         plotter.add_mesh(
@@ -186,6 +354,24 @@ def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):
 def _add_point_cloud(plotter: pv.Plotter, pv_data: pv.PolyData):
     """Add a point cloud to the plotter with appropriate styling."""
     has_colors = "RGB" in pv_data.point_data
+
+    if "splat_radius" in pv_data.point_data:
+        # Gaussian splats: one screen-aligned disc per splat, of the radius the splat handler set.
+        actor = plotter.add_mesh(
+            pv_data,
+            scalars="RGB",
+            rgb=True,
+            style="points_gaussian",
+            emissive=False,
+        )
+        actor.mapper.SetScaleArray("splat_radius")
+        actor.mapper.SetScaleFactor(SPLAT_SCALE_FACTOR)
+        actor.mapper.SetSplatShaderCode(SPLAT_DISC_SHADER)
+        # The colour is the splat's own radiance: no lighting, and fully opaque discs (pyvista sets
+        # 0.9999 for its own shader, which this one replaces).
+        actor.prop.lighting = False
+        actor.prop.opacity = 1.0
+        return
 
     if has_colors:
         plotter.add_mesh(
@@ -206,40 +392,65 @@ def _add_point_cloud(plotter: pv.Plotter, pv_data: pv.PolyData):
         )
 
 
-def _add_alpha_from_depth(plotter, img_rgb):
+def _capture_rgba(plotter) -> np.ndarray:
     """
-    Create RGBA image using the Z-buffer (depth buffer) to determine transparency.
+    Read the rendered frame as RGBA with a transparent background.
 
-    The depth buffer contains the distance from the camera to each pixel.
-    Background pixels have depth = 1.0 (far plane). Any pixel with geometry
-    has depth < 1.0. This gives a perfect binary mask regardless of model
-    color, texture, or sparsity — no color matching needed.
-
-    This works for all model types: solid meshes, sparse point clouds,
-    textured models, white surfaces, and models with holes.
+    Colour and alpha come from the same render: the background is cleared with zero alpha, so a pixel
+    is opaque exactly where geometry covers it and partially transparent where an anti-aliased edge
+    covers it in part.
     """
-    # Get the depth buffer from VTK's renderer
-    z_buffer = plotter.get_image_depth()
-
-    h, w = img_rgb.shape[:2]
-    rgba = np.zeros((h, w, 4), dtype=np.uint8)
-    rgba[:, :, :3] = img_rgb[:, :, :3]
-
-    # Background pixels have depth == 1.0 (far clipping plane)
-    # Model pixels have depth < 1.0
-    has_geometry = z_buffer < 0.9999
-
-    # Erode the geometry mask by 1 pixel to remove anti-aliased edge fringe
-    # that picks up background color blending
-    from scipy.ndimage import binary_erosion
-    has_geometry = binary_erosion(has_geometry, iterations=1)
-
-    rgba[:, :, 3] = np.where(has_geometry, 255, 0).astype(np.uint8)
-
-    return rgba
+    img = plotter.screenshot(transparent_background=True, return_img=True)
+    return np.ascontiguousarray(img, dtype=np.uint8)
 
 
-def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_RESOLUTION):
+def _percentile_bounds_if_sparse(points, lo, hi, pv_data=None, resolution=DEFAULT_RESOLUTION):
+    """The percentile bounds of a mesh that would vanish when framed on its full bounds, else None.
+
+    A mesh is framed on its full bounds, but one stray piece far away inside the same mesh (a part the
+    scene's parts do not tell apart) can make those bounds so large that the model is a dot. Framing
+    the percentile bounds instead would crop a model whose vertices crowd into one detailed region (a
+    long low-poly mast with a dense antenna), so it is done only when full-bounds framing provably
+    loses the model, by two tests:
+
+    * the 2nd-98th percentile bounds (where nearly all vertices lie) are at least
+      ``SPARSE_FRAMING_SCALE`` times smaller than the full bounds, and would project under
+      ``SPARSE_CORE_PIXELS`` pixels framed on the full bounds (cheap; read from at most
+      ``_SPARSE_SAMPLE`` evenly spaced vertices);
+    * a small still render on the full bounds (``SPARSE_CHECK_RESOLUTION``) covers less than
+      ``SPARSE_COVERAGE`` of its pixels: the whole mesh, not only its dense region, draws as nothing.
+
+    A mast is long enough to draw even when its antenna is a dot, so it keeps full-bounds framing; a
+    6 cm model with a stray piece 50 m away covers a pixel or two."""
+    full = float(np.max(hi - lo))
+    if full <= 0:
+        return None
+    step = max(1, len(points) // _SPARSE_SAMPLE)
+    sample = np.asarray(points[::step])
+    p_lo = np.percentile(sample, _FOCUS_PERCENTILE_LO, axis=0)
+    p_hi = np.percentile(sample, _FOCUS_PERCENTILE_HI, axis=0)
+    core = float(np.max(p_hi - p_lo))
+    if core <= 0 or full < SPARSE_FRAMING_SCALE * core:
+        return None
+    _, radius, _ = _framing_for_bounds(lo, hi, True, resolution)
+    visible = 2.0 * radius * np.tan(np.radians(15.0))  # frame height at the focal distance
+    core_pixels = core / visible * resolution[1]
+    if core_pixels >= SPARSE_CORE_PIXELS or pv_data is None:
+        return None
+    frame = generate_static_frame(pv_data, resolution=SPARSE_CHECK_RESOLUTION, use_full_bounds=True,
+                                  _check_sparse=False)
+    coverage = float((frame[..., 3] > 0).mean())
+    if coverage >= SPARSE_COVERAGE:
+        return None
+    if step > 1:
+        p_lo = np.percentile(points, _FOCUS_PERCENTILE_LO, axis=0)
+        p_hi = np.percentile(points, _FOCUS_PERCENTILE_HI, axis=0)
+    logger.info(f"Camera framing: on its full bounds the mesh would cover {coverage:.3%} of the frame "
+                f"(its dense region {core_pixels:.1f} px); framing the 2nd-98th percentile bounds")
+    return p_lo, p_hi
+
+
+def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_RESOLUTION, check_sparse=True):
     """
     Compute camera framing parameters for orbit-style camera positioning.
 
@@ -251,17 +462,32 @@ def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_R
     crop outliers from sparse scenes (point clouds with distant noise).
 
     For full-bounds mode (USD/CAD): uses complete bounding box since
-    all geometry in engineered models is intentional.
+    all geometry in engineered models is intentional. A part the scene's
+    parts mark as a backdrop or a stray is left out of the framing bounds
+    (``scene_parts.framing_bounds``; a loader has already dropped its
+    backdrops from the data, a stray is still drawn), and a mesh whose full
+    bounds would leave its content covering almost nothing is framed on its
+    percentile bounds (``_percentile_bounds_if_sparse``).
     """
     points = pv_data.points
 
-    if use_full_bounds:
+    backdrop_free = scene_parts.framing_bounds(pv_data) if use_full_bounds else None
+    if backdrop_free is not None:
+        lo, hi = backdrop_free
+    elif use_full_bounds:
         lo = points.min(axis=0)
         hi = points.max(axis=0)
+        sparse = _percentile_bounds_if_sparse(points, lo, hi, pv_data, resolution) if check_sparse else None
+        if sparse is not None:
+            lo, hi = sparse
     else:
         lo = np.percentile(points, _FOCUS_PERCENTILE_LO, axis=0)
         hi = np.percentile(points, _FOCUS_PERCENTILE_HI, axis=0)
+    return _framing_for_bounds(lo, hi, use_full_bounds, resolution, log=True)
 
+
+def _framing_for_bounds(lo, hi, use_full_bounds, resolution, log=False):
+    """(focal point, radius, elevation) of the orbit that frames the box (lo, hi)."""
     focal_point = (lo + hi) / 2.0
 
     dx = hi[0] - lo[0]
@@ -293,11 +519,12 @@ def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_R
 
     elevation = radius * np.tan(np.radians(_CAMERA_ELEVATION_DEG))
 
-    logger.info(
-        f"Camera framing: focal={focal_point}, radius={radius:.2f}, "
-        f"elevation={elevation:.2f}, focus_extents=({dx:.2f}, {dy:.2f}, {dz:.2f}), "
-        f"xz_diagonal={xz_diagonal:.2f}, dist_h={dist_for_height:.2f}, "
-        f"dist_w={dist_for_width:.2f}, use_full_bounds={use_full_bounds}"
-    )
+    if log:
+        logger.info(
+            f"Camera framing: focal={focal_point}, radius={radius:.2f}, "
+            f"elevation={elevation:.2f}, focus_extents=({dx:.2f}, {dy:.2f}, {dz:.2f}), "
+            f"xz_diagonal={xz_diagonal:.2f}, dist_h={dist_for_height:.2f}, "
+            f"dist_w={dist_for_width:.2f}, use_full_bounds={use_full_bounds}"
+        )
 
     return focal_point, radius, elevation

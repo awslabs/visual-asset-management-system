@@ -4,7 +4,7 @@ Automates the creation of VAMS roles and constraint imports from JSON permission
 
 ## Overview
 
-When adding a new VAMS database, administrators must create a complete set of roles and constraints covering all object types (database, asset, pipeline, workflow, metadata schema, tags, tag types, web routes, and API routes). This tool automates that process using JSON templates that define common permission profiles.
+When adding a new VAMS database, administrators must create a complete set of roles and constraints covering all object types (database, asset, pipeline, workflow, metadata schema, tags, tag types, compliance schemas, compliance bindings, compliance evaluations, compliance cascades, and, with the EDH Workstations add-on, EDH images, workstations and capacity reservations, plus web routes and API routes). This tool automates that process using JSON templates that define common permission profiles.
 
 The tool orchestrates:
 
@@ -13,6 +13,22 @@ The tool orchestrates:
 3. **User assignment** via `vamscli role user create`
 
 Pre-built JSON templates are located in `documentation/permissionsTemplates/`. For detailed explanations of what each template provides (constraint matrices, design decisions, GLOBAL keyword usage, etc.), see [Permissions (developer guide)](https://awslabs.github.io/visual-asset-management-system/developer/permissions).
+
+| Template                       | Variables (besides `ROLE_NAME`) | Profile                                                                                                                               |
+| ------------------------------ | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `database-admin.json`          | `DATABASE_ID`                   | Full management of one database                                                                                                       |
+| `database-user.json`           | `DATABASE_ID`                   | Standard user access with archive-only delete                                                                                         |
+| `database-readonly.json`       | `DATABASE_ID`                   | Read-only access to one database                                                                                                      |
+| `database-tag-admin.json`      | `DATABASE_ID`                   | Tag and tag type management for one database, global read                                                                             |
+| `global-readonly.json`         | —                               | Read-only access across all databases                                                                                                 |
+| `deny-tagged-assets.json`      | `TAG_VALUE`                     | Overlay: deny editing of assets carrying a tag                                                                                        |
+| `compliance-admin.json`        | `DATABASE_ID`                   | Compliance management and schema binding for one database; runs its database's and GLOBAL workflows (execute route only)              |
+| `compliance-readonly.json`     | `DATABASE_ID`                   | Read-only compliance access for one database                                                                                          |
+| `compliance-global-admin.json` | —                               | `GLOBAL` schema management, read-only compliance everywhere; runs GLOBAL workflows (execute route only)                               |
+| `edh-user.json`                | —                               | EDH Workstations add-on: launch and manage your own workstations; no capacity reservation                                             |
+| `edh-admin.json`               | —                               | EDH Workstations add-on: everything in `edh-user.json` plus images, session oversight, capacity and the capacity reservation registry |
+
+`ROLE_NAME` is set from `--role-name`.
 
 ## Prerequisites
 
@@ -120,6 +136,10 @@ Templates define their required variables in the JSON `variables` array. Variabl
 ### Delete mode
 
 The `--delete` flag deletes the role only. Since constraint IDs are server-generated UUIDs, individual constraint deletion by name is no longer practical from this tool. After deleting a role, use the VAMS UI or `vamscli role constraint` commands to clean up orphaned constraints if needed. To recreate a role with updated constraints, delete the role and re-run the tool in create mode.
+
+### Exit status
+
+The script exits 0 and prints `Status: Complete` only when every step succeeded. If the role cannot be created it stops there and exits 1. If the constraint import, the user assignment or the deletion fails, or a `vamscli` command does not finish within 60 seconds, it prints `Status: Incomplete (failed: <steps>)` and exits 1. A role whose constraint import failed exists with no constraints: re-run the tool, which continues when the role already exists.
 
 ## How It Works
 

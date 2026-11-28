@@ -1,0 +1,197 @@
+#  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#  SPDX-License-Identifier: Apache-2.0
+
+"""Compliance notifications helper.
+
+Publishes compliance event notifications to asset SNS topics,
+following the existing VAMS per-asset subscription pattern.
+"""
+
+from typing import Dict, Optional
+
+import boto3
+from botocore.config import Config
+
+from common.resourceNames import ResourceKeys, get_table_name
+from customLogging.logger import safeLogger
+
+retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
+dynamodb_client = boto3.client("dynamodb", config=retry_config)
+sns_client = boto3.client("sns", config=retry_config)
+logger = safeLogger(service_name="ComplianceNotifications")
+
+try:
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed loading resource names")
+    raise e
+
+
+def notify_quarantine(
+    database_id: str,
+    asset_id: str,
+    schema_name: str,
+    rule_failures: Optional[list] = None,
+):
+    """Notify subscribers that an asset has been quarantined."""
+    asset_name, topic_arn = _get_asset_topic(database_id, asset_id)
+    if not topic_arn:
+        return
+
+    failures_text = ""
+    if rule_failures:
+        failures_text = "\n    Failed rules:\n"
+        for failure in rule_failures[:10]:
+            failures_text += f"      - {failure}\n"
+
+    message = f"""
+    Dear Subscriber,
+
+    Asset '{asset_name}' has been QUARANTINED due to compliance failure.
+
+    Database: {database_id}
+    Asset: {asset_id}
+    Schema: {schema_name}
+{failures_text}
+    The asset does not meet the compliance requirements defined in the
+    schema. Please review and remediate, then re-upload or request an
+    exception.
+
+    Best Regards,
+    VAMS Compliance System
+    """
+
+    _publish(
+        topic_arn,
+        message,
+        subject=f"[QUARANTINED] {asset_name} — compliance failure",
+    )
+
+
+def notify_cascade_pending(
+    database_id: str,
+    asset_id: str,
+    cascade_id: str,
+    child_count: int,
+):
+    """Notify subscribers that a cascade is awaiting approval. `child_count` is the audit entry's
+    `childCount`: the direct children that are not archived (`cascadeAuditSummary.opened_details`).
+    This one message goes to every subscriber, so it counts no archived child."""
+    asset_name, topic_arn = _get_asset_topic(database_id, asset_id)
+    if not topic_arn:
+        return
+
+    message = f"""
+    Dear Subscriber,
+
+    A compliance cascade has been triggered for asset '{asset_name}'.
+
+    Database: {database_id}
+    Asset: {asset_id}
+    Cascade ID: {cascade_id}
+    Downstream assets affected: {child_count}
+
+    This cascade requires approval before downstream assets are
+    re-evaluated. Please review and approve or reject via the VAMS
+    compliance API or UI.
+
+    Best Regards,
+    VAMS Compliance System
+    """
+
+    _publish(
+        topic_arn,
+        message,
+        subject=f"[CASCADE PENDING] {asset_name} — approval required",
+    )
+
+
+def notify_cascade_completed(
+    database_id: str,
+    asset_id: str,
+    cascade_id: str,
+    results_summary: Dict[str, int],
+    other_database_nodes: int = 0,
+):
+    """Notify subscribers that a cascade has completed execution. `results_summary` is the node
+    count per status the audit entry shares with every reader: the descendants in the parent's
+    database, less those skipped as archived (`cascadeAuditSummary.completion_details`), which only
+    a reader who may see those archived assets may count. `other_database_nodes` is the number of
+    descendants in other databases (`other_database_node_count`), given without their ids, names or
+    results: this one message goes to every subscriber, whatever databases each may read."""
+    asset_name, topic_arn = _get_asset_topic(database_id, asset_id)
+    if not topic_arn:
+        return
+
+    summary_lines = "\n".join(
+        f"      {status}: {count}"
+        for status, count in results_summary.items()
+    ) or "      none"
+    other_lines = (
+        f"\n    Downstream assets in other databases: {other_database_nodes}"
+        " (their results are not listed here)\n"
+        if other_database_nodes > 0 else ""
+    )
+
+    message = f"""
+    Dear Subscriber,
+
+    The compliance cascade for asset '{asset_name}' has completed.
+
+    Database: {database_id}
+    Asset: {asset_id}
+    Cascade ID: {cascade_id}
+
+    Results:
+{summary_lines}
+{other_lines}
+    Best Regards,
+    VAMS Compliance System
+    """
+
+    _publish(
+        topic_arn,
+        message,
+        subject=f"[CASCADE COMPLETE] {asset_name} — re-evaluation finished",
+    )
+
+
+def _get_asset_topic(
+    database_id: str, asset_id: str
+) -> tuple:
+    """Look up asset name and SNS topic ARN from the asset table."""
+    try:
+        resp = dynamodb_client.query(
+            TableName=asset_table_name,
+            ProjectionExpression="assetName, snsTopic",
+            KeyConditionExpression=(
+                "assetId = :asset_id AND databaseId = :database_id"
+            ),
+            ExpressionAttributeValues={
+                ":asset_id": {"S": asset_id},
+                ":database_id": {"S": database_id},
+            },
+        )
+        items = resp.get("Items", [])
+        if not items:
+            return ("", "")
+        item = items[0]
+        asset_name = item.get("assetName", {}).get("S", asset_id)
+        topic_arn = item.get("snsTopic", {}).get("S", "")
+        return (asset_name, topic_arn)
+    except Exception as e:
+        logger.exception(f"Failed to look up asset topic: {e}")
+        return ("", "")
+
+
+def _publish(topic_arn: str, message: str, subject: str):
+    """Publish a message to an SNS topic."""
+    try:
+        sns_client.publish(
+            TopicArn=topic_arn,
+            Message=message,
+            Subject=subject[:100],
+        )
+        logger.info(f"Published notification to {topic_arn}")
+    except Exception as e:
+        logger.exception(f"Failed to publish notification: {e}")

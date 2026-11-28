@@ -218,6 +218,12 @@ describe("PipelineForm Wait For Callback for a stored pipeline without the field
             expect(sentCallback(mutateAsync)).toBe("Disabled");
         });
 
+        it("shows a system pipeline without the field as Disabled in the view page", async () => {
+            renderEdit({ ...pipelineOfType("Lambda"), isSystem: true });
+
+            await waitFor(() => expect(callbackSelect()).toHaveValue("Disabled"));
+        });
+
         it("creates with Disabled shown and sent, the API's own default", async () => {
             const user = userEvent.setup();
             const mutateAsync = mockCreate();

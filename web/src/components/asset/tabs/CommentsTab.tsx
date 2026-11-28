@@ -14,6 +14,7 @@ import "./comments/Comments.css";
 import ErrorBoundary from "../../common/ErrorBoundary";
 import { useStatusMessage } from "../../common/StatusMessage";
 import Synonyms from "../../../synonyms";
+import { ARCHIVED_WRITE_REASON, useAssetArchived } from "../../../context/ArchivedAssetContext";
 
 interface CommentsTabProps {
     assetId: string;
@@ -22,6 +23,7 @@ interface CommentsTabProps {
 }
 
 export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, isActive }) => {
+    const assetArchived = useAssetArchived();
     const [reload, setReload] = useState<boolean>(false);
     const [loading, setLoading] = useState<boolean>(false);
     const [showLoadingIcon, setShowLoadingIcon] = useState<boolean>(false);
@@ -113,16 +115,18 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                     setAllComments([]);
                 }
 
-                if (assetId) {
+                if (assetId && databaseId) {
                     setLoading(true);
                     try {
-                        const items = await fetchAllComments({ assetId: assetId });
+                        const items = await fetchAllComments({
+                            databaseId,
+                            assetId,
+                            showArchived: assetArchived,
+                        });
                         if (items !== false && Array.isArray(items)) {
                             setReload(false);
                             setDisplayItemsWhileLoading(false);
-                            setAllComments(
-                                items.filter((item) => item.assetId.indexOf("#deleted") === -1)
-                            );
+                            setAllComments(items);
                         } else if (typeof items === "string" && items.includes("not found")) {
                             setError(
                                 `${Synonyms.Comments} data not found. The requested asset may have been deleted or you may not have permission to access it.`
@@ -171,7 +175,11 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             const loadAsset = async () => {
                 if (assetId && databaseId) {
                     try {
-                        const response = await fetchAsset({ databaseId, assetId });
+                        const response = await fetchAsset({
+                            databaseId,
+                            assetId,
+                            showArchived: assetArchived,
+                        });
                         setAsset(response);
                     } catch (error: any) {
                         console.error("Error fetching asset:", error);
@@ -191,7 +199,7 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             loadAsset();
             getData();
         }
-    }, [isActive, reload, assetId, databaseId, displayItemsWhileLoading]);
+    }, [isActive, reload, assetId, databaseId, displayItemsWhileLoading, assetArchived]);
 
     // Add a comment to the database
     const addComment = async (event: { preventDefault: () => void }) => {
@@ -243,25 +251,24 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
             console.log("Using generated UUID as version ID:", versionId);
         }
 
-        const uuid = "x" + generateUUID();
-        const assetVersionIdAndCommentId = `${versionId}:${uuid}`;
-
         // call the API to post the comment
         setDisplayItemsWhileLoading(true);
         setLoading(true);
         setShowLoadingIcon(true);
         try {
+            // The API generates the comment id; the version the comment is about goes in the body
             const response = await createComment({
+                databaseId,
                 assetId,
-                assetVersionIdAndCommentId,
                 body: {
                     commentBody: content,
+                    assetVersionId: String(versionId),
                 },
             });
             console.log(response);
             // createComment resolves with [false, message] for a rejected request — a body over
-            // the API's length limit, a comment id that already exists, a permission denial — so
-            // the failure never reaches the catch below and has to be read off the result.
+            // the API's length limit, a permission denial — so the failure never reaches the catch
+            // below and has to be read off the result.
             if (response[0] === false) {
                 setShowLoadingIcon(false);
                 const reason = response[1] || "Unknown error";
@@ -352,9 +359,14 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                             </tr>
                             <tr>
                                 <td className="commentSectionTableBorder">
-                                    <div>
-                                        <form onSubmit={addComment}>
-                                            {/* No `container` class here: VAMS defines no such rule, so
+                                    {assetArchived ? (
+                                        <Box color="text-body-secondary" padding="s">
+                                            {ARCHIVED_WRITE_REASON}
+                                        </Box>
+                                    ) : (
+                                        <div>
+                                            <form onSubmit={addComment}>
+                                                {/* No `container` class here: VAMS defines no such rule, so
                                                 the only match is Tailwind's `.container` utility, which
                                                 carries responsive max-widths (640/768/1024/1280/1536px).
                                                 Tailwind is scoped to the orchestration module, but its
@@ -362,28 +374,29 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                                                 Cloudscape tab's comment box at 1280px on a wider
                                                 viewport — the editor filled its parent correctly, the
                                                 parent was simply clamped. */}
-                                            <div>
-                                                <div className="commentSectionTextBoxContainer">
-                                                    <JoditEditor
-                                                        ref={editor}
-                                                        value={content}
-                                                        config={config}
-                                                        onBlur={handleUpdate}
-                                                        onChange={(newContent) => {}}
-                                                    />
+                                                <div>
+                                                    <div className="commentSectionTextBoxContainer">
+                                                        <JoditEditor
+                                                            ref={editor}
+                                                            value={content}
+                                                            config={config}
+                                                            onBlur={handleUpdate}
+                                                            onChange={(newContent) => {}}
+                                                        />
+                                                    </div>
+                                                    <div className="commentSectionSubmitButton">
+                                                        <Button
+                                                            data-testid="submitButton"
+                                                            variant="primary"
+                                                            disabled={!assetId}
+                                                        >
+                                                            Submit
+                                                        </Button>
+                                                    </div>
                                                 </div>
-                                                <div className="commentSectionSubmitButton">
-                                                    <Button
-                                                        data-testid="submitButton"
-                                                        variant="primary"
-                                                        disabled={!assetId}
-                                                    >
-                                                        Submit
-                                                    </Button>
-                                                </div>
-                                            </div>
-                                        </form>
-                                    </div>
+                                            </form>
+                                        </div>
+                                    )}
                                 </td>
                             </tr>
                         </tbody>

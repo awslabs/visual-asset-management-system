@@ -39,7 +39,9 @@ from datetime import datetime
 from .....utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 
 # Import JSON output utilities
-from .....utils.json_output import output_status, output_result, output_error, output_info, output_warning
+from .....utils.json_output import (
+    output_status, output_result, output_error, output_info, output_warning, invoke_nested_command
+)
 
 # Import API client
 from .....utils.api_client import APIClient
@@ -47,7 +49,7 @@ from .....utils.api_client import APIClient
 # Import exceptions
 from .....utils.exceptions import (
     AssetNotFoundError, DatabaseNotFoundError, InvalidAssetDataError,
-    FileDownloadError, APIError
+    FileDownloadError, APIError, GlobalInfrastructureError
 )
 
 # Import GLB combining utilities
@@ -65,6 +67,7 @@ from .....utils.glb_combiner import (
 # Import existing commands to invoke programmatically
 from ....assets import create as create_command
 from ....file import upload as upload_command
+from ...spatial.glb import raise_if_upload_failed
 
 
 @click.group()
@@ -281,8 +284,8 @@ def download_glb_for_node(ctx: click.Context, api_client: APIClient, database_id
         # Use glbassetcombine to get the combined GLB for this asset
         # This handles any child assets and combines them with proper transforms
         try:
-            combine_result = ctx.invoke(
-                glbassetcombine,
+            combine_result = invoke_nested_command(
+                ctx, json_output, glbassetcombine,
                 database_id=database_id,
                 asset_id=asset_id,
                 local_path=str(asset_temp_dir),
@@ -293,7 +296,6 @@ def download_glb_for_node(ctx: click.Context, api_client: APIClient, database_id
                 include_parent_relationships=False,
                 asset_create_name=None,  # Don't create new asset
                 delete_temporary_files=False,  # Keep files for BOM assembly
-                json_output=True  # Suppress CLI output
             )
         except click.ClickException as e:
             output_warning(f"glbassetcombine Click exception for {source_name}: {e.message}", json_output)
@@ -543,8 +545,9 @@ def combine_bom_hierarchy_optimized(ctx: click.Context,
               help='[OPTIONAL] Keep temporary files after processing')
 @click.option('--asset-create-name',
               help='[OPTIONAL] Create new asset with this name and upload all generated GLB files')
-@click.option('--delete-temporary-files', is_flag=True, default=True,
-              help='[OPTIONAL, default: True] Delete temp files after upload (only with --asset-create-name)')
+@click.option('--delete-temporary-files/--no-delete-temporary-files', default=True,
+              help='[OPTIONAL, default: on] Delete temp files after upload (only with --asset-create-name); '
+                   '--no-delete-temporary-files keeps them')
 @click.option('--json-output', is_flag=True,
               help='[OPTIONAL] Output JSON')
 @click.pass_context
@@ -570,9 +573,9 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
     Asset Creation:
     - Use --asset-create-name to create a new asset
     - Uploads all assembled root GLBs
-    - Uploads all downloaded/cached component GLBs
+    - Uploads all downloaded and intermediate component GLBs
     - Uploads the original BOM JSON file
-    - Use --delete-temporary-files to clean up after upload (default: True)
+    - Temp files are deleted after upload; --no-delete-temporary-files keeps them
     
     Examples:
         # Basic assembly
@@ -597,6 +600,10 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
     
     temp_dir = None
     base_temp_dir = None
+    
+    # --no-delete-temporary-files keeps the files after the upload, as --keep-temp-files does
+    if asset_create_name and not delete_temporary_files:
+        keep_temp_files = True
     
     try:
         # Step 1: Parse BOM JSON
@@ -677,7 +684,8 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
             'total_sources': len(sources),
             'root_nodes_processed': len(results),
             'assemblies': results,
-            'temporary_directory': temp_dir if keep_temp_files else 'deleted',
+            # The run's folder stays with --keep-temp-files, and always under a --local-path
+            'temporary_directory': temp_dir if keep_temp_files or local_path else 'deleted',
             'optimization': 'tree-first approach (optimized)'
         }
         
@@ -686,16 +694,8 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
         if asset_create_name:
             output_status(f"Creating new asset '{asset_create_name}'...", json_output)
             
+            new_asset_id = None
             try:
-                # Suppress stdout during internal command calls to prevent multiple JSON outputs
-                import sys
-                from io import StringIO
-                
-                # Create asset (capture output if json_output mode)
-                if json_output:
-                    old_stdout = sys.stdout
-                    sys.stdout = StringIO()
-                
                 # Use json_input to ensure proper field names (assetName not name)
                 asset_create_data = {
                     'databaseId': database_id,
@@ -705,8 +705,8 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                     'tags': []
                 }
                 
-                create_result = ctx.invoke(
-                    create_command,
+                create_result = invoke_nested_command(
+                    ctx, json_output, create_command,
                     database_id=database_id,
                     name=None,  # Not using individual params
                     description=None,
@@ -714,13 +714,13 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                     tags=[],
                     bucket_key=None,
                     json_input=json.dumps(asset_create_data),  # Use JSON input for proper field names
-                    json_output=True  # Internal call uses JSON
                 )
                 
-                if json_output:
-                    sys.stdout = old_stdout
-                
                 new_asset_id = create_result['assetId']
+                # Name the new asset now: if an upload fails, running the command again
+                # creates another
+                output_status(f"Created asset {new_asset_id}", json_output)
+                created = {'createdAssetId': new_asset_id}
                 
                 # Collect all GLB files to upload
                 glb_files_to_upload = []
@@ -746,11 +746,8 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                 for glb_path in glb_files_to_upload:
                     output_status(f"Uploading {os.path.basename(glb_path)}...", json_output)
                     
-                    if json_output:
-                        sys.stdout = StringIO()
-                    
-                    ctx.invoke(
-                        upload_command,
+                    raise_if_upload_failed(invoke_nested_command(
+                        ctx, json_output, upload_command, error_fields=created,
                         files_or_directory=(glb_path,),
                         database_id=database_id,
                         asset_id=new_asset_id,
@@ -762,23 +759,16 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                         retry_attempts=3,
                         force_skip=False,
                         json_input=None,
-                        json_output=True,  # Internal call uses JSON
                         hide_progress=True  # Hide progress to avoid serialization issues
-                    )
-                    
-                    if json_output:
-                        sys.stdout = old_stdout
+                    ))
                     
                     uploaded_files.append(os.path.basename(glb_path))
                 
                 # Upload BOM JSON file
                 output_status("Uploading BOM JSON file...", json_output)
                 
-                if json_output:
-                    sys.stdout = StringIO()
-                
-                ctx.invoke(
-                    upload_command,
+                raise_if_upload_failed(invoke_nested_command(
+                    ctx, json_output, upload_command, error_fields=created,
                     files_or_directory=(json_file,),
                     database_id=database_id,
                     asset_id=new_asset_id,
@@ -790,12 +780,8 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                     retry_attempts=3,
                     force_skip=False,
                     json_input=None,
-                    json_output=True,  # Internal call uses JSON
                     hide_progress=True  # Hide progress to avoid serialization issues
-                )
-                
-                if json_output:
-                    sys.stdout = old_stdout
+                ))
                 
                 uploaded_files.append(os.path.basename(json_file))
                 
@@ -814,7 +800,23 @@ def bomassemble(ctx, json_file, database_id, local_path, keep_temp_files,
                     temp_dir = None
                 
             except Exception as e:
-                output_warning(f"Failed to create/upload to new asset: {e}", json_output)
+                if new_asset_id:
+                    # Name the asset in the error document; the global handler merges it too
+                    e.json_fields = {**(getattr(e, 'json_fields', None) or {}),
+                                     'createdAssetId': new_asset_id}
+                if isinstance(e, GlobalInfrastructureError):
+                    raise
+                output_error(
+                    e,
+                    json_output,
+                    error_type="Asset Creation Error",
+                    helpful_message=(
+                        "The assembly finished, but creating the new asset or uploading its "
+                        "files failed." + (
+                            f" Asset {new_asset_id} was created before the failure; running this "
+                            "command again creates another asset." if new_asset_id else ""))
+                )
+                raise click.ClickException(str(e))
         
         # Add new asset info to result
         if new_asset_info:

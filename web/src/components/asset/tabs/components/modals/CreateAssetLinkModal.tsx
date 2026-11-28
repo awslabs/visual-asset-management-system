@@ -359,15 +359,13 @@ export function CreateAssetLinkModal({
                         <Alert type="warning" dismissible={false}>
                             <div>
                                 <strong>Sub-Child {Synonyms.Asset} Link:</strong> You are adding a
-                                child {Synonyms.asset}
-                                to "{parentAssetData.assetName}" (not the top-level {Synonyms.asset}{" "}
-                                being viewed).
+                                child {Synonyms.asset} to "{parentAssetData.assetName}" (not the
+                                top-level {Synonyms.asset} being viewed).
                             </div>
                             <div style={{ marginTop: "8px" }}>
                                 This will create a relationship between the selected{" "}
                                 {Synonyms.asset} below and "{parentAssetData.assetName}", which is
-                                itself a child of the main
-                                {Synonyms.asset} being viewed.
+                                itself a child of the main {Synonyms.asset} being viewed.
                             </div>
                         </Alert>
                     </div>

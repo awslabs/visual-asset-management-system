@@ -18,7 +18,7 @@ if str(PACKAGE_ROOT) not in sys.path:
 
 _UI_WIDGETS = (
     "Window", "VStack", "HStack", "ZStack", "Label", "Button", "Rectangle",
-    "StringField", "SimpleStringModel", "CollapsableFrame", "ScrollingFrame", "Spacer",
+    "StringField", "SimpleStringModel", "CollapsableFrame", "ScrollingFrame", "Spacer", "ComboBox",
 )
 
 
@@ -56,6 +56,59 @@ def _install_kit_stubs():
 
 
 _install_kit_stubs()
+
+
+@pytest.fixture
+def pxr(monkeypatch):
+    """A stub ``pxr`` whose exported layer holds the asset paths in ``state.asset_paths``.
+
+    ``UsdUtils.ModifyAssetPaths`` replaces each path with what the callback returns. It, and the
+    layer's ``Reload`` and ``Save``, append ``("remap", path)``, ``("reload", path, force)`` and
+    ``("save", path)`` to ``state.events`` — point that at a fake CLI's call list to see them in
+    order with the upload. ``state.saved_paths`` holds the paths at the last successful save;
+    ``open_ok``/``reload_ok``/``save_ok`` make reopening, rereading or saving the export fail.
+
+    ``state.layers`` describes the layers a reference opens, by file name: ``(default prim, root
+    prim names, sublayer paths)``, or None for a file that does not open as a layer. A file it does
+    not name opens with no default prim and no root prims."""
+    state = types.SimpleNamespace(asset_paths=[], saved_paths=None, events=[], layers={},
+                                  open_ok=True, reload_ok=True, save_ok=True)
+
+    class _Layer:
+        def __init__(self, path):
+            self.path = self.identifier = path
+            self.defaultPrim, roots, sublayers = state.layers.get(Path(path).name, ("", [], []))
+            self.rootPrims = [types.SimpleNamespace(name=name) for name in roots]
+            self.subLayerPaths = list(sublayers)
+
+        def Reload(self, force=False):
+            state.events.append(("reload", self.path, force))
+            return state.reload_ok
+
+        def Save(self):
+            state.events.append(("save", self.path))
+            if state.save_ok:
+                state.saved_paths = list(state.asset_paths)
+            return state.save_ok
+
+    def _modify_asset_paths(layer, modify_fn):
+        state.events.append(("remap", layer.path))
+        state.asset_paths = [modify_fn(path) for path in state.asset_paths]
+
+    def _find_or_open(path):
+        if not state.open_ok or state.layers.get(Path(path).name, ()) is None:
+            return None
+        return _Layer(path)
+
+    module = types.ModuleType("pxr")
+    module.Sdf = types.SimpleNamespace(
+        Layer=types.SimpleNamespace(FindOrOpen=_find_or_open),
+        Path=lambda path: path,
+        ComputeAssetPathRelativeToLayer=lambda _anchor, path: path,
+    )
+    module.UsdUtils = types.SimpleNamespace(ModifyAssetPaths=_modify_asset_paths)
+    monkeypatch.setitem(sys.modules, "pxr", module)
+    return state
 
 
 @pytest.fixture

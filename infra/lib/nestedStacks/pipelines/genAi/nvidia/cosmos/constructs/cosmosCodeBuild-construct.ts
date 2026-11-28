@@ -10,12 +10,14 @@ import * as codebuild from "aws-cdk-lib/aws-codebuild";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3assets from "aws-cdk-lib/aws-s3-assets";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as path from "path";
 import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../../config/config";
 import { contentImageTag } from "../../../../../../helper/containerImageTag";
+import { codeBuildTriggerCode } from "../../../../constructs/codeBuildTrigger";
 
 export interface CosmosCodeBuildConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -27,6 +29,8 @@ export interface CosmosCodeBuildConstructProps extends cdk.StackProps {
     buildCosmosRepos: boolean;
     /** Build the Cosmos3 omni repo (useNvidiaCosmos3.useCodeBuild). */
     buildCosmos3Repos: boolean;
+    /** `storageResources.encryption.kmsKey`: the shared VAMS key, undefined when the CMK is off. */
+    kmsKey?: kms.IKey;
 }
 
 export interface PipelineEcrRepo {
@@ -62,6 +66,12 @@ export class CosmosCodeBuildConstruct extends Construct {
         const account = Stack.of(this).account;
         const cosmosConfig = props.config.app.pipelines.useNvidiaCosmos;
 
+        // The shared VAMS key, imported by ARN so no derived grant reaches the storage stack's key
+        // policy (infra/CLAUDE.md, encryption trap 2). Undefined when the CMK is off.
+        const encryptionKey = props.kmsKey
+            ? kms.Key.fromKeyArn(this, "CosmosEcrKmsKeyRef", props.kmsKey.keyArn)
+            : undefined;
+
         /**
          * Helper: Create ECR repo, CodeBuild project, and trigger for a single pipeline.
          */
@@ -70,8 +80,13 @@ export class CosmosCodeBuildConstruct extends Construct {
             containerDir: string
         ): PipelineEcrRepo => {
             // ECR Repository — no explicit repositoryName so CDK auto-generates a unique name
-            // per deployment (avoids collisions across multiple VAMS stacks in the same region)
+            // per deployment (avoids collisions across multiple VAMS stacks in the same region).
+            // KMS-encrypted with the shared key when the CMK is on, AES-256 without.
             const repository = new ecr.Repository(this, `EcrRepo-${pipelineKey}`, {
+                encryption: encryptionKey
+                    ? ecr.RepositoryEncryption.KMS
+                    : ecr.RepositoryEncryption.AES_256,
+                encryptionKey,
                 removalPolicy: RemovalPolicy.DESTROY,
                 emptyOnDelete: true,
                 imageScanOnPush: true,
@@ -157,24 +172,7 @@ export class CosmosCodeBuildConstruct extends Construct {
                     runtime: Config.LAMBDA_PYTHON_RUNTIME,
                     handler: "index.handler",
                     timeout: Duration.minutes(1),
-                    code: cdk.aws_lambda.Code.fromInline(`
-import boto3
-import cfnresponse
-
-def handler(event, context):
-    try:
-        request_type = event.get("RequestType", "")
-        if request_type in ("Create", "Update"):
-            project_name = event["ResourceProperties"]["ProjectName"]
-            client = boto3.client("codebuild")
-            response = client.start_build(projectName=project_name)
-            build_id = response["build"]["id"]
-            cfnresponse.send(event, context, cfnresponse.SUCCESS, {"BuildId": build_id})
-        else:
-            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-    except Exception as e:
-        cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
-`),
+                    code: codeBuildTriggerCode(),
                 }
             );
 
@@ -190,11 +188,16 @@ def handler(event, context):
                 onEventHandler: triggerFunction,
             });
 
+            // EcrRepositoryUri is a trigger input: AWS CloudFormation invokes the Update handler only
+            // when a property changes, and a CMK flip replaces the repository (its encryption is
+            // immutable) while ProjectName and SourceHash stay the same. The new URI re-fires the build
+            // into the new, empty repository the job definition then points at.
             new cdk.CustomResource(this, `BuildTriggerCR-${pipelineKey}`, {
                 serviceToken: triggerProvider.serviceToken,
                 properties: {
                     ProjectName: project.projectName,
                     SourceHash: sourceAsset.assetHash,
+                    EcrRepositoryUri: repository.repositoryUri,
                 },
             });
 
@@ -291,7 +294,7 @@ def handler(event, context):
             new cdk.CfnOutput(this, "CosmosPredictCodeBuildProject", {
                 value: this.predictV2Repo.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Cosmos Predict v2.5 container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Cosmos Predict v2.5 container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --no-paginate --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
 
@@ -312,7 +315,7 @@ def handler(event, context):
             new cdk.CfnOutput(this, "CosmosReasonCodeBuildProject", {
                 value: this.reasonRepo.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Cosmos Reason container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Cosmos Reason container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --no-paginate --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
 
@@ -331,7 +334,7 @@ def handler(event, context):
             new cdk.CfnOutput(this, "CosmosTransferCodeBuildProject", {
                 value: this.transferRepo.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Cosmos Transfer container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Cosmos Transfer container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --no-paginate --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
 
@@ -356,7 +359,7 @@ def handler(event, context):
             new cdk.CfnOutput(this, "Cosmos3CodeBuildProject", {
                 value: this.cosmos3Repo.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Cosmos 3 container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Cosmos 3 container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --no-paginate --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
     }

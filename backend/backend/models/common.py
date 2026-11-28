@@ -7,7 +7,7 @@ from typing import Any, Dict, TypedDict, Optional
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_errors
 
-logger = safeLogger(service_name="CommonModels")
+logger = safeLogger()
 
 
 def _json_default(obj: Any):
@@ -100,8 +100,9 @@ def commonHeaders() -> Dict[str, str]:
         # handled separately by the API's MOCK method). Mirrors the preflight's
         # allow-origin so cross-origin browser callers can read the response.
         'Access-Control-Allow-Origin': '*',
-        # Lets a cross-origin browser caller read the Retry-After of a 429
-        'Access-Control-Expose-Headers': 'Retry-After',
+        # Lets a cross-origin browser caller read the Retry-After of a 429, the
+        # Location of a redirect (e.g. the asset export's 303), and the ETag.
+        'Access-Control-Expose-Headers': 'Retry-After, Location, ETag',
     }
 
 
@@ -125,7 +126,10 @@ def success(status_code: int = 200, body: Any = {'message': 'Success'}) -> APIGa
 def validation_error(status_code: int = 400, body: dict = {'message': 'Validation Error'}, event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
     # An error body is the returned message rather than a payload, so it stays in the log - passed as
     # structured data, not interpolated, so safeLogger's key-driven redaction still walks it.
-    logger.error("Validation error", extra={'statusCode': status_code, 'errorBody': body})
+    # A rejected request is a client outcome, so a 4xx logs at WARNING and ERROR stays reserved for
+    # 5xx, as in general_error().
+    log_validation_error = logger.error if status_code >= 500 else logger.warning
+    log_validation_error("Validation error", extra={'statusCode': status_code, 'errorBody': body})
     
     # AUDIT LOG: Log validation error if event provided
     if event:
@@ -170,7 +174,11 @@ def general_error(status_code: int = 400, body: dict = {'message': 'VAMS General
 
 
 def authorization_error(status_code: int = 403, body: dict = {'message': 'Not Authorized'}, event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
-    logger.error("Not Authorized Error", extra={'statusCode': status_code, 'errorBody': body})
+    # A refusal is an expected client outcome, so a 4xx logs at WARNING and ERROR stays reserved for
+    # 5xx, as in general_error() and validation_error(). The denial itself is audited by the
+    # Casbin enforcer.
+    log_authorization_error = logger.error if status_code >= 500 else logger.warning
+    log_authorization_error("Not Authorized Error", extra={'statusCode': status_code, 'errorBody': body})
     
     #Logged as part of Casbin auth checks
     # # AUDIT LOG: Log authorization error if event provided
@@ -214,6 +222,30 @@ def internal_error(status_code: int = 500, body: Any = {'message': 'Internal Ser
     )
 
 
+def service_unavailable(body: dict = {'message': 'Service Unavailable'}, event: Optional[Dict[str, Any]] = None) -> APIGatewayProxyResponseV2:
+    """503: the request was valid but a dependency could not answer it now (an index still being built,
+    throttling, a search backend that cannot be reached). The message tells the caller to try again and
+    carries no internal detail; the cause goes to the service log."""
+    logger.warning("Service unavailable", extra={'statusCode': 503, 'errorBody': body})
+
+    # AUDIT LOG: Log the unavailable answer if event provided
+    if event:
+        try:
+            log_errors(event, "unavailable", {
+                "statusCode": 503,
+                "errorMessage": body.get('message', 'Service Unavailable') if isinstance(body, dict) else str(body)
+            })
+        except Exception as audit_error:
+            logger.exception(f"Failed to log service unavailable audit: {audit_error}")
+
+    return APIGatewayProxyResponseV2(
+        isBase64Encoded=False,
+        statusCode=503,
+        headers=commonHeaders(),
+        body=json.dumps(body, default=_json_default)
+    )
+
+
 #Define VAMS Custom Exceptions
 
 class VAMSGeneralError(Exception):
@@ -223,6 +255,19 @@ class VAMSGeneralErrorResponse(VAMSGeneralError):
     def __init__(self, message, status_code=400):
         super().__init__(f"VAMS General Error: {message}")
         self.status_code = status_code
+        # The message as raised, without the "VAMS General Error: " prefix str() carries; a handler
+        # that answers its refusals in the words its documentation quotes uses this (#1638).
+        self.user_message = message
+
+
+class AssetLocationInUseError(VAMSGeneralErrorResponse):
+    """An asset create refused because another asset's stored location shares a key with the new
+    asset's location. `owner` names the asset that holds it (`databaseId:assetId at location`), for
+    logs only; the message the caller sees is unchanged."""
+
+    def __init__(self, message, owner=""):
+        super().__init__(message)
+        self.owner = owner
 
 
 class VAMSAuthorizationDeniedResponse(VAMSGeneralErrorResponse):

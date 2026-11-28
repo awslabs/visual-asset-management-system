@@ -20,7 +20,7 @@ All metadata operations share a consistent request format and bulk semantics acr
 Update operations support two modes via `--update-type`:
 
 -   `update` (default) -- Upsert mode. Creates or updates the provided metadata and keeps unlisted keys.
--   `replace_all` -- Replace mode. Deletes unlisted keys and upserts the provided metadata, with rollback on failure.
+-   `replace_all` -- Replace mode. Deletes unlisted keys and upserts the provided metadata, with rollback on failure. Removing stored keys also requires the `DELETE` method on the metadata route; without it the request is refused (`403`) and nothing is written. See [Update Asset Metadata](../../api/metadata.md#update-asset-metadata).
 
 :::info[Supported value types]
 Each metadata item declares a `metadataValueType`. Values are always supplied as strings in JSON input; `object` and `array` values are JSON encoded into a string.
@@ -68,6 +68,7 @@ vamscli metadata asset list [OPTIONS]
 | `-d`, `--database-id` | TEXT    | Yes      | Database ID                                           |
 | `-a`, `--asset-id`    | TEXT    | Yes      | Asset ID                                              |
 | `--asset-version-id`  | TEXT    | No       | Filter metadata by a specific asset version           |
+| `--show-archived`     | FLAG    | No       | Also find an archived asset                           |
 | `--page-size`         | INTEGER | No       | Page size for pagination (default: 100, maximum 1000) |
 | `--starting-token`    | TEXT    | No       | Token for manual single-page pagination               |
 | `--json-output`       | FLAG    | No       | Output raw JSON response                              |
@@ -145,6 +146,7 @@ vamscli metadata file list [OPTIONS]
 | `--file-path`         | TEXT    | Yes      | Relative file path                                    |
 | `--type`              | CHOICE  | Yes      | `metadata` or `attribute`                             |
 | `--asset-version-id`  | TEXT    | No       | Filter metadata by a specific asset version           |
+| `--show-archived`     | FLAG    | No       | Also find an archived asset                           |
 | `--page-size`         | INTEGER | No       | Page size for pagination (default: 100, maximum 1000) |
 | `--starting-token`    | TEXT    | No       | Token for manual single-page pagination               |
 | `--json-output`       | FLAG    | No       | Output raw JSON response                              |
@@ -221,6 +223,7 @@ vamscli metadata asset-link list [OPTIONS]
 | Option             | Type    | Required | Description                                           |
 | ------------------ | ------- | -------- | ----------------------------------------------------- |
 | `--asset-link-id`  | TEXT    | Yes      | Asset link ID                                         |
+| `--show-archived`  | FLAG    | No       | Also find a linked asset that is archived             |
 | `--page-size`      | INTEGER | No       | Page size for pagination (default: 100, maximum 1000) |
 | `--starting-token` | TEXT    | No       | Token for manual single-page pagination               |
 | `--json-output`    | FLAG    | No       | Output raw JSON response                              |
@@ -430,12 +433,12 @@ vamscli metadata-schema create [OPTIONS]
 | `--json-output`               | FLAG   | No       | Output raw JSON response                                                                               |
 
 ```bash
-vamscli metadata-schema create -d my-database -e assetMetadata -n "Asset core fields" -f '[{"name":"projectCode","type":"string","required":true}]'
+vamscli metadata-schema create -d my-database -e assetMetadata -n "Asset core fields" -f '[{"metadataFieldKeyName":"projectCode","metadataFieldValueType":"string","required":true}]'
 vamscli metadata-schema create -d my-database -e fileMetadata -n "File fields" -f ./file-fields.json --disabled
 ```
 
 :::note[File type restriction]
-`--file-key-type-restriction` takes each extension with its leading dot (`.glb,.usd`) and is available for `fileMetadata` and `fileAttribute` schemas only; an entry without the dot, with a second dot or with a path separator is rejected with a `400`. The extension is read from the file's name, so a dot in a folder name is not an extension and a file with no extension is matched by every enabled schema for its entity type. See [File type restriction matching](../../user-guide/metadata-management.md#file-type-restriction-matching).
+`--file-key-type-restriction` takes each extension with its leading dot (`.glb,.usd`) and is available for `fileMetadata` and `fileAttribute` schemas only; an entry without the dot, with a second dot or with a path separator is rejected with a `400`. The extension is read from the file's name, so a dot in a folder name is not an extension, and a file with no extension is validated only against schemas with no file type restriction. See [File type restriction matching](../../user-guide/metadata-management.md#file-type-restriction-matching).
 :::
 
 ---

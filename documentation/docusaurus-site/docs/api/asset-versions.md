@@ -29,12 +29,12 @@ GET /database/{databaseId}/assets/{assetId}/getVersions
 
 ### Query parameters
 
-| Parameter       | Type    | Required | Default | Description                                       |
-| --------------- | ------- | -------- | ------- | ------------------------------------------------- |
-| `maxItems`      | number  | No       | `1000`  | Maximum number of items to return. Maximum `1000` |
-| `pageSize`      | number  | No       | `1000`  | Number of items per page. Maximum `1000`          |
-| `startingToken` | string  | No       | `null`  | Pagination token from a previous response         |
-| `showArchived`  | boolean | No       | `false` | Include archived versions                         |
+| Parameter       | Type    | Required | Default | Description                                                                |
+| --------------- | ------- | -------- | ------- | -------------------------------------------------------------------------- |
+| `maxItems`      | number  | No       | `1000`  | Maximum number of items to return. Maximum `1000`                          |
+| `pageSize`      | number  | No       | `1000`  | Number of items per page. Maximum `1000`                                   |
+| `startingToken` | string  | No       | `null`  | Pagination token from a previous response                                  |
+| `showArchived`  | boolean | No       | `false` | Include archived versions, and also list the versions of an archived asset |
 
 A `maxItems` or `pageSize` above `1000` is rejected with `400`. For the token pattern, see
 [Pagination](overview.md#pagination).
@@ -89,9 +89,15 @@ GET /database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId}
 | `assetId`        | string | Yes      | Asset identifier    |
 | `assetVersionId` | string | Yes      | Version identifier  |
 
+### Query parameters
+
+| Parameter      | Type    | Required | Default | Description                              |
+| -------------- | ------- | -------- | ------- | ---------------------------------------- |
+| `showArchived` | boolean | No       | `false` | Also find a version of an archived asset |
+
 ### Response
 
-Returns a single version object with full details including file listings.
+Returns a single version object with full details including file listings. Each file's `relativeKey` is its path in the asset without its leading `/` (`models/a.glb`), whichever form the version was created with.
 
 ### Error responses
 
@@ -128,7 +134,7 @@ POST /database/{databaseId}/assets/{assetId}/createVersion
 | `files`          | array   | No       | Explicit list of files and their S3 versions to include. Required unless `useLatestFiles` is `true`. |
 | `versionAlias`   | string  | No       | Human-readable version alias (up to 64 characters).                                                  |
 
-Provide either `useLatestFiles` set to `true` or a non-empty `files` list; the two are mutually exclusive. Each entry in `files` is an object with `relativeKey`, `versionId` (S3 version ID), and an optional `isArchived` flag.
+Provide either `useLatestFiles` set to `true` or a non-empty `files` list; the two are mutually exclusive. Each entry in `files` is an object with `relativeKey`, `versionId` (S3 version ID), and an optional `isArchived` flag. A `relativeKey` is the file's path in the asset, with or without its leading `/` (`/models/a.glb` and `models/a.glb` name the same file). The version stores the path without that `/`, so its file list shows `models/a.glb`. A path that starts with `//` names the file whose key has an empty segment after the asset's folder (`//x` is `{location}/x`, another file than `/x`), and the version stores it as `//x`. A request whose `files` name the same file twice (with and without the slash) or name a path made only of `/` answers `400`.
 
 ### Request body example
 

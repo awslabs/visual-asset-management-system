@@ -80,6 +80,24 @@ class TestCheckWebRoutes:
         assert allowed[0]['object__type'] == 'web'
 
     @patch('backend.backend.handlers.auth.routes.request_to_claims')
+    @patch('backend.backend.handlers.auth.routes.CasbinEnforcer')
+    def test_response_names_the_caller_as_user_id(self, mock_casbin, mock_claims):
+        mock_claims.return_value = dict(_CLAIMS)
+        mock_enforcer = MagicMock()
+        mock_enforcer.service_object.enforce.return_value = True
+        mock_casbin.return_value = mock_enforcer
+
+        response = lambda_handler(
+            _make_event(body={'routes': [{'method': 'GET', 'route__path': '/assets'}]}), {})
+
+        assert response['statusCode'] == 200
+        body = json.loads(response['body'])
+        body = body.get('message', body)
+        assert body['userId'] == _CLAIMS['tokens'][0]
+        # The deprecated field keeps the same value for older clients.
+        assert body['email'] == body['userId']
+
+    @patch('backend.backend.handlers.auth.routes.request_to_claims')
     def test_missing_body_returns_400(self, mock_claims):
         mock_claims.return_value = dict(_CLAIMS)
         event = _make_event()  # no body
@@ -107,6 +125,18 @@ class TestCheckWebRoutes:
         event = _make_event(body={'routes': [{'method': 'GET', 'route__path': '/assets'}]})
         response = lambda_handler(event, {})
         assert response['statusCode'] == 403
+
+    @patch('backend.backend.handlers.auth.routes.request_to_claims')
+    @patch('backend.backend.handlers.auth.routes.CasbinEnforcer')
+    def test_failed_claims_check_returns_403(self, mock_casbin, mock_claims):
+        """Claims marked by a raising custom claims check are refused before any route is checked;
+        this route has no Tier-1 check of its own to refuse them."""
+        mock_claims.return_value = {**_CLAIMS, "roles": [], "claimsCheckFailed": True}
+        mock_casbin.return_value.service_object.enforce.return_value = True
+        event = _make_event(body={'routes': [{'method': 'GET', 'route__path': '/assets'}]})
+        response = lambda_handler(event, {})
+        assert response['statusCode'] == 403
+        mock_casbin.return_value.service_object.enforce.assert_not_called()
 
 
 @pytest.mark.unit

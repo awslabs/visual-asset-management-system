@@ -11,7 +11,10 @@ Schema delivery: the static schema files (pipeline.json / workflow.json / templa
 uploaded to the artefacts bucket by CDK; the CR receives their S3 keys (avoids CFN property / lambda
 payload size limits) plus the small deploy-time values — resolved resource ids (Lambda name / SQS url /
 bus arn), optional id overrides, and the deploy-time trigger-enable flag. The CR fetches + merges +
-parses the bundle, then upserts. The CR is also invocable outside CloudFormation (a direct invoke with
+parses the bundle, then upserts. An optional ``executionConfigOverrides`` property (waitForCallback,
+taskTimeout, taskHeartbeatTimeout, lambdaName) lets a deployment register a bundle with a different
+execution config; the pipeline service then redeploys every workflow referencing the pipeline. The CR
+is also invocable outside CloudFormation (a direct invoke with
 an ``inlineBundle`` or ``bundleS3Keys`` payload) so external solutions can self-register.
 
 Idempotent re-register: on redeploy an existing built-in pipeline/workflow is UPDATED (and re-enabled —
@@ -21,14 +24,17 @@ execution history. DELETE archives (soft) rather than hard-deletes.
 
 import json
 import os
+from urllib.parse import quote
 
 import boto3
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from common.resourceNames import ResourceKeys, get_bucket_name
 from common.workflows import vamsSchemaImport as vsi
+from common.workflows.systemRecords import IMPORT_SOURCE_MARKER
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 
@@ -72,7 +78,9 @@ def _invoke(target, method, path, path_parameters, body=None, query_parameters=N
         "requestContext": {"http": {"method": method, "path": path}},
         "pathParameters": path_parameters or {},
         "queryStringParameters": dict(query_parameters or {}),
-        "lambdaCrossCall": {"userName": "SYSTEM_USER"},
+        # The identity the services authorize as, plus the marker they trust for the read-only
+        # exemption and for the isSystem flag a bundle declares.
+        "lambdaCrossCall": {"userName": "SYSTEM_USER", "source": IMPORT_SOURCE_MARKER},
     }
     if body is not None:
         event["body"] = json.dumps(body)
@@ -218,6 +226,22 @@ def _parse_json_prop(value):
     return dict(value)
 
 
+def _parse_overrides_prop(value, name):
+    """Normalize the optional executionConfigOverrides property to a dict. Unlike the id and resource
+    overrides, a value that is present but unparsable fails the registration: silently dropping it
+    would register the pipeline with the execution config the deployment meant to replace."""
+    if value is None or value == "":
+        return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            raise ImportError_(f"{name} is not valid JSON")
+    if not isinstance(value, dict):
+        raise ImportError_(f"{name} must be a JSON object")
+    return dict(value)
+
+
 def _parse_bool_prop(value):
     """Normalize an optional CloudFormation boolean-ish property to True/False/None. CloudFormation
     passes properties as strings, so "true"/"false" (case-insensitive) and actual bools are honored;
@@ -243,8 +267,14 @@ def register_bundle(resource_properties):
     # property arrives as a string; treat only "true" (case-insensitive) as True, absent as no override.
     trigger_enabled_override = _parse_bool_prop(resource_properties.get("triggerEnabled"))
 
+    # Optional deploy-time override of the pipeline's execution config (waitForCallback, timeouts,
+    # Lambda name). Absent builds exactly the request it always did.
+    execution_config_overrides = _parse_overrides_prop(
+        resource_properties.get("executionConfigOverrides"), "executionConfigOverrides")
+
     requests = vsi.build_import_requests(
-        bundle, resource_overrides, id_overrides, trigger_enabled_override=trigger_enabled_override)
+        bundle, resource_overrides, id_overrides, trigger_enabled_override=trigger_enabled_override,
+        execution_config_overrides=execution_config_overrides)
     ids = vsi.collect_ids(bundle, id_overrides)
 
     applied = []
@@ -273,12 +303,72 @@ def _archive_ids(resource_properties):
         }
 
 
+# Page size the archive path asks the trigger service for: its listing maximum.
+_TRIGGER_LIST_PAGE_SIZE = "500"
+
+
+def _list_workflow_trigger_keys(ids):
+    """Every trigger key of the workflow a bundle registered, read through the trigger service to
+    exhaustion. Returns [] when the workflow does not exist (404). Raises ImportError_ on any other
+    non-200 response or a transport failure."""
+    path = f"/database/{ids['workflowDatabaseId']}/workflows/{ids['workflowId']}/triggers"
+    path_parameters = {"databaseId": ids["workflowDatabaseId"], "workflowId": ids["workflowId"]}
+    keys = []
+    query = {"maxItems": _TRIGGER_LIST_PAGE_SIZE, "pageSize": _TRIGGER_LIST_PAGE_SIZE}
+    while True:
+        status_code, inner = _invoke(
+            vsi.TARGET_TRIGGER_SERVICE, "GET", path, path_parameters, query_parameters=query)
+        if status_code == 404:
+            return []
+        if status_code != 200:
+            raise ImportError_(
+                f"Unexpected status {status_code} listing triggers of workflow '{ids['workflowId']}'")
+        # A 200 whose body is not a listing page (a plain acknowledgement string) carries no keys.
+        page = inner.get("message")
+        page = page if isinstance(page, dict) else {}
+        keys.extend(item.get("triggerType") for item in page.get("Items") or [] if item.get("triggerType"))
+        next_token = page.get("NextToken")
+        if not next_token:
+            return keys
+        query = dict(query, startingToken=next_token)
+
+
+def _delete_workflow_triggers(ids, warnings):
+    """DELETE every trigger of the workflow before it is archived, appending a warning instead of
+    raising. A trigger row that outlives its workflow keeps matching uploads and costs a launch the
+    execute handler refuses, so the teardown removes them here as well as through the workflow
+    service's own archive."""
+    if not ids.get("workflowId"):
+        return
+    try:
+        trigger_keys = _list_workflow_trigger_keys(ids)
+    except Exception as e:
+        warnings.append(f"trigger listing: {e}")
+        return
+    for trigger_key in trigger_keys:
+        # The key travels percent-encoded, as API Gateway delivers it: a "type#triggerId" key carries
+        # a '#' that the trigger service decodes from the path parameter.
+        encoded = quote(trigger_key, safe="")
+        try:
+            status_code, inner = _invoke(
+                vsi.TARGET_TRIGGER_SERVICE, "DELETE",
+                f"/database/{ids['workflowDatabaseId']}/workflows/{ids['workflowId']}/triggers/{encoded}",
+                {"databaseId": ids["workflowDatabaseId"], "workflowId": ids["workflowId"],
+                 "triggerType": encoded})
+            if status_code not in (200, 404):
+                warnings.append(f"trigger delete {trigger_key}: {inner.get('message', status_code)}")
+        except Exception as e:
+            warnings.append(f"trigger delete {trigger_key}: {e}")
+
+
 def archive_bundle(resource_properties):
-    """Archive (soft-delete) the built-in pipeline + workflow a bundle registered. Best-effort: a
-    stack teardown is never blocked by a missing/already-archived resource."""
+    """Archive (soft-delete) the built-in pipeline + workflow a bundle registered, deleting the
+    workflow's triggers first. Best-effort: a stack teardown is never blocked by a missing/already-archived
+    resource."""
     ids = _archive_ids(resource_properties)
 
     warnings = []
+    _delete_workflow_triggers(ids, warnings)
     _archive_workflow(ids, warnings)
     _archive_pipeline(ids, warnings)
     return {"ids": ids, "warnings": warnings}
@@ -397,6 +487,17 @@ def _loggable_event(event):
     return loggable
 
 
+def _log_import(event, result, request_type):
+    """Record one import (a register or an archive) of a pipeline and workflow bundle."""
+    ids = result.get("ids") or {}
+    log_action(event, "pipelineImport", database_id=ids.get("pipelineDatabaseId"),
+               pipelineId=ids.get("pipelineId"), workflowId=ids.get("workflowId"),
+               item_count=len(result.get("applied") or []) if "applied" in result else None,
+               changes={"applied": result["applied"]} if result.get("applied") else None,
+               details={"requestType": request_type, "workflowDatabaseId": ids.get("workflowDatabaseId")})
+
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext):
     """CloudFormation custom resource + direct-invoke handler. A CloudFormation event carries
     RequestType; a direct invoke (external self-registration) omits it and is treated as a register.
@@ -411,6 +512,7 @@ def lambda_handler(event, context: LambdaContext):
     # Direct (non-CloudFormation) invoke: register + return the result inline.
     if "RequestType" not in event:
         result = register_bundle(event.get("ResourceProperties") or event)
+        _log_import(event, result, "Register")
         return {"statusCode": 200, "body": json.dumps(result)}
 
     request_type = event["RequestType"]
@@ -425,6 +527,7 @@ def lambda_handler(event, context: LambdaContext):
         except Exception as e:
             logger.exception(f"Delete failed: {e}")
             result = {"warnings": [str(e)]}
+        _log_import(event, result, request_type)
         return {"Data": _response_data(result)}
 
     if request_type not in ("Create", "Update"):
@@ -440,6 +543,7 @@ def lambda_handler(event, context: LambdaContext):
             event.get("OldResourceProperties") or {}, result.get("ids", {}))
         if superseded:
             result["warnings"] = list(result.get("warnings") or []) + superseded
+    _log_import(event, result, request_type)
 
     physical_id = event.get("PhysicalResourceId") or _physical_id(
         resource_properties, result.get("ids", {}), context.log_stream_name)

@@ -1,0 +1,158 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/**
+ * The state machine role's `batch:SubmitJob` grant on `job-definition/*` stays suppressed whether or
+ * not the deployment account resolves (#477).
+ *
+ * `BatchSubmitJob` grants SubmitJob on `arn:<partition>:batch:<region>:<account>:job-definition/*`.
+ * With the shipped templates' `env.account: null` and no AWS credentials (a CI job, a local check),
+ * the account is the `AWS::AccountId` pseudo parameter and cdk-nag reports the resource as
+ * `...:batch:us-east-1:<AWS::AccountId>:job-definition/*`. An `appliesTo` literal that interpolates
+ * `Stack.of(this).account` carries an unresolved token instead, matches nothing, and the synth fails
+ * on AwsSolutions-IAM5. The suppression is therefore a regex over the resource shape.
+ *
+ * Runs the AwsSolutions pack against the 3D preview thumbnail construct, the pipeline the defect was
+ * found on; the other constructs fixed under #477 take the same regex. Both account forms are covered,
+ * because the regex must keep matching the concrete account the literal matched.
+ */
+
+import * as cdk from "aws-cdk-lib";
+import * as fs from "fs";
+import * as path from "path";
+import { Annotations, Match, Template } from "aws-cdk-lib/assertions";
+import { AwsSolutionsChecks } from "cdk-nag";
+import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct";
+import { makePipelineHarness } from "../support/pipelineConstructHarness";
+
+/** A cdk-nag finding id for SubmitJob on every job definition, in either account form. */
+const JOB_DEFINITION_FINDING = String.raw`Resource::arn:<AWS::Partition>:batch:us-east-1:(<AWS::AccountId>|123456789012):job-definition/\*`;
+
+interface NagResult {
+    /** Unsuppressed AwsSolutions-IAM5 findings on job-definition/*. */
+    errors: string[];
+    /** The same finding reported as raised and suppressed (cdk-nag `logIgnores`). */
+    suppressed: string[];
+    /** The state machine role policy's SubmitJob resources, as emitted. */
+    submitJobResources: unknown[];
+}
+
+/** The part of an emitted IAM policy statement this suite reads. */
+interface PolicyStatement {
+    Action: string | string[];
+    Resource: unknown;
+}
+
+function synthWithNag(id: string, unresolvedAccount: boolean): NagResult {
+    const h = makePipelineHarness(
+        id,
+        (c) => {
+            c.app.pipelines.usePreview3dThumbnail.enabled = true;
+            c.app.pipelines.usePreview3dThumbnail.autoRegisterWithVAMS = false;
+        },
+        { unresolvedAccount }
+    );
+    const nested = new Preview3dThumbnailConstruct(h.stack, "Preview3dThumbnailPipeline", {
+        config: h.config,
+        storageResources: h.storage,
+        vpc: h.vpc,
+        pipelineSubnets: h.subnets,
+        pipelineSecurityGroups: h.securityGroups,
+        lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+        importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+    });
+    cdk.Aspects.of(h.stack).add(new AwsSolutionsChecks({ logIgnores: true, reports: false }));
+
+    // A nested stack is not an artifact of its own, so its constructs' annotations are read from the
+    // enclosing stack.
+    const annotations = Annotations.fromStack(h.stack);
+    const messages = (found: ReturnType<typeof annotations.findError>): string[] =>
+        found.map((m) => String(m.entry.data));
+    const errors = messages(
+        annotations.findError(
+            "*",
+            Match.stringLikeRegexp(String.raw`^AwsSolutions-IAM5\[${JOB_DEFINITION_FINDING}\]`)
+        )
+    );
+    const suppressed = messages(
+        annotations.findInfo(
+            "*",
+            Match.stringLikeRegexp(
+                String.raw`^CdkNagSuppression\[${JOB_DEFINITION_FINDING}\]: AwsSolutions-IAM5 was triggered but suppressed`
+            )
+        )
+    );
+
+    const submitJobResources = Object.values(
+        Template.fromStack(nested).findResources("AWS::IAM::Policy")
+    ).flatMap((policy) =>
+        (policy.Properties.PolicyDocument.Statement as PolicyStatement[])
+            .filter((s) => [s.Action].flat().includes("batch:SubmitJob"))
+            .flatMap((s) => [s.Resource].flat())
+    );
+
+    return { errors, suppressed, submitJobResources };
+}
+
+describe.each([
+    ["unresolved", true],
+    ["concrete", false],
+])("3D preview thumbnail job-definition IAM5 suppression, %s account", (label, unresolved) => {
+    let result: NagResult;
+
+    beforeAll(() => {
+        result = synthWithNag(`JobDefinitionNag-${label}`, unresolved);
+    });
+
+    test("[control] the state machine role is granted SubmitJob on job-definition/*", () => {
+        // Without the grant there is no finding to suppress, and the assertions below hold vacuously.
+        const rendered = JSON.stringify(result.submitJobResources);
+        expect(rendered).toContain(":job-definition/*");
+        expect(rendered).toContain(unresolved ? '"Ref":"AWS::AccountId"' : ":123456789012:");
+    });
+
+    test("[control] cdk-nag raises the finding and reports it suppressed", () => {
+        expect(result.suppressed.length).toBeGreaterThan(0);
+    });
+
+    test("no AwsSolutions-IAM5 job-definition finding is left unsuppressed", () => {
+        expect(result.errors).toEqual([]);
+    });
+});
+
+/**
+ * Every pipeline construct carries a copy of this suppression, and a new pipeline starts by copying
+ * one, so the literal form is forbidden across the tree rather than fixed in the constructs that
+ * happen to be synthesized above. A suppression that interpolates `${account}` into a `Resource::`
+ * appliesTo matches only when the account resolves.
+ */
+describe("pipeline constructs suppress job-definition/* by pattern, not by an interpolated account", () => {
+    const PIPELINES_DIR = path.join(__dirname, "../../lib/nestedStacks/pipelines");
+    const INTERPOLATED =
+        /Resource::arn:<AWS::Partition>:batch:\$\{region\}:\$\{account\}:job-definition/;
+    const PATTERN_FORM = "(?:\\\\d{12}|<AWS::AccountId>):job-definition";
+
+    const sources = (dir: string): string[] =>
+        fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) return sources(full);
+            return entry.name.endsWith(".ts") ? [full] : [];
+        });
+    const files = sources(PIPELINES_DIR).map((file) => ({
+        file: path.relative(PIPELINES_DIR, file),
+        text: fs.readFileSync(file, "utf-8"),
+    }));
+
+    test("[control] the scan reads the constructs that carry the suppression", () => {
+        // Fails if the directory moves or the regex form is renamed, rather than passing on no input.
+        expect(files.filter((f) => f.text.includes(PATTERN_FORM)).length).toBeGreaterThanOrEqual(
+            10
+        );
+    });
+
+    test("no construct interpolates the account into a job-definition appliesTo", () => {
+        expect(files.filter((f) => INTERPOLATED.test(f.text)).map((f) => f.file)).toEqual([]);
+    });
+});

@@ -4,11 +4,11 @@
  */
 
 /**
- * The RapidPipeline EKS monitor has two failure exits, and only one of them has no Kubernetes job to
- * delete.
+ * The RapidPipeline EKS failure exits that bypass a task Catch differ in whether a Kubernetes job can
+ * exist to delete.
  *
- *   * `HandleRunJobError` — RUN_JOB itself reported a failure, so no job was ever created. The literal
- *     `failure-before-creation` is the truthful value there.
+ *   * `HandleConstructPipelineError` — CONSTRUCT_PIPELINE returned no manifest, so no job was ever
+ *     created. The literal `failure-before-creation` is the truthful value there.
  *   * `Timeout Job` — the poll reached its ceiling while a job was running. A job DOES exist, and its
  *     name is the only handle `handle_pipeline_end` has for deleting it: it reads `$.k8sJobName` and
  *     keys `cleanup_completed_job(...)` / `delete_job(...)` off exactly that value.
@@ -16,6 +16,8 @@
  * Carrying the placeholder through the timeout exit therefore asks Kubernetes to delete a job that
  * never existed. Both deletes fail, only a log line records it, and the real pod keeps running on its
  * node until `activeDeadlineSeconds` expires — billing a 2 vCPU / 16 GiB node for the remainder.
+ * (`HandleRunJobError` carries the manifest's job name for the same reason; eksRunEndedMarker.test.ts
+ * covers it.)
  *
  * Asserted on the emitted state machine definition rather than the TypeScript, because what matters is
  * that the field arrives at PipelineEnd as a JSONPath reference resolved by Step Functions. The
@@ -34,19 +36,17 @@ const NO_JOB_PLACEHOLDER = "failure-before-creation";
 
 function enableEksPipeline(c: any) {
     c.app.useGlobalVpc.enabled = true;
-    c.app.pipelines.useRapidPipeline.enabled = true;
-    c.app.pipelines.useRapidPipeline.autoRegisterWithVAMS = false;
     c.app.pipelines.useRapidPipeline.useEks.enabled = true;
     c.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI =
         "709825985650.dkr.ecr.us-east-1.amazonaws.com/vendor/product:0.0.1";
 }
 
 /**
- * The EKS pipeline's state machine states, parsed out of the emitted `DefinitionString`. The
+ * The EKS pipeline's state machine definition, parsed out of the emitted `DefinitionString`. The
  * definition is emitted as an `Fn::Join` of literal fragments around CloudFormation tokens, so the
  * fragments are concatenated with a placeholder standing in for each token before parsing.
  */
-function eksStates(synth: SynthResult): Record<string, any> {
+function eksDefinition(synth: SynthResult): any {
     const definitions = Object.values(synth.templates)
         .flatMap((t: any) => Object.values(t.Resources ?? {}))
         .filter((r: any) => r.Type === "AWS::StepFunctions::StateMachine")
@@ -55,13 +55,14 @@ function eksStates(synth: SynthResult): Record<string, any> {
     for (const definition of definitions) {
         const joined = SynthResult.flatten(definition);
         if (!joined.includes("Timeout Job")) continue;
-        return JSON.parse(joined).States;
+        return JSON.parse(joined);
     }
     throw new Error("no emitted state machine carries a 'Timeout Job' state");
 }
 
 describe("EKS Timeout Job preserves the job name cleanup needs", () => {
     let synth: SynthResult;
+    let definition: any;
     let states: Record<string, any>;
 
     beforeAll(() => {
@@ -69,7 +70,8 @@ describe("EKS Timeout Job preserves the job name cleanup needs", () => {
             mutate: enableEksPipeline,
             mutateKey: "eks-timeout-job-cleanup",
         });
-        states = eksStates(synth);
+        definition = eksDefinition(synth);
+        states = definition.States;
     });
 
     test("the pipeline IS in this synth and both failure exits were emitted", () => {
@@ -79,14 +81,16 @@ describe("EKS Timeout Job preserves the job name cleanup needs", () => {
             1
         );
         expect(states["Timeout Job"]).toBeDefined();
-        expect(states["HandleRunJobError"]).toBeDefined();
+        expect(states["HandleConstructPipelineError"]).toBeDefined();
     });
 
-    test("the run-job failure exit keeps the placeholder", () => {
+    test("the construct-failure exit keeps the placeholder", () => {
         // The positive control for the literal itself: it is still written somewhere in this ASL, so
         // its absence from the timeout state is a real difference rather than a search that matched
-        // nothing. Deleting the k8s job is meaningless here because RUN_JOB never created one.
-        expect(states["HandleRunJobError"].Parameters.k8sJobName).toBe(NO_JOB_PLACEHOLDER);
+        // nothing. Deleting the k8s job is meaningless here because no manifest was ever built.
+        expect(states["HandleConstructPipelineError"].Parameters.k8sJobName).toBe(
+            NO_JOB_PLACEHOLDER
+        );
     });
 
     test("the poll-timeout exit carries the real job name as a JSONPath reference", () => {
@@ -121,8 +125,19 @@ describe("EKS Timeout Job preserves the job name cleanup needs", () => {
     });
 
     test("the bundle taskTimeout still bounds the run", () => {
-        // Reached through the same construct, so a change to the timeout chain that removed the
-        // timeout exit entirely would be visible here rather than silently making this file vacuous.
-        expect(Config.RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS).toBeGreaterThan(0);
+        // The parent workflow's pipeline task starts before this state machine does (vamsExecute and
+        // openPipeline run first), so the bundle taskTimeout — the parent's wait, which pipeline.json
+        // declares as this constant (eksJobTimeoutChain.test.ts) — must STRICTLY outlast the state
+        // machine's own timeout: the parent is then still waiting when PipelineEnd reports, and its
+        // taskTimeout is what releases it if States.Timeout stops the state machine. That timeout is
+        // read from the definition this construct emitted, not from config.ts, so a construct that
+        // stopped setting it, or set a longer one, fails here.
+        const stateMachineTimeout = definition.TimeoutSeconds;
+        // The control: an absent timeout must not make the comparison below pass vacuously.
+        expect(typeof stateMachineTimeout).toBe("number");
+        expect(stateMachineTimeout).toBeGreaterThan(0);
+        expect(Config.RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS).toBeGreaterThan(
+            stateMachineTimeout
+        );
     });
 });

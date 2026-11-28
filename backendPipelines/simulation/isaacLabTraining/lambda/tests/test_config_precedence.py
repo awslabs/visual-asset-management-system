@@ -42,7 +42,7 @@ for k, v in {"AWS_DEFAULT_REGION": "us-east-1", "AWS_REGION": "us-east-1"}.items
 _ASSET_FILE = json.dumps({
     "trainingConfig": {
         "mode": "train",
-        "task": "Isaac-Ant-v0",
+        "task": "Isaac-Ant",
         "numEnvs": 4096,
         "maxIterations": 9999,
         "checkpointPath": "checkpoints/from_file.pt",
@@ -112,7 +112,7 @@ class TestManifestConfigurationWins:
         # The selected file says "train"; the operator chose the evaluation template.
         definition = _definition(_event(trainingConfig={
             "mode": "evaluate",
-            "task": "Isaac-Cartpole-Direct-v0",
+            "task": "Isaac-Cartpole-Direct",
             "numEnvs": 100,
             "numEpisodes": 50,
             "checkpointPath": "checkpoints/model_499.pt",
@@ -123,27 +123,27 @@ class TestManifestConfigurationWins:
         definition = _definition(_event(
             trainingConfig={
                 "mode": "evaluate",
-                "task": "Isaac-Cartpole-Direct-v0",
+                "task": "Isaac-Cartpole-Direct",
                 "numEnvs": 100,
                 "checkpointPath": "checkpoints/model_499.pt",
             },
         ))
-        assert definition["trainingConfig"]["task"] == "Isaac-Cartpole-Direct-v0"
+        assert definition["trainingConfig"]["task"] == "Isaac-Cartpole-Direct"
         assert definition["trainingConfig"]["numEnvs"] == 100
         assert definition["trainingConfig"]["policyS3Uri"] == \
             "s3://asset-bucket/xid130a6/checkpoints/model_499.pt"
 
     def test_a_field_the_configuration_omits_falls_back_to_the_input_file(self):
         definition = _definition(_event(
-            trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct-v0"},
+            trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct"},
         ))
-        assert definition["trainingConfig"]["task"] == "Isaac-Cartpole-Direct-v0"
+        assert definition["trainingConfig"]["task"] == "Isaac-Cartpole-Direct"
         assert definition["trainingConfig"]["maxIterations"] == 9999
 
     def test_no_configuration_falls_back_entirely_to_the_input_file(self):
         definition = _definition(_event())
         assert definition["trainingConfig"]["mode"] == "train"
-        assert definition["trainingConfig"]["task"] == "Isaac-Ant-v0"
+        assert definition["trainingConfig"]["task"] == "Isaac-Ant"
         assert definition["trainingConfig"]["maxIterations"] == 9999
 
     def test_the_input_file_supplies_no_compute_section(self):
@@ -154,7 +154,7 @@ class TestManifestConfigurationWins:
 
     def test_a_blank_configuration_value_falls_through(self):
         definition = _definition(_event(trainingConfig={"mode": "train", "task": "   "}))
-        assert definition["trainingConfig"]["task"] == "Isaac-Ant-v0"
+        assert definition["trainingConfig"]["task"] == "Isaac-Ant"
 
 
 @pytest.mark.unit
@@ -213,19 +213,19 @@ class TestAnUnsupportedRlLibraryIsRejectedHere:
     def test_every_supported_library_still_reaches_the_container(self, library):
         # The paired arm: a handler that rejected everything would satisfy the cases above.
         definition = _definition(_event(trainingConfig={
-            "mode": "train", "task": "Isaac-Cartpole-Direct-v0", "rlLibrary": library}))
+            "mode": "train", "task": "Isaac-Cartpole-Direct", "rlLibrary": library}))
         assert definition["trainingConfig"]["rlLibrary"] == library
 
     @pytest.mark.parametrize("library", ["rsl_rl", "rl_games", "skrl"])
     def test_every_supported_library_still_reaches_evaluation(self, library):
         definition = _definition(_event(trainingConfig={
-            "mode": "evaluate", "task": "Isaac-Cartpole-Direct-v0",
+            "mode": "evaluate", "task": "Isaac-Cartpole-Direct",
             "checkpointPath": "checkpoints/model_499.pt", "rlLibrary": library}))
         assert definition["trainingConfig"]["rlLibrary"] == library
 
     def test_a_configuration_naming_no_library_defaults_rather_than_failing(self):
         definition = _definition(_event(trainingConfig={
-            "mode": "train", "task": "Isaac-Cartpole-Direct-v0"}))
+            "mode": "train", "task": "Isaac-Cartpole-Direct"}))
         assert definition["trainingConfig"]["rlLibrary"] == "rsl_rl"
 
     def test_a_null_library_in_the_input_file_falls_through_to_the_default(self):
@@ -233,7 +233,7 @@ class TestAnUnsupportedRlLibraryIsRejectedHere:
         # the merged configuration. The container reads a null as "absent"; so must this handler, or
         # the check would reject a configuration the container accepts.
         definition = _definition(
-            _event(trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct-v0"}),
+            _event(trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct"}),
             file_body=json.dumps({"trainingConfig": {"rlLibrary": None}}))
         assert definition["trainingConfig"]["rlLibrary"] == "rsl_rl"
 
@@ -255,12 +255,9 @@ class TestTheSupportedLibraryListsAgree:
         assert len(declared) == 1, "RL_LIBRARIES is no longer one literal in the container config"
         assert set(declared[0]) == set(_load().SUPPORTED_RL_LIBRARIES)
 
-    def test_the_lambda_list_matches_every_container_script_map(self):
+    def test_the_container_has_no_script_map_left_to_drift(self):
+        """Isaac Lab 3.0 takes the library as ``--rl_library <name>``; the container's per-library
+        script maps are gone, and its library check reads RL_LIBRARIES."""
         script_maps = _literal_assignments(
             os.path.join(_CONTAINER_DIR, "__main__.py"), "script_map")
-        # build_training_command and build_evaluation_command carry one each. The count is the
-        # positive control for the extraction: a parse that found no script map at all would leave
-        # the loop below asserting nothing.
-        assert len(script_maps) == 2, f"expected 2 script maps, found {len(script_maps)}"
-        for script_map in script_maps:
-            assert set(script_map) == set(_load().SUPPORTED_RL_LIBRARIES)
+        assert script_maps == []

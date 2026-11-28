@@ -1,0 +1,38 @@
+[WARNING] isaaclab.sh is deprecated and will be removed in Isaac Lab 3.1. Use 'uv run isaaclab' instead.
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/workspace/isaaclab/source/isaaclab/isaaclab/cli/__init__.py", line 222, in cli
+    subcommands[sys.argv[1]](sys.argv[2:])
+  File "/workspace/isaaclab/source/isaaclab/isaaclab/cli/__init__.py", line 62, in train
+    _exit_on_error(run_train_cli(args))
+                   ^^^^^^^^^^^^^^^^^^^
+  File "/workspace/isaaclab/source/isaaclab_rl/isaaclab_rl/entrypoints/dispatch.py", line 50, in run_train_cli
+    return run_cli("train", argv)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/isaaclab/source/isaaclab_rl/isaaclab_rl/entrypoints/dispatch.py", line 105, in run_cli
+    status = _run_backend(backends[library], backend_argv)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/isaaclab/source/isaaclab_rl/isaaclab_rl/entrypoints/dispatch.py", line 176, in _run_backend
+    return module.run(argv)
+           ^^^^^^^^^^^^^^^^
+  File "/workspace/isaaclab/source/isaaclab_rl/isaaclab_rl/entrypoints/backends/train_rsl_rl.py", line 120, in run
+    _run(args_cli)
+  File "/workspace/isaaclab/source/isaaclab_rl/isaaclab_rl/entrypoints/backends/train_rsl_rl.py", line 128, in _run
+    env_cfg, agent_cfg = resolve_task_config(args_cli.task, args_cli.agent)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/isaaclab/source/isaaclab_tasks/isaaclab_tasks/utils/hydra.py", line 467, in resolve_task_config
+    env_cfg, agent_cfg, hydra_args = register_task(
+                                     ^^^^^^^^^^^^^^
+  File "/workspace/isaaclab/source/isaaclab_tasks/isaaclab_tasks/utils/hydra.py", line 675, in register_task
+    raise ValueError(_format_unknown_presets_error(unknown, display))
+ValueError: Unknown preset(s): bogus
+
+Available presets (grouped by affected paths):
+
+  isaacsim_physx, newton_kamino, newton_mjwarp, ovphysx, physx
+    -> env.sim.physics
+
+[INFO]: Parsing configuration from: isaaclab_tasks.core.cartpole.cartpole_manager_env_cfg:CartpoleEnvCfg
+[INFO]: Parsing configuration from: isaaclab_tasks.core.cartpole.agents.rsl_rl_ppo_cfg:CartpolePPORunnerCfg
+[INFO]: Parsing configuration from: isaaclab_tasks.core.cartpole.cartpole_manager_env_cfg:CartpoleEnvCfg
+[INFO]: Parsing configuration from: isaaclab_tasks.core.cartpole.agents.rsl_rl_ppo_cfg:CartpolePPORunnerCfg

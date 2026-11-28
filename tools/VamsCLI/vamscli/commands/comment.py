@@ -1,6 +1,5 @@
 """Comment management commands for VamsCLI."""
 
-import uuid
 from builtins import list as builtin_list  # Avoid namespace collision with the 'list' command
 from typing import Any, Dict, List, Optional
 
@@ -42,7 +41,8 @@ def format_comment_list_output(result: Dict[str, Any]) -> str:
 
     lines = [f"Found {len(items)} comment(s):", "=" * 100]
     for item in items:
-        lines.append(f"Key: {item.get('assetVersionId:commentId', 'N/A')}")
+        lines.append(f"Comment ID: {item.get('commentId', 'N/A')}")
+        lines.append(f"Asset Version: {item.get('assetVersionId', 'N/A')}")
         lines.append(f"Owner: {item.get('commentOwnerUsername') or item.get('commentOwnerID', 'N/A')}")
         lines.append(f"Created: {item.get('dateCreated', 'N/A')}")
         if item.get('dateEdited'):
@@ -59,8 +59,10 @@ def format_comment_detail_output(result: Dict[str, Any]) -> str:
         return "No comment found."
 
     lines = ["Comment Details:", "=" * 100]
+    lines.append(f"  Database: {comment.get('databaseId', 'N/A')}")
     lines.append(f"  Asset: {comment.get('assetId', 'N/A')}")
-    lines.append(f"  Key: {comment.get('assetVersionId:commentId', 'N/A')}")
+    lines.append(f"  Comment ID: {comment.get('commentId', 'N/A')}")
+    lines.append(f"  Asset Version: {comment.get('assetVersionId', 'N/A')}")
     lines.append(f"  Owner: {comment.get('commentOwnerUsername') or comment.get('commentOwnerID', 'N/A')}")
     lines.append(f"  Created: {comment.get('dateCreated', 'N/A')}")
     if comment.get('dateEdited'):
@@ -74,36 +76,39 @@ def format_comment_detail_output(result: Dict[str, Any]) -> str:
 def comment():
     """Comment management commands.
 
-    A comment is addressed by its asset, the asset version it is attached to, and its own
-    comment ID. The API joins the last two into one path segment (`assetVersionId:commentId`),
-    which is why each command takes them as separate options rather than as one joined value.
+    A comment belongs to one asset, addressed by its database and asset ID (two databases may hold
+    assets with the same asset ID), and is addressed by its own comment ID, which the API
+    generates. The asset version a comment is about is recorded with it.
     """
     pass
 
 
 @comment.command()
+@click.option('-d', '--database-id', required=True, help='[REQUIRED] Database ID of the asset')
 @click.option('-a', '--asset-id', required=True, help='[REQUIRED] Asset ID to list comments for')
 @click.option('-v', '--asset-version-id', default=None,
               help='List only the comments attached to this asset version')
 @click.option('--page-size', type=int, default=None, help='Number of comments per page')
 @click.option('--max-items', type=int, default=None, help='Maximum total comments to fetch')
 @click.option('--starting-token', default=None, help='Token for pagination')
+@click.option('--show-archived', is_flag=True, help='Also find an archived asset')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list(ctx: click.Context, asset_id: str, asset_version_id: Optional[str],
+def list(ctx: click.Context, database_id: str, asset_id: str, asset_version_id: Optional[str],
          page_size: Optional[int], max_items: Optional[int], starting_token: Optional[str],
-         json_output: bool):
+         show_archived: bool, json_output: bool):
     """List the comments on an asset, or on one of its versions.
 
     The endpoint bounds the read with the pagination options but returns no continuation token,
     so a listing larger than the page cannot be followed to the next page.
 
     Examples:
-        vamscli comment list -a my-asset
-        vamscli comment list -a my-asset -v 1
-        vamscli comment list -a my-asset --page-size 50
-        vamscli comment list -a my-asset --json-output
+        vamscli comment list -d my-db -a my-asset
+        vamscli comment list -d my-db -a my-asset -v 1
+        vamscli comment list -d my-db -a my-asset --page-size 50
+        vamscli comment list -d my-db -a my-asset --json-output
+        vamscli comment list -d my-db -a my-archived-asset --show-archived
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -118,14 +123,10 @@ def list(ctx: click.Context, asset_id: str, asset_version_id: Optional[str],
         output_status(f"Retrieving comments for asset '{asset_id}'...", json_output)
 
     try:
-        if asset_version_id:
-            result = api_client.list_asset_version_comments(
-                asset_id, asset_version_id,
-                max_items=max_items, page_size=page_size, starting_token=starting_token)
-        else:
-            result = api_client.list_asset_comments(
-                asset_id,
-                max_items=max_items, page_size=page_size, starting_token=starting_token)
+        result = api_client.list_asset_comments(
+            database_id, asset_id,
+            max_items=max_items, page_size=page_size, starting_token=starting_token,
+            show_archived=show_archived, asset_version_id=asset_version_id)
 
         items = _comment_items(result)
         output_result(
@@ -147,20 +148,18 @@ def list(ctx: click.Context, asset_id: str, asset_version_id: Optional[str],
 
 
 @comment.command()
+@click.option('-d', '--database-id', required=True, help='[REQUIRED] Database ID of the asset')
 @click.option('-a', '--asset-id', required=True, help='[REQUIRED] Asset ID the comment is on')
-@click.option('-v', '--asset-version-id', required=True,
-              help='[REQUIRED] Asset version ID the comment is attached to')
 @click.option('-c', '--comment-id', required=True, help='[REQUIRED] Comment ID')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def get(ctx: click.Context, asset_id: str, asset_version_id: str, comment_id: str,
-        json_output: bool):
+def get(ctx: click.Context, database_id: str, asset_id: str, comment_id: str, json_output: bool):
     """Get a single comment.
 
     Examples:
-        vamscli comment get -a my-asset -v 1 -c c9f1a0b2
-        vamscli comment get -a my-asset -v 1 -c c9f1a0b2 --json-output
+        vamscli comment get -d my-db -a my-asset -c 3f2c9a1e-5b7d-4c11-9e0a-2d6f8b4c1a90
+        vamscli comment get -d my-db -a my-asset -c 3f2c9a1e-5b7d-4c11-9e0a-2d6f8b4c1a90 --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -170,7 +169,7 @@ def get(ctx: click.Context, asset_id: str, asset_version_id: str, comment_id: st
     output_status(f"Retrieving comment '{comment_id}'...", json_output)
 
     try:
-        result = api_client.get_comment(asset_id, asset_version_id, comment_id)
+        result = api_client.get_comment(database_id, asset_id, comment_id)
         output_result(
             _message(result),
             json_output,
@@ -181,7 +180,7 @@ def get(ctx: click.Context, asset_id: str, asset_version_id: str, comment_id: st
         output_error(
             e, json_output,
             error_type="Comment Not Found",
-            helpful_message=f"Use 'vamscli comment list -a {asset_id}' to see existing comments.",
+            helpful_message=f"Use 'vamscli comment list -d {database_id} -a {asset_id}' to see existing comments.",
         )
         raise click.ClickException(str(e))
     except InvalidCommentDataError as e:
@@ -193,46 +192,41 @@ def get(ctx: click.Context, asset_id: str, asset_version_id: str, comment_id: st
 
 
 @comment.command()
+@click.option('-d', '--database-id', required=True, help='[REQUIRED] Database ID of the asset')
 @click.option('-a', '--asset-id', required=True, help='[REQUIRED] Asset ID to comment on')
 @click.option('-v', '--asset-version-id', required=True,
-              help='[REQUIRED] Asset version ID to attach the comment to')
+              help='[REQUIRED] Asset version ID the comment is about')
 @click.option('-b', '--comment-body', required=True, help='[REQUIRED] Comment text')
-@click.option('-c', '--comment-id', default=None,
-              help='Comment ID (generated when omitted; reusing an existing ID overwrites that comment)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def add(ctx: click.Context, asset_id: str, asset_version_id: str, comment_body: str,
-        comment_id: Optional[str], json_output: bool):
-    """Add a comment to an asset version.
+def add(ctx: click.Context, database_id: str, asset_id: str, asset_version_id: str,
+        comment_body: str, json_output: bool):
+    """Add a comment about an asset version.
 
-    The comment ID is generated when --comment-id is omitted, and is reported with the result so
-    a script can address the comment afterwards.
+    The API generates the comment ID; it is reported with the result so a script can address the
+    comment afterwards.
 
     Examples:
-        vamscli comment add -a my-asset -v 1 -b "Reviewed the geometry"
-        vamscli comment add -a my-asset -v 1 -c review-note-1 -b "Reviewed the geometry"
-        vamscli comment add -a my-asset -v 1 -b "Looks good" --json-output
+        vamscli comment add -d my-db -a my-asset -v 1 -b "Reviewed the geometry"
+        vamscli comment add -d my-db -a my-asset -v 1 -b "Looks good" --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
 
-    comment_id = comment_id or str(uuid.uuid4())
-
-    output_status(f"Adding comment '{comment_id}' to asset '{asset_id}'...", json_output)
+    output_status(f"Adding a comment to asset '{asset_id}'...", json_output)
 
     try:
-        result = api_client.add_comment(asset_id, asset_version_id, comment_id, comment_body)
+        result = api_client.add_comment(database_id, asset_id, asset_version_id, comment_body)
 
-        # The endpoint acknowledges with a status string, which would not tell a caller the ID of
-        # the comment it just created when that ID was generated here.
         payload = {
             'message': _message(result),
+            'databaseId': database_id,
             'assetId': asset_id,
             'assetVersionId': asset_version_id,
-            'commentId': comment_id,
+            'commentId': result.get('commentId') if isinstance(result, dict) else None,
         }
 
         output_result(
@@ -240,6 +234,7 @@ def add(ctx: click.Context, asset_id: str, asset_version_id: str, comment_body: 
             json_output,
             success_message="✓ Comment added successfully!",
             cli_formatter=lambda r: '\n'.join([
+                f"  Database: {r.get('databaseId')}",
                 f"  Asset: {r.get('assetId')}",
                 f"  Asset Version: {r.get('assetVersionId')}",
                 f"  Comment ID: {r.get('commentId')}",
@@ -259,23 +254,22 @@ def add(ctx: click.Context, asset_id: str, asset_version_id: str, comment_body: 
 
 
 @comment.command()
+@click.option('-d', '--database-id', required=True, help='[REQUIRED] Database ID of the asset')
 @click.option('-a', '--asset-id', required=True, help='[REQUIRED] Asset ID the comment is on')
-@click.option('-v', '--asset-version-id', required=True,
-              help='[REQUIRED] Asset version ID the comment is attached to')
 @click.option('-c', '--comment-id', required=True, help='[REQUIRED] Comment ID')
 @click.option('-b', '--comment-body', required=True, help='[REQUIRED] Replacement comment text')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def update(ctx: click.Context, asset_id: str, asset_version_id: str, comment_id: str,
+def update(ctx: click.Context, database_id: str, asset_id: str, comment_id: str,
            comment_body: str, json_output: bool):
     """Replace the text of a comment you created.
 
     Only the creator of a comment may edit it.
 
     Examples:
-        vamscli comment update -a my-asset -v 1 -c review-note-1 -b "Corrected note"
-        vamscli comment update -a my-asset -v 1 -c review-note-1 -b "Corrected note" --json-output
+        vamscli comment update -d my-db -a my-asset -c 3f2c9a1e-5b7d-4c11-9e0a-2d6f8b4c1a90 -b "Corrected note"
+        vamscli comment update -d my-db -a my-asset -c 3f2c9a1e-5b7d-4c11-9e0a-2d6f8b4c1a90 -b "Corrected note" --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -285,7 +279,7 @@ def update(ctx: click.Context, asset_id: str, asset_version_id: str, comment_id:
     output_status(f"Updating comment '{comment_id}'...", json_output)
 
     try:
-        result = api_client.update_comment(asset_id, asset_version_id, comment_id, comment_body)
+        result = api_client.update_comment(database_id, asset_id, comment_id, comment_body)
         output_result(
             _message(result),
             json_output,
@@ -295,7 +289,7 @@ def update(ctx: click.Context, asset_id: str, asset_version_id: str, comment_id:
         output_error(
             e, json_output,
             error_type="Comment Not Found",
-            helpful_message=f"Use 'vamscli comment list -a {asset_id}' to see existing comments.",
+            helpful_message=f"Use 'vamscli comment list -d {database_id} -a {asset_id}' to see existing comments.",
         )
         raise click.ClickException(str(e))
     except InvalidCommentDataError as e:
@@ -304,15 +298,14 @@ def update(ctx: click.Context, asset_id: str, asset_version_id: str, comment_id:
 
 
 @comment.command()
+@click.option('-d', '--database-id', required=True, help='[REQUIRED] Database ID of the asset')
 @click.option('-a', '--asset-id', required=True, help='[REQUIRED] Asset ID the comment is on')
-@click.option('-v', '--asset-version-id', required=True,
-              help='[REQUIRED] Asset version ID the comment is attached to')
 @click.option('-c', '--comment-id', required=True, help='[REQUIRED] Comment ID')
 @click.option('--confirm', is_flag=True, help='Confirm comment deletion')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def delete(ctx: click.Context, asset_id: str, asset_version_id: str, comment_id: str,
+def delete(ctx: click.Context, database_id: str, asset_id: str, comment_id: str,
            confirm: bool, json_output: bool):
     """Delete a comment you created.
 
@@ -320,8 +313,8 @@ def delete(ctx: click.Context, asset_id: str, asset_version_id: str, comment_id:
     a listing. Only the creator of a comment may delete it. The --confirm flag is required.
 
     Examples:
-        vamscli comment delete -a my-asset -v 1 -c review-note-1 --confirm
-        vamscli comment delete -a my-asset -v 1 -c review-note-1 --confirm --json-output
+        vamscli comment delete -d my-db -a my-asset -c 3f2c9a1e-5b7d-4c11-9e0a-2d6f8b4c1a90 --confirm
+        vamscli comment delete -d my-db -a my-asset -c 3f2c9a1e-5b7d-4c11-9e0a-2d6f8b4c1a90 --confirm --json-output
     """
     # Setup/auth already validated by decorator
     profile_manager = get_profile_manager_from_context(ctx)
@@ -347,7 +340,7 @@ def delete(ctx: click.Context, asset_id: str, asset_version_id: str, comment_id:
 
         output_status(f"Deleting comment '{comment_id}'...", json_output)
 
-        result = api_client.delete_comment(asset_id, asset_version_id, comment_id)
+        result = api_client.delete_comment(database_id, asset_id, comment_id)
         output_result(
             _message(result),
             json_output,
@@ -357,7 +350,7 @@ def delete(ctx: click.Context, asset_id: str, asset_version_id: str, comment_id:
         output_error(
             e, json_output,
             error_type="Comment Not Found",
-            helpful_message=f"Use 'vamscli comment list -a {asset_id}' to see existing comments.",
+            helpful_message=f"Use 'vamscli comment list -d {database_id} -a {asset_id}' to see existing comments.",
         )
         raise click.ClickException(str(e))
     except InvalidCommentDataError as e:

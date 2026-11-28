@@ -10,25 +10,25 @@ The following open-source projects are integrated into VAMS as viewer plugins, p
 
 ### 3D Viewers
 
-| Integration                                       | Purpose                                                     | License               | VAMS Component                                        |
-| ------------------------------------------------- | ----------------------------------------------------------- | --------------------- | ----------------------------------------------------- |
-| [Online 3D Viewer](https://3dviewer.net/)         | Web viewer for Rhinoceros 3D, AMF, BIM, OFF, VRML formats   | MIT                   | Viewer plugin (`online3d-viewer`)                     |
-| [CesiumJS](https://cesium.com/platform/cesiumjs/) | Geospatial 3D tileset viewer with streaming support         | Apache-2.0            | Viewer plugin (`cesium-viewer`)                       |
-| [Potree](https://potree.github.io/)               | Point cloud viewer for E57, LAS, LAZ formats                | BSD-2-Clause          | Viewer plugin (`potree-viewer`) + processing pipeline |
-| [BabylonJS](https://www.babylonjs.com/)           | Gaussian splat viewer for PLY and SPZ files                 | Apache-2.0            | Viewer plugin (`gaussian-splat-viewer-babylonjs`)     |
-| [PlayCanvas](https://playcanvas.com/)             | Gaussian splat viewer for PLY and SOG files                 | MIT                   | Viewer plugin (`gaussian-splat-viewer-playcanvas`)    |
-| [Needle Engine](https://needle.tools/)            | USD format WASM viewer for .usd, .usda, .usdc, .usdz        | Apache-2.0 (Modified) | Viewer plugin (`needletools-usd-viewer`)              |
-| [Three.js](https://threejs.org/)                  | General-purpose 3D viewer for mesh and optional CAD formats | MIT                   | Viewer plugin (`threejs-viewer`)                      |
+| Integration                                       | Purpose                                                     | License               | VAMS Component                                              |
+| ------------------------------------------------- | ----------------------------------------------------------- | --------------------- | ----------------------------------------------------------- |
+| [Online 3D Viewer](https://3dviewer.net/)         | Web viewer for Rhinoceros 3D, AMF, BIM, OFF, VRML formats   | MIT                   | Viewer plugins (`online3d-viewer`, `online3d-viewer-rhino`) |
+| [CesiumJS](https://cesium.com/platform/cesiumjs/) | Geospatial 3D tileset viewer with streaming support         | Apache-2.0            | Viewer plugin (`cesium-viewer`)                             |
+| [Potree](https://potree.github.io/)               | Point cloud viewer for E57, LAS, LAZ formats                | BSD-2-Clause          | Viewer plugin (`potree-viewer`) + processing pipeline       |
+| [BabylonJS](https://www.babylonjs.com/)           | Gaussian splat viewer for PLY, SPZ, SPLAT and SOG files     | Apache-2.0            | Viewer plugin (`gaussian-splat-viewer-babylonjs`)           |
+| [PlayCanvas](https://playcanvas.com/)             | Gaussian splat viewer for PLY and SOG files                 | MIT                   | Viewer plugin (`gaussian-splat-viewer-playcanvas`)          |
+| [Needle Engine](https://needle.tools/)            | USD format WASM viewer for .usd, .usda, .usdc, .usdz        | Apache-2.0 (Modified) | Viewer plugin (`needletools-usd-viewer`)                    |
+| [Three.js](https://threejs.org/)                  | General-purpose 3D viewer for mesh and optional CAD formats | MIT                   | Viewer plugin (`threejs-viewer`)                            |
 
 ### Processing Pipelines
 
-| Integration                                                                                                                                                 | Purpose                                              | License               | VAMS Component                                                      |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | --------------------- | ------------------------------------------------------------------- |
-| [Trimesh](https://trimesh.org/)                                                                                                                             | 3D mesh conversion and metadata extraction           | MIT                   | 3D Basic Conversion pipeline, CAD/Mesh Metadata Extraction pipeline |
-| [CadQuery](https://github.com/CadQuery/cadquery)                                                                                                            | Open-standard CAD conversion and metadata extraction | Apache-2.0 / LGPL-2.1 | CAD/Mesh Metadata Extraction pipeline, 3D Thumbnail pipeline        |
-| [Blender](https://www.blender.org/)                                                                                                                         | Preview file generation and metadata generation      | GNU GPLv3             | GenAI Metadata 3D Labeling pipeline                                 |
-| [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | Gaussian splat generation from media files           | MIT                   | Gaussian Splat Toolbox pipeline                                     |
-| [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacSim)                                                                                                   | Reinforcement learning training and evaluation       | Apache-2.0            | Isaac Lab Training pipeline                                         |
+| Integration                                                                                                                                                 | Purpose                                              | License               | VAMS Component                                               |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | --------------------- | ------------------------------------------------------------ |
+| [Trimesh](https://trimesh.org/)                                                                                                                             | 3D mesh conversion and metadata extraction           | MIT                   | 3D Basic Conversion pipeline, SYSTEM GenAI metadata pipeline |
+| [CadQuery](https://github.com/CadQuery/cadquery)                                                                                                            | Open-standard CAD conversion and metadata extraction | Apache-2.0 / LGPL-2.1 | SYSTEM GenAI metadata pipeline, 3D Thumbnail pipeline        |
+| [Blender](https://www.blender.org/)                                                                                                                         | Preview file generation and metadata generation      | GNU GPLv3             | GenAI Metadata 3D Labeling pipeline                          |
+| [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | Gaussian splat generation from media files           | MIT                   | Gaussian Splat Toolbox pipeline                              |
+| [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacSim)                                                                                                   | Reinforcement learning training and evaluation       | Apache-2.0            | Isaac Lab Training pipeline                                  |
 
 :::note
 The Isaac Lab Training pipeline uses NVIDIA Isaac Sim container images, which are subject to the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). You must set `acceptNvidiaEula: true` in the configuration to deploy this pipeline.
@@ -79,9 +79,9 @@ If you enable Garnet Framework integration on an existing VAMS deployment, use t
 
 ### Physna Sync
 
-The Physna Sync add-on performs a one-way synchronization of supported VAMS files, file attributes, file metadata, and asset metadata into a Physna tenant. It is intended for customers who want Physna's geometric and semantic 3D search to index their VAMS asset corpus.
+The Physna Sync [add-on](../developer/addons-overview.md) performs a one-way synchronization of supported VAMS files, file attributes, file metadata, and asset metadata into a Physna tenant. It is intended for customers who want Physna's geometric and semantic 3D search to index their VAMS asset corpus.
 
-Phase 1 implements VAMS-to-Physna sync only. Future phases will add bidirectional sync and additional in-VAMS UI surfaces.
+The synchronization runs in one direction, from VAMS to Physna.
 
 The Physna add-on also includes a **Physna Viewer** plugin that embeds the Physna-hosted 3D/CAD viewer directly inside VAMS for files that have been synced. A VAMS-authorized endpoint applies both authorization tiers and returns a Physna viewer token to the browser, which loads the viewer directly from Physna; the Physna client credentials stay in AWS Secrets Manager and are never sent to the browser. That token carries no asset scope, so Physna-hosted viewer access is flat across every synced database — see [Physna Viewer](../developer/physna-integration.md#physna-viewer) in the developer guide for the limitation and its side effects.
 
@@ -105,6 +105,18 @@ VAMS uploads 3D/CAD geometry formats, documents (`txt`, `pdf`), and images (`gif
 
 :::tip[Learn more]
 See [Physna Integration](../developer/physna-integration.md) for configuration, architecture diagrams, metadata precedence rules, and troubleshooting guidance.
+:::
+
+### Cloud Workstations
+
+| Integration                                                   | Purpose                                                                                                                                             | License    | VAMS Component               |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------------------------- |
+| [EDH](https://github.com/awslabs/engineering-development-hub) | Launch, connect to, renew, stop and delete Amazon DCV desktops on an EDH cluster, build desktop AMIs with EC2 Image Builder, and run container jobs | Apache-2.0 | Addon (`useEdhWorkstations`) |
+
+The EDH Workstations [add-on](../developer/addons-overview.md) turns an EDH cluster in the same AWS account into a workstation provider for VAMS users, who launch Amazon DCV desktops from VAMS and open them in the browser. Administrators register desktop images and, with the add-on's optional features, build them from AMI recipes and run container jobs on the cluster.
+
+:::tip[Learn more]
+See [EDH Workstations Add-on](../developer/edh-workstations/overview.md) for how the add-on works, its architecture, permissions and limits.
 :::
 
 ---
@@ -138,7 +150,7 @@ VNTANA provides both a viewer plugin and a processing pipeline (ModelOps).
 
 1. Subscribe to the VNTANA 3D Optimization Engine on the [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-ooio3bidshgy4).
 2. For the processing pipeline, set the container image URI in `app.pipelines.useModelOps.ecrContainerImageURI` and enable with `enabled: true`.
-3. For the viewer plugin, enable it in `web/src/visualizerPlugin/config/viewerConfig.json` by setting `"enabled": true` on the `vntana-viewer` entry.
+3. For the viewer plugin, enable it in `web/src/visualizerPlugin/config/addonViewerConfig.json` (the add-on viewer configuration) by setting `"enabled": true` on the `vntana-viewer` entry.
 4. Redeploy the stack.
 
 #### Veerum
@@ -148,9 +160,10 @@ VNTANA provides both a viewer plugin and a processing pipeline (ModelOps).
 The Veerum 3D Viewer provides advanced visualization for point cloud and 3D tileset files.
 
 1. Contact [Veerum](https://veerum.com/) to obtain a license.
-2. Enable the viewer in `web/src/visualizerPlugin/config/viewerConfig.json` by setting `"enabled": true` on the `veerum-viewer` entry.
+2. Enable the viewer in `web/src/visualizerPlugin/config/addonViewerConfig.json` (the add-on viewer configuration) by setting `"enabled": true` on the `veerum-viewer` entry.
 3. The Veerum Viewer requires the Potree Auto-Processing pipeline to be enabled for point cloud file loading.
-4. Rebuild and redeploy the web application.
+4. For files in an [external S3 bucket](../deployment/external-s3-setup.md#step-2-configure-cors), the Veerum Viewer reads files through the VAMS streaming route, which redirects to Amazon S3 with `Origin: null`. Add `null` to the bucket's CORS `AllowedOrigins` next to the VAMS web origin (prefer `null` over `*`); see the exposure notes in that section. The Cesium 3D Tileset Viewer does not need this while its presigned-URL request hook is active, which is normal; if the hook cannot be installed it falls back to the streaming route and the bucket then needs `null` as well.
+5. Rebuild and redeploy the web application.
 
 ---
 
@@ -158,7 +171,7 @@ The Veerum 3D Viewer provides advanced visualization for point cloud and 3D tile
 
 The following diagram illustrates how integrations connect to VAMS components:
 
-```
+```text
 VAMS Web Application
   |-- Viewer Plugins (Online 3D Viewer, CesiumJS, Potree, BabylonJS,
   |                    PlayCanvas, Needle Engine, Three.js, VNTANA, Veerum)
@@ -173,6 +186,7 @@ VAMS Backend
   |-- Addons
         |-- Amazon SQS --> Garnet Framework (Knowledge Graph)
         |-- Amazon SQS --> Physna Sync (Geometric 3D Search)
+        |-- HTTPS --> EDH Workstations (Amazon DCV Desktops)
 ```
 
 :::info

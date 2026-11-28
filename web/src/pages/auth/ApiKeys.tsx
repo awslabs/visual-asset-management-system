@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
@@ -24,12 +25,8 @@ import {
     deleteUserApiKey,
     fetchAllowedApiRoutes,
 } from "../../services/APIService";
-import { appCache } from "../../services/appCache";
-import {
-    isApiRouteAllowed,
-    ALLOWED_API_ROUTES_CACHE_KEY,
-    ALLOWED_API_ROUTES_CACHE_TTL_MILLIS,
-} from "../../common/constants/authRoutes";
+import { isApiRouteAllowed } from "../../common/constants/authRoutes";
+import { cacheAllowedApiRoutes } from "../../FedAuth/allowedApiRoutesCache";
 import {
     API_KEY_LISTING_PAGE_SIZE,
     USER_API_KEY_MAX_EXPIRATION_DAYS,
@@ -37,6 +34,10 @@ import {
 import CreateApiKey from "./CreateApiKey";
 import UpdateApiKey from "./UpdateApiKey";
 import { usePageTitle } from "../../hooks/usePageTitle";
+import { API_KEYS_ADMIN_NAV_HREF, useActiveNavHref } from "../../layout/activeNavHref";
+import { routeDisabledReason } from "../../features/orchestration/permissions/routeDisabledReason";
+import { useLatestRequest } from "../../components/compliance/listingFilters";
+import { pageReachable, tokenPagerCounts } from "../../components/compliance/listingStates";
 
 export type ApiKeyManagementMode = "admin" | "user"; // pragma: allowlist secret
 
@@ -65,6 +66,52 @@ export function apiKeyStatus(
     return nowMs > expiryMs ? "Expired" : "Active";
 }
 
+/** The `?mode=` the URL asks for, or null when it names no known mode. */
+export function requestedApiKeyMode(search: string): ApiKeyManagementMode | null {
+    const value = new URLSearchParams(search).get("mode");
+    return value === "admin" || value === "user" ? value : null;
+}
+
+/**
+ * The mode the page opens in. `?mode=` is a preference, honoured only for a mode the API's
+ * allowed-routes listing allowed, so a URL never opens the tenant-wide admin mode for a role the
+ * listing does not allow. Otherwise admin when allowed, else the user's own keys.
+ */
+export function resolveApiKeyMode(
+    requested: ApiKeyManagementMode | null,
+    adminAllowed: boolean,
+    userAllowed: boolean
+): ApiKeyManagementMode {
+    if (requested === "admin" && adminAllowed) return "admin";
+    if (requested === "user" && userAllowed) return "user";
+    return adminAllowed ? "admin" : "user";
+}
+
+/** Which key actions the allowed-routes listing offers in one mode. */
+interface ApiKeyActions {
+    create: boolean;
+    update: boolean;
+    remove: boolean;
+}
+
+const NO_API_KEY_ACTIONS: ApiKeyActions = { create: false, update: false, remove: false };
+
+/** The routes each mode's actions call. */
+const API_KEY_ROUTES: Record<ApiKeyManagementMode, { list: string; item: string }> = {
+    admin: { list: "/auth/api-keys", item: "/auth/api-keys/{apiKeyId}" },
+    user: { list: "/auth/user/api-keys", item: "/auth/user/api-keys/{apiKeyId}" },
+};
+
+/** The actions the cached allowed-routes listing offers in a mode (unknown counts as refused). */
+function allowedApiKeyActions(mode: ApiKeyManagementMode): ApiKeyActions {
+    const { list, item } = API_KEY_ROUTES[mode];
+    return {
+        create: isApiRouteAllowed(list, "POST") === true,
+        update: isApiRouteAllowed(item, "PUT") === true,
+        remove: isApiRouteAllowed(item, "DELETE") === true,
+    };
+}
+
 const API_KEY_STATUS_INDICATOR: Record<ApiKeyStatus, "success" | "stopped" | "error"> = {
     Active: "success",
     Inactive: "stopped",
@@ -72,7 +119,14 @@ const API_KEY_STATUS_INDICATOR: Record<ApiKeyStatus, "success" | "stopped" | "er
 };
 
 export default function ApiKeys() {
-    usePageTitle("API Keys");
+    // Matches the page's h1 and the navigation entry that opens it.
+    usePageTitle("API Key Management");
+
+    // The profile menu opens ?mode=user and Admin - Auth opens ?mode=admin; both are preferences,
+    // validated against the modes the API allowed (resolveApiKeyMode).
+    const location = useLocation();
+    const navigate = useNavigate();
+    const requestedMode = requestedApiKeyMode(location.search);
 
     // Available modes, resolved asynchronously from the allowed-API-routes
     // list. Admin mode: GET /auth/api-keys allowed. User mode:
@@ -89,6 +143,10 @@ export default function ApiKeys() {
     // guessing a privilege level.
     const [permissionsUnavailable, setPermissionsUnavailable] = useState(false);
     const [resolveAttempt, setResolveAttempt] = useState(0);
+    // Create, Edit and Delete per mode, from the same listing; the API still authorizes each call.
+    const [actionsByMode, setActionsByMode] = useState<Record<ApiKeyManagementMode, ApiKeyActions>>(
+        { admin: NO_API_KEY_ACTIONS, user: NO_API_KEY_ACTIONS }
+    );
 
     const [mode, setMode] = useState<ApiKeyManagementMode>("admin");
     const [reload, setReload] = useState(false);
@@ -107,11 +165,7 @@ export default function ApiKeys() {
                 try {
                     const result = await fetchAllowedApiRoutes();
                     if (result[0] === true && result[1]?.routes) {
-                        appCache.setItemWithExpiry(
-                            ALLOWED_API_ROUTES_CACHE_KEY,
-                            result[1],
-                            ALLOWED_API_ROUTES_CACHE_TTL_MILLIS
-                        );
+                        cacheAllowedApiRoutes(result[1]);
                         admin = isApiRouteAllowed("/auth/api-keys", "GET");
                         user = isApiRouteAllowed("/auth/user/api-keys", "GET");
                     } else if (result[2] === 404) {
@@ -132,7 +186,14 @@ export default function ApiKeys() {
             setPermissionsUnavailable(undeterminable);
             setShowAdminMode(adminMode);
             setShowUserMode(userMode);
-            setMode(adminMode ? "admin" : "user");
+            // With no listing served at all there is nothing to gate on, as for the modes.
+            const allActions: ApiKeyActions = { create: true, update: true, remove: true };
+            setActionsByMode(
+                listingAbsent
+                    ? { admin: allActions, user: allActions }
+                    : { admin: allowedApiKeyActions("admin"), user: allowedApiKeyActions("user") }
+            );
+            setMode(resolveApiKeyMode(requestedMode, adminMode, userMode));
             setModesResolved(!undeterminable);
             if (undeterminable) {
                 setLoading(false);
@@ -144,7 +205,29 @@ export default function ApiKeys() {
         return () => {
             cancelled = true;
         };
+        // The listing is resolved once per attempt; a later ?mode= change is applied by the
+        // effect below, without resolving the listing again.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [resolveAttempt]);
+
+    // Follow a later ?mode= change while the page stays mounted (for example the Admin - Auth link
+    // followed from the user view), within the allowed modes. The URL is kept on the mode shown, so
+    // the profile menu marks API Key Management as the current page on the user view only.
+    useEffect(() => {
+        if (modesResolved) {
+            const resolved = resolveApiKeyMode(requestedMode, showAdminMode, showUserMode);
+            setMode(resolved);
+            if (requestedMode !== resolved) {
+                navigate({ search: `?mode=${resolved}` }, { replace: true });
+            }
+        }
+    }, [requestedMode, modesResolved, showAdminMode, showUserMode, navigate]);
+
+    // Highlight Admin - Auth > "API Keys (all users)" only on the admin view, from the mode resolved
+    // against the API listing. The user view is opened from the profile menu and highlights no side
+    // link, and nothing is highlighted until the modes are known.
+    useActiveNavHref(modesResolved && mode === "admin" ? API_KEYS_ADMIN_NAV_HREF : "");
+
     const [allItems, setAllItems] = useState<any[]>([]);
     const [selectedItems, setSelectedItems] = useState<any[]>([]);
     const [createOpen, setCreateOpen] = useState(false);
@@ -155,15 +238,18 @@ export default function ApiKeys() {
     const [filterText, setFilterText] = useState("");
 
     // Server-side token paging: tokens[i] is the startingToken that fetches page i
-    // (tokens[0] is undefined). hasMore tracks whether the loaded page reported a
-    // NextToken, which is what Pagination's openEnd renders.
+    // (tokens[0] is undefined). hasMore tracks whether the page shown reported a NextToken
+    // (the counter's "+"); the pager follows the end of the walk (tokenPagerCounts).
     const [tokens, setTokens] = useState<Record<number, string | undefined>>({});
     const [hasMore, setHasMore] = useState(false);
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
     const [loadedPages, setLoadedPages] = useState(1);
+    // Only the latest load sets state: an answer for a mode switched away from is dropped.
+    const beginLoad = useLatestRequest();
 
     const loadPage = useCallback(
         async (pageNumber: number, startingToken: string | undefined) => {
+            const isCurrent = beginLoad();
             setLoading(true);
             setError(null);
             setSelectedItems([]);
@@ -173,6 +259,7 @@ export default function ApiKeys() {
                     pageSize: API_KEY_LISTING_PAGE_SIZE,
                     startingToken,
                 });
+                if (!isCurrent()) return;
                 if (result === false || (Array.isArray(result) && result[0] === false)) {
                     const errorMsg = Array.isArray(result) ? result[1] : "Failed to fetch API keys";
                     setError(errorMsg);
@@ -192,15 +279,18 @@ export default function ApiKeys() {
                 }
             } catch (err: any) {
                 console.log(err);
+                if (!isCurrent()) return;
                 setError(err?.message || "Unknown error");
                 setAllItems([]);
                 setHasMore(false);
             } finally {
-                setLoading(false);
-                setReload(false);
+                if (isCurrent()) {
+                    setLoading(false);
+                    setReload(false);
+                }
             }
         },
-        [mode]
+        [mode, beginLoad]
     );
 
     useEffect(() => {
@@ -224,9 +314,30 @@ export default function ApiKeys() {
 
     const handlePageChange = ({ detail }: any) => {
         const newIndex = detail.currentPageIndex;
+        if (!pageReachable(tokens, newIndex)) return;
         setCurrentPageIndex(newIndex);
         loadPage(newIndex - 1, tokens[newIndex - 1]);
     };
+
+    const actions = actionsByMode[mode];
+    const createDisabledReason = routeDisabledReason(
+        !modesResolved,
+        false,
+        actions.create,
+        "Your role does not allow creating API keys."
+    );
+    const editDisabledReason = routeDisabledReason(
+        !modesResolved,
+        false,
+        actions.update,
+        "Your role does not allow editing API keys."
+    );
+    const deleteDisabledReason = routeDisabledReason(
+        !modesResolved,
+        false,
+        actions.remove,
+        "Your role does not allow deleting API keys."
+    );
 
     // Whether the listing spans more than the page shown. Only then are the filter and the
     // column sorting narrower than the whole key set, so only then is it worth saying so.
@@ -390,9 +501,13 @@ export default function ApiKeys() {
                         <Box padding={{ bottom: "s" }}>
                             <SegmentedControl
                                 selectedId={mode}
-                                onChange={({ detail }) =>
-                                    setMode(detail.selectedId as ApiKeyManagementMode)
-                                }
+                                onChange={({ detail }) => {
+                                    const selected = detail.selectedId as ApiKeyManagementMode;
+                                    setMode(selected);
+                                    // Keep the URL in step, so a menu link to the other mode
+                                    // still switches the view.
+                                    navigate({ search: `?mode=${selected}` }, { replace: true });
+                                }}
                                 label="API key management mode"
                                 options={[
                                     { text: "All Keys (Admin)", id: "admin" },
@@ -415,8 +530,7 @@ export default function ApiKeys() {
                         pagination={
                             <Pagination
                                 currentPageIndex={currentPageIndex}
-                                pagesCount={hasMore ? loadedPages + 1 : loadedPages}
-                                openEnd={hasMore}
+                                {...tokenPagerCounts(tokens, loadedPages)}
                                 onChange={handlePageChange}
                                 disabled={loading}
                                 ariaLabels={{
@@ -464,20 +578,27 @@ export default function ApiKeys() {
                                 actions={
                                     <SpaceBetween direction="horizontal" size="xs">
                                         <Button
-                                            disabled={!modesResolved || selectedItems.length !== 1}
+                                            disabled={
+                                                !!editDisabledReason || selectedItems.length !== 1
+                                            }
+                                            disabledReason={editDisabledReason}
                                             onClick={() => setEditOpen(true)}
                                         >
                                             Edit
                                         </Button>
                                         <Button
-                                            disabled={!modesResolved || selectedItems.length !== 1}
+                                            disabled={
+                                                !!deleteDisabledReason || selectedItems.length !== 1
+                                            }
+                                            disabledReason={deleteDisabledReason}
                                             onClick={() => setDeleteConfirmOpen(true)}
                                         >
                                             Delete
                                         </Button>
                                         <Button
                                             variant="primary"
-                                            disabled={!modesResolved}
+                                            disabled={!!createDisabledReason}
+                                            disabledReason={createDisabledReason}
                                             onClick={() => setCreateOpen(true)}
                                             data-testid="create-api-key-button"
                                         >
@@ -496,7 +617,8 @@ export default function ApiKeys() {
                                     No API keys have been created yet.
                                 </Box>
                                 <Button
-                                    disabled={!modesResolved}
+                                    disabled={!!createDisabledReason}
+                                    disabledReason={createDisabledReason}
                                     onClick={() => setCreateOpen(true)}
                                 >
                                     Create API Key

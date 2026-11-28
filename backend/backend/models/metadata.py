@@ -12,8 +12,9 @@ import re
 from datetime import datetime
 import geojson
 from customLogging.logger import safeLogger
+from common.validators import show_archived_model_value
 
-logger = safeLogger(service_name="MetadataModels")
+logger = safeLogger()
 
 #######################
 # Metadata Value Types and Validation
@@ -574,6 +575,9 @@ class GetAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
     maxItems: Optional[int] = Field(default=DEFAULT_METADATA_MAX_ITEMS, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Maximum items to return")
     pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
+    showArchived: Optional[bool] = Field(default=False, description="Also resolve a linked asset that is archived")
+
+    _parse_show_archived = validator('showArchived', pre=True, allow_reuse=True)(show_archived_model_value)
 
 
 class CreateAssetLinkMetadataRequestModel(BaseModel, extra='ignore'):
@@ -701,6 +705,9 @@ class GetAssetMetadataRequestModel(BaseModel, extra='ignore'):
     pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
     assetVersionId: Optional[str] = Field(None, max_length=MAX_ASSET_VERSION_ID_LENGTH, description="Optional asset version ID to retrieve metadata snapshot")
+    showArchived: Optional[bool] = Field(default=False, description="Also resolve an archived asset")
+
+    _parse_show_archived = validator('showArchived', pre=True, allow_reuse=True)(show_archived_model_value)
 
 
 class CreateAssetMetadataRequestModel(BaseModel, extra='ignore'):
@@ -831,22 +838,25 @@ class GetFileMetadataRequestModel(BaseModel, extra='ignore'):
     pageSize: Optional[int] = Field(default=DEFAULT_METADATA_PAGE_SIZE, ge=1, le=MAX_METADATA_PAGE_SIZE, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
     assetVersionId: Optional[str] = Field(None, max_length=MAX_ASSET_VERSION_ID_LENGTH, description="Optional asset version ID to retrieve metadata snapshot")
+    showArchived: Optional[bool] = Field(default=False, description="Also resolve an archived asset")
+
+    _parse_show_archived = validator('showArchived', pre=True, allow_reuse=True)(show_archived_model_value)
 
     @root_validator
     def validate_fields(cls, values):
-        """Normalize and validate file path"""
+        """Validate file path"""
         from common.validators import validate
 
-        # Normalize: Add leading slash if missing
-        file_path = values.get('filePath', '')
-        if file_path and not file_path.startswith('/'):
-            values['filePath'] = '/' + file_path
-            logger.info(f"Normalized filePath by adding leading slash: {file_path} -> {values['filePath']}")
-        
+        # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a
+        # path without one is the file's full key when the asset holds it (metadataService.file_record_path).
+        # The validator reads a path with a leading slash, so it checks a copy that has one.
+        file_path = values.get('filePath')
+        validated_path = '/' + file_path if file_path and not file_path.startswith('/') else file_path
+
         # Validate filePath format
         (valid, message) = validate({
             'filePath': {
-                'value': values.get('filePath'),
+                'value': validated_path,
                 'validator': 'RELATIVE_FILE_PATH'
             }
         })
@@ -869,19 +879,19 @@ class CreateFileMetadataRequestModel(BaseModel, extra='ignore'):
 
     @root_validator
     def validate_fields(cls, values):
-        """Normalize and validate file path and attribute type constraints"""
+        """Validate file path and attribute type constraints"""
         from common.validators import validate
         
-        # Normalize: Add leading slash if missing
-        file_path = values.get('filePath', '')
-        if file_path and not file_path.startswith('/'):
-            values['filePath'] = '/' + file_path
-            logger.info(f"Normalized filePath by adding leading slash: {file_path} -> {values['filePath']}")
-        
+        # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a
+        # path without one is the file's full key when the asset holds it (metadataService.file_record_path).
+        # The validator reads a path with a leading slash, so it checks a copy that has one.
+        file_path = values.get('filePath')
+        validated_path = '/' + file_path if file_path and not file_path.startswith('/') else file_path
+
         # Validate filePath format
         (valid, message) = validate({
             'filePath': {
-                'value': values.get('filePath'),
+                'value': validated_path,
                 'validator': 'RELATIVE_FILE_PATH'
             }
         })
@@ -922,19 +932,19 @@ class UpdateFileMetadataRequestModel(BaseModel, extra='ignore'):
 
     @root_validator
     def validate_fields(cls, values):
-        """Normalize and validate file path and attribute type constraints"""
+        """Validate file path and attribute type constraints"""
         from common.validators import validate
         
-        # Normalize: Add leading slash if missing
-        file_path = values.get('filePath', '')
-        if file_path and not file_path.startswith('/'):
-            values['filePath'] = '/' + file_path
-            logger.info(f"Normalized filePath by adding leading slash: {file_path} -> {values['filePath']}")
-        
+        # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a
+        # path without one is the file's full key when the asset holds it (metadataService.file_record_path).
+        # The validator reads a path with a leading slash, so it checks a copy that has one.
+        file_path = values.get('filePath')
+        validated_path = '/' + file_path if file_path and not file_path.startswith('/') else file_path
+
         # Validate filePath format
         (valid, message) = validate({
             'filePath': {
-                'value': values.get('filePath'),
+                'value': validated_path,
                 'validator': 'RELATIVE_FILE_PATH'
             }
         })
@@ -972,19 +982,19 @@ class DeleteFileMetadataRequestModel(BaseModel, extra='ignore'):
 
     @root_validator
     def validate_fields(cls, values):
-        """Normalize and validate file path"""
+        """Validate file path"""
         from common.validators import validate
         
-        # Normalize: Add leading slash if missing
-        file_path = values.get('filePath', '')
-        if file_path and not file_path.startswith('/'):
-            values['filePath'] = '/' + file_path
-            logger.info(f"Normalized filePath by adding leading slash: {file_path} -> {values['filePath']}")
-        
+        # filePath keeps the caller's form: a leading slash marks the file's path in the asset, and a
+        # path without one is the file's full key when the asset holds it (metadataService.file_record_path).
+        # The validator reads a path with a leading slash, so it checks a copy that has one.
+        file_path = values.get('filePath')
+        validated_path = '/' + file_path if file_path and not file_path.startswith('/') else file_path
+
         # Validate filePath format
         (valid, message) = validate({
             'filePath': {
-                'value': values.get('filePath'),
+                'value': validated_path,
                 'validator': 'RELATIVE_FILE_PATH'
             }
         })

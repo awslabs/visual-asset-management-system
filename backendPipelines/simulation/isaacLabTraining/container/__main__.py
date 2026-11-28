@@ -11,13 +11,20 @@ Supports both training and evaluation modes:
 
 import json
 import os
+import re
 import sys
 import subprocess
 import glob
 import traceback
 import boto3
 from utils.aws.s3 import S3Client
-from utils.training.config import PipelineConfig
+from utils.aws.staging import STAGED_ASSET_FILES_ENV, stage_asset_files
+from utils.training.config import (
+    PipelineConfig, PHYSICS_ENGINES, RL_LIBRARIES, TASK_DEFAULT_PHYSICS)
+from utils.training.checkpoints import find_checkpoints, old_rsl_rl_checkpoint_message
+from utils.training.task_physics import (
+    NO_PRESETS_NOTE, is_typed_preset_rejection, isaac_lab_version, preset_error_message,
+    run_isaac_lab, unknown_preset_message)
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -30,8 +37,36 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 EFS_CHECKPOINT_PATH = "/mnt/efs/checkpoints"
 LOCAL_LOG_PATH = "/workspace/isaaclab/logs"
 
+# Where the evaluation policy is downloaded. Isaac Lab's play.py derives its run folder from the
+# --checkpoint path (the checkpoint's folder for rsl_rl, the folder above it for rl_games and skrl)
+# and records the video under <run folder>/videos/play; rsl_rl also exports policy.pt and
+# policy.onnx to <checkpoint folder>/exported. Two levels below LOCAL_LOG_PATH, which the image
+# gives the non-root user, keeps all of those writes in a folder that user owns and under the
+# video upload's search root, LOCAL_LOG_PATH/**/videos/** (issue #1312).
+EVALUATION_POLICY_PATH = f"{LOCAL_LOG_PATH}/evaluation/checkpoints/policy.pt"
+
 # Package formats pip can install from a downloaded archive
 ENVIRONMENT_PACKAGE_SUFFIXES = (".tar.gz", ".tgz", ".zip", ".whl")
+
+# Isaac Lab 3.0.0 runs in /opt/isaaclab-venv on Python 3.12 (Isaac Lab 2.3.0 ran Python 3.11). Custom
+# environments are installed with that interpreter, and a wheel built for Python 3.11 cannot import.
+ISAAC_LAB_PYTHON = "/opt/isaaclab-venv/bin/python"
+ISAAC_LAB_PYTHON_TAG = "cp312"
+_WHEEL_PYTHON_TAG = re.compile(r"-(cp3\d+)-cp3\d+[a-z]*-[^-]+\.whl$")
+
+# The visualizer playback records with. Newton state is not visible to a Kit visualizer without
+# extra work and Isaac Lab warns that Kit frames can come out black under Newton, so evaluation on
+# Newton records through Newton's own GL viewer (issue #1669, owner decision D10). PhysX keeps the
+# default Kit visualizer. Training passes ``--viz none`` on both engines: the container has no
+# display, and ``--headless`` no longer switches visualizers off in Isaac Lab 3.0.
+NEWTON_VIDEO_VISUALIZER = "newton_gl"
+
+# Wall-clock bound on the play process (see evaluation_time_limit).
+EVALUATION_TIME_LIMIT_FLOOR_SECONDS = 1800
+EVALUATION_SECONDS_PER_STEP = 0.1
+# 7.5 hours: the evaluation workflow step allows 9 hours from its start, and the 1.5 hour margin covers
+# the wait for a GPU instance and the image pull, so the watchdog's readable failure comes first.
+EVALUATION_TIME_LIMIT_CAP_SECONDS = 27000
 
 # Get region from environment (set by Batch job definition)
 AWS_REGION = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-west-2"))
@@ -205,6 +240,14 @@ def run_pipeline():
     print(f"Task: {config.task}")
     print(f"Num Envs: {config.num_envs}")
     print(f"RL Library: {config.rl_library}")
+    print(f"Physics: {config.physics}")
+    if config.physics == TASK_DEFAULT_PHYSICS:
+        print(NO_PRESETS_NOTE.format(task=config.task))
+    print(f"Isaac Lab: {isaac_lab_version()}")
+    if config.task_id_requested:
+        print(f"Task id {config.task_id_requested} was mapped to {config.task} "
+              f"for Isaac Lab {isaac_lab_version()}")
+    print(f"NVIDIA driver: {gpu_driver_version() or 'unknown'}")
     print(f"Input S3 Path: {config.input_s3_path}")
     print(f"Output S3 Path: {config.output_s3_path}")
     
@@ -214,10 +257,18 @@ def run_pipeline():
         print(f"Policy: {config.policy_s3_uri}")
         print(f"Num Episodes: {config.num_episodes}")
         print(f"Record Video: {config.record_video}")
+        if config.physics_note:
+            print(f"NOTE: {config.physics_note}")
     
     print("=" * 60)
 
     s3 = S3Client()
+    # Sign each asset bucket's requests for its own Region before any S3 call (see utils/aws/s3.py).
+    s3.register_bucket_regions(job_config.get("bucketRegions"))
+
+    # Stage the asset files the task reads from disk, before any package code runs in the container
+    if config.stage_asset_files:
+        stage_assets(s3, config)
 
     # Download and install custom environment if provided
     if config.custom_environment_s3_uri:
@@ -246,14 +297,15 @@ def run_training(config: PipelineConfig, s3: S3Client, job_config: dict):
     """Execute training workflow."""
     checkpoint_dir = setup_checkpoint_dir(config)
 
-    cmd = build_training_command(config, checkpoint_dir)
-    print(f"Executing: {' '.join(cmd)}")
-
-    result = subprocess.run(cmd, cwd="/workspace/isaaclab", capture_output=False) # nosemgrep: dangerous-subprocess-use-audit
+    result = run_with_preset_fallback(
+        config, lambda: build_training_command(config, checkpoint_dir), cwd="/workspace/isaaclab")
 
     if result.returncode != 0:
         print(f"ERROR: Training failed with exit code {result.returncode}")
         upload_logs(s3, config)
+        refusal = preset_failure_message(config, result.tail)
+        if refusal:
+            raise RuntimeError(refusal)
         # Raise rather than exit: main() owns the Step Functions failure callbacks, and
         # SystemExit would bypass them and leave the workflow task waiting for its timeout.
         raise RuntimeError(f"Training failed with exit code {result.returncode}")
@@ -267,19 +319,91 @@ def run_evaluation(config: PipelineConfig, s3: S3Client, job_config: dict):
     """Execute evaluation workflow."""
     # Find policy file - either from explicit URI or from input directory
     policy_path = download_policy(s3, config)
-    
-    cmd = build_evaluation_command(config, policy_path)
-    print(f"Executing: {' '.join(cmd)}")
 
-    result = subprocess.run(cmd, cwd="/workspace/isaaclab", capture_output=False) # nosemgrep: dangerous-subprocess-use-audit
+    if config.rl_library == "rsl_rl":
+        problem = old_rsl_rl_checkpoint_message(policy_path)
+        if problem:
+            print(f"ERROR: {problem}")
+            upload_logs(s3, config)
+            raise RuntimeError(problem)
+
+    limit = evaluation_time_limit(config)
+    result = run_with_preset_fallback(
+        config, lambda: build_evaluation_command(config, policy_path), cwd="/workspace/isaaclab",
+        timeout_seconds=limit)
+
+    if result.timed_out:
+        print(f"ERROR: Evaluation did not finish within {limit} seconds")
+        upload_logs(s3, config)
+        raise RuntimeError(
+            f"Evaluation on physics={config.physics} did not finish within {limit} seconds and was "
+            f"stopped. The playback of {config.num_episodes * config.steps_per_episode} steps "
+            "should end well before that; check the run log for where it stopped.")
 
     if result.returncode != 0:
         print(f"ERROR: Evaluation failed with exit code {result.returncode}")
         upload_logs(s3, config)
+        refusal = preset_failure_message(config, result.tail)
+        if refusal:
+            raise RuntimeError(refusal)
         raise RuntimeError(f"Evaluation failed with exit code {result.returncode}")
 
     upload_evaluation_results(s3, config, job_config)
     print("Evaluation complete")
+
+
+def run_with_preset_fallback(config: PipelineConfig, build_command, cwd: str, **kwargs):
+    """Run the Isaac Lab command; when the task has no physics presets, run it again without one.
+
+    A task that lists no preset of the physics type rejects ``physics=<engine>`` during
+    configuration validation, before Isaac Sim starts. The Lambda leaves the override out for the
+    tasks it knows; for any other (a custom or ported environment) this reads the rejection and
+    runs once more with no selector, so the task runs on the physics it registers. The run is
+    recorded as ``task-default``. Any other failure is returned as it is.
+    """
+    cmd = build_command()
+    print(f"Executing: {' '.join(cmd)}")
+    result = run_isaac_lab(cmd, cwd=cwd, **kwargs)
+    if (result.returncode != 0 and not getattr(result, "timed_out", False)
+            and config.physics != TASK_DEFAULT_PHYSICS and is_typed_preset_rejection(result.tail)):
+        print(NO_PRESETS_NOTE.format(task=config.task))
+        config.physics = TASK_DEFAULT_PHYSICS
+        cmd = build_command()
+        print(f"Executing: {' '.join(cmd)}")
+        result = run_isaac_lab(cmd, cwd=cwd, **kwargs)
+    return result
+
+
+def preset_failure_message(config: PipelineConfig, output: str):
+    """The readable message for a failed run whose output shows a preset error, or ``None``."""
+    return (unknown_preset_message(config.task, config.physics, output, PHYSICS_ENGINES)
+            or preset_error_message(config.task, output))
+
+
+def evaluation_time_limit(config: PipelineConfig) -> int:
+    """Seconds the play process may run before it is stopped.
+
+    Play did not terminate in some runs (a Kit visualizer under Newton; a Newton checkpoint played
+    on PhysX), and a hung run would otherwise hold the GPU until the workflow's timeout. The limit
+    is a floor plus a per-step allowance for the bounded playback (``--video_length``), capped below
+    the workflow's own 32,400 second (9 hour) bound. The constants are first estimates, to be tuned from the
+    live smoke runs.
+    """
+    steps = config.num_episodes * config.steps_per_episode
+    return int(min(EVALUATION_TIME_LIMIT_CAP_SECONDS,
+                   EVALUATION_TIME_LIMIT_FLOOR_SECONDS + steps * EVALUATION_SECONDS_PER_STEP))
+
+
+def gpu_driver_version() -> str:
+    """The NVIDIA driver version, or ``""`` when it cannot be read (never an error)."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=30)  # nosemgrep: dangerous-subprocess-use-audit
+        lines = (result.stdout or "").strip().splitlines()
+        return lines[0].strip() if result.returncode == 0 and lines else ""
+    except Exception:
+        return ""
 
 
 def download_policy(s3: S3Client, config: PipelineConfig) -> str:
@@ -288,9 +412,10 @@ def download_policy(s3: S3Client, config: PipelineConfig) -> str:
     The policy S3 URI reaches here from the Lambda (openPipeline), which resolves it from a relative
     checkpointPath, an operator-supplied policyS3Uri, or by discovering the newest .pt in the asset.
     The Lambda constrains it to the executing asset's own bucket in every case, because the file is
-    deserialized by torch.load in this container.
+    deserialized by torch.load in this container. The file lands at EVALUATION_POLICY_PATH, whose
+    folders decide where play.py writes its video and exported policy.
     """
-    policy_path = "/tmp/policy.pt"
+    policy_path = EVALUATION_POLICY_PATH
 
     if not config.policy_s3_uri:
         raise ValueError(
@@ -305,9 +430,26 @@ def download_policy(s3: S3Client, config: PipelineConfig) -> str:
         raise ValueError(f"Policy must be an s3:// URI: {config.policy_s3_uri}")
     bucket = parsed.netloc
     key = parsed.path.lstrip("/")
-    s3.client.download_file(bucket, key, policy_path)
+    os.makedirs(os.path.dirname(policy_path), exist_ok=True)
+    s3.client_for_bucket(bucket).download_file(bucket, key, policy_path)
     print(f"Policy downloaded to {policy_path}")
     return policy_path
+
+
+def stage_assets(s3: S3Client, config: PipelineConfig) -> dict:
+    """Stage the run's asset files (trainingConfig.stageAssetPaths) and export their folder.
+
+    The files keep their asset-relative paths under the staging folder, which the Isaac Lab process
+    inherits as STAGED_ASSET_FILES_ENV; see utils/aws/staging.py.
+    """
+    paths = config.stage_asset_files.get("paths")
+    shown = ", ".join(str(p) or "/" for p in paths) if isinstance(paths, list) else repr(paths)
+    print(f"Staging asset files: {shown}")
+    staged = stage_asset_files(s3, config.stage_asset_files)
+    os.environ[STAGED_ASSET_FILES_ENV] = staged["path"]
+    print(f"Staged {staged['files']} asset files ({staged['bytes']} bytes) in {staged['seconds']} s; "
+          f"{STAGED_ASSET_FILES_ENV}={staged['path']}")
+    return staged
 
 
 def setup_checkpoint_dir(config: PipelineConfig) -> str:
@@ -347,14 +489,21 @@ def download_and_install_custom_environment(s3: S3Client, s3_uri: str):
             f"Unsupported custom environment package '{filename}'. Supported formats: "
             f"{', '.join(ENVIRONMENT_PACKAGE_SUFFIXES)}"
         )
+    wheel_tag = _WHEEL_PYTHON_TAG.search(filename)
+    if wheel_tag and wheel_tag.group(1) != ISAAC_LAB_PYTHON_TAG:
+        raise ValueError(
+            f"Custom environment wheel '{filename}' is built for Python "
+            f"{wheel_tag.group(1)[2]}.{wheel_tag.group(1)[3:]}, but Isaac Lab {isaac_lab_version()} "
+            f"runs Python 3.12. Rebuild the package for Python 3.12 ({ISAAC_LAB_PYTHON_TAG})."
+        )
     local_path = f"/tmp/{filename}"
 
     print(f"Downloading {filename} from s3://{bucket}/{key}")
-    s3.client.download_file(bucket, key, local_path)
+    s3.client_for_bucket(bucket).download_file(bucket, key, local_path)
 
     print(f"Installing custom environment: {local_path}")
     result = subprocess.run(
-        ["/isaac-sim/python.sh", "-m", "pip", "install", "--no-build-isolation", local_path],
+        [ISAAC_LAB_PYTHON, "-m", "pip", "install", "--no-build-isolation", local_path],
         capture_output=True,
         text=True
     )
@@ -365,83 +514,101 @@ def download_and_install_custom_environment(s3: S3Client, s3_uri: str):
         raise RuntimeError(f"Failed to install custom environment {filename}: {result.stderr}")
 
 
-def resolve_script(rl_library: str, script_map: dict) -> str:
-    """The IsaacLab script for an RL library.
+def resolve_rl_library(rl_library: str) -> str:
+    """The RL library for ``--rl_library``, checked against the libraries the pipeline supports.
 
     An unrecognized library is rejected rather than substituted: falling back would run the whole
     job with a different library than asked for and report success, leaving checkpoints the
     requested library cannot load.
     """
-    if rl_library not in script_map:
+    if rl_library not in RL_LIBRARIES:
         raise ValueError(
             f"Unsupported rlLibrary '{rl_library}'. Supported libraries: "
-            f"{', '.join(sorted(script_map))}"
+            f"{', '.join(sorted(RL_LIBRARIES))}"
         )
-    return script_map[rl_library]
+    return rl_library
+
+
+def resolve_physics(physics: str) -> str:
+    """The physics engine for the ``physics=`` override, checked against the allowed engines.
+
+    The value reaches the command line as one argument of a list (no shell), and only a value of
+    the allow list gets there.
+    """
+    if physics not in PHYSICS_ENGINES:
+        raise ValueError(
+            f"Unsupported physics '{physics}'. Supported engines: {', '.join(PHYSICS_ENGINES)}"
+        )
+    return physics
 
 
 def build_training_command(config: PipelineConfig, checkpoint_dir: str) -> list:
-    """Build the IsaacLab training command."""
-    script_map = {
-        "rsl_rl": "scripts/reinforcement_learning/rsl_rl/train.py",
-        "rl_games": "scripts/reinforcement_learning/rl_games/train.py",
-        "skrl": "scripts/reinforcement_learning/skrl/train.py",
-    }
-    script = resolve_script(config.rl_library, script_map)
+    """Build the Isaac Lab training command (Isaac Lab 3.0: ``isaaclab.sh train``).
 
+    ``--headless`` no longer exists in Isaac Lab 3.0; ``--viz none`` keeps visualizers off on both
+    engines. The ``physics=<engine>`` Hydra override comes last, as Isaac Lab expects overrides.
+    """
     cmd = [
         "./isaaclab.sh",
-        "-p",
-        script,
+        "train",
+        "--rl_library",
+        resolve_rl_library(config.rl_library),
         "--task",
         config.task,
         "--num_envs",
         str(config.num_envs),
         "--max_iterations",
         str(config.max_iterations),
-        "--headless",
+        "--viz",
+        "none",
     ]
 
     if config.seed is not None:
         cmd.extend(["--seed", str(config.seed)])
 
+    if config.physics != TASK_DEFAULT_PHYSICS:
+        cmd.append(f"physics={resolve_physics(config.physics)}")
     return cmd
 
 
 def build_evaluation_command(config: PipelineConfig, policy_path: str) -> list:
-    """Build the IsaacLab evaluation command.
-    
-    Note: Isaac Lab's play.py runs in an infinite loop by default.
-    The --video flag with --video_length is REQUIRED to enable termination.
-    See ISAACLAB_CLI_REFERENCE.md for details.
-    """
-    script_map = {
-        "rsl_rl": "scripts/reinforcement_learning/rsl_rl/play.py",
-        "rl_games": "scripts/reinforcement_learning/rl_games/play.py",
-        "skrl": "scripts/reinforcement_learning/skrl/play.py",
-    }
-    script = resolve_script(config.rl_library, script_map)
+    """Build the Isaac Lab evaluation command (Isaac Lab 3.0: ``isaaclab.sh play``).
 
+    Note: ``play`` runs until it is stopped unless a video length bounds it. The --video flag with
+    --video_length is REQUIRED to enable termination. See ISAACLAB_CLI_REFERENCE.md for details.
+
+    On Newton the video is recorded through Newton's GL viewer (``--viz newton_gl``); PhysX keeps
+    the default Kit visualizer. The ``physics=<engine>`` override comes last and is the same engine
+    the training run used, or a transfer test the operator asked for.
+    """
     # Calculate total steps from user-configurable parameters
     total_steps = config.num_episodes * config.steps_per_episode
 
     cmd = [
         "./isaaclab.sh",
-        "-p",
-        script,
+        "play",
+        "--rl_library",
+        resolve_rl_library(config.rl_library),
         "--task",
         config.task,
         "--num_envs",
         str(config.num_envs),
         "--checkpoint",
         policy_path,
-        "--headless",
-        # --video is REQUIRED for play.py to terminate (not just for recording)
+        # --video is REQUIRED for play to terminate (not just for recording)
         "--video",
         "--video_length",
         str(total_steps),
     ]
 
+    if config.physics == TASK_DEFAULT_PHYSICS:
+        return cmd  # the task lists no physics presets: no selector and no Newton viewer
+
+    physics = resolve_physics(config.physics)
+    if physics == "newton_mjwarp":
+        cmd.extend(["--viz", NEWTON_VIDEO_VISUALIZER])
+
+    cmd.append(f"physics={physics}")
     return cmd
 
 
@@ -449,10 +616,11 @@ def upload_training_results(s3: S3Client, config: PipelineConfig, checkpoint_dir
     """Upload trained policy and checkpoints to VAMS asset bucket.
 
     Output structure:
-    - {output_s3_path}checkpoints/*.pt (model checkpoints)
+    - {output_s3_path}checkpoints/* (model checkpoints: model_*.pt for rsl_rl, *.pth for rl_games,
+      agent_*.pt and best_agent.pt for skrl)
     - {output_s3_path}metrics.csv (training metrics from TensorBoard)
     - {output_s3_path}*.txt (converted .diff files)
-    - {output_s3_path}train-config.json (input configuration)
+    - {output_s3_path}train-config.json (the run settings)
     """
     if not config.output_s3_path:
         print("No output S3 path configured, skipping upload")
@@ -463,26 +631,35 @@ def upload_training_results(s3: S3Client, config: PipelineConfig, checkpoint_dir
 
     print(f"Uploading training results for execution {job_uuid} to {base_output_path}")
 
-    # Upload model checkpoints
+    # Upload model checkpoints. Each library lays its run folder out differently, so the files come
+    # from the per-library table in utils/training/checkpoints.py. They are stored flat under
+    # checkpoints/ by file name, as the rsl_rl ones always were.
     checkpoint_output_path = f"{base_output_path}checkpoints/"
-    
-    policy_patterns = [
-        f"{LOCAL_LOG_PATH}/**/model_*.pt",
-        f"{checkpoint_dir}/**/model_*.pt",
-    ]
 
-    for pattern in policy_patterns:
-        for policy_path in glob.glob(pattern, recursive=True):
-            filename = os.path.basename(policy_path)
-            s3_path = f"{checkpoint_output_path}{filename}"
-            print(f"Uploading {policy_path} -> {s3_path}")
-            s3.upload_file(policy_path, s3_path)
+    uploaded = {}
+    for policy_path in find_checkpoints([LOCAL_LOG_PATH, checkpoint_dir], config.rl_library):
+        filename = os.path.basename(policy_path)
+        if filename in uploaded:
+            print(f"WARNING: {policy_path} has the same file name as {uploaded[filename]}; "
+                  f"the newer file replaces it in {checkpoint_output_path}")
+        s3_path = f"{checkpoint_output_path}{filename}"
+        print(f"Uploading {policy_path} -> {s3_path}")
+        s3.upload_file(policy_path, s3_path)
+        uploaded[filename] = policy_path
 
-    # Upload logs
+    if not uploaded:
+        print(f"ERROR: no {config.rl_library} checkpoint found under {LOCAL_LOG_PATH} or "
+              f"{checkpoint_dir}; nothing was uploaded to {checkpoint_output_path}")
+
+    # Upload logs and the input config first, so a failed run keeps its diagnostics
     upload_logs(s3, config)
-
-    # Upload input config
     upload_config(s3, config, job_config)
+
+    if not uploaded:
+        # A training run that produced no policy is a failed run (issue #1315). Raise rather than
+        # exit: main() owns the Step Functions failure callbacks.
+        raise RuntimeError(
+            f"Training finished but no {config.rl_library} checkpoint was found to upload")
 
 
 def upload_evaluation_results(s3: S3Client, config: PipelineConfig, job_config: dict):
@@ -492,7 +669,7 @@ def upload_evaluation_results(s3: S3Client, config: PipelineConfig, job_config: 
     - {output_s3_path}metrics.csv (evaluation metrics from TensorBoard)
     - {output_s3_path}*.txt (converted .diff files)
     - {output_s3_path}videos/*.mp4 (evaluation videos, when recordVideo is set)
-    - {output_s3_path}evaluate-config.json (input configuration)
+    - {output_s3_path}evaluate-config.json (the run settings)
 
     Note: Videos are always generated because the --video flag is required for play.py to
     terminate, so recordVideo decides whether the recording is uploaded rather than whether it
@@ -531,12 +708,11 @@ def upload_evaluation_results(s3: S3Client, config: PipelineConfig, job_config: 
             except Exception as e:
                 print(f"Warning: Failed to upload {log_path}: {e}")
 
-    # Upload videos - recorded on every run since --video is required for termination
+    # Upload videos - recorded on every run since --video is required for termination. play.py
+    # records under the policy's folders (EVALUATION_POLICY_PATH), which sit below LOCAL_LOG_PATH.
     if config.record_video:
         videos_output_path = f"{base_output_path}videos/"
         video_search_paths = [
-            "/tmp/videos/**/*.mp4",
-            "/tmp/videos/**/*.avi",
             f"{LOCAL_LOG_PATH}/**/videos/**/*.mp4",
             f"{LOCAL_LOG_PATH}/**/videos/**/*.avi",
         ]
@@ -688,18 +864,34 @@ def upload_logs(s3: S3Client, config: PipelineConfig):
                 print(f"Warning: Failed to upload {log_path}: {e}")
 
 
+# What the uploaded run record keeps of the job configuration: the run's settings. The workflow's
+# callback fields, the bucket and location fields and the Region map are used to run the job and are
+# left out of a file that sits beside the run's outputs.
+RECORDED_CONFIG_KEYS = ("jobName", "trainingConfig", "customEnvironmentS3Uri", "stageAssetFiles")
+
+
 def upload_config(s3: S3Client, config: PipelineConfig, job_config: dict):
-    """Upload the input configuration to the output directory for reference."""
+    """Upload the run's settings to the output directory for reference."""
     base_output_path = resolve_output_base_path(config.output_s3_path)
 
     # Determine config filename based on mode
     config_filename = f"{config.mode}-config.json"
     config_s3_path = f"{base_output_path}{config_filename}"
     
-    # Write config to temp file
+    # Write config to temp file. The record carries the physics engine the run used and the Isaac
+    # Lab release it ran on, so a run made before the upgrade (PhysX, Isaac Lab 2.3.0) is told
+    # apart from one made after it, and the resolved engine is there even if the caller left it out.
+    recorded = {key: job_config[key] for key in RECORDED_CONFIG_KEYS if key in job_config}
+    recorded_training = dict(recorded.get("trainingConfig") or {})
+    recorded_training["physics"] = config.physics
+    recorded["trainingConfig"] = recorded_training
+    recorded["isaacLabVersion"] = isaac_lab_version()
+    driver = gpu_driver_version()
+    if driver:
+        recorded["gpuDriverVersion"] = driver
     temp_config_path = f"/tmp/{config_filename}"
     with open(temp_config_path, "w") as f:
-        json.dump(job_config, f, indent=2)
+        json.dump(recorded, f, indent=2)
     
     print(f"Uploading config {temp_config_path} -> {config_s3_path}")
     try:

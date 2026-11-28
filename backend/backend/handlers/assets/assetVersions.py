@@ -7,7 +7,7 @@ import json
 import uuid
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from common.timestamps import utc_now
 from typing import Dict, List, Optional, Any, Tuple
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
@@ -21,14 +21,21 @@ from common.apiRoutes import (
     API_GET_ASSET_VERSIONS, API_GET_ASSET_VERSION, API_ASSET_VERSION_BY_ID,
     API_ASSET_VERSION_ARCHIVE, API_ASSET_VERSION_UNARCHIVE,
 )
-from common.validators import validate
+from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
-from common.dynamodb import to_update_expr, query_all_items
-from common.s3 import is_object_version_archived, list_all_object_versions
+from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_object
+from common.assetProvenance import ASSET_VERSION_STAMPED_FIELDS, stamp_asset_version_provenance
+from common.assetLocations import (
+    NestedLocations, contains, normalize_base_prefix, object_key_for_path, relative_path_in, viewer_data_scope,
+)
+from common.fileAttribution import nested_locations_of_asset
+from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
     GetAssetVersionRequestModel, GetAssetVersionsRequestModel, AssetVersionFileModel,
@@ -66,8 +73,8 @@ retry_config = Config(
 region = os.environ.get('AWS_REGION', 'us-east-1')
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
-s3_client = boto3.client('s3', config=retry_config)
-s3_resource = boto3.resource('s3', config=retry_config)
+s3_client = region_routing_s3_client()
+s3_resource = region_routing_s3_resource()
 lambda_client = boto3.client('lambda', config=retry_config)
 logger = safeLogger(service_name="AssetVersions")
 
@@ -118,6 +125,18 @@ file_attribute_table = dynamodb.Table(file_attribute_table_name) if file_attribu
 # Utility Functions
 #######################
 
+# Resolver error text (#1134). Fixed strings: an error reaches the caller through str(e) in the
+# download, stream and zip download handlers, so it never echoes the requested asset version id,
+# alias or file key; the specifics go to the log.
+MSG_ASSET_VERSION_NOT_FOUND = "Asset version not found for asset"
+MSG_ASSET_VERSION_NO_FILES = "No files found in the requested asset version"
+MSG_ASSET_VERSION_FILE_NOT_FOUND = "File not found in the requested asset version"
+MSG_ASSET_VERSION_FILE_NO_VERSION = "No version ID recorded for the file in the requested asset version"
+MSG_ASSET_VERSIONS_NONE = "No asset versions found for asset"
+MSG_ASSET_VERSION_ALIAS_NOT_FOUND = "No asset version found with the requested alias"
+MSG_ASSET_VERSION_ALIAS_AMBIGUOUS = "Ambiguous alias: multiple versions share this alias"
+
+
 def validate_asset_version_exists(databaseId: str, assetId: str, assetVersionId: str) -> bool:
     """Validate that an asset version exists by checking the asset versions table.
 
@@ -140,7 +159,9 @@ def validate_asset_version_exists(databaseId: str, assetId: str, assetVersionId:
             }
         )
         if not response.get('Item'):
-            raise VAMSGeneralErrorResponse(f"Asset version '{assetVersionId}' not found for asset")
+            # The requested id stays in the log only: error text never echoes caller input (#1134).
+            logger.warning(f"Asset version {assetVersionId!r} not found for {databaseId}:{assetId}")
+            raise VAMSGeneralErrorResponse(MSG_ASSET_VERSION_NOT_FOUND)
         return True
     except VAMSGeneralErrorResponse:
         raise
@@ -166,18 +187,13 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
@@ -198,7 +214,8 @@ def send_subscription_email(database_id, asset_id):
     except Exception as e:
         logger.exception(f"Error invoking send_email Lambda function: {e}")
 
-def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict) -> Dict:
+def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, claims_and_roles: Dict,
+                               include_archived: bool = False) -> Dict:
     """Get asset and verify permissions for the specified operation
     
     Args:
@@ -206,6 +223,8 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         assetId: The asset ID
         operation: The operation to check permissions for (GET, POST, PUT, DELETE)
         claims_and_roles: The claims and roles from the request
+        include_archived: Also resolve an archived asset's record (read routes asked with
+            showArchived); write routes leave it False, so an archived asset stays not found
         
     Returns:
         The asset if found and user has permissions, otherwise raises an exception
@@ -216,9 +235,8 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
     """
     try:
         # Get the asset from DynamoDB
-        response = asset_table.get_item(Key={'databaseId': databaseId, 'assetId': assetId})
-        asset = response.get('Item', {})
-        
+        asset = get_asset_record(asset_table, databaseId, assetId, include_archived=include_archived)
+
         # Fail closed: with no authenticated identity no authorization can be
         # evaluated, so deny rather than return the asset.
         if len(claims_and_roles["tokens"]) == 0:
@@ -227,11 +245,10 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         # Authorize before existence, so a refused caller gets the same answer for a missing asset
         # as for an existing one. A found record is checked as an annotated copy, so the returned
         # record, which callers write back, carries no object type; for a missing one the request's
-        # identifiers stand in.
-        if asset:
-            authorization_object = {**asset, 'object__type': 'asset'}
-        else:
-            authorization_object = {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
+        # identifiers stand in (on a showArchived read, with the archived database id, so a caller
+        # refused that database's archived records cannot tell an archived asset from a missing one).
+        authorization_object = asset_authorization_object(asset, databaseId, assetId,
+                                                          include_archived=include_archived)
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(authorization_object, operation):
             raise VAMSAuthorizationDeniedResponse()
@@ -331,7 +348,7 @@ def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
     base = (database_id or "").strip('/')
     return f"{base}/{key}/" if key else f"{base}/"
 
-def delete_assetAuxiliary_files(prefix):
+def delete_assetAuxiliary_files(prefix, keep=None):
     """Permanently delete the auxiliary files under a prefix, with every version and delete marker
 
     The auxiliary bucket is versioned, so a delete that names no VersionId would only hide the data.
@@ -339,6 +356,7 @@ def delete_assetAuxiliary_files(prefix):
 
     Args:
         prefix: Auxiliary-bucket prefix (see aux_bucket_asset_file_base); a trailing '/' is added
+        keep: Optional predicate (``common.assetLocations.aux_owner_filter``); only the keys it accepts go
     """
 
     if not prefix:
@@ -356,7 +374,8 @@ def delete_assetAuxiliary_files(prefix):
         paginator = s3_client.get_paginator('list_object_versions')
         for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=prefix):
             entries = [{'Key': entry['Key'], 'VersionId': entry['VersionId']}
-                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])]
+                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])
+                       if keep is None or keep(entry['Key'])]
             for i in range(0, len(entries), 1000):  # DeleteObjects takes at most 1000 entries
                 batch = entries[i:i + 1000]
                 response = s3_client.delete_objects(
@@ -374,7 +393,15 @@ def delete_assetAuxiliary_files(prefix):
 
     return
 
-def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool = False) -> List[Dict]:
+def nested_locations_for(asset: Dict, bucket: str, prefix: str, destructive: bool = False) -> NestedLocations:
+    """The stored locations of other assets nested in this asset's location: their files are theirs, so a
+    version of this asset neither records nor reverts them."""
+    return nested_locations_of_asset(asset_table, buckets_table, asset, bucket, prefix, destructive=destructive,
+                                     asset_table_name=asset_database)
+
+
+def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool = False,
+                                nested: Optional[NestedLocations] = None) -> List[Dict]:
     """List all files in an S3 bucket prefix with their version information
 
     Uses a single paginated list_object_versions walk (no per-file head_object
@@ -388,6 +415,7 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
         bucket: The S3 bucket name
         prefix: The S3 key prefix
         include_archived: Whether to also include archived (soft-deleted) files
+        nested: The locations of other assets nested in ``prefix``; their files are left out
 
     Returns:
         List of file dictionaries with version information
@@ -395,9 +423,9 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
     result = []
 
     try:
-        # Ensure prefix ends with a slash if it doesn't already
-        if not prefix.endswith('/'):
-            prefix = prefix + '/'
+        # The listing prefix is the location key itself; a single-file location also matches keys
+        # that only share its characters, so each listed key is kept only when the location holds it
+        location = prefix
 
         # Use a single paginated list_object_versions walk rather than a
         # head_object per file. list_object_versions returns VersionId + IsLatest
@@ -416,10 +444,12 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
 
             key = version['Key']
             # Skip folder markers (keys ending with '/')
-            if key.endswith('/'):
+            if key.endswith('/') or not contains(location, key) or (nested and not nested.keep(key)):
                 continue
 
-            relative_key = key[len(prefix):]
+            # Stored form (stored_version_entry_key): 'x' for '{location}x', '//x' for '{location}/x', so
+            # the two are two entries (#1977)
+            relative_key = stored_version_entry_key(relative_path_in(location, key))
             result.append({
                 'relativeKey': relative_key,
                 'key': key,
@@ -449,10 +479,10 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
 
                 key = marker['Key']
                 # Skip folder markers (keys ending with '/')
-                if key.endswith('/'):
+                if key.endswith('/') or not contains(location, key) or (nested and not nested.keep(key)):
                     continue
 
-                relative_key = key[len(prefix):]
+                relative_key = stored_version_entry_key(relative_path_in(location, key))
                 # Most recent content version behind the delete marker (if any).
                 candidates = content_versions_by_key.get(key, [])
                 latest_content = max(candidates, key=lambda v: v['LastModified'], default=None)
@@ -487,12 +517,8 @@ def validate_s3_files_exist(bucket: str, prefix: str, files: List[AssetFileVersi
     """
     invalid_files = []
     
-    # Ensure prefix ends with a slash if it doesn't already
-    if not prefix.endswith('/'):
-        prefix = prefix + '/'
-    
     for file in files:
-        full_key = prefix + file.relativeKey.lstrip('/')
+        full_key = object_key_for_path(prefix, file.relativeKey)
         
         try:
             # Check if file exists with specified version
@@ -565,13 +591,23 @@ def save_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
     try:
         # Create partition key in the format {databaseId}:{assetId}:{assetVersionId}
         partition_key = f"{databaseId}:{assetId}:{assetVersionId}"
-        created_at = datetime.utcnow().isoformat()
+        created_at = utc_now().isoformat()
 
-        # Create individual records for each file
-        with asset_file_versions_table.batch_writer() as batch:
+        # Create individual records for each file. Two entries of one file (an older version can hold
+        # '/a.txt' and 'a.txt', which a revert copies) are one row: the batch keeps the last one,
+        # where DynamoDB would refuse the whole batch.
+        with asset_file_versions_table.batch_writer(
+                overwrite_by_pkeys=['databaseId:assetId:assetVersionId', 'fileKey']) as batch:
             for file in files:
-                # Use the file's relativeKey as the sort key
-                file_key = file['relativeKey']
+                # The sort key is the file's path in its stored form (stored_version_entry_key): 'x' for
+                # '/x' or 'x', '//x' for '//x', however the caller wrote it (#1795).
+                raw_key = file.get('relativeKey')
+                if names_no_file(raw_key):
+                    # Only an entry an earlier release stored for the asset root can get here (a revert
+                    # copies it); it names no file.
+                    logger.warning(f"Skipping a version entry that names no file in {partition_key}")
+                    continue
+                file_key = stored_version_entry_key(raw_key)
 
                 # Create item for DynamoDB
                 item = {
@@ -594,16 +630,65 @@ def save_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
         logger.exception(f"Error saving asset file versions: {e}")
         return False
 
-def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) -> Optional[Dict]:
+
+def version_entry_key(file_key) -> str:
+    """The key a version entry is compared and deduplicated by: its path with exactly one leading '/'
+    removed, which is the key's part after the asset's location ('x' for '{location}x', '/x' for the key
+    with an empty segment right after the location, '{location}/x').
+
+    A leading '/' marks a path in the asset, so 'x' and the legacy '/x' name one file and '//x' names
+    another. Stripping every leading '/' would make '//x' and '/x' one entry.
+    """
+    file_key = str(file_key or '')
+    return file_key[1:] if file_key.startswith('/') else file_key
+
+
+def stored_version_entry_key(file_key) -> str:
+    """The form a version entry is stored and handed out in: 'x' for '{location}x' and '//x' for
+    '{location}/x' (never '/x', which legacy rows store for '{location}x'). Every reader resolves it
+    with exactly one leading '/' dropped, as it resolves the path the caller wrote."""
+    key = version_entry_key(file_key)
+    return '/' + key if key.startswith('/') else key
+
+
+def names_no_file(file_key) -> bool:
+    """Whether a version entry's key is made only of '/' (or is empty): the asset root, not a file."""
+    return not str(file_key or '').strip('/')
+
+
+def collapse_version_entries(items: List[Dict]) -> List[Dict]:
+    """The rows of an asset version's files, one per file, keyed by version_entry_key.
+
+    A version a file list created before #1795 can name one file both as '/a.txt' and 'a.txt' (D1),
+    and can hold a '/' row that names no file. The row stored in the current form
+    (stored_version_entry_key) wins, the first one read otherwise, and a row that names no file is
+    left out, so the version detail lists the file once and a revert copies it once. '//a.txt' is
+    another file ('{location}/a.txt') and stays its own entry.
+    """
+    chosen: Dict[str, Dict] = {}
+    for item in items:
+        stored_key = str(item.get('fileKey') or '')
+        if names_no_file(stored_key):
+            continue
+        relative_key = version_entry_key(stored_key)
+        if relative_key not in chosen or stored_key == stored_version_entry_key(stored_key):
+            chosen[relative_key] = item
+    return list(chosen.values())
+
+
+def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
+                            raise_errors: bool = False) -> Optional[Dict]:
     """Get file versions for a specific asset version
 
     Args:
         databaseId: The database ID
         assetId: The asset ID
         assetVersionId: The asset version ID
+        raise_errors: Re-raise a failed read instead of answering None, for a caller that must
+            tell a read failure from a snapshot with no files
 
     Returns:
-        Dictionary with file versions or None if not found
+        Dictionary with file versions or None if not found (or, without raise_errors, unreadable)
     """
     try:
         # Query using the table PK (databaseId:assetId:assetVersionId is now the table PK)
@@ -620,11 +705,13 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
         if not items:
             return None
 
-        # Reconstruct the file versions structure
+        # Reconstruct the file versions structure. The key is handed out in the form new entries are
+        # stored in (stored_version_entry_key), once per file, so an entry a file list stored with the
+        # slash before #1795 reads the same way: in the version detail, a revert and every lookup.
         files = []
-        for item in items:
+        for item in collapse_version_entries(items):
             file_info = {
-                'relativeKey': item.get('fileKey'),
+                'relativeKey': stored_version_entry_key(item.get('fileKey')),
                 'versionId': item.get('versionId'),
                 'size': item.get('size'),
                 'lastModified': item.get('lastModified'),
@@ -638,11 +725,13 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
             'assetId': assetId,
             'assetVersionId': assetVersionId,
             'files': files,
-            'createdAt': items[0].get('createdAt') if items else datetime.utcnow().isoformat()
+            'createdAt': items[0].get('createdAt') if items else utc_now().isoformat()
         }
         
     except Exception as e:
         logger.exception(f"Error getting asset file versions: {e}")
+        if raise_errors:
+            raise
         return None
 
 def resolve_file_version_from_asset_version(databaseId: str, assetId: str, assetVersionId: str, fileKey: str) -> str:
@@ -666,23 +755,28 @@ def resolve_file_version_from_asset_version(databaseId: str, assetId: str, asset
     # Get the file versions for this asset version
     file_versions = get_asset_file_versions(databaseId, assetId, assetVersionId)
     if not file_versions or not file_versions.get('files'):
-        raise VAMSGeneralErrorResponse(f"No files found in asset version '{assetVersionId}'")
+        logger.warning(f"No files recorded in asset version {assetVersionId!r} of {databaseId}:{assetId}")
+        raise VAMSGeneralErrorResponse(MSG_ASSET_VERSION_NO_FILES)
 
-    # Build a lookup map with normalized keys (strip leading /)
-    file_map = {f['relativeKey'].lstrip('/'): f for f in file_versions['files']}
+    # Build a lookup map by version_entry_key: exactly one leading '/' removed, so '//x' and 'x' stay
+    # two files
+    file_map = {version_entry_key(f['relativeKey']): f for f in file_versions['files']}
 
-    # Normalize the requested file key — strip leading /
-    normalized_key = fileKey.lstrip('/')
+    # The requested file by the same rule
+    normalized_key = version_entry_key(fileKey)
 
     # Look up the file
     file_entry = file_map.get(normalized_key)
 
     if not file_entry:
-        raise VAMSGeneralErrorResponse(f"File not found in asset version '{assetVersionId}'")
+        logger.warning(f"File not in asset version {assetVersionId!r} of {databaseId}:{assetId}")
+        raise VAMSGeneralErrorResponse(MSG_ASSET_VERSION_FILE_NOT_FOUND)
 
     version_id = file_entry.get('versionId')
     if not version_id:
-        raise VAMSGeneralErrorResponse(f"No version ID recorded for file in asset version '{assetVersionId}'")
+        logger.warning(f"No S3 version recorded for a file in asset version {assetVersionId!r} of "
+                       f"{databaseId}:{assetId}")
+        raise VAMSGeneralErrorResponse(MSG_ASSET_VERSION_FILE_NO_VERSION)
 
     return version_id
 
@@ -703,17 +797,25 @@ def resolve_asset_version_id_from_alias(databaseId: str, assetId: str, alias: st
     """
     all_versions = get_all_asset_versions(databaseId, assetId)
     if not all_versions:
-        raise VAMSGeneralErrorResponse(f"No asset versions found for asset")
+        raise VAMSGeneralErrorResponse(MSG_ASSET_VERSIONS_NONE)
 
     # Filter for versions matching the alias (exact match)
     matches = [v for v in all_versions if v.get('versionAlias') == alias]
 
     if len(matches) == 0:
-        raise VAMSGeneralErrorResponse(f"No asset version found with alias '{alias}'")
+        logger.warning(f"No asset version of {databaseId}:{assetId} has alias {alias!r}")
+        raise VAMSGeneralErrorResponse(MSG_ASSET_VERSION_ALIAS_NOT_FOUND)
     elif len(matches) > 1:
-        raise VAMSGeneralErrorResponse(f"Ambiguous alias '{alias}': multiple versions share this alias")
+        logger.warning(f"Alias {alias!r} matches {len(matches)} versions of {databaseId}:{assetId}")
+        raise VAMSGeneralErrorResponse(MSG_ASSET_VERSION_ALIAS_AMBIGUOUS)
 
     return matches[0]['assetVersionId']
+
+
+def count_version_files(file_keys) -> int:
+    """The number of files a version's rows name: one per version_entry_key, a row that names no file
+    ('/') left out. The version detail lists the same set (collapse_version_entries)."""
+    return len({version_entry_key(file_key) for file_key in file_keys if not names_no_file(file_key)})
 
 
 def get_asset_version_file_count(databaseId: str, assetId: str, assetVersionId: str) -> int:
@@ -725,19 +827,36 @@ def get_asset_version_file_count(databaseId: str, assetId: str, assetVersionId: 
         assetVersionId: The asset version ID
 
     Returns:
-        The number of snapshot rows recorded for the version -- EVERY row, including ones
-        marked isPermanentlyDeleted. No such filter is applied, and this is the number the
-        version listing reports, so an assertion against it must compare with the unfiltered
-        file list (get_asset_version_details emits isPermanentlyDeleted rows too).
+        The number of files the version's detail lists (get_asset_version_details): one per path
+        without its leading slash, a row that names no file left out (count_version_files), and
+        every other row counted, including ones marked isPermanentlyDeleted. No such filter is
+        applied, so an assertion against it must compare with the unfiltered file list.
     """
     try:
         # Query using the table PK (databaseId:assetId:assetVersionId is now the table PK)
         version_composite_key = f"{databaseId}:{assetId}:{assetVersionId}"
+        version_key_condition = Key('databaseId:assetId:assetVersionId').eq(version_composite_key)
+
+        # A row stored with a leading slash exists only in a version a file list created before
+        # #1795, where it can name a file another row names too, or name no file ('/'). Such a
+        # version is counted from its keys; any other is counted without reading them. The probe is
+        # a key condition on the sort key, so it reads only those rows.
+        slashed_query = {
+            'KeyConditionExpression': version_key_condition & Key('fileKey').begins_with('/'),
+            'ProjectionExpression': '#fileKey',
+            'ExpressionAttributeNames': {'#fileKey': 'fileKey'},
+            'Limit': 1
+        }
+        if asset_file_versions_table.query(**slashed_query).get('Items'):
+            file_keys = [item.get('fileKey') for item in query_all_items(
+                asset_file_versions_table, KeyConditionExpression=version_key_condition,
+                ProjectionExpression='#fileKey', ExpressionAttributeNames={'#fileKey': 'fileKey'})]
+            return count_version_files(file_keys)
 
         # A COUNT query is bounded by the same 1 MB scan limit as any other query, so page to
         # exhaustion or a version holding many files reports a short count.
         query_kwargs = {
-            'KeyConditionExpression': Key('databaseId:assetId:assetVersionId').eq(version_composite_key),
+            'KeyConditionExpression': version_key_condition,
             'Select': 'COUNT'
         }
         count = 0
@@ -761,20 +880,21 @@ def tally_asset_version_file_counts(databaseId: str, assetId: str) -> Optional[D
         assetId: The asset ID
 
     Returns:
-        Mapping of assetVersionId to file count, or None when the walk exceeded
-        FILE_COUNT_TALLY_MAX_PAGES and the tally would be partial
+        Mapping of assetVersionId to file count (count_version_files), or None when the walk
+        exceeded FILE_COUNT_TALLY_MAX_PAGES and the tally would be partial
     """
     composite_key = f"{databaseId}:{assetId}"
     version_key_prefix = f"{composite_key}:"
-    counts: Dict[str, int] = {}
+    keys_by_version: Dict[str, List] = {}
 
-    # Only the version each row belongs to is needed, which keeps the pages small enough to
-    # deserialize on an asset holding many files.
+    # Only the version each row belongs to and its key are needed, which keeps the pages small
+    # enough to deserialize on an asset holding many files. The key is read because a version a
+    # file list created before #1795 can name one file both with and without the leading slash.
     query_kwargs = {
         'IndexName': 'databaseIdAssetIdIndex',
         'KeyConditionExpression': Key('databaseId:assetId').eq(composite_key),
-        'ProjectionExpression': '#versionPk',
-        'ExpressionAttributeNames': {'#versionPk': 'databaseId:assetId:assetVersionId'}
+        'ProjectionExpression': '#versionPk, #fileKey',
+        'ExpressionAttributeNames': {'#versionPk': 'databaseId:assetId:assetVersionId', '#fileKey': 'fileKey'}
     }
 
     try:
@@ -784,10 +904,10 @@ def tally_asset_version_file_counts(databaseId: str, assetId: str) -> Optional[D
                 version_key = item.get('databaseId:assetId:assetVersionId') or ''
                 if version_key.startswith(version_key_prefix):
                     version_id = version_key[len(version_key_prefix):]
-                    counts[version_id] = counts.get(version_id, 0) + 1
+                    keys_by_version.setdefault(version_id, []).append(item.get('fileKey'))
 
             if 'LastEvaluatedKey' not in response:
-                return counts
+                return {version_id: count_version_files(keys) for version_id, keys in keys_by_version.items()}
             query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
 
         logger.info(
@@ -823,7 +943,7 @@ def save_asset_version_metadata(assetId: str, assetVersionId: str,
         ClientError: When require_new is set and the version ID is already taken
     """
     try:
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
 
         # Create version record
         version_record = {
@@ -1025,30 +1145,56 @@ def get_all_asset_versions(databaseId: str, assetId: str) -> List[Dict]:
         logger.exception(f"Error getting all asset versions: {e}")
         raise
 
+
 def update_asset_current_version_reference(asset: Dict, new_assetVersionId: str) -> bool:
-    """Update the asset's currentVersionId reference
-    
+    """Record new_assetVersionId as the asset's current version, together with the version
+    provenance the caller stamped on `asset` (stamp_asset_version_provenance), as a targeted
+    update of those attributes on the live row.
+
+    The row is not written back whole: `asset` was read when the version operation began, and
+    writing that copy back would revert attributes written since (an upload completion's
+    lastUploadAt, an edit) and recreate an asset archived meanwhile. The update is conditional on
+    the live row still existing.
+
     Args:
         asset: The asset dictionary
         new_assetVersionId: The new current asset version ID
-        
+
     Returns:
         True if successful, False otherwise
     """
     try:
-        # Update only the currentVersionId field
         asset['currentVersionId'] = new_assetVersionId
-        
-        # Remove legacy version fields if they exist
-        if 'currentVersion' in asset:
-            del asset['currentVersion']
-        if 'versions' in asset:
-            del asset['versions']
-        
-        # Save updated asset
-        asset_table.put_item(Item=asset)
+        asset.pop('currentVersion', None)
+        asset.pop('versions', None)
+
+        updates = {'currentVersionId': new_assetVersionId}
+        updates.update({field: asset[field] for field in ASSET_VERSION_STAMPED_FIELDS if field in asset})
+        # Legacy version fields, and the workflow execution id the stamp drops.
+        removed = ['currentVersion', 'versions']
+        if 'lastChangeWorkflowExecutionId' not in asset:
+            removed.append('lastChangeWorkflowExecutionId')
+        names = {f"#s{n}": name for n, name in enumerate(updates)}
+        values = {f":s{n}": updates[name] for n, name in enumerate(updates)}
+        remove_names = {f"#r{n}": name for n, name in enumerate(removed)}
+        names.update(remove_names)
+        asset_table.update_item(
+            Key={'databaseId': asset['databaseId'], 'assetId': asset['assetId']},
+            UpdateExpression=(f"SET {', '.join(f'#s{n} = :s{n}' for n in range(len(updates)))} "
+                              f"REMOVE {', '.join(remove_names)}"),
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+            ConditionExpression="attribute_exists(assetId)",
+        )
         return True
-        
+
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.warning(f"Asset {asset.get('assetId')} no longer exists; its current version "
+                           f"{new_assetVersionId} was not recorded on it")
+            return False
+        logger.exception(f"Error updating current version reference: {e}")
+        return False
     except Exception as e:
         logger.exception(f"Error updating current version reference: {e}")
         return False
@@ -1144,6 +1290,21 @@ def finalize_asset_version(asset: Dict, new_assetVersionId: str, databaseId: str
     return asset
 
 
+def versioned_metadata_paths(files_to_version: List[Dict]) -> set:
+    """The metadata ``filePath`` of each file a version holds, and ``/`` for the asset's own record.
+
+    A file's metadata is keyed by its listed path, which is ``/`` + its version entry with exactly one leading
+    ``/`` removed (``version_entry_key``): ``x`` and a legacy ``/x`` are ``/x``, and ``//x`` (the key with an
+    empty segment after the location) is ``//x`` (#1977). An entry that starts with the asset ID is a path in
+    the asset like any other (``A1/x`` is ``/A1/x``, the file of a subfolder named like the asset, #1943); it
+    was read as ``/x``, so a version kept or restored the root file's metadata for it.
+    """
+    paths = {"/"}
+    for file in files_to_version:
+        paths.add("/" + version_entry_key(file['relativeKey']))
+    return paths
+
+
 def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: str, 
                                files_to_version: List[Dict]) -> bool:
     """Save a snapshot of current asset and file metadata/attributes for a version
@@ -1168,29 +1329,15 @@ def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: s
         return False
     
     try:
-        # Build set of file paths from files_to_version
-        versioned_file_paths = set()
-        versioned_file_paths.add("/")  # Always include asset-level metadata
-        
-        for file in files_to_version:
-            relative_key = file['relativeKey']
-            
-            # Remove asset ID prefix if present
-            if relative_key.startswith(assetId + '/'):
-                path_without_asset = relative_key[len(assetId) + 1:]
-            else:
-                path_without_asset = relative_key
-            
-            # Prepend "/" to match metadata filePath format
-            file_path = "/" + path_without_asset.lstrip('/')
-            versioned_file_paths.add(file_path)
+        # The metadata filePath of each versioned file, plus the asset-level record
+        versioned_file_paths = versioned_metadata_paths(files_to_version)
         
         logger.info(f"Versioning metadata for {len(versioned_file_paths)} file paths (including asset-level)")
         logger.info(f"Versioned file paths: {versioned_file_paths}")
         
         # Composite key for querying all metadata/attributes for this asset
         composite_key = f"{databaseId}:{assetId}"
-        created_at = datetime.utcnow().isoformat()
+        created_at = utc_now().isoformat()
         
         # Partition key for the version table
         version_pk = f"{databaseId}:{assetId}:{assetVersionId}"
@@ -1488,22 +1635,8 @@ def revert_asset_metadata_version(databaseId: str, assetId: str, target_assetVer
         return False
     
     try:
-        # Build set of file paths from files_to_version
-        versioned_file_paths = set()
-        versioned_file_paths.add("/")  # Always include asset-level metadata
-        
-        for file in files_to_version:
-            relative_key = file['relativeKey']
-            
-            # Remove asset ID prefix if present
-            if relative_key.startswith(assetId + '/'):
-                path_without_asset = relative_key[len(assetId) + 1:]
-            else:
-                path_without_asset = relative_key
-            
-            # Prepend "/" to match metadata filePath format
-            file_path = "/" + path_without_asset.lstrip('/')
-            versioned_file_paths.add(file_path)
+        # The metadata filePath of each versioned file, plus the asset-level record
+        versioned_file_paths = versioned_metadata_paths(files_to_version)
         
         logger.info(f"Reverting metadata for {len(versioned_file_paths)} file paths (including asset-level)")
         logger.info(f"Versioned file paths: {versioned_file_paths}")
@@ -1751,9 +1884,12 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     files_to_version = []
     skipped_files = []
     
+    # The files of an asset nested in this asset's location are that asset's: not part of this version
+    nested = nested_locations_for(asset, bucket, prefix)
+
     if request_model.useLatestFiles:
         # Get latest files from S3
-        s3_files = list_s3_files_with_versions(bucket, prefix, include_archived=False)
+        s3_files = list_s3_files_with_versions(bucket, prefix, include_archived=False, nested=nested)
         
         # Format for storage
         for file in s3_files:
@@ -1768,13 +1904,16 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     else:
         # Validate provided files (not archived for the version provided and not permanently deleted)
         invalid_files = validate_s3_files_exist(bucket, prefix, request_model.files)
+        invalid_files.extend(file.relativeKey for file in request_model.files
+                             if file.relativeKey not in invalid_files
+                             and not nested.keep(object_key_for_path(prefix, file.relativeKey) or ''))
         
         # Add valid files to version
         for file in request_model.files:
             if file.relativeKey not in invalid_files:
                 # Get additional metadata
                 try:
-                    full_key = prefix + file.relativeKey.lstrip('/')
+                    full_key = object_key_for_path(prefix, file.relativeKey)
                     response = s3_client.head_object(
                         Bucket=bucket,
                         Key=full_key,
@@ -1812,14 +1951,16 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     if not metadata_saved:
         logger.warning(f"Failed to save metadata snapshot for version {new_assetVersionId}")
 
-    # Make the reserved version the asset's current version (with databaseId for GSI)
+    # Make the reserved version the asset's current version (with databaseId for GSI). The asset
+    # row records it, with the new version as its latest change, in a targeted update.
+    stamp_asset_version_provenance(asset)
     finalize_asset_version(asset, new_assetVersionId, databaseId=databaseId)
 
     #Send email for new version
     send_subscription_email(databaseId, assetId)
 
     # Return response
-    now = datetime.utcnow().isoformat()
+    now = utc_now().isoformat()
     return AssetVersionOperationResponseModel(
         success=True,
         message=f"Successfully created version {new_assetVersionId} with {len(files_to_version)} files",
@@ -1848,6 +1989,8 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     
     # Get asset location
     bucket, prefix = get_asset_s3_location(asset)
+    # A file a nested asset's location holds is that asset's: the revert skips it and reports it
+    nested = nested_locations_for(asset, bucket, prefix)
     
     # First check if the version metadata exists
     version_metadata = get_asset_version_metadata(databaseId, assetId, request_model.assetVersionId)
@@ -1887,7 +2030,11 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         (None, relative_key) when the file should be skipped."""
         relative_key = file['relativeKey']
         source_version_id = file['versionId']
-        full_key = prefix + relative_key.lstrip('/')
+        # Exactly one leading '/' is dropped: a stored '//x' is '{location}/x', 'x' and a legacy '/x' are
+        # '{location}x' (#1977)
+        full_key = object_key_for_path(prefix, relative_key)
+        if not full_key or not nested.keep(full_key):
+            return None, relative_key
 
         try:
             # Check if the file version still exists (wasn't permanently deleted)
@@ -1903,14 +2050,17 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
             if not new_version_id:
                 return None, relative_key
 
-            # Delete the aux files since they are most likely wrong with the version revert
-            delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+            # Delete the file's own viewer data, which no longer matches the reverted version. It is in
+            # {db}/{key}/preview/; the rest of {db}/{key}/, and a folder named preview inside it, holds the
+            # data of other files in a folder named like this file (companion entries, or a nested asset's).
+            aux_prefix, aux_keep = viewer_data_scope(databaseId, full_key)
+            delete_assetAuxiliary_files(aux_prefix, keep=aux_keep)
 
             return {
                 'relativeKey': relative_key,
                 'versionId': new_version_id,
                 'size': file.get('size'),
-                'lastModified': datetime.utcnow().isoformat(),
+                'lastModified': utc_now().isoformat(),
                 'etag': file.get('etag')
             }, None
         except Exception as e:
@@ -1953,17 +2103,23 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     else:
         logger.info(f"Successfully saved metadata snapshot for reverted version {new_assetVersionId}")
     
-    # Make the reserved version the asset's current version
+    # Make the reserved version the asset's current version. The asset row records it, with the
+    # new version as its latest change, in a targeted update.
+    stamp_asset_version_provenance(asset)
     finalize_asset_version(asset, new_assetVersionId, databaseId=databaseId)
 
     #Send email for asset version change
     send_subscription_email(databaseId, assetId)
-    
+
+    # The files the new version stores: one entry per version_entry_key, as save_asset_file_versions
+    # writes them
+    stored_file_count = count_version_files(f.get('relativeKey') for f in files_to_version)
+
     # Return response
-    now = datetime.utcnow().isoformat()
+    now = utc_now().isoformat()
     return AssetVersionOperationResponseModel(
         success=True,
-        message=f"Successfully reverted to version {request_model.assetVersionId} with {len(files_to_version)} files",
+        message=f"Successfully reverted to version {request_model.assetVersionId} with {stored_file_count} files",
         assetId=assetId,
         assetVersionId=new_assetVersionId,
         operation="revert",
@@ -1984,8 +2140,10 @@ def get_asset_versions(databaseId: str, assetId: str, query_params: Dict,
     Returns:
         AssetVersionsListResponseModel with versions list and optional NextToken
     """
-    # Get asset and verify permissions
-    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    # Get asset and verify permissions. showArchived also resolves an archived asset, whose
+    # versions stay keyed by its original database id.
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles,
+                                       include_archived=bool(query_params.get('showArchived', False)))
     
     # Build query parameters for DynamoDB using the table PK (databaseId:assetId is now the table PK)
     composite_key = f"{databaseId}:{assetId}"
@@ -2098,7 +2256,8 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
         AssetVersionResponseModel with the version details
     """
     # Get asset and verify permissions
-    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles)
+    asset = get_asset_with_permissions(databaseId, assetId, "GET", claims_and_roles,
+                                       include_archived=bool(request_model.showArchived))
     
     # Get version information from asset
     version_info = None
@@ -2128,10 +2287,6 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     # Get asset location for checking file existence
     bucket, prefix = get_asset_s3_location(asset)
     
-    # Ensure prefix ends with a slash if it doesn't already
-    if not prefix.endswith('/'):
-        prefix = prefix + '/'
-    
     # Resolve every file's existence and archive state from ONE paginated
     # list_object_versions walk of the asset prefix rather than two head_object calls
     # per file. The listing carries each version's id plus IsLatest inline, so both
@@ -2141,7 +2296,10 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     #   - the key's current state is archived when its IsLatest entry is a delete marker
     # This turns 2N sequential S3 calls into a single listing, which is what kept this
     # endpoint inside the API timeout on assets with many files.
-    snapshot_files = file_versions.get('files', [])
+    # A snapshot taken before nested assets were left out can name a nested asset's files; they are not shown
+    nested = nested_locations_for(asset, bucket, prefix)
+    snapshot_files = [file for file in file_versions.get('files', [])
+                      if not nested or nested.keep(object_key_for_path(prefix, file.get('relativeKey', '')) or '')]
     existing_version_ids = set()
     archived_keys = set()
 
@@ -2160,7 +2318,7 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     files = []
     for file in snapshot_files:
         # Construct full S3 key
-        full_key = prefix + file['relativeKey'].lstrip('/')
+        full_key = object_key_for_path(prefix, file['relativeKey'])
 
         files.append(AssetVersionFileModel(
             relativeKey=file['relativeKey'],
@@ -2190,6 +2348,16 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
 #######################
 # API Route Handlers
 #######################
+
+
+def _version_count(response):
+    """The number of versions a listing returned (a count, never the versions)."""
+    for field in ("versions", "Items", "items"):
+        value = getattr(response, field, None)
+        if isinstance(value, list):
+            return len(value)
+    return None
+
 
 def handle_create_version(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /createVersion requests
@@ -2267,6 +2435,11 @@ def handle_create_version(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "assetVersionCreate", database_id=path_params['databaseId'],
+                   asset_id=path_params['assetId'], assetVersionId=response.assetVersionId,
+                   file_count=len(request_model.files) if request_model.files is not None else None,
+                   changes={field: value for field, value in request_model.dict(exclude_none=True).items()
+                            if field != "files"})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -2360,7 +2533,7 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
             revertMetadata=body.get('revertMetadata', False)
         )
         
-        logger.info(f"Parsed request model - revertMetadata: {request_model.revertMetadata}, comment: {request_model.comment}")
+        logger.info(f"Parsed request model - revertMetadata: {request_model.revertMetadata}, comment provided: {bool(request_model.comment)}")
         
         # Process request
         response = revert_asset_version(
@@ -2370,6 +2543,9 @@ def handle_revert_version(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "assetVersionRevert", database_id=path_params['databaseId'],
+                   asset_id=path_params['assetId'], assetVersionId=response.assetVersionId,
+                   changes=request_model.dict(exclude_none=True))
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -2445,6 +2621,9 @@ def handle_get_versions(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "assetVersionList", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   item_count=_version_count(response),
+                   request_parameters=request_model.dict(exclude_none=True))
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -2511,8 +2690,13 @@ def handle_get_version(event, context) -> APIGatewayProxyResponseV2:
         if not valid:
             return validation_error(body={'message': message}, event=event)
         
+        show_archived = parse_show_archived(event.get('queryStringParameters') or {})
+        if show_archived is None:
+            return validation_error(body={'message': SHOW_ARCHIVED_INVALID_MESSAGE}, event=event)
+
         # Create request model with assetVersionId from path parameter
-        request_model = GetAssetVersionRequestModel(assetVersionId=path_params['assetVersionId'])
+        request_model = GetAssetVersionRequestModel(assetVersionId=path_params['assetVersionId'],
+                                                    showArchived=show_archived)
         
         # Process request
         response = get_asset_version_details(
@@ -2522,6 +2706,9 @@ def handle_get_version(event, context) -> APIGatewayProxyResponseV2:
             claims_and_roles
         )
         
+        log_action(event, "assetVersionGet", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   assetVersionId=request_model.assetVersionId,
+                   request_parameters={"showArchived": request_model.showArchived})
         return success(body=response.dict())
     
     except ValidationError as v:
@@ -2640,7 +2827,10 @@ def handle_update_asset_version(event, context) -> APIGatewayProxyResponseV2:
             ExpressionAttributeValues=values_map
         )
 
-        now = datetime.utcnow().isoformat()
+        log_action(event, "assetVersionUpdate", database_id=databaseId, asset_id=assetId,
+                   assetVersionId=assetVersionId, changes=update_fields)
+
+        now = utc_now().isoformat()
         return success(body=AssetVersionOperationResponseModel(
             success=True,
             message=f"Successfully updated version {assetVersionId}",
@@ -2747,7 +2937,10 @@ def handle_archive_asset_version(event, context) -> APIGatewayProxyResponseV2:
             }
         )
 
-        now = datetime.utcnow().isoformat()
+        log_action(event, "assetVersionArchive", database_id=databaseId, asset_id=assetId,
+                   assetVersionId=assetVersionId, changes={"isArchived": True})
+
+        now = utc_now().isoformat()
         return success(body=AssetVersionOperationResponseModel(
             success=True,
             message=f"Successfully archived version {assetVersionId}",
@@ -2846,7 +3039,10 @@ def handle_unarchive_asset_version(event, context) -> APIGatewayProxyResponseV2:
             }
         )
 
-        now = datetime.utcnow().isoformat()
+        log_action(event, "assetVersionUnarchive", database_id=databaseId, asset_id=assetId,
+                   assetVersionId=assetVersionId, changes={"isArchived": False})
+
+        now = utc_now().isoformat()
         return success(body=AssetVersionOperationResponseModel(
             success=True,
             message=f"Successfully unarchived version {assetVersionId}",
@@ -2873,6 +3069,8 @@ def handle_unarchive_asset_version(event, context) -> APIGatewayProxyResponseV2:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset version operations
     
@@ -2893,8 +3091,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
         # Log incoming request
         logger.info(f"Asset versions lambda handler invoked: {method} {path}")
-        logger.debug(f"Event path parameters: {event.get('pathParameters', {})}")
-        logger.debug(f"Event query parameters: {event.get('queryStringParameters', {})}")
+        logger.debug(f"Event: {event_log_summary(event)}")
         
         # Route to appropriate handler based on the master API route definitions
         if method == 'POST' and API_CREATE_ASSET_VERSION.matches(path):

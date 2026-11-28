@@ -11,8 +11,13 @@ import {
     ButtonDropdown,
 } from "@cloudscape-design/components";
 import { archiveFile, deleteAssetPreview } from "../../../services/FileOperationsService";
-import { useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { AssetDetailContext, AssetDetailContextType } from "../../../context/AssetDetailContext";
+import {
+    ARCHIVED_TRANSFER_REASON,
+    ARCHIVED_WRITE_REASON,
+    useAssetArchived,
+} from "../../../context/ArchivedAssetContext";
 import { createFolder, fetchAsset, fetchFileInfo } from "../../../services/APIService";
 import { FileInfoPanelProps, FileManagerContextType } from "../types/FileManagerTypes";
 import {
@@ -24,6 +29,7 @@ import {
 import { getChangeSourceLabel } from "../utils/changeSourceLabels";
 import { EXECUTION_DETAILS_API_ROUTE, linkedExecutionId } from "../utils/executionLinks";
 import { useAllowedRoutes } from "../../../features/orchestration/permissions/useAllowedRoutes";
+import { routeDisabledReason } from "../../../features/orchestration/permissions/routeDisabledReason";
 import { CreateFolderModal } from "../modals/CreateFolderModal";
 import AssetDeleteModal from "../../modals/AssetDeleteModal";
 import UnarchiveFileModal from "../../modals/UnarchiveFileModal";
@@ -39,26 +45,40 @@ import PreviewModal from "./PreviewModal";
 import FileViewerModal from "../modals/FileViewerModal";
 import FileMetadata from "../../metadata/FileMetadata";
 import "./FileDetailsPanel.css";
-import { previewFileFormats } from "../../../common/constants/fileFormats";
+import { isSelfPreviewable, previewFileFormats } from "../../../common/constants/fileFormats";
 import { FileInfo } from "../../../visualizerPlugin/core/types";
+import { ViewerMode } from "../../../visualizerPlugin/core/PluginRegistry";
 import Synonyms from "../../../synonyms";
 import { EYE_ICON_SVG } from "../../../visualizerPlugin/components/EyeIconSvg";
 import {
-    isViewableExtension,
+    isViewableFilename,
     areFilenamesViewableTogether,
-    extensionOfFilename,
+    areFilesComparableTogether,
 } from "../../../visualizerPlugin/core/viewableExtensions";
 import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
 import AutomationActions from "./AutomationActions";
 import { deriveAutomationInputFiles, automationDisabledReason } from "../utils/automationSelection";
+import CreateZipDownloadModal from "../../zipDownloads/CreateZipDownloadModal";
+import {
+    assetDownloadQueueLink,
+    buildZipSelection,
+    DOWNLOAD_QUEUE_TAB_LABEL,
+    isZipDownloadsEnabled,
+    ZIP_ROUTES,
+    ZipSelectableItem,
+    ZipSelectionResult,
+} from "../../zipDownloads/zipDownloads";
 
 // Import the context from FileTreeView
 import { FileManagerContext } from "./FileTreeView";
+
+const FILE_PERMANENT_DELETE_ROUTE = "/database/{databaseId}/assets/{assetId}/deleteFile";
 
 // File Info Panel Component
 export function FileDetailsPanel({}: FileInfoPanelProps) {
     const { state, dispatch, onViewExecution } = useContext(FileManagerContext)!;
     const navigate = useNavigate();
+    const location = useLocation();
     const { databaseId, assetId } = useParams();
     const { state: assetDetailState } = useContext(AssetDetailContext) as AssetDetailContextType;
     const [asset, setAsset] = useState<any>(null);
@@ -72,14 +92,108 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     // fail. A fetched record without the flag is not distributable, as the API treats it; the null
     // held before the fetch resolves is not.
     const isNotDistributable = !!asset?.assetId && asset.isDistributable !== true;
+    // An archived asset's files carry delete markers, so the same affordances are hidden for it,
+    // and its writes are hidden through the read-only state the file manager sets for it.
+    const assetArchived = useAssetArchived();
+    const transfersUnavailable = isNotDistributable || assetArchived;
     // The viewer registry is initialized lazily. Without this the eye icons below would never
     // appear on this page: nothing else initializes the registry before they render, so every
     // viewability check reported "no viewer" (only the search page's container initializes it).
     const viewerRegistryReady = useViewerRegistryReady();
     // The "View execution" provenance link is hidden when the caller may not read execution
     // details, the same Tier-1 gate the orchestration pages apply. Fail-closed while loading.
-    const { can: canCallRoute } = useAllowedRoutes();
+    const {
+        loading: permissionsLoading,
+        failed: permissionsFailed,
+        can: canCallRoute,
+    } = useAllowedRoutes();
     const canViewExecution = canCallRoute("GET", EXECUTION_DETAILS_API_ROUTE);
+    const uploadDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        permissionsFailed,
+        canCallRoute("POST", "/uploads"),
+        `Your role does not allow uploading files to this ${Synonyms.asset}.`
+    );
+    // Permanent file delete is its own route: a role may archive files without it, so the delete
+    // dialog offers only archiving and the archived files' delete buttons are greyed.
+    const canPermanentlyDeleteFiles = canCallRoute("DELETE", FILE_PERMANENT_DELETE_ROUTE);
+    const permanentDeleteDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        !!permissionsFailed,
+        canPermanentlyDeleteFiles,
+        `Your role does not allow permanently deleting files of this ${Synonyms.asset}.`
+    );
+
+    // Download as Zip: offered in every Export menu when the deployment has the feature and the
+    // asset can be transferred at all (the API refuses a non-distributable or archived asset), and
+    // greyed with its reason while the role may not create a zip download.
+    const [zipDownloadsEnabled] = useState(() => isZipDownloadsEnabled());
+    const offerZipDownload = zipDownloadsEnabled && !transfersUnavailable;
+    const zipDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        !!permissionsFailed,
+        canCallRoute("POST", ZIP_ROUTES.asset),
+        `Your role does not allow creating zip downloads for this ${Synonyms.asset}.`
+    );
+    const zipMenuItem = (emptyReason?: string) => ({
+        id: "download-zip",
+        text: "Download as Zip",
+        iconName: "download" as const,
+        disabled: !!(zipDisabledReason || emptyReason),
+        disabledReason: zipDisabledReason || emptyReason,
+    });
+    const [zipSelection, setZipSelection] = useState<ZipSelectionResult | null>(null);
+    const [zipCreatedName, setZipCreatedName] = useState<string | null>(null);
+    const openZipDownload = (items: ZipSelectableItem[]) => {
+        setZipCreatedName(null);
+        setZipSelection(buildZipSelection(items));
+    };
+    const zipModal =
+        offerZipDownload && zipSelection ? (
+            <CreateZipDownloadModal
+                visible={!!zipSelection}
+                onDismiss={() => setZipSelection(null)}
+                databaseId={databaseId || ""}
+                assetId={assetId || ""}
+                assetName={asset?.assetName}
+                selection={zipSelection}
+                initialAssetVersionId={state.assetVersionId}
+                onCreated={(job) => {
+                    setZipSelection(null);
+                    setZipCreatedName(job?.archiveFileName || "Your archive");
+                }}
+            />
+        ) : null;
+    const zipCreatedAlert = zipCreatedName ? (
+        <Alert
+            type="success"
+            dismissible
+            dismissAriaLabel="Dismiss zip download message"
+            onDismiss={() => setZipCreatedName(null)}
+            statusIconAriaLabel="Success"
+            action={
+                // The asset's own Download Queue tab. The panel sits on that asset's page, so the
+                // link only changes `?tab=` (keeping the file selection and version) and the page
+                // switches tabs without remounting. My Download Queue stays in the profile menu.
+                <Button
+                    onClick={() =>
+                        navigate(
+                            assetDownloadQueueLink(
+                                databaseId || "",
+                                assetId || "",
+                                location.search
+                            ),
+                            { state: location.state }
+                        )
+                    }
+                >
+                    {`View ${DOWNLOAD_QUEUE_TAB_LABEL}`}
+                </Button>
+            }
+        >
+            {`${zipCreatedName} is being prepared.`}
+        </Alert>
+    ) : null;
 
     // Clear fetched files cache when refresh happens
     useEffect(() => {
@@ -157,6 +271,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     assetId,
                     fileKey: selectedItem.keyPrefix,
                     includeVersions: false,
+                    showArchived: assetArchived,
                 });
 
                 if (success && fileInfo) {
@@ -254,11 +369,17 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
         selectedItem.keyPrefix !== "/" &&
         selectedItem.relativePath !== "/" &&
         selectedItem.level > 0 &&
-        !selectedItem.isArchived;
+        (!selectedItem.isArchived || assetArchived);
 
     // State for modals
     const [createFolderModalVisible, setCreateFolderModalVisible] = useState(false);
     const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+    const [createFolderError, setCreateFolderError] = useState("");
+    const [downloadError, setDownloadError] = useState<string | null>(null);
+    // A download error belongs to the file it was raised for
+    useEffect(() => {
+        setDownloadError(null);
+    }, [selectedItem?.keyPrefix]);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showMoveFilesModal, setShowMoveFilesModal] = useState(false);
     const [showFileVersionsModal, setShowFileVersionsModal] = useState(false);
@@ -274,6 +395,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const [showShareUrlsModal, setShowShareUrlsModal] = useState(false);
     const [showFileViewerModal, setShowFileViewerModal] = useState(false);
     const [modalFiles, setModalFiles] = useState<FileInfo[]>([]);
+    // Which surface the viewer modal opens on: the eye opens Visualize, the compare icon Compare.
+    const [modalInitialMode, setModalInitialMode] = useState<ViewerMode>("visualize");
     const [showRenameFileModal, setShowRenameFileModal] = useState(false);
 
     // Helper function to get files for the modal
@@ -338,18 +461,20 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     };
 
     // Add handler for file viewer modal with debugging
-    const handleFileViewerModal = () => {
+    const handleFileViewerModal = (initialMode: ViewerMode = "visualize") => {
         console.log("handleFileViewerModal called - current state:", {
             isMultiSelect,
             selectedItems: selectedItems.length,
             selectedItem: selectedItem?.name,
             showFileViewerModal,
+            initialMode,
         });
 
         // Capture the files at the moment the button is clicked
         const files = getModalFiles();
         console.log("Captured files for modal:", files);
         setModalFiles(files);
+        setModalInitialMode(initialMode);
         setShowFileViewerModal(true);
     };
 
@@ -463,7 +588,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     databaseId={databaseId!}
                     assetId={assetId!}
                     assetVersionId={state.assetVersionId}
+                    initialMode={modalInitialMode}
                 />
+                {zipModal}
 
                 <div className="file-info-panel">
                     <AssetDeleteModal
@@ -474,6 +601,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         databaseId={databaseId}
                         assetId={assetId}
                         forceDeleteMode={selectedItems.every((item) => item.isArchived)}
+                        canPermanentlyDelete={canPermanentlyDeleteFiles}
                         onSuccess={(operation) => {
                             setShowDeleteModal(false);
                             // Clear selection first, then refresh file list
@@ -546,6 +674,20 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         </div>
                         <div className="file-actions">
                             <SpaceBetween direction="horizontal" size="xs">
+                                {/* A selection with folders has no per-file actions, but it can
+                                    still be archived as one zip download. */}
+                                {hasSelectedFolders && offerZipDownload && (
+                                    <ButtonDropdown
+                                        items={[zipMenuItem()]}
+                                        onItemClick={({ detail }) => {
+                                            if (detail.id === "download-zip") {
+                                                openZipDownload(selectedItems);
+                                            }
+                                        }}
+                                    >
+                                        Export
+                                    </ButtonDropdown>
+                                )}
                                 {!hasSelectedFolders && (
                                     <>
                                         {/* Check if all files are archived */}
@@ -561,6 +703,10 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     <Button
                                                         iconName="remove"
                                                         onClick={() => setShowDeleteModal(true)}
+                                                        disabled={!!permanentDeleteDisabledReason}
+                                                        disabledReason={
+                                                            permanentDeleteDisabledReason
+                                                        }
                                                     >
                                                         Permanently Delete Files
                                                     </Button>
@@ -622,10 +768,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     databaseId={databaseId!}
                                                     assetId={assetId!}
                                                     inputFiles={automationInputFiles}
-                                                    disabledReason={automationDisabled}
+                                                    disabledReason={
+                                                        assetArchived
+                                                            ? ARCHIVED_WRITE_REASON
+                                                            : automationDisabled
+                                                    }
                                                 />
 
-                                                {!isNotDistributable && (
+                                                {!transfersUnavailable && (
                                                     <ButtonDropdown
                                                         items={[
                                                             {
@@ -633,6 +783,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                                 text: "Download Files",
                                                                 iconName: "download",
                                                             },
+                                                            ...(offerZipDownload
+                                                                ? [zipMenuItem()]
+                                                                : []),
                                                             {
                                                                 id: "share",
                                                                 text: "Share File(s) URL",
@@ -644,6 +797,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                                 case "download":
                                                                     handleMultiFileDownload();
                                                                     break;
+                                                                case "download-zip":
+                                                                    openZipDownload(selectedItems);
+                                                                    break;
                                                                 case "share":
                                                                     setShowShareUrlsModal(true);
                                                                     break;
@@ -654,7 +810,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     </ButtonDropdown>
                                                 )}
 
-                                                {!isNotDistributable && (
+                                                {!transfersUnavailable && (
                                                     <Button
                                                         iconName="external"
                                                         variant={"primary"}
@@ -672,27 +828,59 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     </div>
 
                     <div className="multi-select-info">
-                        {/* Eye icon for the multi-file selection, hidden unless ONE viewer can render
-                            every selected file — a viewer covering only part of a mixed selection
-                            would open and then fail on the files it cannot read. */}
+                        {zipCreatedAlert}
+                        {/* Viewer entry points for the multi-file selection. Each is gated by ITS OWN
+                            path: the eye needs ONE visualize viewer that renders every selected file
+                            (never a compare-only one), the compare icon needs ONE compare viewer that
+                            admits the selection's count, shape and types. A viewer covering only part
+                            of a mixed selection would open and then fail on the files it cannot read. */}
                         {!hasSelectedFolders &&
-                            !isNotDistributable &&
+                            !transfersUnavailable &&
                             viewerRegistryReady &&
-                            areFilenamesViewableTogether(selectedItems.map((i: any) => i.name)) && (
-                                <div className="file-info-item">
-                                    <div className="file-info-label">File Viewer:</div>
-                                    <div className="file-info-value">
-                                        <span title="Visualize Selected Files">
-                                            <Button
-                                                variant="icon"
-                                                iconSvg={EYE_ICON_SVG}
-                                                ariaLabel="Visualize Selected Files"
-                                                onClick={handleFileViewerModal}
-                                            />
-                                        </span>
+                            (() => {
+                                const names = selectedItems.map((i: any) => i.name);
+                                const canVisualize = areFilenamesViewableTogether(names);
+                                const canCompare = areFilesComparableTogether(
+                                    selectedItems.map((i: any) => ({
+                                        filename: i.name,
+                                        key: i.keyPrefix,
+                                        assetId: assetId || undefined,
+                                        databaseId: databaseId || undefined,
+                                    }))
+                                );
+                                if (!canVisualize && !canCompare) return null;
+                                return (
+                                    <div className="file-info-item">
+                                        <div className="file-info-label">File Viewer:</div>
+                                        <div className="file-info-value">
+                                            {canVisualize && (
+                                                <span title="Visualize Selected Files">
+                                                    <Button
+                                                        variant="icon"
+                                                        iconSvg={EYE_ICON_SVG}
+                                                        ariaLabel="Visualize Selected Files"
+                                                        onClick={() =>
+                                                            handleFileViewerModal("visualize")
+                                                        }
+                                                    />
+                                                </span>
+                                            )}
+                                            {canCompare && (
+                                                <span title="Compare Selected Files">
+                                                    <Button
+                                                        variant="icon"
+                                                        iconName="copy"
+                                                        ariaLabel="Compare Selected Files"
+                                                        onClick={() =>
+                                                            handleFileViewerModal("compare")
+                                                        }
+                                                    />
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
-                            )}
+                                );
+                            })()}
 
                         <div className="selected-files-list">
                             {selectedItems.map((item) => (
@@ -718,15 +906,22 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     }
 
     // Single selection display (existing functionality)
-    const handleDownload = () => {
-        dispatch({
-            type: "DOWNLOAD_FILE",
-            payload: {
-                key: selectedItem.keyPrefix,
-                versionId: selectedItem.versionId || "",
-                assetVersionId: state.assetVersionId,
-            },
-        });
+    const handleDownload = async () => {
+        setDownloadError(null);
+        const result = await downloadFile(
+            state.assetId,
+            state.databaseId,
+            selectedItem.keyPrefix,
+            selectedItem.versionId || "",
+            state.assetVersionId
+        );
+        if (!result.ok) {
+            setDownloadError(
+                result.status
+                    ? `Download failed (${result.status}): ${result.message}`
+                    : `Download failed: ${result.message}`
+            );
+        }
     };
 
     const handleUpload = () => {
@@ -743,12 +938,10 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const folderName = selectedItem.name;
 
     const handleView = () => {
-        // Encode the relative path for the URL (for bookmarking/sharing)
-        // Remove leading slash if present since it's already in the URL structure
-        const pathForUrl = selectedItem.relativePath.startsWith("/")
-            ? selectedItem.relativePath.substring(1)
-            : selectedItem.relativePath;
-        const encodedPath = encodeURIComponent(pathForUrl);
+        // Encode the file's path in the asset for the URL (for bookmarking/sharing). It keeps its
+        // leading "/", so the API reads it as a path in the asset, never as one of the asset's keys:
+        // "/A1/cloud.las" in an asset stored at "A1/" is the file in the subfolder "A1/" (#1943)
+        const encodedPath = encodeURIComponent(selectedItem.relativePath);
 
         // Build URL with version query parameter — assetVersionId takes priority
         let url = `/databases/${databaseId}/assets/${encodeURIComponent(
@@ -779,14 +972,17 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     // Handle create folder
     const handleCreateFolder = async (newFolderName: string) => {
         setIsCreatingFolder(true);
+        setCreateFolderError("");
 
         try {
             // Construct the relative path for the new folder
             let relativeKey;
 
-            // If we're at the root level
+            // If we're at the root level. The path keeps its leading "/", so the API reads it as a
+            // path in the asset: a folder named like the asset's location ("A1/" in an asset stored
+            // at "A1/") is the new folder "A1/A1/", never the asset's own folder (#1943)
             if (selectedItem.relativePath === "/") {
-                relativeKey = `${newFolderName}/`;
+                relativeKey = `/${newFolderName}/`;
             } else {
                 // If we're in a subfolder, use the selected item's relativePath
                 // Make sure it ends with a slash
@@ -797,14 +993,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 relativeKey = `${basePath}${newFolderName}/`;
             }
 
-            // Call the API to create the folder
-            const [success, response] = (await createFolder({
+            // Call the API to create the folder. It resolves [true, message] on success,
+            // [false, message] for a rejected request and false for an empty reply.
+            const result = await createFolder({
                 databaseId,
                 assetId,
                 relativeKey,
-            })) as [boolean, any];
+            });
 
-            if (success) {
+            if (Array.isArray(result) && result[0] === true) {
                 // Refresh the file list
                 dispatch({
                     type: "REFRESH_FILES",
@@ -814,12 +1011,13 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 // Close the modal
                 setCreateFolderModalVisible(false);
             } else {
-                console.error("Failed to create folder:", response);
-                // Handle error (could show an error message)
+                const reason = (Array.isArray(result) && result[1]) || "Unknown error";
+                console.error("Failed to create folder:", reason);
+                setCreateFolderError(`Failed to create folder: ${reason}`);
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error creating folder:", error);
-            // Handle error
+            setCreateFolderError(`Failed to create folder: ${error?.message || "Unknown error"}`);
         } finally {
             setIsCreatingFolder(false);
         }
@@ -838,7 +1036,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 databaseId={databaseId!}
                 assetId={assetId!}
                 assetVersionId={state.assetVersionId}
+                initialMode={modalInitialMode}
             />
+            {zipModal}
 
             <div className="file-info-panel">
                 <CreateFolderModal
@@ -847,6 +1047,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     onSubmit={handleCreateFolder}
                     parentFolder={folderName}
                     isLoading={isCreatingFolder}
+                    submitError={createFolderError}
                 />
 
                 <AssetDeleteModal
@@ -857,6 +1058,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     databaseId={databaseId}
                     assetId={assetId}
                     forceDeleteMode={selectedItem?.isArchived}
+                    canPermanentlyDelete={canPermanentlyDeleteFiles}
                     onSuccess={(operation) => {
                         setShowDeleteModal(false);
                         // Clear selection first, then refresh file list
@@ -1005,6 +1207,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         databaseId={databaseId!}
                         assetId={assetId!}
                         filePath={selectedItem.keyPrefix}
+                        linkFilePath={selectedItem.relativePath}
                         fileName={selectedItem.name}
                         currentVersionId={selectedItem.versionId}
                         onVersionRevert={() => {
@@ -1086,6 +1289,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     setShowDeleteModal(true);
                                                     break;
                                                 case "create-subfolder":
+                                                    setCreateFolderError("");
                                                     setCreateFolderModalVisible(true);
                                                     break;
                                             }
@@ -1103,10 +1307,12 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                     databaseId={databaseId!}
                                     assetId={assetId!}
                                     inputFiles={automationInputFiles}
-                                    disabledReason={automationDisabled}
+                                    disabledReason={
+                                        assetArchived ? ARCHIVED_WRITE_REASON : automationDisabled
+                                    }
                                 />
 
-                                {!isNotDistributable && (
+                                {!transfersUnavailable && (
                                     <ButtonDropdown
                                         items={[
                                             {
@@ -1115,6 +1321,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                 iconName: "download",
                                                 disabled: !hasFolderContent(selectedItem),
                                             },
+                                            ...(offerZipDownload
+                                                ? [
+                                                      zipMenuItem(
+                                                          hasFolderContent(selectedItem)
+                                                              ? undefined
+                                                              : "This folder has no files."
+                                                      ),
+                                                  ]
+                                                : []),
                                             {
                                                 id: "share-folder",
                                                 text: "Share Files URL",
@@ -1123,7 +1338,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                             },
                                         ]}
                                         onItemClick={({ detail }) => {
-                                            if (detail.id === "download-folder") {
+                                            if (detail.id === "download-zip") {
+                                                openZipDownload([selectedItem]);
+                                            } else if (detail.id === "download-folder") {
                                                 navigate(
                                                     `/databases/${databaseId}/assets/${encodeURIComponent(
                                                         String(assetId)
@@ -1149,6 +1366,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                         iconName="upload"
                                         variant={"primary"}
                                         onClick={handleUpload}
+                                        disabled={!!uploadDisabledReason}
+                                        disabledReason={uploadDisabledReason}
                                     >
                                         Upload Files
                                     </Button>
@@ -1168,6 +1387,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                             <Button
                                                 iconName="remove"
                                                 onClick={() => setShowDeleteModal(true)}
+                                                disabled={!!permanentDeleteDisabledReason}
+                                                disabledReason={permanentDeleteDisabledReason}
                                             >
                                                 Permanently Delete File
                                             </Button>
@@ -1225,10 +1446,14 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                             databaseId={databaseId!}
                                             assetId={assetId!}
                                             inputFiles={automationInputFiles}
-                                            disabledReason={automationDisabled}
+                                            disabledReason={
+                                                assetArchived
+                                                    ? ARCHIVED_WRITE_REASON
+                                                    : automationDisabled
+                                            }
                                         />
 
-                                        {!isNotDistributable && (
+                                        {!transfersUnavailable && (
                                             <ButtonDropdown
                                                 items={[
                                                     {
@@ -1236,6 +1461,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                         text: "Download File",
                                                         iconName: "download",
                                                     },
+                                                    ...(offerZipDownload ? [zipMenuItem()] : []),
                                                     {
                                                         id: "share",
                                                         text: "Share File URL",
@@ -1247,6 +1473,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                         case "download":
                                                             handleDownload();
                                                             break;
+                                                        case "download-zip":
+                                                            openZipDownload([selectedItem]);
+                                                            break;
                                                         case "share":
                                                             setShowShareUrlsModal(true);
                                                             break;
@@ -1257,7 +1486,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                             </ButtonDropdown>
                                         )}
 
-                                        {!isNotDistributable && (
+                                        {!transfersUnavailable && (
                                             <Button
                                                 iconName="external"
                                                 variant={"primary"}
@@ -1279,6 +1508,25 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     }`}
                 >
                     <div className="file-info-content">
+                        {zipCreatedAlert}
+                        {downloadError && (
+                            <Alert
+                                type="error"
+                                dismissible
+                                dismissAriaLabel="Dismiss download error"
+                                onDismiss={() => setDownloadError(null)}
+                                statusIconAriaLabel="Error"
+                            >
+                                {downloadError}
+                            </Alert>
+                        )}
+
+                        {assetArchived && !selectedItem.isPermanentlyDeleted && (
+                            <Alert type="info" statusIconAriaLabel="Info">
+                                {ARCHIVED_TRANSFER_REASON}
+                            </Alert>
+                        )}
+
                         {selectedItem.isPermanentlyDeleted && (
                             <Alert type="error" statusIconAriaLabel="Error">
                                 This file has been permanently deleted. All S3 versions have been
@@ -1298,9 +1546,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                 {!isFolder &&
                                     selectedItem.level > 0 &&
                                     !selectedItem.isPermanentlyDeleted &&
-                                    !isNotDistributable &&
+                                    !transfersUnavailable &&
                                     viewerRegistryReady &&
-                                    isViewableExtension(extensionOfFilename(selectedItem.name)) && (
+                                    isViewableFilename(selectedItem.name) && (
                                         <span
                                             style={{ marginLeft: "8px" }}
                                             title={`Visualize File ${selectedItem.name}`}
@@ -1309,7 +1557,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                 variant="icon"
                                                 iconSvg={EYE_ICON_SVG}
                                                 ariaLabel={`Visualize File ${selectedItem.name}`}
-                                                onClick={handleFileViewerModal}
+                                                onClick={() => handleFileViewerModal("visualize")}
                                             />
                                         </span>
                                     )}
@@ -1365,7 +1613,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         {/* Show preview thumbnail for the top-level Asset Node */}
                         {selectedItem.relativePath === "/" &&
                             selectedItem.level === 0 &&
-                            !isNotDistributable && (
+                            !transfersUnavailable && (
                                 <div className="file-info-item">
                                     <div className="file-info-label">Preview:</div>
                                     <AssetPreviewThumbnail
@@ -1496,7 +1744,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         )}
 
                         {/* Show preview thumbnail or message for previewable file nodes - at the bottom of the panel */}
-                        {!isFolder && selectedItem.level > 0 && !isNotDistributable && (
+                        {!isFolder && selectedItem.level > 0 && !transfersUnavailable && (
                             <>
                                 {/* Check if file has a preview file or is a previewable format */}
                                 {(() => {
@@ -1545,10 +1793,11 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
 
                                     // If file format is previewable, show preview section
                                     if (isPreviewFormat) {
-                                        // Check if file size is less than 5MB
-                                        const isSizeOk =
-                                            selectedItem.size !== undefined &&
-                                            selectedItem.size < 5 * 1024 * 1024;
+                                        // A file is shown as its own preview only when it is strictly under 5 MiB
+                                        const isSizeOk = isSelfPreviewable(
+                                            fileName,
+                                            selectedItem.size
+                                        );
 
                                         return (
                                             <div className="file-info-item">
@@ -1569,7 +1818,10 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     // Show message if file is too large
                                                     <Box padding="s" textAlign="center">
                                                         <div>
-                                                            File is too large to preview (over 5MB)
+                                                            This image is 5 MiB or larger, so it is
+                                                            not shown as its own preview. A
+                                                            generated preview appears here when
+                                                            media previews are enabled.
                                                         </div>
                                                     </Box>
                                                 )}

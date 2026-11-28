@@ -11,8 +11,9 @@ For asset-level operations, see [Assets](assets.md). For file metadata, see [Met
 -   **File**: An individual object stored in S3 within an asset's directory structure. Files can be organized in folders.
 -   **File Version**: S3 object versions tracked through bucket versioning. VAMS also tracks file versions within asset version snapshots.
 -   **Primary File Type**: A designation that marks a file as the primary representative of a particular type within an asset (e.g., the primary `.ifc` file).
--   **Preview File**: A generated preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file.
+-   **Preview File**: A generated or uploaded preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file. `previewFile` names the file's newest preview that is not archived; a listing with `includeArchived=true` names the newest archived preview when the file has no other.
 -   **Archive**: Soft-deletion of a file using S3 delete markers. Archived files can be unarchived.
+-   **File path**: How a request names a file of the asset (`filePath`, `sourcePath`, `destinationPath`, an upload's `relativeKey`, a stream path, a download key, a workflow input's `relativeFileKey`). Send the file's path in the asset with its leading `/`, the file list's `relativePath`. A value with a leading `/` is always a path in the asset: `/a1/cloud.laz` in an asset stored at `a1/` is the file `a1/a1/cloud.laz` of a subfolder named like the asset, and `/` followed by the asset's location key is a path too. A value without a leading `/` is the file's full S3 key (the file list's `key`) when it is one of the asset's keys, and otherwise a path in the asset. Exactly one leading `/` is the marker, so `//x` names the key `a1//x` (an empty segment right after the location); the file list shows such a file at `//x`, and the web file manager shows it in a folder named `/`. Every value names a key inside the requesting asset; a value with a `..` segment is refused.
 
 ---
 
@@ -26,14 +27,15 @@ Returns a list of all files in the specified asset, including file metadata, siz
 
 **Request Parameters:**
 
-| Parameter         | Location | Type    | Required | Description                                                                                                                     |
-| ----------------- | -------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`      | path     | string  | Yes      | Database identifier.                                                                                                            |
-| `assetId`         | path     | string  | Yes      | Asset identifier.                                                                                                               |
-| `maxItems`        | query    | integer | No       | Maximum number of files to return. Default: `10000`. No maximum.                                                                |
-| `pageSize`        | query    | integer | No       | Page size for pagination. Default: `100`, or `1500` when `basic` is `true`. No maximum.                                         |
-| `startingToken`   | query    | string  | No       | Continuation token from a previous response.                                                                                    |
-| `includeArchived` | query    | boolean | No       | Include archived files. Default: `false`. Archived files are returned on the first page only, beside that page's current files. |
+| Parameter         | Location | Type    | Required | Description                                                                                                                                                                                                                                   |
+| ----------------- | -------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`      | path     | string  | Yes      | Database identifier.                                                                                                                                                                                                                          |
+| `assetId`         | path     | string  | Yes      | Asset identifier.                                                                                                                                                                                                                             |
+| `maxItems`        | query    | integer | No       | Maximum number of files to return. Default: `10000`. Maximum: `30000`.                                                                                                                                                                        |
+| `pageSize`        | query    | integer | No       | Page size for pagination. Default: `100`, or `1500` when `basic` is `true`. Maximum: `10000`.                                                                                                                                                 |
+| `startingToken`   | query    | string  | No       | Continuation token from a previous response.                                                                                                                                                                                                  |
+| `includeArchived` | query    | boolean | No       | Include archived files. Default: `false`. Archived files are returned on the first page only, beside that page's current files.                                                                                                               |
+| `showArchived`    | query    | boolean | No       | When `true`, also lists the files of an archived asset. An archived asset's listing always includes its archived files, each with `isArchived: true`. Default: `false`. See [Reading an archived asset](assets.md#reading-an-archived-asset). |
 
 **Response:**
 
@@ -72,7 +74,7 @@ Returns a list of all files in the specified asset, including file metadata, siz
 }
 ```
 
-`key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns.
+`key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns. An asset whose base key names one object (created with a `bucketExistingKey` that has no trailing `/`) holds that object at `relativePath` `/{file name}`, every key under `{key}/` at the path after the key (`{key}/sub/x.obj` is `/sub/x.obj`), and its previews `{key}.previewFile.{ext}`. A file under `{key}/` named exactly like the object is listed one level down, at `/{file name}/{file name}` (its previews at `/{file name}/{file name}.previewFile.{ext}`), so every file has its own path. Other keys that start with the same characters are not part of it. A path of such an asset never names a key outside it, an upload at `/{file name}` writes a new version of the object (a workflow output at that path is refused), its file cannot be moved or renamed, and a file route given `/` alone answers `400`: delete and archive with a `message` that contains `Cannot delete the top-level asset folder` or `Cannot archive the top-level asset folder`, and the other file and stream routes with one that contains `Requested file is not part of this asset`. Download resolves `/` to the object.
 
 `changeSource` and `changeUserId` describe how the current version of each file was created. When `changeSource` is `workflowExecution`, `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote it; they are `null` for every other change source, and in `basic` mode, which performs no per-object read.
 
@@ -101,6 +103,7 @@ Retrieves detailed information about a specific file, including S3 metadata, ver
 | `assetId`         | path     | string  | Yes      | Asset identifier.                                                       |
 | `filePath`        | query    | string  | Yes      | The relative file path (e.g., `/models/building.ifc`).                  |
 | `includeVersions` | query    | boolean | No       | When `true`, include the file's version history in the `versions` list. |
+| `showArchived`    | query    | boolean | No       | When `true`, also finds a file of an archived asset. Default: `false`.  |
 
 **Response:**
 
@@ -150,7 +153,9 @@ The `versions` list is present only when `includeVersions` is `true`. `changeWor
 
 `POST /database/{databaseId}/assets/{assetId}/moveFile`
 
-Moves or renames a file within the asset. This copies the file to the new location and deletes the original.
+Moves or renames a file within the asset. This copies the file to the new location and deletes the original. The copy runs within the request, so moving a large file can take longer than the Amazon API Gateway integration timeout; see [API Gateway Timeout for Large Operations](../troubleshooting/known-limitations.md#api-gateway-timeout-for-large-operations).
+
+A `sourcePath` of `/`, or one that resolves to the entry the file list shows at `/`, names the top-level asset folder: for an asset stored at `a1/`, its full key `a1/`, and for an asset created from one Amazon S3 object, its companion folder `{key}/`. These requests return `400` with a `message` that contains `Cannot move or rename the top-level asset folder`, and nothing is moved. A `destinationPath` that resolves to that entry returns `400` with a `message` that contains `Cannot move or rename a file onto the top-level asset folder`, also when no object exists at that key. A file moved onto any other `destinationPath` whose key ends in `/` (a folder entry, such as `/sub/`, `//` or `{key}//`) returns `400` with a `message` that contains `Cannot move or rename a file onto a folder`; name a file in the folder instead. `/a1/` is the subfolder named like the asset (key `a1/a1/`).
 
 **Request Parameters:**
 
@@ -185,11 +190,11 @@ Moves or renames a file within the asset. This copies the file to the new locati
 
 **Error Responses:**
 
-| Status | Description                                                                                                                  |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, source file not found, destination already exists, or the destination file name has a blocked extension. |
-| `403`  | Not authorized to modify files in this asset.                                                                                |
-| `500`  | Internal server error.                                                                                                       |
+| Status | Description                                                                                                                                                                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, source file not found, destination already exists, the source or the destination is the top-level asset folder, a file's destination is a folder, the source is the file of a single-file asset (`The file of a single-file asset cannot be moved or renamed.`), or the destination file name has a blocked extension. |
+| `403`  | Not authorized to modify files in this asset.                                                                                                                                                                                                                                                                                              |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                     |
 
 ---
 
@@ -197,7 +202,9 @@ Moves or renames a file within the asset. This copies the file to the new locati
 
 `POST /database/{databaseId}/assets/{assetId}/copyFile`
 
-Copies a file within the same asset or to a different asset. Supports cross-database copying when `destinationDatabaseId` is provided.
+Copies a file within the same asset or to a different asset. Supports cross-database copying when `destinationDatabaseId` is provided. The copy runs within the request, so copying a large file can take longer than the Amazon API Gateway integration timeout; see [API Gateway Timeout for Large Operations](../troubleshooting/known-limitations.md#api-gateway-timeout-for-large-operations).
+
+A `destinationPath` that resolves to the entry the destination asset's file list shows at `/` (`/`, its full key such as `a1/` for an asset stored at `a1/`, or the companion folder `{key}/` of an asset created from one Amazon S3 object) returns `400` with a `message` that contains `Cannot copy a file onto the top-level asset folder`, also when no object exists at that key, and nothing is copied. A file copied onto any other `destinationPath` whose key ends in `/` (a folder entry, such as `/sub/`, `//` or `{key}//`) returns `400` with a `message` that contains `Cannot copy a file onto a folder`.
 
 **Request Parameters:**
 
@@ -236,11 +243,11 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 **Error Responses:**
 
-| Status | Description                                                                                      |
-| ------ | ------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, source file not found, or the destination file name has a blocked extension. |
-| `403`  | Not authorized to copy files.                                                                    |
-| `500`  | Internal server error.                                                                           |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, source file not found, the destination is the top-level asset folder or another folder, or the destination file name has a blocked extension. A copy to another asset or database of a file whose asset is quarantined without an exception, when the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and its files cannot be copied to another asset"); a copy within the asset is not refused. |
+| `403`  | Not authorized to copy files. A caller who may not read the source asset or write the destination asset receives `403` whatever the asset's compliance state.                                                                                                                                                                                                                                                                                                   |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 ---
 
@@ -248,7 +255,11 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 `DELETE /database/{databaseId}/assets/{assetId}/deleteFile`
 
-Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files.
+Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files. It also removes the file's metadata, attributes and version records, so the asset's versions no longer list the file.
+
+When Amazon S3 does not delete every version of every file under a prefix, the request returns `400`. The files that were deleted lose their metadata, attributes, version records and auxiliary data, and the remaining files keep theirs, so the delete can be retried. When Amazon S3 does not delete every version of a single file, or its previews cannot be listed, the request returns `400` and the file keeps its previews, auxiliary data and records. When the file is deleted but one of its previews is not, the request returns `400`: the file loses its metadata, version records and auxiliary data, the preview that was kept keeps its version records, and deleting the file again removes it.
+
+A `filePath` of `/` names the top-level asset folder, and so does a path that resolves to the entry the file list shows at `/`, whether `isPrefix` is `true` or `false`: for an asset stored at `a1/`, its full key `a1/`, and for an asset created from one Amazon S3 object, its companion folder `{key}/`. These requests return `400` with a `message` that contains `Cannot delete the top-level asset folder`, and nothing is deleted. A path with a leading `/` is a path in the asset, so `/a1/` is the subfolder named like the asset (key `a1/a1/`) and deletes only that subfolder. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
 
 :::danger[Irreversible Operation]
 This permanently deletes the file and all its versions. Consider using [Archive File](#archive-file) for soft-deletion instead.
@@ -271,11 +282,11 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 }
 ```
 
-| Field                    | Type    | Required | Description                                                                      |
-| ------------------------ | ------- | -------- | -------------------------------------------------------------------------------- |
-| `filePath`               | string  | Yes      | Relative file path to delete.                                                    |
-| `isPrefix`               | boolean | No       | When `true`, delete all files under the path prefix. Defaults to `false`.        |
-| `confirmPermanentDelete` | boolean | Yes      | Safety confirmation. Must be `true`; the operation errors when it is not `true`. |
+| Field                    | Type    | Required | Description                                                                                                                                                            |
+| ------------------------ | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `filePath`               | string  | Yes      | Relative file path to delete.                                                                                                                                          |
+| `isPrefix`               | boolean | No       | When `true`, `filePath` names a folder and every file in it is deleted; a trailing `/` is added when missing, so `/sub` never selects `/sub.txt`. Defaults to `false`. |
+| `confirmPermanentDelete` | boolean | Yes      | Safety confirmation. Must be `true`; the operation errors when it is not `true`.                                                                                       |
 
 **Response:**
 
@@ -289,11 +300,11 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 
 **Error Responses:**
 
-| Status | Description                                                                        |
-| ------ | ---------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, or file not found. |
-| `403`  | Not authorized to delete files in this asset.                                      |
-| `500`  | Internal server error.                                                             |
+| Status | Description                                                                                                                                                                                          |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, the top-level asset folder, file not found, or Amazon S3 did not delete every version of the file or of every file under the prefix. |
+| `403`  | Not authorized to delete files in this asset.                                                                                                                                                        |
+| `500`  | Internal server error.                                                                                                                                                                               |
 
 ---
 
@@ -302,6 +313,8 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 `DELETE /database/{databaseId}/assets/{assetId}/archiveFile`
 
 Soft-deletes a file by creating an S3 delete marker. The file can be restored using [Unarchive File](#unarchive-file).
+
+A `filePath` of `/`, or a path that resolves to the entry the file list shows at `/` (`isPrefix` `true` or `false`), such as `a1/` (its full key) for an asset stored at `a1/` or the companion folder `{key}/` of an asset created from one Amazon S3 object, returns `400` with a `message` that contains `Cannot archive the top-level asset folder`, and nothing is archived. `/a1/` is the subfolder named like the asset (key `a1/a1/`) and archives only that subfolder. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
 
 **Request Parameters:**
 
@@ -319,10 +332,10 @@ Soft-deletes a file by creating an S3 delete marker. The file can be restored us
 }
 ```
 
-| Field      | Type    | Required | Description                                                                |
-| ---------- | ------- | -------- | -------------------------------------------------------------------------- |
-| `filePath` | string  | Yes      | Relative file path to archive.                                             |
-| `isPrefix` | boolean | No       | When `true`, archive all files under the path prefix. Defaults to `false`. |
+| Field      | Type    | Required | Description                                                                                                                                                             |
+| ---------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `filePath` | string  | Yes      | Relative file path to archive.                                                                                                                                          |
+| `isPrefix` | boolean | No       | When `true`, `filePath` names a folder and every file in it is archived; a trailing `/` is added when missing, so `/sub` never selects `/sub.txt`. Defaults to `false`. |
 
 **Response:**
 
@@ -336,11 +349,11 @@ Soft-deletes a file by creating an S3 delete marker. The file can be restored us
 
 **Error Responses:**
 
-| Status | Description                                                |
-| ------ | ---------------------------------------------------------- |
-| `400`  | Invalid parameters, or file not found or already archived. |
-| `403`  | Not authorized to archive files in this asset.             |
-| `500`  | Internal server error.                                     |
+| Status | Description                                                                            |
+| ------ | -------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, the top-level asset folder, or file not found or already archived. |
+| `403`  | Not authorized to archive files in this asset.                                         |
+| `500`  | Internal server error.                                                                 |
 
 ---
 
@@ -439,6 +452,8 @@ Creates a new folder (zero-byte S3 object with trailing slash) within the asset'
 
 Reverts a file to a specific previous S3 version by copying the old version as the new current version.
 
+A `filePath` of `/`, or one that resolves to the entry the file list shows at `/` (for an asset stored at `a1/`, its full key `a1/`; for an asset created from one Amazon S3 object, its companion folder `{key}/`), names the top-level asset folder. These requests return `400` with a `message` that contains `Cannot revert the top-level asset folder`, and nothing changes.
+
 **Request Parameters:**
 
 | Parameter    | Location | Type   | Required | Description                     |
@@ -473,11 +488,11 @@ Reverts a file to a specific previous S3 version by copying the old version as t
 
 **Error Responses:**
 
-| Status | Description                                       |
-| ------ | ------------------------------------------------- |
-| `400`  | Invalid parameters, or file or version not found. |
-| `403`  | Not authorized to revert file versions.           |
-| `500`  | Internal server error.                            |
+| Status | Description                                                                   |
+| ------ | ----------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, the top-level asset folder, or file or version not found. |
+| `403`  | Not authorized to revert file versions.                                       |
+| `500`  | Internal server error.                                                        |
 
 ---
 
@@ -568,9 +583,13 @@ Each entry in `files` is an object:
 
 | Field         | Type    | Required | Description                                                                           |
 | ------------- | ------- | -------- | ------------------------------------------------------------------------------------- |
-| `relativeKey` | string  | Yes      | Relative file path for the upload.                                                    |
+| `relativeKey` | string  | Yes      | The file's path in the asset, with its leading `/` ([file path](#concepts)).          |
 | `file_size`   | integer | No       | File size in bytes. Either `file_size` or `num_parts` must be provided.               |
 | `num_parts`   | integer | No       | Number of multipart upload parts. Either `file_size` or `num_parts` must be provided. |
+
+A request accepts at most 1,000 files and 1,500 total parts across all files, and at most 10,000 parts per file; a request over any of these is refused with `400`. Because every part's presigned URL carries the file's key, a request whose estimated response is over 5 MiB is also refused with `400` ("Upload request too large; split the files across several requests") even inside those limits; this can happen when keys are long and use non-ASCII characters. Split such a request, or send fewer, larger parts. See [Upload request size limits](../troubleshooting/known-limitations.md#upload-request-size-limits).
+
+A file's key, which is its asset's location followed by its `relativeKey`, may be at most 998 bytes of UTF-8 in a bucket registered at its root, and the length of the bucket's base prefix less than that otherwise. The upload is staged under a longer key that must fit the 1,024-byte Amazon S3 limit. A longer key is refused with `400` (`VAMS General Error: File key is too long to upload: a file key, including its asset location, may be at most N bytes`, where N is the bound for the asset's bucket), and no multipart upload is created for any file in the request. See [Amazon S3 quotas](../additional/quotas.md#amazon-s3).
 
 **Response:**
 
@@ -596,19 +615,23 @@ Each entry in `files` is an object:
 
 **Error Responses:**
 
-| Status | Description                                                                                                                          |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, asset not found, blocked file extension, or blocked MIME type.                                                   |
-| `403`  | Not authorized to upload files to this asset.                                                                                        |
-| `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60). |
-| `500`  | Internal server error.                                                                                                               |
+| Status | Description                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, asset not found, a blocked file extension or one the database does not allow, a file key over the upload bound, or a request over a per-request limit described above. |
+| `403`  | Not authorized to upload files to this asset.                                                                                                                                              |
+| `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60).                                                       |
+| `500`  | Internal server error.                                                                                                                                                                     |
 
 :::info[Blocked File Types]
-For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked. The destination file name of a move, rename or copy gets the same extension check.
+For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.dotm`, `.xlsm`, `.xltm`, `.xlam`, `.pptm`, `.potm`, `.ppsm`, `.ppam`, `.sldm`, `.vbs`, `.bat`. The destination file name of a move, rename or copy gets the same extension check. The blocked MIME type list does not refuse an upload; see [Blocked File Types](../architecture/security.md#blocked-file-types).
+:::
+
+:::info[Single-file assets]
+For an asset whose base key names one object, a `relativeKey` of `/{file name}` uploads a new version of that object, `/{file name}.previewFile.{ext}` writes its own preview `{key}.previewFile.{ext}`, and any other `relativeKey` lands under `{key}/`. A pipeline output at `/{file name}` is refused with `A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.` The run then ends `FAILED`, and its error names the file with that message: `The asset file write-back failed. Writing output file '{file name}' into the asset failed: A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.`
 :::
 
 :::info[Preview File Extensions]
-An `assetPreview` file, and any file-level preview companion (a `relativeKey` containing `.previewFile.`) inside an `assetFile` upload, must carry one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`. For a companion the extension is everything after the `.previewFile.` marker, so `model.gltf.previewFile.p.png` is read as `.p.png` and refused. One offending file rejects the entire request with `400`; no multipart upload is created for any file in it.
+An `assetPreview` file, and any file-level preview companion (a `relativeKey` containing `.previewFile.`) inside an `assetFile` upload, must carry one of `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, or `.bmp`. For a companion the extension is everything after the `.previewFile.` marker, so `model.gltf.previewFile.p.png` is read as `.p.png` and refused. One offending file rejects the entire request with `400`; no multipart upload is created for any file in it.
 :::
 
 ---
@@ -656,8 +679,6 @@ Completes a multipart file upload by signaling that all parts have been uploaded
 
 Each entry in `files` is an object with `relativeKey`, `uploadIdS3`, and a `parts` array of `{ "PartNumber", "ETag" }` objects. An empty `parts` array completes a file initialized as `zero-byte`. For any other file it cancels the file: the multipart upload is aborted, nothing is stored, and the file's result has `success: false`.
 
-A file over 1 GiB is processed asynchronously: its result has `success: true` and `largeFileAsynchronousHandling: true`, it counts toward `overallSuccess`, and it appears in the asset once the copy finishes.
-
 **Response:**
 
 ```json
@@ -678,13 +699,69 @@ A file over 1 GiB is processed asynchronously: its result has `success: true` an
 }
 ```
 
+A file over 1 GiB is processed asynchronously: its result has `success: true` and `largeFileAsynchronousHandling: true`, and it counts toward `overallSuccess`, also when every file in the upload is that large. The file appears in the asset when the copy finishes. Files over 5 GiB are copied by the large object copy engine, which has no time limit. Read each such file's outcome with [Get Upload Status](#get-upload-status).
+
 **Error Responses:**
 
-| Status | Description                                            |
-| ------ | ------------------------------------------------------ |
-| `400`  | Invalid upload ID, upload not found, or missing parts. |
-| `403`  | Not authorized to upload files to this asset.          |
-| `500`  | Internal server error.                                 |
+| Status | Description                                                                                                                                                                                       |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid upload ID, upload not found, missing parts, or `VAMS General Error: Upload has already been completed.` (a completed upload whose record is kept for its asynchronously processed files). |
+| `403`  | Not authorized to upload files to this asset.                                                                                                                                                     |
+| `500`  | Internal server error.                                                                                                                                                                            |
+
+---
+
+### Get Upload Status
+
+`GET /uploads/{uploadId}`
+
+Returns the outcome of each file an upload accepted for asynchronous processing. Completion keeps the record of an upload with such a file, with status `processing_async` and one `PENDING` entry per file. Each file then becomes `SUCCEEDED` or `FAILED`, and the upload `completed` or `completed_with_errors`. The record is kept for 7 days. A user upload whose files all landed at completion has no record; the upload a workflow execution makes to store its pipeline outputs keeps its record with status `completed` or `completed_with_errors`, so it answers `200`.
+
+**Request Parameters:**
+
+| Parameter    | Location | Type   | Required | Description                                            |
+| ------------ | -------- | ------ | -------- | ------------------------------------------------------ |
+| `uploadId`   | path     | string | Yes      | The upload identifier from the initial upload request. |
+| `assetId`    | query    | string | Yes      | The asset the upload targets.                          |
+| `databaseId` | query    | string | Yes      | The database of the asset.                             |
+
+**Response:**
+
+```json
+{
+    "uploadId": "upload-12345",
+    "databaseId": "my-database",
+    "assetId": "asset-001",
+    "status": "completed_with_errors",
+    "asyncFiles": [
+        {
+            "relativeKey": "/scans/site.e57",
+            "status": "SUCCEEDED",
+            "error": "",
+            "updatedAt": "2026-11-06T10:15:00Z"
+        },
+        {
+            "relativeKey": "/scans/site-2.e57",
+            "status": "FAILED",
+            "error": "The file could not be processed into the asset.",
+            "updatedAt": "2026-11-06T10:20:00Z"
+        }
+    ]
+}
+```
+
+`asyncFiles` is sorted by `relativeKey`. A failed file is not in the asset; upload it again.
+
+**Error Responses:**
+
+| Status | Description                                                                                                                                                                                  |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters.                                                                                                                                                                          |
+| `403`  | Not authorized to call this route.                                                                                                                                                           |
+| `404`  | Upload not found. Also returned for a user upload whose files all landed at completion (it has no record), a record past its 7 days, another database, and an asset the caller may not read. |
+| `500`  | Internal server error.                                                                                                                                                                       |
+
+The route requires `GET` on the upload's asset. From the CLI, use `vamscli file upload-status` or `vamscli file upload --wait-async`.
 
 ---
 
@@ -739,11 +816,12 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                   |
-| ------ | ----------------------------------------------------------------------------- |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable. |
-| `404`  | File not found.                                                               |
-| `500`  | Internal server error.                                                        |
+| Status | Description                                                                                                                                                                                                                                                                                              |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | The asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). A file's `{file}.previewFile.{ext}` preview image with an allowed image extension and no version parameter is still served. |
+| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable.                                                                                                                                                       |
+| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                                                                                                                                                                          |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                   |
 
 ---
 
@@ -759,11 +837,18 @@ Returns file metadata without the file body.
 
 **Request Parameters:**
 
-| Parameter    | Location | Type   | Required | Description                                         |
-| ------------ | -------- | ------ | -------- | --------------------------------------------------- |
-| `databaseId` | path     | string | Yes      | Database identifier.                                |
-| `assetId`    | path     | string | Yes      | Asset identifier.                                   |
-| `{proxy+}`   | path     | string | Yes      | The relative file path within the auxiliary bucket. |
+| Parameter    | Location | Type   | Required | Description                                                    |
+| ------------ | -------- | ------ | -------- | -------------------------------------------------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier.                                           |
+| `assetId`    | path     | string | Yes      | Asset identifier.                                              |
+| `{proxy+}`   | path     | string | Yes      | The viewer data path `{file}/preview/{data path}` (see below). |
+
+A file's viewer data lives in its own `preview/` folder, so the path is the file, then `/preview/`, then the data path a pipeline wrote (for example `scans/site.laz/preview/PotreeViewer/metadata.json`). The file part names a file the asset holds in either form, for folder and single-file assets:
+
+-   its path in the asset with its leading `/`, the file list's `relativePath` (`/scans/site.laz`, so the request path has two slashes after `stream`);
+-   its full S3 key, the `key` the file list returns (`vams/a1/scans/site.laz` for an asset in a bucket registered under the base prefix `vams/`), the form the web viewers send for a file the list showed.
+
+The file part follows the [file path](#concepts) rule: a leading `/` marks the path in the asset, so `/a1/cloud.laz` in an asset stored at `a1/` is the file `a1/a1/cloud.laz` of a subfolder named like the asset, never `a1/cloud.laz`. A path without a leading `/` that starts with the asset's location key is read as the full key, and any other path as the path in the asset. URL-encode each segment and keep the slashes, so a viewer that reads the files beside `metadata.json` can resolve them. A path that names no file of this asset is refused with `400` and a `message` that contains `Requested file is not part of this asset`, and the data of another asset nested in this asset's folder answers `404`.
 
 **Response:**
 
@@ -771,11 +856,12 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                   |
-| ------ | ----------------------------------------------------------------------------- |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable. |
-| `404`  | File not found.                                                               |
-| `500`  | Internal server error.                                                        |
+| Status | Description                                                                                                                                                                                                                                                                                  |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | The path names no file of this asset (a `message` that contains `Requested file is not part of this asset`); or the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). |
+| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable.                                                                                                                                           |
+| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                                                                                                                                                              |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                       |
 
 ---
 

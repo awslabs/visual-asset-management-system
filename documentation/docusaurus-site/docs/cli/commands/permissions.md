@@ -166,6 +166,10 @@ vamscli role user create -u user@example.com --role-name admin --role-name viewe
 vamscli role user create -u user@example.com --json-input '{"roleName":["admin","viewer"]}'
 ```
 
+:::note[Federated users]
+With Amazon Cognito SAML or OIDC federation, a federated user's user ID is the username Amazon Cognito gives the user at the first sign-in: the identity provider's `name` from `infra/config/saml-config.ts` or `oidc-config.ts`, an underscore, and the user's identifier at the identity provider (the SAML `NameID`, or the OIDC `sub`), for example `MyIDP_bob@example.com`. It is not the user's email address unless the identity provider uses the email address as that identifier. After the user's first sign-in, `vamscli user cognito list` shows it as `userId`. The API takes the user ID from the token's `cognito:username` or `username` claim.
+:::
+
 The user role JSON structure is:
 
 ```json
@@ -425,14 +429,18 @@ The template must include a `variableValues` object containing `ROLE_NAME` and a
 
 Pre-built templates are available in `documentation/permissionsTemplates/`:
 
-| Template                  | Description                                                     |
-| ------------------------- | --------------------------------------------------------------- |
-| `database-admin.json`     | Full admin access to a specific database                        |
-| `database-user.json`      | Standard user access (create, edit, view)                       |
-| `database-readonly.json`  | Read-only access to a specific database                         |
-| `database-tag-admin.json` | Manage tags and tag types scoped to a database; read all others |
-| `global-readonly.json`    | Read-only access across all databases                           |
-| `deny-tagged-assets.json` | Deny access to assets with specific tags                        |
+| Template                       | Description                                                                                                                                                                                                        |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `database-admin.json`          | Full admin access to a specific database                                                                                                                                                                           |
+| `database-user.json`           | Standard user access (create, edit, view)                                                                                                                                                                          |
+| `database-readonly.json`       | Read-only access to a specific database                                                                                                                                                                            |
+| `database-tag-admin.json`      | Manage tags and tag types scoped to a database; read all others                                                                                                                                                    |
+| `global-readonly.json`         | Read-only access across all databases                                                                                                                                                                              |
+| `deny-tagged-assets.json`      | Deny access to assets with specific tags                                                                                                                                                                           |
+| `compliance-admin.json`        | Compliance management for one database: schemas, schema binding, evaluation, quarantine, cascade approval; runs the database's and `GLOBAL` workflows (execute route and reads only) so it can save pipeline rules |
+| `compliance-readonly.json`     | Read-only compliance access for one database                                                                                                                                                                       |
+| `compliance-global-admin.json` | `GLOBAL` compliance schema management, read-only compliance across every database; runs `GLOBAL` workflows (execute route and reads only) so it can save pipeline rules                                            |
+| `audit-reader.json`            | Search and read the audit log groups matching `ALLOWED_GROUPS` (default `.*`); variables `ROLE_NAME` and `ALLOWED_GROUPS`                                                                                          |
 
 ### Template JSON format
 

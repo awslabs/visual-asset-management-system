@@ -18,21 +18,44 @@ its no-AWS/no-env import contract: importing it — as the pipeline/workflow rea
 triggers no boto3 client build and no env lookup.
 """
 
+import hashlib
 import json
 import os
+import time
 import uuid
 
 import boto3
 from botocore.config import Config
 
 from customLogging.logger import safeLogger
+from common.largeObjectCopy import MAX_OUTPUT_INGESTION_WAIT_HOURS
 from common.workflows.workflowAslBuilder import generate_workflow_asl
-from common.workflows.stepfunctions_builder import create_state_machine, update_state_machine
+from common.workflows.stepfunctions_builder import (
+    create_state_machine,
+    update_state_machine,
+    publish_state_machine_version,
+)
 
-logger = safeLogger(service_name="WorkflowAsl")
+logger = safeLogger()
 
-# ASL schema version stamped on the workflow record.
-ASL_SCHEMA_VERSION = 1
+# ASL schema version stamped on the workflow record. A workflow deployed with an older version is
+# redeployed by its next launch or pipeline refresh (deployment_matches -> asl_schema_current, which
+# compares the stored aslSchemaVersion). Bump it, together with workflowAslBuilder.ASL_SCHEMA_VERSION,
+# whenever the builders change every definition. 2 adds the wait for large outputs (#1123); 3 adds the
+# process-output retry of Sandbox.Timedout and EarlierIngestionInProgress (#1290, #1271); 4 the retry
+# of a refused resource-name lookup on the scaffolding states (#1187); 5 that retry's 15 s first
+# interval (#1187).
+ASL_SCHEMA_VERSION = 5
+
+# Published versions kept per workflow state machine. Step Functions caps a state machine at 1000
+# versions; older ones are deleted after each deploy. A launch reads the newest from the workflow
+# record, so a handful of older ones only has to cover a launch that read the record just before a
+# few redeploys landed.
+MAX_RETAINED_STATE_MACHINE_VERSIONS = 5
+
+# Bounded retry for the ConflictException Step Functions raises on overlapping publishes.
+MAX_PUBLISH_CONFLICT_RETRIES = 3
+PUBLISH_CONFLICT_BACKOFF_SECONDS = 0.5
 
 # Configure AWS clients with retry configuration.
 _retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
@@ -99,8 +122,65 @@ def to_asl_pipeline_dict(pipeline_record, job_name=""):
 
 
 def to_asl_pipeline_dicts(ref_records):
-    """Map a list of (ref, pipeline_record) tuples (workflow order) to flat pipeline dicts."""
-    return [to_asl_pipeline_dict(rec, getattr(ref, "jobName", "") or "") for ref, rec in ref_records]
+    """Map a list of (ref, pipeline_record) tuples (workflow order) to flat pipeline dicts. A ref is
+    either a request model (attribute access) or a stored specifiedPipelines entry (a dict)."""
+    return [to_asl_pipeline_dict(rec, _ref_job_name(ref)) for ref, rec in ref_records]
+
+
+def _ref_job_name(ref):
+    if isinstance(ref, dict):
+        return ref.get("jobName", "") or ""
+    return getattr(ref, "jobName", "") or ""
+
+
+def pipeline_asl_fingerprint(pipeline_record):
+    """Stable hash of everything a pipeline record contributes to a workflow's state machine
+    definition: the flat dict the ASL generator reads, minus the workflow-owned step `name`.
+
+    Two records with the same fingerprint produce the same task state, so a workflow whose stored
+    fingerprints equal its pipelines' current ones is running a definition built from their current
+    settings. The resource block is compared parsed, so key order inside it does not matter."""
+    flat = to_asl_pipeline_dict(pipeline_record or {})
+    flat.pop("name", None)
+    flat["userProvidedResource"] = json.loads(flat.get("userProvidedResource") or "{}")
+    canonical = json.dumps(flat, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def workflow_pipeline_fingerprints(pipeline_records):
+    """{"pipelineDatabaseId:pipelineId": fingerprint} for the pipelines a workflow references. The
+    definition schema is compared separately (asl_schema_current), so this map stays per pipeline."""
+    return {
+        f"{rec.get('databaseId', '')}:{rec.get('pipelineId', '')}": pipeline_asl_fingerprint(rec)
+        for rec in pipeline_records or []
+    }
+
+
+def fingerprints_match(workflow_item, pipeline_records):
+    """True when the workflow record names a published version AND its stored per-pipeline
+    fingerprints equal these pipeline records' current ones — i.e. the version was built from exactly
+    these settings. A record written before versions and fingerprints were stored never matches."""
+    if not (workflow_item or {}).get("workflowVersionArn"):
+        return False
+    stored = (workflow_item or {}).get("pipelineFingerprints") or {}
+    return dict(stored) == workflow_pipeline_fingerprints(pipeline_records)
+
+
+def asl_schema_current(workflow_item):
+    """True when the workflow's deployed definition was generated with the current ASL schema and
+    with the current maximum output-ingestion wait (the wait is baked into the definition, so a
+    release that changes MAX_OUTPUT_INGESTION_WAIT_HOURS redeploys the workflow at its next launch)."""
+    item = workflow_item or {}
+    if str(item.get("aslSchemaVersion") or "") != str(ASL_SCHEMA_VERSION):
+        return False
+    return str(item.get("outputIngestionWaitHours") or "") == str(_max_wait_hours())
+
+
+def deployment_matches(workflow_item, pipeline_records):
+    """True when the deployed version was built from these pipeline records (fingerprints_match) with
+    the current ASL schema. A workflow deployed with an older schema is redeployed by its next launch
+    or pipeline refresh, which is how existing workflows move to a new definition."""
+    return fingerprints_match(workflow_item, pipeline_records) and asl_schema_current(workflow_item)
 
 
 def _deploy_env():
@@ -115,7 +195,14 @@ def _deploy_env():
         # Deployment partition for the service-integration ARNs embedded in the ASL (defaults to
         # commercial "aws"); GovCloud/China/ISO inject the matching partition.
         "aws_partition": os.environ.get("AWS_PARTITION", "aws") or "aws",
+        # Maximum wait for large outputs (common.largeObjectCopy MAX_OUTPUT_INGESTION_WAIT_HOURS).
+        "max_output_ingestion_wait_hours": _max_wait_hours(),
     }
+
+
+def _max_wait_hours():
+    """The maximum output-ingestion wait, in hours (a fixed value)."""
+    return MAX_OUTPUT_INGESTION_WAIT_HOURS
 
 
 def _sf_client():
@@ -148,9 +235,74 @@ def _generate_state_machine_name(workflow_id):
     return "vams-" + name + suffix
 
 
-def deploy_state_machine(database_id, workflow_id, ref_records, existing_arn=""):
-    """Generate the workflow ASL from its referenced pipelines and deploy the Step Functions state
-    machine, returning (state_machine_arn, job_names).
+def _is_conflict(error):
+    """True for the Step Functions ConflictException raised when two publishes of one state machine
+    (or a publish and a version delete) overlap."""
+    code = getattr(error, "response", {}).get("Error", {}).get("Code", "")
+    return code == "ConflictException"
+
+
+def _with_conflict_retry(operation):
+    """Run a publishing call, retrying a ConflictException a bounded number of times. A workflow can
+    be redeployed by a save, a pipeline-change refresh and a launch at the same moment, and Step
+    Functions rejects overlapping publishes of one state machine rather than queueing them."""
+    for attempt in range(MAX_PUBLISH_CONFLICT_RETRIES + 1):
+        try:
+            return operation()
+        except Exception as e:
+            if not _is_conflict(e) or attempt == MAX_PUBLISH_CONFLICT_RETRIES:
+                raise
+            logger.info(f"State machine publish conflicted; retrying (attempt {attempt + 1})")
+            time.sleep(PUBLISH_CONFLICT_BACKOFF_SECONDS * (attempt + 1))
+
+
+def prune_state_machine_versions(sf_client, state_machine_arn, keep_version_arns=(),
+                                 recorded_version_arn=""):
+    """Delete published versions beyond the newest MAX_RETAINED_STATE_MACHINE_VERSIONS that are older
+    than recorded_version_arn (the version the workflow record named when the deploy read it), never
+    one named in keep_version_arns. Every deploy publishes one, and Step Functions caps a state
+    machine's versions, so unpruned versions would eventually block every save of a long-lived
+    workflow.
+
+    A version newer than the recorded one is never deleted: concurrent redeploys each publish one,
+    and any of them may be the one the winning write records, so a burst of them must not prune the
+    version that becomes the record's. When the recorded version is not listed (none recorded yet,
+    or it is gone), nothing is deleted; the next deploy that reads a listed version prunes.
+
+    Deleting a version stops new executions from starting on it and leaves its in-progress executions
+    running. Best-effort: a failure is logged and the next deploy retries the sweep."""
+    keep = {arn for arn in keep_version_arns if arn}
+    try:
+        newest_first = []
+        kwargs = {"stateMachineArn": state_machine_arn}
+        while True:
+            # Newest first (ListStateMachineVersions orders by creation time, descending).
+            response = sf_client.list_state_machine_versions(**kwargs) or {}
+            for version in response.get("stateMachineVersions", []) or []:
+                version_arn = (version or {}).get("stateMachineVersionArn", "")
+                if version_arn:
+                    newest_first.append(version_arn)
+            if not response.get("nextToken"):
+                break
+            kwargs["nextToken"] = response["nextToken"]
+        if not recorded_version_arn or recorded_version_arn not in newest_first:
+            return
+        # Keep the recorded version, every version newer than it, and at least the newest
+        # MAX_RETAINED_STATE_MACHINE_VERSIONS.
+        retained = max(MAX_RETAINED_STATE_MACHINE_VERSIONS, newest_first.index(recorded_version_arn) + 1)
+        for version_arn in newest_first[retained:]:
+            if version_arn not in keep:
+                sf_client.delete_state_machine_version(stateMachineVersionArn=version_arn)
+    except Exception as e:
+        logger.warning(f"Pruning state machine versions for {state_machine_arn} failed "
+                       f"(non-fatal): {e}")
+
+
+def deploy_state_machine(database_id, workflow_id, ref_records, existing_arn="", job_names=None,
+                         recorded_version_arn=""):
+    """Generate the workflow ASL from its referenced pipelines, deploy the Step Functions state
+    machine, and publish the deployed revision as a version. Returns
+    (state_machine_arn, job_names, state_machine_version_arn).
 
     Creates a new state machine when there is no existing ARN (or the recorded ARN no longer exists —
     the orphaned-record case), otherwise updates the existing one in place (preserving its ARN +
@@ -159,14 +311,22 @@ def deploy_state_machine(database_id, workflow_id, ref_records, existing_arn="")
     lazily from the environment.
 
     job_names are the per-pipeline job names the generator baked into the ASL's output S3 paths
-    (ordered to match ref_records). The caller persists them on the workflow record's `jobNames` so
-    the execute handler reconstructs the identical output prefixes.
+    (ordered to match ref_records). Passing the previously stored names keeps them when they still
+    fit the steps (workflowAslBuilder.reusable_job_names), so a redeploy of an unchanged step list
+    leaves every output prefix where it was. The caller persists them on the workflow record's
+    `jobNames` so the execute handler reconstructs the identical output prefixes.
+
+    The version is immutable: an execution started on its ARN runs exactly this definition, which an
+    execution started on the unqualified ARN right after an update is not guaranteed to do. The
+    caller persists it with the job names, and the execute handler starts on it. recorded_version_arn
+    is the version the workflow record named when the caller read it; older versions are pruned only
+    past it (prune_state_machine_versions).
 
     Raises on a deployment failure (missing env, ASL/validation error, or a boto3 error) so the
     caller aborts the save rather than persisting a workflow whose state machine was not deployed."""
     if not ref_records:
         # No pipelines to deploy (empty workflow): keep any existing ARN, deploy nothing.
-        return existing_arn or "", []
+        return existing_arn or "", [], ""
 
     env = _deploy_env()
     sf_client = _sf_client()
@@ -178,28 +338,36 @@ def deploy_state_machine(database_id, workflow_id, ref_records, existing_arn="")
         interim_tracking_function=env["interim_tracking_function"],
         error_handler_function=env["error_handler_function"],
         aws_partition=env["aws_partition"],
+        job_names=job_names,
+        max_output_ingestion_wait_hours=env.get("max_output_ingestion_wait_hours") or _max_wait_hours(),
     )
 
     # Update in place only when the recorded ARN still resolves; otherwise (new workflow or orphaned
     # record whose state machine was deleted) create a fresh state machine.
     if existing_arn and _state_machine_exists(sf_client, existing_arn):
         logger.info(f"Updating existing state machine for workflow {workflow_id}")
-        update_state_machine(
+        version_arn = _with_conflict_retry(lambda: update_state_machine(
             sf_client=sf_client,
             state_machine_arn=existing_arn,
             definition=workflow_definition,
             role_arn=env["role_arn"],
             log_group_arn=env["log_group_arn"],
+            publish=True,
+        ))
+        state_machine_arn = existing_arn
+    else:
+        logger.info(f"Creating new state machine for workflow {workflow_id}")
+        state_machine_arn = create_state_machine(
+            sf_client=sf_client,
+            name=_generate_state_machine_name(workflow_id),
+            definition=workflow_definition,
+            role_arn=env["role_arn"],
+            log_group_arn=env["log_group_arn"],
+            state_machine_type="STANDARD",
         )
-        return existing_arn, job_names
+        version_arn = _with_conflict_retry(
+            lambda: publish_state_machine_version(sf_client, state_machine_arn))
 
-    logger.info(f"Creating new state machine for workflow {workflow_id}")
-    new_arn = create_state_machine(
-        sf_client=sf_client,
-        name=_generate_state_machine_name(workflow_id),
-        definition=workflow_definition,
-        role_arn=env["role_arn"],
-        log_group_arn=env["log_group_arn"],
-        state_machine_type="STANDARD",
-    )
-    return new_arn, job_names
+    prune_state_machine_versions(sf_client, state_machine_arn, keep_version_arns=[version_arn],
+                                 recorded_version_arn=recorded_version_arn)
+    return state_machine_arn, job_names, version_arn or ""

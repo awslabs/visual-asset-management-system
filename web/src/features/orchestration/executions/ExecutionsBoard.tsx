@@ -4,18 +4,22 @@
  */
 
 import React, { useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { type ColumnDef } from "@tanstack/react-table";
 import DataTable from "../components/DataTable";
 import StatusBadge from "../components/StatusBadge";
 import Dialog from "../components/Dialog";
 import ExecutionRowActions from "./ExecutionRowActions";
 import ExecutionQuickView from "./ExecutionQuickView";
+import ExecutionOutputTypeBadges from "./ExecutionOutputTypeBadges";
 import ExecuteWorkflowButton from "./ExecuteWorkflowButton";
 import { control, btnSecondary } from "../components/controlStyles";
+import { BusyButton, BusyInput } from "../components/BusyControls";
+import LoadMoreButton from "../components/LoadMoreButton";
 import RefreshButton from "../components/RefreshButton";
 import SearchInput from "../components/SearchInput";
 import Breadcrumb from "../components/Breadcrumb";
+import { controlNamed, rowActionsTrigger, useRemovedRowRef } from "../components/useReturnFocus";
 import {
     useExecutions,
     useExecutionActions,
@@ -26,17 +30,88 @@ import {
 } from "../api/queries";
 import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
-import type { Execution } from "../types";
+import { appCache } from "../../../services/appCache";
+import { isZipDownloadsEnabled } from "../../../components/zipDownloads/zipDownloads";
+import {
+    featuresEnabled,
+    normalizeFeaturesEnabled,
+} from "../../../common/constants/featuresEnabled";
+import type { Execution, NotAbortableSubExecution } from "../types";
+import { resourceTypeLabel } from "./resourceTypeLabels";
 
 interface ExecutionsBoardProps {
     scope: ExecutionScope;
+    /** Offer "Execute workflow" (default true); the asset tab turns it off for an archived asset. */
+    allowExecute?: boolean;
 }
 
 // Lower bound for a custom range whose "from" side is left empty, meaning "everything up to the
 // chosen end date".
 const OPEN_ENDED_RANGE_START = "1970-01-01T00:00:00Z";
 
-const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
+/** The accessible name of the board's search box (SearchInput's default). */
+const SEARCH_LABEL = "Search";
+
+/**
+ * URL query parameter (inside the HashRouter location) holding the "Show system runs" choice, and the
+ * list query parameter it is sent as. Absent means "the server's default": system workflow runs are
+ * hidden, except on a list scoped to one system workflow, a system trigger value (System-<Identifier>)
+ * or an execution group, where the server shows them and says so in the response's `includeSystem`.
+ */
+export const INCLUDE_SYSTEM_PARAM = "includeSystem";
+
+/**
+ * Status-filter choice that keeps every status but SKIPPED. Sent as the list API's
+ * `excludeStatus=SKIPPED`, which drops those rows before the page is cut, so pages stay full.
+ */
+export const EXCLUDE_SKIPPED_FILTER = "__ALL_EXCEPT_SKIPPED__";
+
+/**
+ * The Status cell. A SKIPPED record also shows how many trigger launches it counts and, on hover and
+ * for screen readers, the reason the API gave.
+ */
+export const ExecutionStatusCell: React.FC<{ execution: Execution }> = ({ execution }) => {
+    if (execution.executionStatus !== "SKIPPED") {
+        return <StatusBadge status={execution.executionStatus} />;
+    }
+    const count = execution.skippedLaunchCount ?? 0;
+    const launches = count === 1 ? "1 launch" : `${count} launches`;
+    return (
+        <span
+            className="inline-flex flex-col gap-0.5"
+            title={execution.skipReason || undefined}
+            data-testid="skipped-status"
+        >
+            <StatusBadge status="SKIPPED" />
+            <span className="text-xs text-text-secondary">
+                {launches} skipped
+                {execution.skipReason && <span className="sr-only">: {execution.skipReason}</span>}
+            </span>
+        </span>
+    );
+};
+
+/**
+ * One line naming the registered sub-processes an abort left running because VAMS cannot stop their
+ * type: "2 sub-processes were left running because VAMS cannot stop their type: Mock Slurm job
+ * (slurmJob, in MockTrain); ...". A group abort's entries carry the member `executionId`, which
+ * prefixes the entry the way the group's warnings are prefixed: "<executionId>: Mock Slurm job
+ * (slurmJob, in MockTrain)". Rendered ahead of the server's free-text warnings.
+ */
+export const notAbortableSummary = (entries: NotAbortableSubExecution[]): string => {
+    const named = entries.map((e) => {
+        const member = e.executionId ? `${e.executionId}: ` : "";
+        const name = e.label || e.locator || e.resourceType;
+        const type = resourceTypeLabel(e.resourceType);
+        const stage = e.stageName ? `, in ${e.stageName}` : "";
+        return `${member}${name} (${type}${stage})`;
+    });
+    const count =
+        entries.length === 1 ? "1 sub-process was" : `${entries.length} sub-processes were`;
+    return `${count} left running because VAMS cannot stop their type: ${named.join("; ")}.`;
+};
+
+const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope, allowExecute = true }) => {
     const toast = useToast();
     const navigate = useNavigate();
     const [quickViewExecutionId, setQuickViewExecutionId] = useState<string | null>(null);
@@ -49,6 +124,21 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     } | null>(null);
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const [deleteTypedValue, setDeleteTypedValue] = useState("");
+    // The abort and delete confirmations open from a row's menu, so they return focus to that row's
+    // actions button, or to the search box once the action has taken the row off the list. The
+    // quick view returns focus to the row that opened it, or to the row's actions button when its
+    // menu opened it.
+    const boardRef = React.useRef<HTMLDivElement>(null);
+    const abortedRowRef = useRemovedRowRef<string>(abortConfirm);
+    const deletedRowRef = useRemovedRowRef<string>(deleteConfirm);
+    const rowActionsOr = (executionId: string) =>
+        rowActionsTrigger(boardRef.current, executionId) ??
+        controlNamed(boardRef.current, SEARCH_LABEL);
+    const returnFocusAfter =
+        (removedRef: React.MutableRefObject<string | null>, executionId: string) => () =>
+            removedRef.current === executionId
+                ? controlNamed(boardRef.current, SEARCH_LABEL)
+                : rowActionsOr(executionId);
     // Failure message from the last abort / rerun / permanent-delete attempt. Shown inside the
     // confirmation dialog that triggered it (the dialog stays open so the action can be retried or
     // cancelled), and in a page-level banner for rerun, which has no dialog.
@@ -60,6 +150,15 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     const [searchText, setSearchText] = useState("");
     const [statusFilter, setStatusFilter] = useState("");
     const [triggerFilter, setTriggerFilter] = useState("");
+    // A System-Reindex run is started only by the vector-search reindexer and a System-ZipDownload run
+    // only by Download as Zip, so the trigger filter offers each value only on a deployment with that
+    // feature on.
+    const [vectorSearchEnabled] = useState(() =>
+        normalizeFeaturesEnabled(appCache.getItem("config")?.featuresEnabled).includes(
+            featuresEnabled.VECTORSEARCH
+        )
+    );
+    const [zipDownloadsEnabled] = useState(() => isZipDownloadsEnabled());
     // Workflow-database / workflow filters. Only meaningful in the global scope: a WORKFLOW-scoped
     // board already has these pinned by the scope (see useExecutions), so the controls are hidden
     // there rather than offering a choice that would be overridden.
@@ -78,15 +177,30 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     const [dateWindow, setDateWindow] = useState<"90" | "120" | "180" | "custom">("90");
     const [startDateFilter, setStartDateFilter] = useState("");
     const [endDateFilter, setEndDateFilter] = useState("");
+    // "Show system runs" lives in the URL so a shared or reloaded link keeps it. Only an explicit
+    // "true" / "false" is sent; anything else leaves the server's default in force.
+    const [searchParams, setSearchParams] = useSearchParams();
+    const includeSystemParam = searchParams.get(INCLUDE_SYSTEM_PARAM);
+    const includeSystemExplicit =
+        includeSystemParam === "true" ? true : includeSystemParam === "false" ? false : undefined;
 
     // Server-side filters (the global-list handler AND-s these; empty values are omitted).
     // The backend already defaults to 90 days, so the "90" preset sends no explicit start date.
     const filters = useMemo(() => {
         const f: Record<string, string> = {};
-        if (statusFilter) f.status = statusFilter;
+        if (statusFilter === EXCLUDE_SKIPPED_FILTER) f.excludeStatus = "SKIPPED";
+        else if (statusFilter) f.status = statusFilter;
         if (triggerFilter) f.triggerType = triggerFilter;
         if (workflowDatabaseFilter) f.workflowDatabaseId = workflowDatabaseFilter;
-        if (workflowFilter) f.workflowId = workflowFilter;
+        // The global workflow filter holds the composite "databaseId:workflowId" of the chosen
+        // option, so it sends the workflow's own database even when "All workflow databases" is
+        // selected. The server treats a list as scoped to one workflow (and shows a system
+        // workflow's runs by default) only when both halves arrive.
+        if (workflowFilter) {
+            const separator = workflowFilter.indexOf(":");
+            f.workflowDatabaseId = workflowFilter.slice(0, separator);
+            f.workflowId = workflowFilter.slice(separator + 1);
+        }
         // The asset tab sends both halves of the composite together. The backend matches these two
         // per field rather than as a joined key, so sending only one would not narrow to a single
         // workflow when two databases happen to share a workflow id.
@@ -109,8 +223,12 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             const cutoff = new Date(Date.now() - Number(dateWindow) * 24 * 60 * 60 * 1000);
             f.filterStartDate = cutoff.toISOString().replace(/\.\d{3}Z$/, "Z");
         }
+        if (includeSystemExplicit !== undefined) {
+            f[INCLUDE_SYSTEM_PARAM] = includeSystemExplicit ? "true" : "false";
+        }
         return f;
     }, [
+        includeSystemExplicit,
         statusFilter,
         triggerFilter,
         workflowDatabaseFilter,
@@ -228,6 +346,27 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         return seen;
     }, [data]);
 
+    // Whether the loaded list includes system workflow runs: the user's explicit choice, else what
+    // the server reports it applied (it shows them by default on a list scoped to one system
+    // workflow). The board never works the default out itself.
+    const firstPage = data?.pages?.[0] as { includeSystem?: boolean } | undefined;
+    const serverIncludeSystem = firstPage?.includeSystem === true;
+    const showSystemRuns = includeSystemExplicit ?? serverIncludeSystem;
+    const setShowSystemRuns = (show: boolean) => {
+        setSearchParams(
+            (previous) => {
+                const next = new URLSearchParams(previous);
+                // Unticking only needs an explicit "false" when the server's default would show
+                // them; otherwise the parameter is dropped and the default (hidden) applies.
+                if (show) next.set(INCLUDE_SYSTEM_PARAM, "true");
+                else if (serverIncludeSystem) next.set(INCLUDE_SYSTEM_PARAM, "false");
+                else next.delete(INCLUDE_SYSTEM_PARAM);
+                return next;
+            },
+            { replace: true }
+        );
+    };
+
     // Fold whatever workflows the loaded rows reveal into the accumulated option set (asset tab
     // only). Rows carry ids, so the label comes from the workflow list when it is available and falls
     // back to the id — a workflow that has since been archived or that the caller cannot read still
@@ -307,11 +446,21 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         setActionError(null);
         try {
             const result: any = await abortExecution.mutateAsync({ executionId, groupId });
+            // An aborted execution leaves the status it was filtered on as the list re-reads.
+            if (statusFilter) abortedRowRef.current = executionId;
             setAbortConfirm(null);
             // The abort response carries `warnings` when a registered sub-process could not be
-            // stopped. The execution still reads ABORTED, so without surfacing these the compute left
-            // running is invisible — which is the opposite of what the operator asked for.
-            const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
+            // stopped, and `notAbortable` for the sub-processes of a type VAMS cannot stop at all. The
+            // execution still reads ABORTED, so without surfacing these the compute left running is
+            // invisible — which is the opposite of what the operator asked for. The structured list
+            // is summarised into one leading line; the free-text warnings follow it.
+            const notAbortable: NotAbortableSubExecution[] = Array.isArray(result?.notAbortable)
+                ? result.notAbortable
+                : [];
+            const warnings: string[] = [
+                ...(notAbortable.length ? [notAbortableSummary(notAbortable)] : []),
+                ...(Array.isArray(result?.warnings) ? result.warnings : []),
+            ];
             setActionWarnings(warnings);
             const what = groupId
                 ? `Every active execution in group ${groupId} was signalled to stop.`
@@ -379,6 +528,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
         setActionError(null);
         try {
             await permanentDeleteExecution.mutateAsync(executionId);
+            deletedRowRef.current = executionId;
             setDeleteConfirm(null);
             setDeleteTypedValue("");
             toast.success("Execution deleted", {
@@ -427,7 +577,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             {
                 accessorKey: "executionStatus",
                 header: "Status",
-                cell: ({ row }) => <StatusBadge status={row.original.executionStatus} />,
+                cell: ({ row }) => <ExecutionStatusCell execution={row.original} />,
             },
             {
                 accessorKey: "workflowExecutionId",
@@ -445,7 +595,20 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             {
                 accessorKey: "workflowId",
                 header: "Workflow",
-                cell: ({ row }) => <span className="text-sm">{row.original.workflowId}</span>,
+                cell: ({ row }) => (
+                    <span className="text-sm inline-flex items-center gap-2">
+                        {row.original.workflowId}
+                        {/* Same badge the Workflows and Pipelines pages give a system record. */}
+                        {row.original.isSystem === true && (
+                            <span
+                                className="px-2 py-0.5 text-xs bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200 rounded"
+                                title="A run of a system workflow shipped with the deployment"
+                            >
+                                System
+                            </span>
+                        )}
+                    </span>
+                ),
             },
             {
                 accessorKey: "workflowDatabaseId",
@@ -468,6 +631,21 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                             </div>
                         )}
                     </div>
+                ),
+            },
+            {
+                // Output Types on BOTH scopes: the backend threads outputTypes onto the global list
+                // (free, from the config row it already reads) AND the per-asset list (via a
+                // per-request config-row memo), so unlike the output-target columns below this one is
+                // not gated to the global scope. File/Metadata render as static badges; Result opens
+                // the lazy full-result surface.
+                id: "outputTypes",
+                header: "Output Types",
+                cell: ({ row }) => (
+                    <ExecutionOutputTypeBadges
+                        executionId={row.original.workflowExecutionId}
+                        outputTypes={row.original.outputTypes}
+                    />
                 ),
             },
             // Output-target columns, global scope only. The per-asset list is built by joining the
@@ -600,7 +778,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
     );
 
     return (
-        <div className="orchestration-root orchestration-page space-y-4 bg-surface">
+        <div ref={boardRef} className="orchestration-root orchestration-page space-y-4 bg-surface">
             {/* Workflow-scoped board (navigated from a workflow): trail back to the Workflows list and
                 that workflow, so the filtered view says what it is filtered to. */}
             {scope.kind === "workflow" && (
@@ -619,7 +797,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                 <h1 className="text-text-primary">Executions</h1>
                 {/* Execute sits in the header row (matching Pipelines/Workflows) and is available
                     wherever the board is shown (global page + asset tab). */}
-                <ExecuteWorkflowButton scope={scope} />
+                {allowExecute && <ExecuteWorkflowButton scope={scope} />}
             </div>
 
             {/* One aligned filter row (matching Pipelines/Workflows): search + refresh on the left,
@@ -641,11 +819,13 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         className={control}
                     >
                         <option value="">All statuses</option>
+                        <option value={EXCLUDE_SKIPPED_FILTER}>All except skipped</option>
                         <option value="RUNNING">Running</option>
                         <option value="SUCCEEDED">Succeeded</option>
                         <option value="FAILED">Failed</option>
                         <option value="ABORTED">Aborted</option>
                         <option value="TIMED_OUT">Timed out</option>
+                        <option value="SKIPPED">Skipped</option>
                     </select>
                     <select
                         aria-label="Filter by trigger"
@@ -653,11 +833,20 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         onChange={(e) => setTriggerFilter(e.target.value)}
                         className={control}
                     >
-                        {/* Values are the stored trigger vocabulary ("Manual"/"File-Upload"), which
-                            is what the server-side triggerType filter compares against. */}
+                        {/* Values are the stored trigger vocabulary ("Manual"/"File-Upload") and the
+                            system trigger values of the vector-search reindex runs ("System-Reindex")
+                            and the Download as Zip runs ("System-ZipDownload"), which this board
+                            offers (the server keys on the System- format and names no value); that is
+                            what the server-side triggerType filter compares against. */}
                         <option value="">All triggers</option>
                         <option value="Manual">Manual</option>
                         <option value="File-Upload">File upload</option>
+                        {vectorSearchEnabled && (
+                            <option value="System-Reindex">System reindex</option>
+                        )}
+                        {zipDownloadsEnabled && (
+                            <option value="System-ZipDownload">Zip download</option>
+                        )}
                     </select>
                     {isGlobalScope && (
                         <select
@@ -690,7 +879,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                             {workflowOptions.map((w) => (
                                 <option
                                     key={`${w.databaseId}:${w.workflowId}`}
-                                    value={w.workflowId}
+                                    value={`${w.databaseId}:${w.workflowId}`}
                                 >
                                     {w.workflowName || w.workflowId}
                                 </option>
@@ -753,6 +942,16 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                             />
                         </>
                     )}
+                    {/* System workflow runs are hidden by default (the server applies it); the box
+                        shows what the loaded list actually includes. */}
+                    <label className="flex items-center gap-1 text-sm text-text-primary">
+                        <input
+                            type="checkbox"
+                            checked={showSystemRuns}
+                            onChange={(e) => setShowSystemRuns(e.target.checked)}
+                        />
+                        Show system runs
+                    </label>
                     {(statusFilter ||
                         triggerFilter ||
                         workflowDatabaseFilter ||
@@ -760,7 +959,8 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         assetWorkflowFilter ||
                         dateWindow !== "90" ||
                         startDateFilter ||
-                        endDateFilter) && (
+                        endDateFilter ||
+                        includeSystemExplicit !== undefined) && (
                         <button
                             onClick={() => {
                                 setStatusFilter("");
@@ -771,6 +971,15 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                                 setDateWindow("90");
                                 setStartDateFilter("");
                                 setEndDateFilter("");
+                                // Back to the server's default for system runs.
+                                setSearchParams(
+                                    (previous) => {
+                                        const next = new URLSearchParams(previous);
+                                        next.delete(INCLUDE_SYSTEM_PARAM);
+                                        return next;
+                                    },
+                                    { replace: true }
+                                );
                             }}
                             className="px-2 py-1 text-sm text-blue-600 dark:text-blue-400 hover:underline"
                         >
@@ -819,10 +1028,15 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
             {/* The search runs over the loaded pages only, so an unqualified "not found" would report
                 absence for an execution that exists on a page nobody has fetched. The message says
                 what was actually searched, and the "Load more" control below stays reachable. */}
+            {/* Likewise a server page can come back empty while more remain (the server dropped every
+                row it inspected, e.g. hidden system runs on a system-dense asset), so an empty board
+                with a NextToken says the search continues rather than "No executions found." */}
             {!isLoading && !loadError && visibleExecutions.length === 0 && (
                 <div className="text-text-secondary">
                     {!searchText.trim()
-                        ? "No executions found."
+                        ? hasNextPage
+                            ? "No executions to show on the pages loaded so far — load more to keep looking."
+                            : "No executions found."
                         : hasNextPage
                         ? `No matches among the ${executions.length} execution${
                               executions.length === 1 ? "" : "s"
@@ -830,6 +1044,17 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         : `No executions match "${searchText.trim()}".`}
                 </div>
             )}
+            {/* An empty list without system runs is not an empty history: say they are hidden. Shown
+                with "load more" too, since hidden system runs are the usual reason a page is empty. */}
+            {!isLoading &&
+                !loadError &&
+                visibleExecutions.length === 0 &&
+                !searchText.trim() &&
+                !showSystemRuns && (
+                    <div className="text-sm text-text-secondary">
+                        System workflow runs are hidden. Select Show system runs to include them.
+                    </div>
+                )}
 
             {!isLoading && visibleExecutions.length > 0 && (
                 <DataTable
@@ -863,13 +1088,11 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                 the loaded pages while more pages remain, so the control must stay reachable. */}
             {!isLoading && hasNextPage && (
                 <div className="flex justify-center mt-4">
-                    <button
+                    <LoadMoreButton
                         onClick={() => fetchNextPage()}
-                        disabled={isFetchingNextPage}
+                        busy={isFetchingNextPage}
                         className={btnSecondary}
-                    >
-                        {isFetchingNextPage ? "Loading more..." : "Load more"}
-                    </button>
+                    />
                 </div>
             )}
 
@@ -879,6 +1102,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     open={!!quickViewExecutionId}
                     onClose={() => setQuickViewExecutionId(null)}
                     executionId={quickViewExecutionId}
+                    returnFocusTo={(opener) => opener ?? rowActionsOr(quickViewExecutionId)}
                 />
             )}
 
@@ -893,9 +1117,12 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         }
                     }}
                     title={abortConfirm.isGroup ? "Abort Execution Group" : "Abort Execution"}
+                    busy={abortExecution.isPending}
+                    returnFocusTo={returnFocusAfter(abortedRowRef, abortConfirm.executionId)}
                     footer={
                         <>
-                            <button
+                            <BusyButton
+                                busy={abortExecution.isPending}
                                 onClick={() => {
                                     setAbortConfirm(null);
                                     setActionError(null);
@@ -903,8 +1130,10 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                                 className={btnSecondary}
                             >
                                 Cancel
-                            </button>
-                            <button
+                            </BusyButton>
+                            <BusyButton
+                                busy={abortExecution.isPending}
+                                busyLabel="Aborting..."
                                 onClick={() =>
                                     handleAbort(
                                         abortConfirm.executionId,
@@ -916,7 +1145,7 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                                 className="px-4 py-2 bg-red-600 text-white rounded"
                             >
                                 Abort
-                            </button>
+                            </BusyButton>
                         </>
                     }
                 >
@@ -947,9 +1176,12 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                         }
                     }}
                     title="Permanent Delete"
+                    busy={permanentDeleteExecution.isPending}
+                    returnFocusTo={returnFocusAfter(deletedRowRef, deleteConfirm)}
                     footer={
                         <>
-                            <button
+                            <BusyButton
+                                busy={permanentDeleteExecution.isPending}
                                 onClick={() => {
                                     setDeleteConfirm(null);
                                     setDeleteTypedValue("");
@@ -958,14 +1190,16 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                                 className={btnSecondary}
                             >
                                 Cancel
-                            </button>
-                            <button
+                            </BusyButton>
+                            <BusyButton
+                                busy={permanentDeleteExecution.isPending}
+                                busyLabel="Deleting..."
                                 onClick={() => handlePermanentDelete(deleteConfirm)}
                                 disabled={deleteTypedValue !== "CONFIRM"}
                                 className="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 Permanent Delete
-                            </button>
+                            </BusyButton>
                         </>
                     }
                 >
@@ -976,14 +1210,19 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                     <p className="font-semibold mt-2">
                         Type <code className="bg-surface-secondary px-1">CONFIRM</code> to proceed:
                     </p>
-                    <input
+                    <BusyInput
+                        busy={permanentDeleteExecution.isPending}
                         type="text"
                         placeholder="CONFIRM"
                         value={deleteTypedValue}
                         onChange={(e) => setDeleteTypedValue(e.target.value)}
                         className="mt-2 w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
                         onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
-                            if (e.key === "Enter" && deleteTypedValue === "CONFIRM") {
+                            if (
+                                e.key === "Enter" &&
+                                deleteTypedValue === "CONFIRM" &&
+                                !permanentDeleteExecution.isPending
+                            ) {
                                 handlePermanentDelete(deleteConfirm);
                             }
                         }}

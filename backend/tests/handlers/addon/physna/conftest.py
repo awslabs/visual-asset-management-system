@@ -43,6 +43,8 @@ import types
 # satisfy module-load, and then re-register via a session-scoped fixture
 # below so they survive the autouse fixture's clobbering.
 _auth_mock = types.ModuleType("handlers.auth")
+# The claims key a failed custom claims check sets; handlers.authz and auth/routes import it.
+_auth_mock.CLAIMS_CHECK_FAILED = "claimsCheckFailed"
 
 
 def _mock_request_to_claims(event):
@@ -50,6 +52,12 @@ def _mock_request_to_claims(event):
 
 
 _auth_mock.request_to_claims = _mock_request_to_claims
+# The same authMethod values the root conftest's handlers.auth stub carries.
+# customLogging.auditLogging imports AUTH_METHOD_API_KEY, so without them a
+# test module that first imports auditLogging after this stub is installed
+# fails at collection (test_physna_auth_stub_surface.py).
+_auth_mock.AUTH_METHOD_JWT = "jwt"
+_auth_mock.AUTH_METHOD_API_KEY = "apiKey"
 sys.modules["handlers.auth"] = _auth_mock
 
 

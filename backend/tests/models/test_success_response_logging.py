@@ -66,7 +66,7 @@ _RESPONSE_HEADERS = {
     "Content-Type": "application/json",
     "Cache-Control": "no-cache, no-store",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Expose-Headers": "Retry-After",
+    "Access-Control-Expose-Headers": "Retry-After, Location, ETag",
 }
 
 # (helper name, status code, default message) for the four error helpers.
@@ -154,7 +154,7 @@ class TestSuccessResponseUnchanged:
             "Content-Type": "application/json",
             "Cache-Control": "no-cache, no-store",
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Expose-Headers": "Retry-After",
+            "Access-Control-Expose-Headers": "Retry-After, Location, ETag",
         }
         assert response["body"] == (
             '{"assetSize": 1024, "ratio": 1.5, "nested": [{"count": 2}, "text"]}')
@@ -294,8 +294,10 @@ class TestErrorHelpersDoNotInterpolateTheBody:
             response = helper(body=dict(body))
 
         assert response["statusCode"] == status
-        # general_error() logs a 4xx below ERROR; the other helpers log every response at ERROR.
-        logged = spy.warning if name == "general_error" else spy.error
+        # validation_error(), general_error() and authorization_error() log a 4xx below ERROR;
+        # internal_error() logs every response at ERROR.
+        logged = spy.warning if name in ("validation_error", "general_error", "authorization_error") \
+            else spy.error
         assert logged.call_count == 1
         message = logged.call_args.args[0]
         # A rendered body brings the dict's own braces with it, so their absence pins the plain message.
@@ -354,7 +356,9 @@ class TestErrorResponsesUnchanged:
 
 
 @pytest.mark.unit
-def test_common_headers_expose_retry_after():
-    """A cross-origin browser caller can read only exposed headers, and the upload limiter's 429
-    carries its wait in Retry-After."""
-    assert response_models.commonHeaders()["Access-Control-Expose-Headers"] == "Retry-After"
+def test_common_headers_expose_retry_after_location_and_etag():
+    """A cross-origin browser caller can read only exposed headers. The upload limiter's 429 carries
+    its wait in Retry-After, the asset export's 303 carries its redirect target in Location, and a
+    response may carry its entity tag in ETag."""
+    assert (response_models.commonHeaders()["Access-Control-Expose-Headers"]
+            == "Retry-After, Location, ETag")

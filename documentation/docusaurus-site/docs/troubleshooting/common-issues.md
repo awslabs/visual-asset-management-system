@@ -46,7 +46,7 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
 
 1. In `infra/config/config.json`, disable everything that requires VPC networking so the dependent ENIs are torn down. This includes:
     - Amazon OpenSearch Service provisioned (`openSearch.useProvisioned.enabled = false`)
-    - All pipelines that use AWS Batch, Amazon ECS, or Amazon EKS (Splat Toolbox, Isaac Lab Training, NVIDIA Cosmos, NVIDIA Gr00t, ModelOps, RapidPipeline, point cloud / 3D thumbnail / GenAI labeling previews)
+    - All pipelines that use AWS Batch, Amazon ECS, or Amazon EKS (Splat Toolbox, Isaac Lab Training, NVIDIA Cosmos, NVIDIA Gr00t, Image to 3D, ModelOps, RapidPipeline, GenAI CAD STEP agent on its `fargate` runtime, point cloud / 3D thumbnail / media previews / GenAI labeling previews)
     - `useGlobalVpc.useForAllLambdas = false` so Lambda functions are removed from the VPC. Their network interfaces stay in the VPC afterwards; step 2 removes them
     - The ALB public subnet if it is being removed (`useAlb.usePublicSubnet = false`), or the ALB itself if the web tier is changing
 2. Remove any Lambda functions and their VPC ENIs. Deploy with networking disabled so AWS CloudFormation detaches the Lambda functions from the VPC and deletes their ENIs:
@@ -101,13 +101,13 @@ To minimize the chance of these failures, keep the availability zone count and s
 
 ### Docker Buildx Container Image Errors
 
-The 3D Basic Conversion and CAD/Mesh Metadata Extraction pipelines deploy as AWS Lambda container images, which AWS CDK builds with Docker and pushes to Amazon ECR during `npx cdk deploy`. Pushing one of these images or creating its function can fail with `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
+The 3D Basic Conversion pipeline and the SYSTEM GenAI metadata pipeline deploy AWS Lambda functions as container images, which AWS CDK builds with Docker and pushes to Amazon ECR during `npx cdk deploy`. Pushing one of these images or creating its function can fail with `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
 
 **Symptoms:**
 
 -   `unexpected status from PUT request to https://....dkr.ecr.REGION.amazonaws.com/v2/foo/manifests/bar: 400 Bad Request`
 -   `InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected)` or `The image manifest, config or layer media type for the source image ... is not supported` while AWS CloudFormation creates the pipeline's Lambda function
--   The conversion pipeline nested stack fails and the core stack rolls back
+-   The pipeline's nested stack fails and the core stack rolls back
 
 **Cause:**
 
@@ -118,10 +118,10 @@ When the error appears anyway, the image index is already cached. AWS CDK tags e
 **Resolution:**
 
 1. Run the deployment from the `infra/` directory with `npx cdk` so that the pinned AWS CDK CLI builds the images. `npx cdk --version` shows the version in use.
-2. List the asset hashes of the two conversion images. In `cdk.out/*.assets.json`, written by the failed deployment or by `npx cdk synth`, each image under `dockerImages` is keyed by its hash, which this command (run from the `infra/` directory) prints on the line before the image's `displayName`:
+2. List the asset hashes of the Lambda container images. In `cdk.out/*.assets.json`, written by the failed deployment or by `npx cdk synth`, each image under `dockerImages` is keyed by its hash, which this command (run from the `infra/` directory) prints on the line before the image's `displayName`:
 
     ```bash
-    grep -B1 -E 'vamsExecute(3dBasic|MeshCadMetadataExtraction)Conversion/AssetImage' cdk.out/*.assets.json
+    grep -B1 -E '(vamsExecute3dBasicConversion|SystemGenAiMetadata(BlenderRender|Render3d|MediaExtract|SegmentAnalyze))/AssetImage' cdk.out/*.assets.json
     ```
 
 3. Delete those image tags from the container assets repository. With the default bootstrap qualifier, the repository is named `cdk-hnb659fds-container-assets-<account>-<region>`:
@@ -281,7 +281,7 @@ The Vite development server proxy handles most CSP issues automatically. If prob
 
 ### WASM-Based Viewers Not Loading
 
-Viewers that use WebAssembly (Needle USD Viewer, Three.js CAD Viewer, Cesium 3D Tileset Viewer, ThatOpen IFC BIM Viewer, SuperSplat Editor) require specific HTTP headers to function.
+Viewers that use WebAssembly (Needle USD Viewer, Three.js CAD Viewer, Cesium 3D Tileset Viewer, ThatOpen IFC BIM Viewer, SuperSplat Editor, Robotics Data Viewer) require specific HTTP headers to function.
 
 **Symptoms:**
 
@@ -295,7 +295,7 @@ WASM-based viewers require Cross-Origin Isolation headers (`Cross-Origin-Opener-
 -   **Amazon CloudFront deployment:** Headers are set automatically by the CloudFront distribution.
 -   **Application Load Balancer (ALB) deployment:** A front-end service worker attempts to set the headers. If your organization's security policy blocks service workers, WASM viewers will not function.
 
-For the Needle USD Viewer, the SuperSplat Editor, the ThatOpen IFC BIM Viewer, and Three.js CAD formats, you must also enable `allowUnsafeEvalFeatures` in `infra/config/config.json` because their WASM loaders require runtime code generation.
+For the Needle USD Viewer, the SuperSplat Editor, the ThatOpen IFC BIM Viewer, the Robotics Data Viewer, and Three.js CAD formats, you must also enable `allowUnsafeEvalFeatures` in `infra/config/config.json` because their WASM loaders require runtime code generation.
 
 ### Safari Limitations for WASM Viewers
 
@@ -310,18 +310,72 @@ Safari does not fully support the cross-origin isolation requirements needed by 
 
 Use a Chromium-based browser (Google Chrome, Microsoft Edge) or Mozilla Firefox for WASM-dependent viewers. Non-WASM viewers and standard mesh formats work in all supported browsers.
 
+### Three.js Viewer Cannot Build Geometry from a CAD File
+
+The Three.js Viewer reads `.stp`, `.step`, `.iges`, `.igs` and `.brep` files with OpenCascade, which turns each part into a triangle mesh. Some files open but give parts with no triangles.
+
+**Symptoms:**
+
+-   Opening a STEP, IGES or BREP file shows "The viewer could not build any geometry from this `<format>` file" and nothing is drawn
+-   Some parts of a CAD file are missing while the others show
+
+**Resolution:**
+
+-   The viewer leaves out the parts that have no geometry and draws the rest. When no part has geometry, it shows the message instead of an empty scene ([#1734](https://github.com/awslabs/visual-asset-management-system/issues/1734)).
+-   Convert the file to GLB and open the converted file. For STEP, the [3D Basic Conversion pipeline](../pipelines/3d-conversion.md) does this when `app.pipelines.useConversion3dBasic.enableStepInput` is `true`. For IGES and BREP, export GLB from a CAD application.
+
+### BabylonJS Gaussian Splat Viewer Reports SPZ Format Version 4
+
+The BabylonJS Gaussian Splat viewer opens SPZ versions 2 and 3. Babylon.js reads SPZ version 4 only through the `@adobe/spz` WebAssembly module, which the VAMS Content Security Policy does not allow to load.
+
+**Symptoms:**
+
+-   Opening a `.spz` file shows "`<file>` uses SPZ format version 4, which the BabylonJS Gaussian Splat viewer does not support" (or "does not open"), and nothing is drawn
+
+**Resolution:**
+
+-   On a deployment with `ALLOWUNSAFEEVAL` enabled, the message points to the SuperSplat Editor: choose **SuperSplat Editor (PlayCanvas)** in the viewer list.
+-   Otherwise, convert the file to SPZ version 3, `.ply` or `.sog` (for example with `@playcanvas/splat-transform` and `--spz-version 3`) and upload the converted file.
+
 ### SuperSplat Editor Reports That WebGPU Is Required
 
 The SuperSplat Editor renders through WebGPU and has no WebGL fallback.
 
 **Symptoms:**
 
--   Opening a `.ply`, `.sog`, `.splat`, or `.lcc` file in the SuperSplat Editor shows the message "SuperSplat requires WebGPU, which this browser does not support" instead of the editor
--   The BabylonJS and PlayCanvas Gaussian Splat viewers render the same `.ply` and `.sog` files
+-   Opening a `.ksplat`, `.lcc`, `.ply`, `.sog`, `.splat`, or `.spz` file in the SuperSplat Editor shows the message "SuperSplat requires WebGPU, which this browser does not support" instead of the editor
+-   The BabylonJS and PlayCanvas Gaussian Splat viewers render the same `.ply` and `.sog` files, and the BabylonJS viewer renders the same `.splat` files and SPZ version 2 and 3 `.spz` files
 
 **Resolution:**
 
-Use a browser with WebGPU enabled: current Google Chrome or Microsoft Edge, Safari 26 or later, or Mozilla Firefox where WebGPU is enabled. Where a browser policy disables WebGPU or the machine has no supported GPU driver, open `.ply` files with the BabylonJS or PlayCanvas Gaussian Splat viewer and `.sog` files with the PlayCanvas Gaussian Splat viewer instead; `.lcc` and `.splat` files have no alternative viewer.
+Use a browser with WebGPU enabled: current Google Chrome or Microsoft Edge, Safari 26 or later, or Mozilla Firefox where WebGPU is enabled. Where a browser policy disables WebGPU or the machine has no supported GPU driver, open `.ply` and `.sog` files with the BabylonJS or PlayCanvas Gaussian Splat viewer, and `.splat` files and SPZ version 2 and 3 `.spz` files with the BabylonJS Gaussian Splat viewer instead; `.ksplat`, `.lcc` and SPZ version 4 `.spz` files have no alternative viewer.
+
+### Point Cloud or 3D Tileset Viewer Reports a Load Failure
+
+The Potree Viewer and the Cesium 3D Tileset Viewer stream their files from the API, and each names the cause when a file fails to load.
+
+**Symptoms:**
+
+-   The Potree Viewer shows "Potree Viewer Auxiliary Preview files not currently available" with a prompt to run the Point Cloud Potree Viewer Pipeline
+-   Either viewer shows a message beginning "Unable to load" or "Unable to reach" instead of the model, or the Potree Viewer shows one beginning "Unable to display"
+-   The Cesium 3D Tileset Viewer shows **Error Loading 3D Tileset** with a message beginning "Tileset loading failed for", or with "N of N tilesets failed to load" when every selected tileset failed
+-   The Cesium 3D Tileset Viewer renders the scene under an **Incomplete 3D Tileset** banner
+
+**Resolution:**
+
+| Message                                                                          | Cause and resolution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Preview files not currently available, with the pipeline prompt                  | The point cloud has no Potree preview files. Run the Point Cloud Potree Viewer Pipeline on the file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `Request blocked by the deployment's AWS WAF web ACL (request ID ...)`           | A web ACL rule blocked the request. Find the request by its ID in the web ACL's log group to see the rule that matched (see [Requests the web ACL blocks](../architecture/security.md#requests-the-web-acl-blocks)).                                                                                                                                                                                                                                                                                                                                                                  |
+| `Unable to reach ...`                                                            | The request failed before VAMS answered it, so the browser reports no status: a network failure, Amazon API Gateway throttling of the browser's CORS preflight (`OPTIONS`) request, or an AWS WAF block of the preflight by a rule on the request's URI path or by the rate-based rule. Each file and tile request has its own preflight. Look for an `OPTIONS` request to the file's path at that time in the REST API access log group, where a `429` status is throttling (see [429 Rate Limiting](#429-rate-limiting)), and, when AWS WAF is enabled, in the web ACL's log group. |
+| `Unable to display ...`                                                          | The file downloads, but the Potree Viewer could not read it. Check the file, or run the Point Cloud Potree Viewer Pipeline on it again to regenerate the preview files.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Tileset loading failed for ...`                                                 | Cesium could not use the tileset for a reason other than a failed request, such as tileset JSON it cannot read. The text after the colon is Cesium's message. Check the tileset file.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `N of N tilesets failed to load`                                                 | Every selected tileset failed to load. The message goes on to name the cause of the first failure, which has its own row in this table.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `you don't have permission to view it`                                           | The role cannot read the file. An administrator grants the role access to the file's database or asset.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Asset is not currently allowing file distribution` or `Asset not distributable` | The asset's **Is Distributable** setting is off, so the API streams none of its files. Set **Is Distributable?** to **Yes** under **Edit** on the asset's page to view the file.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `your session is no longer valid`                                                | The sign-in expired. Sign in again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `too many requests`                                                              | Amazon API Gateway or the web ACL's rate-based rule throttled the request. See [429 Rate Limiting](#429-rate-limiting).                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Incomplete 3D Tileset** banner                                                 | Some tiles or tilesets failed to load while the rest of the scene loaded. The banner counts the tilesets that failed and names the cause of the first, and counts the failed tile requests and shows Cesium's message for the last one, such as `Request has failed. Status Code: 403`.                                                                                                                                                                                                                                                                                               |
 
 ### Login Loop or Configuration Fetch Failures
 
@@ -345,7 +399,7 @@ Users may experience a login loop where the application repeatedly redirects to 
 
 ### 429 Rate Limiting
 
-VAMS applies API rate limiting through Amazon API Gateway throttling.
+A `429 Too Many Requests` comes from Amazon API Gateway stage throttling or, when `app.useWaf` is enabled, from the web ACL's rate-based rule.
 
 **Symptoms:**
 
@@ -354,20 +408,24 @@ VAMS applies API rate limiting through Amazon API Gateway throttling.
 
 **Resolution:**
 
-Increase the rate limits in `infra/config/config.json`:
+Increase the stage limits in `infra/config/config.json`:
 
 ```json
 {
     "app": {
         "api": {
-            "globalRateLimit": 100,
-            "globalBurstLimit": 200
+            "apiGatewayRest": {
+                "globalRateLimit": 100,
+                "globalBurstLimit": 200
+            }
         }
     }
 }
 ```
 
-The default values are `globalRateLimit: 50` requests per second and `globalBurstLimit: 100`. Redeploy after changing these values.
+The default values are `app.api.apiGatewayRest.globalRateLimit: 50` requests per second and `app.api.apiGatewayRest.globalBurstLimit: 100`. Every caller of the API shares them, and each browser CORS preflight request counts against them. Redeploy after changing these values.
+
+A `429` from the web ACL's rate-based rule carries `Retry-After: 1` and is recorded in the web ACL's log group; the stage limits do not affect it. Raise the rule's `limit`, the number of requests each IP address may make in a 5-minute window, in `infra/config/policy/wafPolicyConfig.json` (see [WAF rule policy](../deployment/configuration-reference.md#waf-rule-policy-configpolicywafpolicyconfigjson)).
 
 :::warning
 Increasing rate limits raises the potential cost of Amazon API Gateway usage and may affect downstream service limits. Monitor your Amazon CloudWatch metrics after adjustments.
@@ -393,6 +451,47 @@ Amazon API Gateway returns a timeout once the configured integration timeout ela
 For operations that may exceed the integration timeout, check your AWS Lambda function logs in Amazon CloudWatch to confirm whether the operation completed. The VamsCLI provides automatic pagination and retry logic that handles timeout scenarios for bulk operations.
 
 Deployments that regularly run these operations can raise `app.api.apiGatewayRest.apiGatewayTimeoutTime` (up to 300 seconds) so the request completes synchronously instead of returning a 504. Values above 29 seconds require an approved account-level **Integration timeout** quota increase (`L-E5AE38E3`) in the deployment Region before deploying — see the [configuration reference](../deployment/configuration-reference.md).
+
+### Requests Time Out or Workflow Runs Fail After an Idle Period
+
+Each VAMS AWS Lambda function reads its resource names from AWS Systems Manager Parameter Store when it starts. Parameter Store throughput is shared by every application in an AWS account and Region, so when many functions start at once (the first requests after an idle period, a burst of workflow runs, or several VAMS deployments in one account and Region), Parameter Store can throttle those reads.
+
+**Symptoms:**
+
+-   API requests fail or time out for a short time after the deployment was idle, or the web application shows "Page access could not be checked"
+-   Workflow runs fail with an error that names `GetParametersByPath` and `ThrottlingException`, or with `ResourceNameUnavailableError` and "Resource name not resolved while SSM sweeps back off after a failure" or "Resource name parameters could not be read from SSM"
+-   Function logs in Amazon CloudWatch show `Resource name chunk read failed (ThrottlingException)`, `Resource name sweep failed (ThrottlingException)` or `Resource name read failed (ThrottlingException)` lines
+-   Search answers "Search is temporarily unavailable. Try again in a moment.", the web application starts slowly or shows no map until the page is reloaded, or new files appear in search results later than usual
+-   Function logs show `Parameter Store read failed (ThrottlingException)` lines
+-   With the EDH Workstations add-on, the capacity reservation list shows no answer for whether EDH has a subnet in a reservation's zone, an AMI recipe save skips its architecture check, an AMI build answers "the parent image's SSM parameter could not be read", a desktop starts without its VAMS session credential, or the root key sync ends `controllerNotFound`
+-   Requests or workflow runs fail with `ResourceNameAccessError`. Function logs show `Resource name sweep failed (AccessDeniedException)` or another code, after the warning `Resource name chunk parameters not used (GetParameters failed (AccessDeniedException)), reading every parameter under the prefix`, or, for a single name, `Resource name read failed (AccessDeniedException) after 1 calls: <key>`. This is not throttling (see the end of **Resolution**)
+
+**Behavior:**
+
+A function retries a throttled read for up to 4 seconds. The search endpoint and index names, the web application URL and the ARN of the map API key come with the resource names, in the same Parameter Store call, and are kept for an hour like them. While a deployment that adds them is still updating its stacks, a function reads them from the parameters that held them before, with the same limit and back-off, and keeps the web application URL and the map API key ARN for five minutes. While the reads fail, search answers that it is temporarily unavailable, the web application starts without the map until a later reload, and the indexers hand their batch back to the queue, which delivers it again about 16 minutes later. If the read still fails, the function does not read Parameter Store again for a short back-off window (about 2 seconds, doubling up to 30 seconds while the reads keep failing), and a lookup of a name the function has not cached fails without reading again. A cold API request that meets this fails in about 8 to 16 seconds instead of waiting out the API's 29-second limit. Requests succeed again once Parameter Store answers. The EDH Workstations add-on reads EDH's and AWS's parameters (the private subnets, an AMI recipe's parent image and the controller's instance ID) the same way, and gives the answer it gives for any failed read; an AMI build that the deployment or the build sweep starts waits up to 30 seconds for Parameter Store before it reports that the parent image could not be read. A workflow step that VAMS runs between and after the pipelines (output processing, the wait for large outputs, the step between two pipelines, and the error handling) is retried when it, or a VAMS function it calls (file ingestion, the metadata service or the copy engine), could not start because its resource names were refused: up to 12 times, with randomized delays that start at up to 15 seconds and grow to at most 60 seconds, about 11 minutes at most in all. A retried output step ingests only the outputs that had not landed. A burst can still fail runs, for example when a step is refused more often than that or the request that starts a run is refused.
+
+Connection and TLS failures are retried and back off like throttling. A read that Parameter Store refuses outright, rather than throttling it or failing to answer, is not retried and opens no back-off window. The commonest case is `AccessDeniedException`; `ValidationException`, `UnrecognizedClientException` and missing credentials are refused the same way. The lookup fails at once with `ResourceNameAccessError`, whose message names the error code, and the workflow step is not retried as above: output processing, the wait for large outputs and finalization fail at once, and the step between two pipelines and the error handling retry it only as they retry any error (at most 3 attempts within about 35 seconds).
+
+**Resolution:**
+
+-   Run fewer VAMS deployments, or other applications that read Parameter Store heavily, in the same account and Region.
+-   Turn on the Parameter Store higher-throughput setting for the account and Region. It raises the `GetParametersByPath` limit from the default of 40 transactions per second, which `GetParameter` and `GetParameters` share, to 500. The setting applies to every application in the account and Region and is charged per API interaction (one per parameter a request returns). Check that it is offered in your partition and Region before relying on it.
+
+Read the current setting (read-only):
+
+```bash
+aws ssm get-service-setting --setting-id /ssm/parameter-store/high-throughput-enabled
+```
+
+Turn it on:
+
+```bash
+aws ssm update-service-setting --setting-id /ssm/parameter-store/high-throughput-enabled --setting-value true
+```
+
+See [Managing Parameter Store throughput](https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-store-throughput.html) for the quotas and pricing.
+
+For `ResourceNameAccessError` with any code other than `AccessDeniedException` (for example `ValidationException`, `UnrecognizedClientException` or `NoCredentialsError`), check the function's `VAMS_RESOURCE_PARAM_PREFIX` value and its execution role. For `AccessDeniedException`, the function's role needs `ssm:GetParametersByPath` on the deployment's resource-name parameters, the path in the function's `VAMS_RESOURCE_PARAM_PREFIX` environment variable (`/<name>-<baseStackName>-<region>/resourceNames`) and everything under it, and `ssm:GetParameter` on each name below it (`<prefix>/<key>`, the key the `Resource name read failed` line names). It also needs `ssm:GetParameters` on the chunk parameters, `.../resourceNamesChunks/*`: without that, lookups still succeed, but every refresh logs the `chunk parameters not used` warning and reads the whole prefix. VAMS grants all three on the roles it creates. Check what can remove them: a permissions boundary (`environments.aws.PermissionBoundaryArn` in `infra/cdk.json`), a service control policy, or the policies of a pre-created role (`app.iamRoleConfig.useCustomVamsStackRoles`).
 
 ### Asset ID Refused as Not Unique Although No Asset Exists
 
@@ -448,25 +547,54 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 3. If necessary, trigger a re-index by setting `reindexOnCdkDeploy: true` in the configuration and redeploying, or by using the manual re-index tool in `infra/deploymentDataMigration/`.
 4. If a file is in the asset's file list but never appears in search, or a deleted asset or file is still listed, check the indexing dead-letter queues (next section).
 
+### Bucket Sync Rejected-Record Queue Holds Messages
+
+**Symptoms:**
+
+-   The Amazon CloudWatch alarm `<configuration name>-<app.baseStackName>-bucketSyncRejected` is in the `ALARM` state.
+-   A file written directly to an asset bucket is in no asset and not in search, and the bucket-sync function logged `Bucket sync rejected key ... (ambiguousLocation)`, `(archivedOwnerLocationInUse)` or `(assetIdInUse)` at `ERROR`.
+-   An upload, a new folder, a copy into an asset, a file revert, unarchive or primary-file change, or a workflow output is refused with `This asset shares its storage location with another asset, so no file can be added or changed here until one of them is archived.`
+-   Unarchiving an asset is refused with `This asset shares its storage location with another asset, so it cannot be unarchived while that asset is live.`
+
+**Cause:** two live assets hold the same stored location in the bucket, so bucket sync cannot tell which one the file belongs to. It attributes the file to neither and sends the S3 notification to the deployment's bucket-sync rejected-record queue (`reason` `ambiguousLocation`). A file written directly into the location of an archived asset while another live asset is stored at exactly that location goes there too (`reason` `archivedOwnerLocationInUse`): bucket sync does not unarchive the asset, because the location would be shared again. So does a file that no asset's location holds, written into a top-level folder whose name is the ID of an asset stored somewhere else in the same database bucket sync creates the bucket's assets in (the database assigned to the bucket, or else its default sync database), live or archived (`reason` `assetIdInUse`); for example, a file put under `<assetId>/` for an asset created with `bucketExistingKey`. Bucket sync would otherwise create a second asset with that ID in that database. An asset with the same ID in another database does not stop it: the folder becomes a new asset of the bucket's database. Each message carries `reason`, `bucket`, `key`, `candidateAssets` (the `databaseId:assetId` of each asset that claims the location) and the original S3 `record`. Messages are kept for 14 days.
+
+**What archive and permanent delete do to a shared location:** the files of a location two live assets share belong to both, so neither asset's destructive operations change them. Archiving one asset archives its asset record and leaves every shared file live. Permanently deleting one asset removes its records and leaves every shared file and every version of it in place; viewer data in the auxiliary bucket stays when both assets are in one database. Deleting, archiving or moving a shared file through either asset is refused with `This file is also held by another asset and is not archived or deleted through this asset`. Do not move or delete the shared objects in Amazon S3 directly: they are the remaining asset's files.
+
+**What VAMS refuses on a shared location:** once the `assetLocationIndex` migration step has run, VAMS writes no file into a location another live asset also holds, because bucket sync could not attribute the file to either asset. An upload, a new folder, a copy into either asset, a file revert, unarchive or primary-file change, and a workflow output that would land there are refused before anything is written, with `This asset shares its storage location with another asset, so no file can be added or changed here until one of them is archived.` The refusal names neither asset. Writes work again once you have followed the resolution below. For the same reason an archived asset is not unarchived, through the API or by bucket sync, while another live asset is stored at exactly its location; that refusal names neither asset either. An asset whose location is inside another asset's folder, or holds another asset's location, is unarchived as usual: each of its files has one owner, the asset with the deepest location.
+
+**Resolution:**
+
+1. Read the messages in the queue (Amazon SQS console, **Send and receive messages**) and note the `candidateAssets` of each.
+2. Decide which asset keeps the location, then archive the other asset. Only its asset record is archived; the shared files stay live and belong to the remaining asset from then on. If you no longer need the archived asset, you can permanently delete it later, which leaves the shared files in place too. VAMS refuses to unarchive it while the remaining asset is live. For an `archivedOwnerLocationInUse` message, the archived asset in `candidateAssets` (its `databaseId` ends in `#deleted`) stays archived: to bring it back, archive the live asset first and then unarchive it; otherwise move the object into the live asset's own location.
+   For an `assetIdInUse` message, `candidateAssets` names the assets of the bucket's database that already have the folder's ID. If the file belongs to one of them, upload it through VAMS, or move the object into that asset's own location in Amazon S3, and delete the message. To make the folder an asset of its own, create an asset in a database whose default bucket is the folder's bucket, with `bucketExistingKey` set to the folder (for example `<assetId>/`) and no asset ID, so VAMS gives the asset a new one. VAMS imports the files already in the folder into the new asset, so the messages of that folder can then be deleted without sending them again.
+3. Send each message's `record` again as an S3 event to the bucket's created-events queue (`<configuration name>-<app.baseStackName>-bucketSyncCreated--<n>`), wrapped as `{"Records": [<record>]}`, then delete it from the rejected-record queue. Bucket sync then attributes the file to the remaining asset.
+4. Check the remaining asset's file list: it lists every file of the location, live.
+
 ### Indexing Dead-Letter Queue Holds Messages
 
 **Symptoms:**
 
 -   One of these Amazon CloudWatch alarms is in the `ALARM` state:
 
-    | Alarm                                                                         | Source queue                                                               |
-    | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreatedDLQ--<n>` | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreated--<n>` |
-    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeletedDLQ--<n>` | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeleted--<n>` |
-    | `<configuration name>-<app.baseStackName>-<region>-fileIndexerDLQ`            | `<configuration name>-<app.baseStackName>-<region>-fileIndexer`            |
-    | `<configuration name>-<app.baseStackName>-<region>-assetIndexerDLQ`           | `<configuration name>-<app.baseStackName>-<region>-assetIndexer`           |
+    | Alarm                                                                           | Source queue                                                                                |
+    | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreatedDLQ--<n>`   | `<configuration name>-<app.baseStackName>-<region>-bucketSyncCreated--<n>`                  |
+    | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeletedDLQ--<n>`   | `<configuration name>-<app.baseStackName>-<region>-bucketSyncDeleted--<n>`                  |
+    | `<configuration name>-<app.baseStackName>-<region>-fileIndexerDLQ`              | `<configuration name>-<app.baseStackName>-<region>-fileIndexer`                             |
+    | `<configuration name>-<app.baseStackName>-<region>-assetIndexerDLQ`             | `<configuration name>-<app.baseStackName>-<region>-assetIndexer`                            |
+    | `<configuration name>-<app.baseStackName>-<region>-vectorIndexerDLQ`            | The vector indexer queue (auto-named; see the note below)                                   |
+    | `<configuration name>-<app.baseStackName>-<region>-vectorEmbeddingReadyRuleDLQ` | None: the `vector.embedding.ready` rule's dead-letter queue (see the note below)            |
+    | `<configuration name>-<app.baseStackName>-<region>-systemWorkflowLaunchDLQ`     | The system-workflow launch queue (auto-named; see the note below)                           |
+    | `<configuration name>-<app.baseStackName>-<region>-vectorReindexerAsyncDLQ`     | None: the vector reindexer's asynchronous-invocation dead-letter queue (see the note below) |
 
 -   Files appear in the asset's file list but not in search results, have no version history entry, or did not fire a file-upload workflow trigger
 -   Deleted assets or files still appear in search results
+-   Natural-language search does not rank a file whose SYSTEM GenAI metadata execution succeeded
+-   A vector reindex run stopped before it finished: its `System-Reindex` executions stop arriving, or vectors remain after a `clear`
 
 **Cause:**
 
-A bucket-sync or indexer Lambda could not process those events within three receives, so Amazon SQS moved them to the dead-letter queue of its source queue. The objects in Amazon S3 are unaffected. For the bucket-sync created queue in the commercial partition and the AWS European Sovereign Cloud, AWS Lambda recursive loop detection is a cause when the bucket-sync Lambda's recursive loop setting is not `Allow`; its `RecursiveInvocationsDropped` metric is above zero when that is the cause. For the indexer queues, an interruption of the Amazon OpenSearch Service domain or collection is the usual cause.
+A bucket-sync or indexer Lambda could not process those events within three receives, so Amazon SQS moved them to the dead-letter queue of its source queue. For the vector search alarms, the vector indexer or the system-workflow launcher could not process a record, Amazon EventBridge could not deliver a `vector.embedding.ready` event to the vector indexer queue, or an asynchronous continuation of the vector reindexer failed. The objects in Amazon S3 are unaffected. For the bucket-sync created queue in the commercial partition and the AWS European Sovereign Cloud, AWS Lambda recursive loop detection is a cause when the bucket-sync Lambda's recursive loop setting is not `Allow`; its `RecursiveInvocationsDropped` metric is above zero when that is the cause. For the indexer queues, an interruption of the Amazon OpenSearch Service domain or collection is the usual cause.
 
 **Resolution:**
 
@@ -493,6 +621,53 @@ Fix the cause shown in the logs of the Lambda that reads the source queue, if an
 
 The credentials you use need `sqs:StartMessageMoveTask`, `sqs:ListMessageMoveTasks`, `sqs:ReceiveMessage`, `sqs:DeleteMessage` and `sqs:GetQueueAttributes` on the dead-letter queue, `sqs:SendMessage` on the source queue and, with `app.useKmsCmkEncryption.enabled`, `kms:Decrypt` and `kms:GenerateDataKey` on the VAMS key. Each replayed event is processed as the original event would have been. A bucket-sync created event indexes the file, writes its version history row, and fires matching file-upload workflow triggers; a bucket-sync deleted event removes the file's metadata and search entry; an indexer event updates the search index. The alarm returns to `OK` once the queue is empty. The [Reindex utility](../developer/utilities/reindex.md) restores the search entries only.
 
+**Vector search dead-letter queues:** the vector indexer and system-workflow launch queues are auto-named. Read a dead-letter queue's name from the `QueueName` dimension of its alarm (`aws cloudwatch describe-alarms --alarm-names <alarm name>`) and its source queue from `aws sqs list-dead-letter-source-queues --queue-url <dead-letter queue URL>`, then follow the steps above. The `vectorEmbeddingReadyRuleDLQ` queue receives events from the Amazon EventBridge rule rather than from a source queue, and a message move task accepts only the dead-letter queue of another Amazon SQS queue, so the steps above cannot redrive it. Each of its messages holds one `vector.embedding.ready` event naming a file version: after fixing the cause, re-run that file's SYSTEM GenAI metadata execution or run the [vector reindexer](../concepts/vector-search.md#reindexing), then purge the queue.
+
+**Vector reindexer dead-letter queue:** the `vectorReindexerAsyncDLQ` queue is the on-failure destination of the vector reindexer's asynchronous invocations, so a message move task cannot redrive it either. Each message is the AWS Lambda record of one invocation that failed: a continuation that hit an error (an Amazon SQS send that failed, the system workflow not being registered, Amazon DynamoDB retries exhausted, or its own next self-invocation refused), an invocation that timed out or crashed, or one that aged out while the function was throttled. A failed invocation is not retried, so each failure leaves one message. Its `requestPayload` is the payload the invocation started with, including the `continuation` token that holds the run id, the phase (`clear` or `enqueue`) and the position the run had reached when that invocation started. When the continuation caught the error itself, `responsePayload.errorType` is `ReindexContinuationFailed` and `responsePayload.errorMessage` is a JSON object holding the run id, the phase, the error, and `resumePayload`: the payload that continues the run after the last file that invocation sent. For a timeout or a crash, `requestContext.condition` and `responsePayload` give the failure and only the `requestPayload` is there. To resume the run:
+
+1. Read the dead-letter queue's name from the `QueueName` dimension of the alarm, then receive a message and save the payload to resume from (the `resumePayload` when the message has one, otherwise the `requestPayload`):
+
+    ```bash
+    aws sqs get-queue-url --queue-name <dead-letter queue name>
+    aws sqs receive-message --queue-url <dead-letter queue URL> --visibility-timeout 600 > message.json
+    jq '.Messages[0].Body | fromjson | ((.responsePayload.errorMessage // "" | fromjson? | .resumePayload) // .requestPayload)' \
+        message.json > continuation.json
+    ```
+
+2. After fixing the cause, invoke the reindexer asynchronously with that payload. Its function name is published under the deployment's `resourceNames/lambdaFunctions/vectorReindexer` parameter:
+
+    ```bash
+    aws lambda invoke --function-name <vector reindexer function name> --invocation-type Event \
+        --cli-binary-format raw-in-base64-out --payload file://continuation.json response.json
+    ```
+
+3. Delete the message:
+
+    ```bash
+    aws sqs delete-message --queue-url <dead-letter queue URL> --receipt-handle "$(jq -r '.Messages[0].ReceiptHandle' message.json)"
+    ```
+
+The run continues under the same run id, so its executions keep their `vec-<runId>-<chunk>` execution groups. In the `clear` phase the scan resumes from the saved position and deletes what remains. In the `enqueue` phase a `resumePayload` continues after the last file the failed invocation sent, so no file is sent twice, with one exception: when Amazon SQS refused part of one batch of ten twice, the files of that batch after the first refused one that it did accept are sent again (at most nine). A `requestPayload` starts from where the failed invocation started, so the files that invocation enqueued before it timed out or crashed are enqueued again. A file sent again is analyzed again unless its first execution is still running, in which case the system workflow's per-input-file-version lock declines it. A `requestPayload` with no `continuation` is the first invocation of a run that was itself started asynchronously and timed out or crashed, and invoking it starts that run again from the beginning. The credentials you use need `sqs:ReceiveMessage` and `sqs:DeleteMessage` on the dead-letter queue, `lambda:InvokeFunction` on the reindexer and, with `app.useKmsCmkEncryption.enabled`, `kms:Decrypt` on the VAMS key. An error the reindexer catches in the first invocation of a run, such as the system workflow not being registered, is returned to the caller as a 500 response naming the run and leaves no message in this queue; when that first invocation was itself asynchronous, the error is recorded only in the reindexer's log group.
+
+### Natural-Language Search Does Not Return a Newly Uploaded File
+
+A file appears in the asset list and in keyword search but a natural-language query that clearly describes it returns nothing.
+
+**Symptoms:**
+
+-   The file was uploaded minutes ago.
+-   Keyword search finds it by name; natural-language search does not rank it.
+
+**Resolution:**
+
+Natural-language search reads embeddings produced by the SYSTEM GenAI metadata pipeline, which runs as a workflow execution after upload — rendering, analysis, and embedding take from one to several minutes per file. Check the file's asset **Executions** tab:
+
+1. **No execution** — the pipeline's file-upload trigger is off or the extension is not allow-listed. Confirm `app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload` is `true` and that the file type has a viewer.
+2. **Execution FAILED with `BedrockAccessDenied` or `BedrockModelError`** — the analysis model is not enabled for the account (see [Prerequisites](../deployment/prerequisites.md#amazon-bedrock-model-access)). Attributes were still written; no embedding was produced. Enable the model and re-run the execution, or run the vector reindexer.
+3. **Execution SUCCEEDED** — allow up to a minute for the vector indexer to consume the `vector.embedding.ready` event, then retry. If the vector indexer's Amazon CloudWatch log shows `embedding.ready names a model or dimension other than the configured index; dropping`, `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` or `embeddingDimensions` changed after the pipeline produced the embedding, and the indexer dropped it: follow the model-change procedure in [Vector search](../concepts/vector-search.md#changing-the-embedding-model). Messages in the vector indexer's dead-letter queue are records it failed to apply; see [Indexing Dead-Letter Queue Holds Messages](#indexing-dead-letter-queue-holds-messages).
+
+A `503` from `POST /search/nlp` names its cause in its message: `Vector index is being built` (the index is being created or re-created; wait until `DescribeTable` shows it `ACTIVE`), `The search filters could not be applied…` (Amazon OpenSearch Service could not apply a metadata, tag, or location constraint), or `Search is busy right now…` (Amazon Bedrock or Amazon DynamoDB throttled the call or was briefly unavailable). Retry in each case.
+
 ---
 
 ## Pipeline Issues
@@ -516,7 +691,7 @@ Pipeline containers require network access to Amazon ECR endpoints. Verify:
 
 ### GPU Instance Unavailability for AWS Batch Jobs
 
-Some pipelines (Isaac Lab Training, Gaussian Splat Toolbox) require GPU instances that may not be available in all AWS Regions or Availability Zones.
+Some pipelines (Isaac Lab Training, Gaussian Splat Toolbox, Image to 3D) require GPU instances that may not be available in all AWS Regions or Availability Zones.
 
 **Symptoms:**
 
@@ -525,7 +700,7 @@ Some pipelines (Isaac Lab Training, Gaussian Splat Toolbox) require GPU instance
 
 **Resolution:**
 
-1. Verify GPU instance type availability in your AWS Region (e.g., `g6e.2xlarge`, `g5.xlarge`).
+1. Verify GPU instance type availability in your AWS Region (e.g., `g6e.2xlarge`, `g5.xlarge`). For Isaac Lab Training, check the types in `app.pipelines.useIsaacLabTraining.instanceTypes` against your Region and Availability Zones, and see [Instance types](../pipelines/nvidia-isaac-lab.md#instance-types).
 2. Request a service quota increase for the required instance types through the AWS Service Quotas console.
 3. For Isaac Lab Training, consider enabling the `keepWarmInstance` option to reduce cold start times at the cost of continuous compute charges.
 
@@ -564,6 +739,40 @@ Because the alarm names worker responsiveness rather than an IAM permission, thi
 
 See [Configuration reference](../deployment/configuration-reference.md) for the full list of operator-supplied Deadline Cloud prerequisites.
 
+### 3D Preview Thumbnail Run Fails on a Large or Complex File
+
+**Symptoms:**
+
+-   The execution fails with a message such as `does not fit on the work volume`, `Out of memory loading the 3D file`, `FBX scene places more than`, `FBX file nests deeper than 256 levels`, `STEP assembly places more than 1,000,000 components`, `splat-transform did not finish within 1800 s`, `has an implausible compression ratio`, or `LCC2 chunk file`
+
+**Resolution:**
+
+These are fixed limits of the pipeline (see [Quotas](../additional/quotas.md)). Reduce or split the input; for an FBX file, export it as FBX 2011 (7.1) or later. For an `.lcc2` scene, upload its `data/3dgs/` folder beside the `.lcc2` file in the same asset. The AWS Batch job log in Amazon CloudWatch records the input size, the render budgets and each phase's duration.
+
+### 3D Basic Conversion Refuses a STEP File or Reports an Incomplete Conversion
+
+**Symptoms:**
+
+-   A run on a `.step` or `.stp` file fails with `STEP input is not enabled in this deployment`.
+-   A run succeeds with `Converted <file>, but the converted file is incomplete`, and the execution's Output Results list `conversion-incomplete.json`.
+-   A run fails with `was not converted because MISSING_REFERENCES is fail`.
+
+**Resolution:**
+
+-   STEP input is off by default because it adds Open CASCADE to the conversion image. Set `app.pipelines.useConversion3dBasic.enableStepInput` to `true` in `infra/config/config.json` and deploy again; the image is rebuilt with cascadio. See the [3D Basic Conversion pipeline](../pipelines/3d-conversion.md) and the [configuration reference](../deployment/configuration-reference.md).
+-   A model is refused as too large for the conversion function. Turn on the AWS Batch tier (`app.pipelines.useConversion3dBasic.batchTier.enabled`, which needs `app.useGlobalVpc.enabled`) to convert it on an AWS Fargate job of up to 120 GiB. A run that waits for a job and then fails in `RUNNABLE` is blocked by the account's Fargate On-Demand vCPU quota; a run refused above the largest job size, or naming a Region, is explained in the [Batch tier troubleshooting](../pipelines/3d-conversion.md#troubleshooting).
+-   An incomplete conversion names the referenced files it could not include in `conversion-incomplete.json` and the run log, with the reason for each. Upload a missing file to the asset at the path the model names, or change a reference that points outside the asset (an absolute path, a URL, or a path that leaves the asset) to a relative path, and run the conversion again. Set the template's Missing references option to `fail` to stop such a run instead of converting without the files.
+
+### Media Preview Run Completes With No Preview
+
+**Symptoms:**
+
+-   A Media Preview Thumbnail execution succeeds but no `.previewFile.*` object is written.
+
+**Resolution:**
+
+Open the execution's results and read `preview-not-generated.json`. `alreadyShownAsOwnPreview` means the file is an image under 5 MiB that the web shows as its own preview, so no preview is needed; `noSmallerPreview` and `animatedImageLeftAlone` come from the optional `downscaleSelfPreviewableImages` setting; `emptyFile` is a zero-byte file; `noVideoStream` is a video file with no video track. If the result says the record could not be written, the run still succeeded and the cause is in the pipeline's AWS Lambda log.
+
 ### Pipeline Timeout vs. Workflow Timeout
 
 Pipeline step timeouts and overall workflow timeouts are configured separately. A pipeline step that exceeds its timeout will cause the workflow to fail.
@@ -575,7 +784,7 @@ Pipeline step timeouts and overall workflow timeouts are configured separately. 
 
 **Resolution:**
 
-Adjust the timeout values in the pipeline or workflow configuration. Large files (approaching the 100 GB limit for the 3D Thumbnail pipeline) may require extended processing time. Monitor the AWS Batch job logs and AWS Step Functions execution history to determine appropriate timeout values.
+Adjust the timeout values in the pipeline or workflow configuration. Large files may need more than the 3D Preview Thumbnail pipeline's job limits of 1 hour on the standard tier and 3 hours on the large tier; set the run's `computeTier` parameter to `large` for a file that runs out of time on the standard tier. Monitor the AWS Batch job logs and AWS Step Functions execution history to determine appropriate timeout values.
 
 :::tip
 For long-running pipeline operations, check the AWS Batch job logs in Amazon CloudWatch rather than relying solely on the API response or web UI status.

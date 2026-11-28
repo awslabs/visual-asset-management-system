@@ -28,6 +28,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from inprocess_worker import in_process_worker  # noqa: E402
+
 pytest.importorskip("aws_lambda_powertools")
 
 from botocore.exceptions import ClientError  # noqa: E402
@@ -62,11 +65,13 @@ INPUT_KEY = "assets/a1/box.obj"
 
 # An OBJ naming a material library the asset does not hold: skipped, with a warning.
 OBJ_MISSING_MTL = b"mtllib box.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"
-# An OBJ that is not UTF-8: its references cannot be read, with a warning.
-OBJ_NOT_UTF8 = b"mtllib box.mtl\n# caf\xe9\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"
+# A material library that is not UTF-8: its references cannot be read, with a warning. (An OBJ input
+# that is not UTF-8 fails the run before its references are read, #910.)
+MTL_KEY = "assets/a1/box.mtl"
+MTL_NOT_UTF8 = b"newmtl m\n# caf\xe9\nKd 1 0 0\nmap_Kd box.png\n"
 
 SKIPPED_WARNING = "Skipped box.mtl, referenced by box.obj"
-UNREADABLE_WARNING = "Could not read the references in box.obj"
+UNREADABLE_WARNING = "Could not read the references in box.mtl"
 
 
 def _load_handler():
@@ -103,7 +108,7 @@ class _Storage:
     """Amazon S3 as the handler sees it: the run's manifest and configuration, and the input's asset.
     HeadObject on a key it does not hold answers 404."""
 
-    def __init__(self, input_bytes):
+    def __init__(self, input_bytes, asset_files=None):
         manifest = {
             "inputFiles": [{"bucket": ASSET_BUCKET, "key": INPUT_KEY, "relativePath": "/box.obj"}],
             "outputs": {"bucket": OUTPUT_BUCKET, "files": "runs/r1/files/"},
@@ -113,6 +118,8 @@ class _Storage:
             (ASSET_BUCKET, CONFIGURATION_KEY): json.dumps({"outputType": ".glb"}).encode("utf-8"),
             (ASSET_BUCKET, INPUT_KEY): input_bytes,
         }
+        for key, data in (asset_files or {}).items():
+            self.objects[(ASSET_BUCKET, key)] = data
         self.uploaded = []
 
     def get_object(self, Bucket, Key):
@@ -146,26 +153,30 @@ _TRIMESH = SimpleNamespace(load=lambda path, resolver=None: _Mesh())
 _ABSENT = object()
 
 
-def _body(execution_id):
+def _body(execution_id, pipeline_execution_id=_ABSENT):
     body = {
         "inputManifestS3Location": f"s3://{ASSET_BUCKET}/{MANIFEST_KEY}",
         "inputConfigurationS3Location": f"s3://{ASSET_BUCKET}/{CONFIGURATION_KEY}",
     }
     if execution_id is not _ABSENT:
         body["workflowExecutionId"] = execution_id
+    if pipeline_execution_id is not _ABSENT:
+        body["pipelineExecutionId"] = pipeline_execution_id
     return body
 
 
-def _run(mod, logger, buffer, execution_id, input_bytes=OBJ_MISSING_MTL):
+def _run(mod, logger, buffer, execution_id, input_bytes=OBJ_MISSING_MTL, asset_files=None,
+         pipeline_execution_id=_ABSENT):
     """Run the handler once; return its response, the raw lines it logged, and those lines parsed."""
-    storage = _Storage(input_bytes)
+    storage = _Storage(input_bytes, asset_files)
     start = len(buffer.getvalue())
     # The input is read through s3_client on both release lines; the upload goes through s3_client
     # or s3.meta.client depending on the line, so both point at the same in-memory storage.
     with patch.object(mod, "logger", logger), patch.object(mod, "s3_client", storage), \
             patch.object(mod, "s3", SimpleNamespace(meta=SimpleNamespace(client=storage))), \
-            patch.object(mod, "trimesh", _TRIMESH):
-        response = mod.lambda_handler({"body": json.dumps(_body(execution_id))}, MagicMock())
+            patch.object(mod, "run_worker", in_process_worker(_TRIMESH)):
+        response = mod.lambda_handler({"body": json.dumps(_body(execution_id, pipeline_execution_id))},
+                                      MagicMock())
     assert storage.uploaded == ["runs/r1/files/box.glb"]
     raw_lines = buffer.getvalue()[start:].splitlines()
     return response, raw_lines, [json.loads(line) for line in raw_lines]
@@ -180,14 +191,15 @@ def _the_line(raw_lines, records, prefix):
 
 @pytest.mark.unit
 class TestTheRunsLinesCarryItsExecutionId:
-    @pytest.mark.parametrize("input_bytes,prefix", [
-        (OBJ_MISSING_MTL, SKIPPED_WARNING),
-        (OBJ_NOT_UTF8, UNREADABLE_WARNING),
+    @pytest.mark.parametrize("asset_files,prefix", [
+        (None, SKIPPED_WARNING),
+        ({MTL_KEY: MTL_NOT_UTF8}, UNREADABLE_WARNING),
     ], ids=["material-library-skipped", "references-unreadable"])
-    def test_a_referenced_file_warning_carries_the_execution_id(self, container_logger, input_bytes,
+    def test_a_referenced_file_warning_carries_the_execution_id(self, container_logger, asset_files,
                                                                 prefix):
         logger, buffer = container_logger
-        response, raw_lines, records = _run(_load_handler(), logger, buffer, EXECUTION_ID, input_bytes)
+        response, raw_lines, records = _run(_load_handler(), logger, buffer, EXECUTION_ID,
+                                            asset_files=asset_files)
         assert response["statusCode"] == 200
         raw, record = _the_line(raw_lines, records, prefix)
         assert record["level"] == "WARNING"
@@ -205,6 +217,38 @@ class TestTheRunsLinesCarryItsExecutionId:
         messages = [r["message"] for r in records]
         assert "Conversion request received" in messages and "Conversion complete" in messages
         assert any(m.startswith(SKIPPED_WARNING) for m in messages)
+
+
+PIPELINE_EXECUTION_ID = "5b2e8c1f0d7a4e39b6c2a1f4e8d0c3b7"
+
+
+@pytest.mark.unit
+class TestABatchTierRunCarriesItsPipelineExecutionIdToo:
+    """On a deployment with the Batch tier, the launcher registers this function's log group as a
+    source of the pipeline execution, and VAMS reads a registered shared group for lines that carry
+    BOTH execution ids. The launcher passes the pipeline execution id in the request."""
+
+    def test_every_line_carries_both_ids(self, container_logger):
+        logger, buffer = container_logger
+        _, raw_lines, records = _run(_load_handler(), logger, buffer, EXECUTION_ID,
+                                     pipeline_execution_id=PIPELINE_EXECUTION_ID)
+        assert [r["message"] for r in records if r.get("pipelineExecutionId") != PIPELINE_EXECUTION_ID] == []
+        assert [r["message"] for r in records if r.get("workflowExecutionId") != EXECUTION_ID] == []
+        raw, _ = _the_line(raw_lines, records, SKIPPED_WARNING)
+        assert PIPELINE_EXECUTION_ID in raw and EXECUTION_ID in raw
+
+    def test_a_reused_environment_does_not_carry_the_previous_runs_pipeline_execution_id(self, container_logger):
+        logger, buffer = container_logger
+        mod = _load_handler()
+        _run(mod, logger, buffer, EXECUTION_ID, pipeline_execution_id=PIPELINE_EXECUTION_ID)
+        _, _, without = _run(mod, logger, buffer, EXECUTION_ID)
+        assert [r["message"] for r in without if "pipelineExecutionId" in r] == []
+
+    @pytest.mark.parametrize("value", ["", None, 42], ids=["empty", "null", "not-a-string"])
+    def test_an_unusable_value_is_not_logged(self, container_logger, value):
+        logger, buffer = container_logger
+        _, _, records = _run(_load_handler(), logger, buffer, EXECUTION_ID, pipeline_execution_id=value)
+        assert [r["message"] for r in records if "pipelineExecutionId" in r] == []
 
 
 @pytest.mark.unit

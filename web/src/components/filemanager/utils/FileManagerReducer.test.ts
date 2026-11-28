@@ -104,3 +104,74 @@ describe("fileManagerReducer SET_TREE_NAME", () => {
         expect(next.selectedItems).toEqual([]);
     });
 });
+
+describe("fileManagerReducer selection across a page merge (#1125 D32)", () => {
+    // A tree still loading merges each page as it arrives (MERGE_FILES), which re-resolves the
+    // selection by `selectedItemPaths`. A Ctrl- or Shift-click selection must be in those paths, or
+    // the next page drops every item but the one first clicked.
+    const merge = (state: FileManagerState) =>
+        fileManagerReducer(state, {
+            type: "MERGE_FILES",
+            payload: { files: [], loadingPhase: "basic-loading" },
+        } as any);
+
+    it("keeps a Ctrl-click addition when the next page merges", () => {
+        const { state } = stateWithSelection();
+        const [root, , file] = state.flattenedItems;
+        let next = fileManagerReducer(state, {
+            type: "SELECT_ITEM",
+            payload: { item: root, ctrlKey: false, shiftKey: false },
+        } as any);
+        next = fileManagerReducer(next, {
+            type: "SELECT_ITEM",
+            payload: { item: file, ctrlKey: true, shiftKey: false },
+        } as any);
+        expect(next.selectedItemPaths).toEqual(["/", "/img/p1.png"]);
+
+        const merged = merge(next);
+
+        expect(merged.selectedItems.map((i) => i.relativePath)).toEqual(["/", "/img/p1.png"]);
+    });
+
+    it("keeps a Shift-click range when the next page merges", () => {
+        const { state } = stateWithSelection();
+        const [root, , file] = state.flattenedItems;
+        let next = fileManagerReducer(state, {
+            type: "SELECT_ITEM",
+            payload: { item: root, ctrlKey: false, shiftKey: false },
+        } as any);
+        next = fileManagerReducer(next, {
+            type: "SELECT_ITEM",
+            payload: { item: file, ctrlKey: false, shiftKey: true },
+        } as any);
+
+        const merged = merge(next);
+
+        expect(merged.selectedItems.map((i) => i.relativePath)).toEqual([
+            "/",
+            "/img/",
+            "/img/p1.png",
+        ]);
+    });
+
+    it("a Ctrl-click removal stays removed when the next page merges", () => {
+        const { state } = stateWithSelection();
+        const [root, , file] = state.flattenedItems;
+        let next = fileManagerReducer(state, {
+            type: "SELECT_ITEM",
+            payload: { item: root, ctrlKey: false, shiftKey: false },
+        } as any);
+        next = fileManagerReducer(next, {
+            type: "SELECT_ITEM",
+            payload: { item: file, ctrlKey: true, shiftKey: false },
+        } as any);
+        next = fileManagerReducer(next, {
+            type: "SELECT_ITEM",
+            payload: { item: root, ctrlKey: true, shiftKey: false },
+        } as any);
+
+        const merged = merge(next);
+
+        expect(merged.selectedItems.map((i) => i.relativePath)).toEqual(["/img/p1.png"]);
+    });
+});

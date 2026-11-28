@@ -18,7 +18,7 @@ approach in detail.
 
 -   **Sync-out (VAMS → external).** VAMS is the source of truth, and an external
     system needs a continuously updated copy of your databases, assets, files, and
-    metadata. The Garnet Framework and Physna add-ons are both sync-out integrations.
+    metadata. The Garnet Framework and Physna [add-ons](../addons-overview.md) are both sync-out integrations.
 -   **Sync-in (external → VAMS).** An external system owns some data — CAD files on a
     network share, records in a PLM system, output from a build pipeline — and VAMS
     needs to reflect it. You look up the target asset, compare, and push changes with

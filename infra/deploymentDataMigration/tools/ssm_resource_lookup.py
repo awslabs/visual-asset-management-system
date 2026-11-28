@@ -10,7 +10,7 @@ names, audit log group names, deprecated migration-only table names, and
 selected Lambda function names as SSM String parameters under a
 deployment-unique prefix. The prefix is exposed by the core stack output
 ``ResourceNamesSSMParamPrefixOutput`` (format:
-``/{configName}-{baseStackName}/resourceNames``).
+``/{configName}-{baseStackName}-{region}/resourceNames``).
 
 Migration scripts pass the prefix (plus optional profile/region) to
 ``SsmResourceLookup`` and resolve every table and function name they need,
@@ -87,6 +87,18 @@ class ResourceParamKeys:
     PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE = "dynamoTables/pipelineTemplateTagSchemaStorage"
     WORKFLOW_STORAGE_TABLE_V2 = "dynamoTables/workflowStorageV2"
     WORKFLOW_TRIGGERS_STORAGE_TABLE = "dynamoTables/workflowTriggersStorage"
+    WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE = "dynamoTables/workflowExecutionLocksStorage"
+    # Vector search tables
+    VECTOR_EMBEDDINGS_STORAGE_TABLE = "dynamoTables/vectorEmbeddingsStorage"
+    LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE = "dynamoTables/largeObjectCopyJobsStorage"
+    ZIP_DOWNLOAD_REQUESTS_STORAGE_TABLE = "dynamoTables/zipDownloadRequestsStorage"
+    AUDIT_LOG_QUERIES_STORAGE_TABLE = "dynamoTables/auditLogQueriesStorage"
+    # Compliance tables
+    COMPLIANCE_SCHEMA_STORAGE_TABLE = "dynamoTables/complianceSchemaStorage"
+    COMPLIANCE_ASSET_STATE_STORAGE_TABLE = "dynamoTables/complianceAssetStateStorage"
+    COMPLIANCE_EVALUATION_STORAGE_TABLE = "dynamoTables/complianceEvaluationStorage"
+    COMPLIANCE_CASCADE_STORAGE_TABLE = "dynamoTables/complianceCascadeStorage"
+    COMPLIANCE_AUDIT_STORAGE_TABLE = "dynamoTables/complianceAuditStorage"
 
     # Deprecated tables retained for data migration only
     LEGACY_ASSET_VERSIONS_STORAGE_TABLE_V1 = "dynamoTables/legacy/assetVersionsStorageV1"
@@ -96,6 +108,8 @@ class ResourceParamKeys:
     LEGACY_METADATA_SCHEMA_STORAGE_TABLE = "dynamoTables/legacy/metadataSchemaStorage"
     LEGACY_TAG_STORAGE_TABLE = "dynamoTables/legacy/tagStorage"
     LEGACY_TAG_TYPE_STORAGE_TABLE = "dynamoTables/legacy/tagTypeStorage"
+    LEGACY_COMMENT_STORAGE_TABLE_V1 = "dynamoTables/legacy/commentStorageV1"
+    LEGACY_SUBSCRIPTIONS_STORAGE_TABLE_V1 = "dynamoTables/legacy/subscriptionsStorageV1"
 
     # Non-asset S3 buckets
     ASSET_AUXILIARY_BUCKET = "s3Buckets/assetAuxiliary"
@@ -112,8 +126,23 @@ class ResourceParamKeys:
     AUDIT_LOG_ACTIONS = "cloudwatchLogGroups/auditActions"
     AUDIT_LOG_ERRORS = "cloudwatchLogGroups/auditErrors"
 
-    # Lambda function names consumed by migration tooling
+    # Lambda function names consumed by migration tooling and external bridge stacks
     CR_OS_REINDEXER_FUNCTION = "lambdaFunctions/crOsReindexer"
+    VECTOR_REINDEXER_FUNCTION = "lambdaFunctions/vectorReindexer"
+    IMPORT_GLOBAL_PIPELINE_WORKFLOW_FUNCTION = "lambdaFunctions/importGlobalPipelineWorkflow"
+    LARGE_OBJECT_COPY_ENGINE_FUNCTION = "lambdaFunctions/largeObjectCopyEngine"
+
+    # Integration surface resolved by externally owned pipeline bridge stacks
+    INTEGRATION_ORCHESTRATION_BUS_ARN = "integration/orchestrationBusArn"
+    INTEGRATION_ORCHESTRATION_EVENT_SOURCE_PREFIX = "integration/orchestrationEventSourcePrefix"
+    INTEGRATION_WORKFLOW_EXECUTION_ROLE_ARN = "integration/workflowExecutionRoleArn"
+
+    # Deploy-time values, each published only when its feature is deployed
+    OPENSEARCH_ENDPOINT = "openSearch/endpoint"
+    OPENSEARCH_ASSET_INDEX_NAME = "openSearch/assetIndexName"
+    OPENSEARCH_FILE_INDEX_NAME = "openSearch/fileIndexName"
+    WEB_DEPLOYED_URL = "web/deployedUrl"
+    LOCATION_API_KEY_ARN = "location/apiKeyArn"
 
 
 class SsmResourceLookup:

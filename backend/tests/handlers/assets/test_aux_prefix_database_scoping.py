@@ -65,7 +65,8 @@ class TestAssetVersionsAuxPrefix:
             response = av.revert_asset_version("db1", "asset-1", request, {"tokens": ["alice"]})
 
         assert response.success is True
-        mock_delete.assert_called_once_with("db1/asset-1/scans/pump.e57/")
+        mock_delete.assert_called_once()
+        assert mock_delete.call_args.args == ("db1/asset-1/scans/pump.e57/preview/",)
 
 
 @pytest.mark.unit
@@ -100,4 +101,5 @@ class TestAssetServiceAuxPrefix:
 
         m.delete_asset_permanent("db1#deleted", "a1", request, {"tokens": ["u1"]})
 
-        m.delete_assetAuxiliary_files.assert_called_once_with("db1", {"Key": "a1/"})
+        m.delete_assetAuxiliary_files.assert_called_once()
+        assert m.delete_assetAuxiliary_files.call_args.args == ("db1", {"Key": "a1/"})

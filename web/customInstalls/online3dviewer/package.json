@@ -6,7 +6,7 @@
     "dependencies": {
         "draco3d": "1.5.7",
         "occt-import-js": "0.0.22",
-        "online-3d-viewer": "^0.16.0",
+        "online-3d-viewer": "^0.18.0",
         "rhino3dm": "8.17.0",
         "web-ifc": "0.0.68"
     },

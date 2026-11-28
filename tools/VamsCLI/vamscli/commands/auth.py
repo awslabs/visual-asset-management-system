@@ -110,7 +110,10 @@ def auth():
               help='Read the new password from stdin instead of the command line. Combined with '
                    '--password-stdin, stdin carries two lines: current password, then new.')
 @click.option('--save-credentials', is_flag=True, help='Save credentials for automatic re-authentication')
-@click.option('--user-id', help='User ID for token override authentication')
+@click.option('--user-id',
+              help='User ID for token override authentication. With an external IDP it must be the user '
+                   'ID the API resolves from the token: the claim set as lambdaAuthorizorJWTUserIdClaim, '
+                   'else the first of cognito:username, username and sub.')
 @click.option('--token-override',
               help='Pre-generated token to use directly, for external IDP or SAML/OIDC-federated '
                    'logins (requires --user-id). Not recommended: the token is readable from the OS '
@@ -218,13 +221,21 @@ def login(ctx: click.Context, username: str, password: str, password_stdin: bool
             )
             output_warning(warning_msg, json_output)
             
-            if not skip_version_check and not json_output and not click.confirm("Continue with authentication?"):
+            # A stdin credential flag means a secret is piped; the prompt would consume it as input.
+            stdin_credentials = password_stdin or new_password_stdin or token_override_stdin
+            if not skip_version_check and not json_output and not stdin_credentials \
+                    and not click.confirm("Continue with authentication?"):
                 output_info("Authentication cancelled.", json_output)
                 return
             elif skip_version_check:
                 output_info("Skipping version check confirmation (--skip-version-check enabled)", json_output)
         else:
             output_status(f"✓ Version match: {version_info['cli_version']}", json_output)
+    except click.Abort:
+        # Ctrl+C or end of input at the prompt is a "no". click.Abort is a RuntimeError, so the
+        # handler below would otherwise report it as a failed version check and sign the user in.
+        output_info("Authentication cancelled.", json_output)
+        return
     except Exception as e:
         # Version check failure shouldn't block authentication
         output_warning(f"Could not check API version: {e}", json_output)

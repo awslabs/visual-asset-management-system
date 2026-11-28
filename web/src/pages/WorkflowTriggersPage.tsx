@@ -61,6 +61,7 @@ const WorkflowTriggersPage: React.FC = () => {
                 databaseId={databaseId}
                 workflowId={workflowId}
                 pipelineRefs={workflow.specifiedPipelines || []}
+                systemLocked={!!workflow.isSystem}
             />
         </div>
     );

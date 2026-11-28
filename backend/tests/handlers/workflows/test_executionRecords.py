@@ -70,7 +70,9 @@ class TestKeysAndDates:
 
     def test_normalize_file_key_single_leading_slash(self):
         assert er.normalize_file_key("a/b.txt") == "/a/b.txt"
-        assert er.normalize_file_key("///a/b.txt") == "/a/b.txt"
+        # Repeated leading slashes are kept: '//a/b.txt' names the key with an empty segment after the
+        # asset's folder, another file than '/a/b.txt' (#1977)
+        assert er.normalize_file_key("///a/b.txt") == "///a/b.txt"
         assert er.normalize_file_key("") == "/"
 
     def test_iso_now_format(self):
@@ -303,7 +305,8 @@ class TestOutputBuilders:
             pipeline_execution_id="P1", target_file_path="/x.glb", metadata_key="color",
             metadata_value="red", source_metadata_file_relative_path="x.glb.metadata.json",
         )
-        assert rec["targetFilePath:metadataKey"] == "/x.glb:color"
+        assert rec["targetFilePath:metadataKey"] == "/x.glb:metadata:color"
+        assert rec["metadataType"] == "metadata"
         assert rec["metadataValue"] == "red"
 
     def test_output_result_record_truncates(self):

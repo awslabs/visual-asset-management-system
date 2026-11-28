@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useReducer, useState, useCallback } from "react";
+import React, { useEffect, useReducer, useRef, useState, useCallback } from "react";
 import {
     Alert,
     Box,
@@ -15,8 +15,8 @@ import {
     AlertProps,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams, useLocation } from "react-router";
-import { appCache } from "../../services/appCache";
 import { AssetDetailContext, assetDetailReducer } from "../../context/AssetDetailContext";
+import { ArchivedAssetContext } from "../../context/ArchivedAssetContext";
 import { AssetDetail } from "../../pages/AssetUpload/AssetUpload";
 import { fetchAssetLinks, fetchAssetWithStatus, fetchtagTypes } from "../../services/APIService";
 import { fetchAllAssetVersions } from "../../services/AssetVersionService";
@@ -25,11 +25,18 @@ import ErrorBoundary from "../common/ErrorBoundary";
 import AssetDetailsPane from "./AssetDetailsPane";
 import TabbedContainer from "./TabbedContainer";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
+import AssetUnarchiveModal from "../modals/AssetUnarchiveModal";
 import { UpdateAsset } from "../createupdate/UpdateAsset";
 import { MetadataContainer } from "../metadataV2";
 import Synonyms from "../../synonyms";
-import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { usePageTitle } from "../../hooks/usePageTitle";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
+import { routeDisabledReason } from "../../features/orchestration/permissions/routeDisabledReason";
+import { ASSET_TAB_QUERY_PARAM } from "../zipDownloads/zipDownloads";
+
+const ASSET_METADATA_ROUTE = "/database/{databaseId}/assets/{assetId}/metadata";
+const ASSET_UNARCHIVE_ROUTE = "/database/{databaseId}/assets/{assetId}/unarchiveAsset";
+const ASSET_PERMANENT_DELETE_ROUTE = "/database/{databaseId}/assets/{assetId}/deleteAsset";
 
 // Fetch tag types and store in localStorage
 fetchtagTypes().then((res) => {
@@ -61,6 +68,27 @@ export default function ViewAsset() {
         return (location.state as any)?.filePathToNavigate ?? undefined;
     }, [location.search, location.state]);
 
+    // `?tab=` selects a tab (the Download Queue link of a new zip job uses it). The tab follows the
+    // query while the page stays mounted, and a tab the user picks is written back to it.
+    const requestedTabId = React.useMemo(
+        () => new URLSearchParams(location.search).get(ASSET_TAB_QUERY_PARAM),
+        [location.search]
+    );
+    const handleTabChange = useCallback(
+        (tabId: string) => {
+            const params = new URLSearchParams(location.search);
+            if (tabId === "file-manager") params.delete(ASSET_TAB_QUERY_PARAM);
+            else params.set(ASSET_TAB_QUERY_PARAM, tabId);
+            const search = params.toString();
+            if (`?${search}` === location.search || (!search && !location.search)) return;
+            navigate(
+                { search: search ? `?${search}` : "" },
+                { replace: true, state: location.state }
+            );
+        },
+        [location.search, location.state, navigate]
+    );
+
     // State
     const [state, dispatch] = useReducer(assetDetailReducer, {
         isMultiFile: false,
@@ -71,6 +99,7 @@ export default function ViewAsset() {
     const [assetLinks, setAssetLinks] = useState<any>({});
     const [openUpdateAsset, setOpenUpdateAsset] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [showUnarchiveModal, setShowUnarchiveModal] = useState(false);
     const [apiError, setApiError] = useState<string | null>(null);
     const [showApiError, setShowApiError] = useState(false);
     const [apiErrorType, setApiErrorType] = useState<AlertProps.Type>("error");
@@ -82,14 +111,41 @@ export default function ViewAsset() {
     });
     const [versions, setVersions] = useState<any[]>([]);
     const [versionsLoading, setVersionsLoading] = useState(false);
+    // Counts the changes made on the Versions tab, each of which reloads the asset and its versions.
+    const [versionsRevision, setVersionsRevision] = useState(0);
+    const versionsAssetKey = useRef("");
 
     usePageTitle(databaseId, asset?.assetName);
     const assetLoaded = !!assetId && asset?.assetId === assetId;
+    // An archived asset is shown read-only: every panel reads with showArchived and offers no
+    // writes, downloads or viewers; the page offers Unarchive and Delete permanently instead.
+    const isArchived = assetLoaded && asset?.status === "archived";
 
-    // Config
-    const config = appCache.getItem("config");
-    const [useNoOpenSearch] = useState(
-        config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
+    // The role's API route permissions decide which asset actions are offered; the API still
+    // authorizes each request.
+    const { loading: permissionsLoading, failed: permissionsFailed, can } = useAllowedRoutes();
+    const deleteDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        permissionsFailed,
+        can("DELETE", "/database/{databaseId}/assets/{assetId}/archiveAsset"),
+        `Your role does not allow archiving or deleting this ${Synonyms.asset}.`
+    );
+    // The metadata editor adds with POST and updates with PUT; either grant keeps it editable.
+    const canWriteMetadata = can("POST", ASSET_METADATA_ROUTE) || can("PUT", ASSET_METADATA_ROUTE);
+    // Row delete calls DELETE on the same route, which a role may lack while it may add and edit.
+    const canDeleteMetadata = can("DELETE", ASSET_METADATA_ROUTE);
+    const unarchiveDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        permissionsFailed,
+        can("PUT", ASSET_UNARCHIVE_ROUTE),
+        `Your role does not allow unarchiving this ${Synonyms.asset}.`
+    );
+    const canPermanentlyDelete = can("DELETE", ASSET_PERMANENT_DELETE_ROUTE);
+    const permanentDeleteDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        permissionsFailed,
+        canPermanentlyDelete,
+        `Your role does not allow permanently deleting this ${Synonyms.asset}.`
     );
 
     // Fetch asset data. In-app navigation to another asset keeps this page mounted, so the previous
@@ -145,8 +201,9 @@ export default function ViewAsset() {
                     setShowApiError(true);
                     setApiErrorType("error");
                 } else if (status === undefined && typeof item === "string" && item) {
-                    // A request rejected without a status keeps its own message: a request whose
-                    // response never arrived says the service could not be reached.
+                    // A request rejected without a status keeps its own message: a block by the
+                    // AWS WAF web ACL names the request ID an administrator looks up, and a
+                    // request whose response never arrived says the service could not be reached.
                     setApiError(`Failed to load ${Synonyms.asset} data. ${item}`);
                     setShowApiError(true);
                     setApiErrorType("error");
@@ -177,17 +234,46 @@ export default function ViewAsset() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [databaseId, assetId]);
 
-    // Fetch asset versions for the version dropdown
+    // Reload the asset after a change on the Versions tab, so the header's current version follows
+    // it. The details stay on screen while the request runs, and a failed reload leaves them as
+    // they are.
+    useEffect(() => {
+        if (versionsRevision === 0 || !databaseId || !assetId) return;
+        let cancelled = false;
+        const assetKey = `${databaseId}/${assetId}`;
+        fetchAssetWithStatus({ databaseId, assetId, showArchived: true })
+            .then(([, item]) => {
+                // Drop an answer for an asset the user has already left: versionsAssetKey names
+                // the asset now shown (the versions effect below updates it on navigation).
+                if (cancelled || versionsAssetKey.current !== assetKey) return;
+                if (item && typeof item === "object") setAsset(item);
+            })
+            .catch((error) => console.log("Failed to reload asset:", error));
+        return () => {
+            cancelled = true;
+        };
+        // Runs once per change on the Versions tab; the asset effect above handles a new asset.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [versionsRevision]);
+
+    // Fetch asset versions for the version dropdown, once the asset is known so an archived
+    // asset's versions are asked for with showArchived. The list is cleared for another asset and
+    // kept while it reloads for the same one.
     useEffect(() => {
         let cancelled = false;
-        setVersions([]);
+        const assetKey = `${databaseId}/${assetId}`;
+        if (versionsAssetKey.current !== assetKey) {
+            versionsAssetKey.current = assetKey;
+            setVersions([]);
+        }
         const loadVersions = async () => {
-            if (!databaseId || !assetId) return;
+            if (!databaseId || !assetId || !assetLoaded) return;
             setVersionsLoading(true);
             try {
                 const [success, result] = await fetchAllAssetVersions({
                     databaseId,
                     assetId,
+                    showArchived: isArchived,
                 });
                 if (cancelled) return;
                 if (success && result?.versions) {
@@ -209,7 +295,9 @@ export default function ViewAsset() {
         return () => {
             cancelled = true;
         };
-    }, [databaseId, assetId]);
+    }, [databaseId, assetId, assetLoaded, isArchived, versionsRevision]);
+
+    const handleVersionsChanged = useCallback(() => setVersionsRevision((n) => n + 1), []);
 
     // Handle version selection change and sync to URL query parameter
     const handleVersionChange = useCallback(
@@ -272,126 +360,160 @@ export default function ViewAsset() {
 
     return (
         <AssetDetailContext.Provider value={{ state, dispatch }}>
-            <StatusMessageProvider>
-                <Box padding={{ top: "xs", horizontal: "l" }}>
-                    <SpaceBetween direction="vertical" size="xs">
-                        {/* Breadcrumbs */}
-                        <BreadcrumbGroup
-                            items={[
-                                { text: Synonyms.Databases, href: "#/databases/" },
-                                {
-                                    text: "Search",
-                                    href: "#/assets/",
-                                },
-                                {
-                                    text: databaseId,
-                                    href: "#/databases/" + databaseId + "/assets/",
-                                },
-                                { text: asset?.assetName, href: "" },
-                            ]}
-                            ariaLabel="Breadcrumbs"
+            <ArchivedAssetContext.Provider value={isArchived}>
+                <StatusMessageProvider>
+                    <Box padding={{ top: "xs", horizontal: "l" }}>
+                        <SpaceBetween direction="vertical" size="xs">
+                            {/* Breadcrumbs */}
+                            <BreadcrumbGroup
+                                items={[
+                                    { text: Synonyms.Databases, href: "#/databases/" },
+                                    {
+                                        text: "Search",
+                                        href: "#/assets/",
+                                    },
+                                    {
+                                        text: databaseId,
+                                        href: "#/databases/" + databaseId + "/assets/",
+                                    },
+                                    { text: asset?.assetName, href: "" },
+                                ]}
+                                ariaLabel="Breadcrumbs"
+                            />
+
+                            {/* API Error Alert */}
+                            {showApiError && (
+                                <Alert
+                                    type={apiErrorType}
+                                    statusIconAriaLabel="Error"
+                                    header="API Error"
+                                    dismissible
+                                    dismissAriaLabel="Dismiss error"
+                                    onDismiss={() => setShowApiError(false)}
+                                >
+                                    {apiError}
+                                </Alert>
+                            )}
+
+                            {/* Asset Header - only shown on error, otherwise asset name is in the details
+                                container. It stays after the alert is dismissed so the page is not left empty. */}
+                            {apiError && (
+                                <Header variant="h1">{`${Synonyms.Asset} Information Unavailable`}</Header>
+                            )}
+                        </SpaceBetween>
+
+                        {/* Content with more spacing between containers */}
+                        <div style={{ marginTop: "12px" }} />
+                        <SpaceBetween direction="vertical" size="xs">
+                            {/* The asset's details, files, metadata and map mount only once the asset
+                                has loaded, so a refused or missing asset never starts them and each
+                                panel knows whether to read it as archived */}
+                            {!apiError && !assetLoaded && (
+                                <StatusIndicator type="loading">
+                                    {`Loading ${Synonyms.asset}...`}
+                                </StatusIndicator>
+                            )}
+                            {!showApiError && assetLoaded && (
+                                <>
+                                    {/* Asset Details Pane */}
+                                    <AssetDetailsPane
+                                        asset={asset}
+                                        databaseId={databaseId || ""}
+                                        assetId={assetId || ""}
+                                        onOpenUpdateAsset={handleOpenUpdateAsset}
+                                        onOpenDeleteModal={handleOpenDeleteModal}
+                                        deleteDisabledReason={
+                                            isArchived
+                                                ? permanentDeleteDisabledReason
+                                                : deleteDisabledReason
+                                        }
+                                        isArchived={isArchived}
+                                        onOpenUnarchiveModal={() => setShowUnarchiveModal(true)}
+                                        unarchiveDisabledReason={unarchiveDisabledReason}
+                                        versions={versions}
+                                        versionsLoading={versionsLoading}
+                                        selectedVersionId={selectedVersionId}
+                                        onVersionChange={handleVersionChange}
+                                    />
+
+                                    {/* Tabbed Container */}
+                                    <TabbedContainer
+                                        assetName={asset?.assetName || ""}
+                                        assetId={assetId || ""}
+                                        databaseId={databaseId || ""}
+                                        filePathToNavigate={filePathToNavigate}
+                                        assetVersionId={selectedVersionId || undefined}
+                                        onSelectedPathChange={handleSelectedPathChange}
+                                        requestedTabId={requestedTabId}
+                                        onTabChange={handleTabChange}
+                                        onVersionsChanged={handleVersionsChanged}
+                                    />
+
+                                    {/* Metadata - New MetadataV2 Component */}
+                                    <ErrorBoundary componentName="Metadata">
+                                        {databaseId && assetId && (
+                                            <MetadataContainer
+                                                entityType="asset"
+                                                entityId={assetId}
+                                                databaseId={databaseId}
+                                                mode="online"
+                                                assetVersionId={selectedVersionId || undefined}
+                                                readOnly={
+                                                    !!selectedVersionId ||
+                                                    !canWriteMetadata ||
+                                                    isArchived
+                                                }
+                                                canDelete={canDeleteMetadata}
+                                            />
+                                        )}
+                                    </ErrorBoundary>
+                                </>
+                            )}
+                        </SpaceBetween>
+                        <div style={{ paddingBottom: "20px" }} />
+                    </Box>
+
+                    {/* Modals */}
+                    {asset && !isArchived && (
+                        <UpdateAsset
+                            asset={asset}
+                            isOpen={openUpdateAsset}
+                            onClose={() => setOpenUpdateAsset(false)}
+                            onComplete={() => {
+                                setOpenUpdateAsset(false);
+                                window.location.reload();
+                            }}
                         />
+                    )}
 
-                        {/* API Error Alert */}
-                        {showApiError && (
-                            <Alert
-                                type={apiErrorType}
-                                statusIconAriaLabel="Error"
-                                header="API Error"
-                                dismissible
-                                dismissAriaLabel="Dismiss error"
-                                onDismiss={() => setShowApiError(false)}
-                            >
-                                {apiError}
-                            </Alert>
-                        )}
-
-                        {/* Asset Header - only shown on error, otherwise asset name is in the details
-                            container. It stays after the alert is dismissed so the page is not left empty. */}
-                        {apiError && (
-                            <Header variant="h1">{`${Synonyms.Asset} Information Unavailable`}</Header>
-                        )}
-                    </SpaceBetween>
-
-                    {/* Content with more spacing between containers */}
-                    <div style={{ marginTop: "12px" }} />
-                    <SpaceBetween direction="vertical" size="xs">
-                        {/* The asset's details, files, metadata and map mount only once the
-                            asset has loaded, so a refused or missing asset never starts them */}
-                        {!apiError && !assetLoaded && (
-                            <StatusIndicator type="loading">
-                                {`Loading ${Synonyms.asset}...`}
-                            </StatusIndicator>
-                        )}
-                        {!showApiError && assetLoaded && (
-                            <>
-                                {/* Asset Details Pane */}
-                                <AssetDetailsPane
-                                    asset={asset}
-                                    databaseId={databaseId || ""}
-                                    onOpenUpdateAsset={handleOpenUpdateAsset}
-                                    onOpenDeleteModal={handleOpenDeleteModal}
-                                    versions={versions}
-                                    versionsLoading={versionsLoading}
-                                    selectedVersionId={selectedVersionId}
-                                    onVersionChange={handleVersionChange}
-                                />
-
-                                {/* Tabbed Container */}
-                                <TabbedContainer
-                                    assetName={asset?.assetName || ""}
-                                    assetId={assetId || ""}
-                                    databaseId={databaseId || ""}
-                                    filePathToNavigate={filePathToNavigate}
-                                    assetVersionId={selectedVersionId || undefined}
-                                    onSelectedPathChange={handleSelectedPathChange}
-                                />
-
-                                {/* Metadata - New MetadataV2 Component */}
-                                <ErrorBoundary componentName="Metadata">
-                                    {databaseId && assetId && (
-                                        <MetadataContainer
-                                            entityType="asset"
-                                            entityId={assetId}
-                                            databaseId={databaseId}
-                                            mode="online"
-                                            assetVersionId={selectedVersionId || undefined}
-                                            readOnly={!!selectedVersionId}
-                                        />
-                                    )}
-                                </ErrorBoundary>
-                            </>
-                        )}
-                    </SpaceBetween>
-                    <div style={{ paddingBottom: "20px" }} />
-                </Box>
-
-                {/* Modals */}
-                {asset && (
-                    <UpdateAsset
-                        asset={asset}
-                        isOpen={openUpdateAsset}
-                        onClose={() => setOpenUpdateAsset(false)}
-                        onComplete={() => {
-                            setOpenUpdateAsset(false);
-                            window.location.reload();
+                    <AssetDeleteModal
+                        visible={showDeleteModal}
+                        onDismiss={() => setShowDeleteModal(false)}
+                        mode="asset"
+                        selectedAssets={asset ? [asset] : []}
+                        databaseId={databaseId}
+                        forceDeleteMode={isArchived}
+                        canPermanentlyDelete={canPermanentlyDelete}
+                        onSuccess={(operation) => {
+                            setShowDeleteModal(false);
+                            // Navigate back to search page after successful deletion / archival
+                            navigate(databaseId ? `/databases/${databaseId}/assets` : "/assets");
                         }}
                     />
-                )}
-
-                <AssetDeleteModal
-                    visible={showDeleteModal}
-                    onDismiss={() => setShowDeleteModal(false)}
-                    mode="asset"
-                    selectedAssets={asset ? [asset] : []}
-                    databaseId={databaseId}
-                    onSuccess={(operation) => {
-                        setShowDeleteModal(false);
-                        // Navigate back to search page after successful deletion / archival
-                        navigate(databaseId ? `/databases/${databaseId}/assets` : "/assets");
-                    }}
-                />
-            </StatusMessageProvider>
+                    {isArchived && (
+                        <AssetUnarchiveModal
+                            visible={showUnarchiveModal}
+                            onDismiss={() => setShowUnarchiveModal(false)}
+                            selectedAsset={asset}
+                            databaseId={databaseId}
+                            onSuccess={() => {
+                                setShowUnarchiveModal(false);
+                                window.location.reload();
+                            }}
+                        />
+                    )}
+                </StatusMessageProvider>
+            </ArchivedAssetContext.Provider>
         </AssetDetailContext.Provider>
     );
 }

@@ -32,7 +32,9 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
                       output_s3_asset_metadata_path, inputOutput_s3_assetAuxiliary_files_path,
                       input_metadata_s3_location, input_configuration_s3_location, external_task_token,
                       executing_userName, executing_requestContext, asset_id, database_id, cosmos_prompt,
-                      orchestration_event_prefix=""):
+                      orchestration_event_prefix="",
+                      input_bucket_region="", output_bucket_region="", input_version_id="",
+                      input_asset=None):
     """
     Execute the Cosmos Reason pipeline by invoking the openPipeline Lambda.
     Reason requires an input video file path to analyze.
@@ -53,6 +55,17 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "executingRequestContext": executing_requestContext,
         "assetId": asset_id,
         "databaseId": database_id,
+        # The Regions of the input and output asset buckets, from the manifest (empty when a bucket
+        # is in the deployment Region), so the Batch container addresses each bucket in its Region.
+        "inputBucketRegion": input_bucket_region,
+        # The S3 version the run reads its input at, recorded at launch; "" reads the current object.
+        "inputVersionId": input_version_id,
+        # Where the input sits in its asset, from its manifest entry (empty without one): its
+        # asset-relative path, whose folder is the output subfolder, and the asset root.
+        "inputRelativePath": (input_asset or {}).get("relativePath") or "",
+        "inputAssetRootS3Key": (input_asset or {}).get("assetRootS3Key") or "",
+        "inputAssetRootBucket": (input_asset or {}).get("assetRootBucket") or "",
+        "outputBucketRegion": output_bucket_region,
         "cosmosPrompt": cosmos_prompt,
         "orchestrationEventPrefix": orchestration_event_prefix
     }
@@ -159,7 +172,11 @@ def lambda_handler(event, context):
             resolved['assetId'],
             resolved['databaseId'],
             cosmos_prompt,
-            resolved['orchestrationEventPrefix']
+            resolved['orchestrationEventPrefix'],
+            input_bucket_region=resolved['inputBucketRegion'],
+            input_version_id=resolved['inputVersionId'],
+            input_asset=(resolved['inputFiles'] or [None])[0],
+            output_bucket_region=resolved['outputBucketRegion'],
         )
 
         return {

@@ -4,8 +4,10 @@ Execution-keyed operations that span the whole workflow-execution lifecycle (exe
 files across multiple assets, so these are keyed on the executionId, not an asset):
 
     execution list          global, permission-filtered list with filters + pagination
-    execution details       full detail / traceability view
-    execution details-metadata   one metadata collection of the detail view, a page at a time
+    execution details       full detail / traceability view (no subcommand)
+    execution details metadata   one metadata collection of the detail view, a page at a time
+    execution details files      one file collection (input / output) of the detail view, a page at a time
+    execution details results    the concatenated result text of the run, a page at a time
     execution logs          truncated stored log, or full live CloudWatch search
     execution abort         abort one execution, or an entire group via --group-id
     execution rerun         reconstruct + relaunch from stored records
@@ -18,15 +20,26 @@ from typing import Dict, Any, Optional
 import click
 
 from ..constants import (
-    EXECUTION_DETAIL_METADATA_COLLECTIONS, MAX_EXECUTION_AUTO_PAGINATE_PAGES,
+    EXECUTION_DETAIL_METADATA_COLLECTIONS, EXECUTION_DETAIL_FILE_COLLECTIONS,
+    EXECUTION_LIST_INCLUDE_SYSTEM_PARAM, MAX_EXECUTION_AUTO_PAGINATE_PAGES,
     MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE, MAX_GLOBAL_EXECUTION_PAGE_SIZE,
 )
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
+from ..utils.system_records import system_runs_hidden_hint
 from ..utils.exceptions import (
-    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
+    BusinessLogicError, ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
 )
+
+
+def _resumable(error: BusinessLogicError, token: Optional[str], **fields: Any) -> BusinessLogicError:
+    """``error`` carrying, in its own ``json_fields``, the token that re-reads the page that failed
+    (``startingToken``, absent when it was the first page) and ``fields`` describing what was kept."""
+    existing = getattr(error, 'json_fields', None)
+    error.json_fields = {**(existing if isinstance(existing, dict) else {}), **fields,
+                         **({'startingToken': token} if token else {})}
+    return error
 
 
 def _api(ctx: click.Context) -> APIClient:
@@ -44,18 +57,51 @@ def _warnings(result: Dict[str, Any]) -> Any:
     return result.get('warnings') if isinstance(result, dict) else None
 
 
+def _not_abortable(result: Dict[str, Any]) -> Any:
+    """The top-level `notAbortable` array an abort returns as a sibling of `message`: the registered
+    sub-processes of a type VAMS cannot stop, each {resourceType, label, stageName, locator}."""
+    return result.get('notAbortable') if isinstance(result, dict) else None
+
+
+def _message_siblings(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Every non-empty top-level key a handler returns BESIDE `message` (`warnings`, `notAbortable`,
+    ...). The envelope is the handler's only copy of these, so unwrapping must carry them all; a
+    field added upstream reaches `--json-output` without a CLI change."""
+    if not isinstance(result, dict):
+        return {}
+    return {key: value for key, value in result.items()
+            if key != 'message' and value not in (None, "", [], {})}
+
+
 def _payload_with_warnings(result: Dict[str, Any]) -> Any:
-    """Unwrap the `message` envelope, carrying any top-level `warnings` into the payload."""
+    """Unwrap the `message` envelope, carrying every top-level sibling of `message` (`warnings`,
+    `notAbortable`, and any later addition) into the payload. Siblings override a same-named key
+    inside `message`, since the envelope is the handler's authoritative copy."""
     message = _message(result)
-    warnings = _warnings(result)
-    if not warnings:
+    siblings = _message_siblings(result)
+    if not siblings:
         return message
     if isinstance(message, dict):
         payload = dict(message)
     else:
         payload = {'message': message}
-    payload['warnings'] = warnings
+    payload.update(siblings)
     return payload
+
+
+def _left_running_line(not_abortable: Any) -> str:
+    """One human-readable line naming what an abort left running because VAMS cannot stop its type:
+    'Left running (VAMS cannot stop these sub-process types): Mock Slurm job (slurmJob, in MockTrain); ...'.
+    A group abort's entries carry the member `executionId`, which prefixes each name the way the
+    group's warnings are prefixed: 'e1: Mock Slurm job (slurmJob, in MockTrain)'."""
+    named = []
+    for entry in not_abortable or []:
+        entry = entry if isinstance(entry, dict) else {}
+        name = entry.get('label') or entry.get('locator') or entry.get('resourceType') or '?'
+        stage = f", in {entry['stageName']}" if entry.get('stageName') else ""
+        member = f"{entry['executionId']}: " if entry.get('executionId') else ""
+        named.append(f"{member}{name} ({entry.get('resourceType', '?')}{stage})")
+    return "Left running (VAMS cannot stop these sub-process types): " + "; ".join(named)
 
 
 @click.group()
@@ -64,13 +110,48 @@ def execution():
     pass
 
 
+class DetailsGroup(click.Group):
+    """The `execution details` group: `details <id>` runs the whole-view callback (unchanged), while
+    `details metadata|files|results <id>` dispatches a subcommand.
+
+    The group carries NO positional argument, because a group positional shadows the subcommand name
+    (Click binds the first token to the positional, then looks for a subcommand named like the id). So
+    when the first bare token is NOT a known subcommand it is the whole-view EXECUTION_ID: it is pulled
+    out here, the rest is parsed as the group's options, and `invoke_without_command=True` runs the
+    callback with the id stashed on the context. Execution ids are GUIDs, so one can never collide with
+    the literal subcommand names metadata/files/results."""
+
+    def parse_args(self, ctx, args):
+        first = next((a for a in args if not a.startswith('-')), None)
+        if first is not None and first not in self.commands:
+            remaining = list(args)
+            remaining.remove(first)
+            ctx._details_execution_id = first
+            return super().parse_args(ctx, remaining)
+        ctx._details_execution_id = None
+        return super().parse_args(ctx, args)
+
+    def collect_usage_pieces(self, ctx):
+        # The id is pulled out in parse_args rather than declared, so Click cannot list it itself.
+        return ['[OPTIONS]', 'EXECUTION_ID | COMMAND EXECUTION_ID [ARGS]...']
+
+
 @execution.command('list')
 @click.option('-w', '--workflow-id', help='Filter by workflow ID')
 @click.option('--workflow-database-id', help='Filter by workflow database ID')
-@click.option('--status', help='Filter by execution status (e.g. RUNNING, SUCCEEDED, FAILED)')
-@click.option('--trigger-type', help='Filter by trigger type (Manual / File-Upload)')
+@click.option('--status', help='Filter by execution status (e.g. RUNNING, SUCCEEDED, FAILED, SKIPPED)')
+@click.option('--exclude-status',
+              help='Exclude executions of these statuses, one or comma-separated (e.g. SKIPPED); applied by '
+                   'the service before the page is cut')
+@click.option('--trigger-type',
+              help='Filter by trigger type (Manual / File-Upload / System-Reindex); a system trigger value '
+                   'such as System-Reindex shows its system runs')
 @click.option('--group-id', help='Filter by executionGroupId')
 @click.option('--triggered-by', help='Filter by the user ID that triggered the execution')
+@click.option('--include-system/--no-include-system', 'include_system', default=None,
+              help='Include runs of system workflows, which are hidden by default. Filtering to one '
+                   'system workflow (-w and --workflow-database-id) shows its runs unless '
+                   '--no-include-system is given.')
 @click.option('--filter-start-date',
               help='Only executions started on/after this UTC date-time, as '
                    'YYYY-MM-DDTHH:MM:SSZ (default: 90 days ago). The list shows recent '
@@ -87,8 +168,9 @@ def execution():
 @click.pass_context
 @requires_setup_and_auth
 def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_database_id: Optional[str],
-                    status: Optional[str], trigger_type: Optional[str], group_id: Optional[str],
-                    triggered_by: Optional[str], filter_start_date: Optional[str],
+                    status: Optional[str], exclude_status: Optional[str], trigger_type: Optional[str],
+                    group_id: Optional[str], triggered_by: Optional[str], include_system: Optional[bool],
+                    filter_start_date: Optional[str],
                     filter_end_date: Optional[str], page_size: Optional[int], max_items: Optional[int],
                     starting_token: Optional[str], auto_paginate: bool, json_output: bool):
     """List workflow executions globally (permission-filtered), with optional filters.
@@ -96,7 +178,8 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
     Only executions whose workflow you can read are listed, and then only when you can read every
     asset the run read and the asset it wrote to. By default only recent executions (started within
     the last 90 days) are listed; use --filter-start-date / --filter-end-date to query an explicit
-    date range.
+    date range. Runs of system workflows are hidden unless --include-system is given (or the list
+    is filtered to one system workflow).
 
     A page shorter than --page-size is a stated bound rather than an absence of matches: the reason
     is reported under Warnings, and a NextToken continues from where the page stopped.
@@ -104,8 +187,10 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
     Examples:
         vamscli execution list
         vamscli execution list -w my-workflow --status RUNNING
+        vamscli execution list --exclude-status SKIPPED
         vamscli execution list --filter-start-date 2026-01-01T00:00:00Z --filter-end-date 2026-02-01T00:00:00Z
         vamscli execution list --group-id grp-123 --auto-paginate
+        vamscli execution list --include-system
     """
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
@@ -130,12 +215,18 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
             params['workflowDatabaseId'] = workflow_database_id
         if status:
             params['status'] = status
+        if exclude_status:
+            params['excludeStatus'] = exclude_status
         if trigger_type:
             params['triggerType'] = trigger_type
         if group_id:
             params['groupId'] = group_id
         if triggered_by:
             params['triggeredByUserId'] = triggered_by
+        # Sent only when given, so the service's default (hidden, or shown for one system
+        # workflow) applies otherwise.
+        if include_system is not None:
+            params[EXECUTION_LIST_INCLUDE_SYSTEM_PARAM] = 'true' if include_system else 'false'
         if filter_start_date:
             params['filterStartDate'] = filter_start_date
         if filter_end_date:
@@ -155,6 +246,10 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                 end = data.get('filterEndDate')
                 lines.append(f"\nStart date filter applied: {start}"
                              + (f" (through {end})" if end else ""))
+            # System runs are hidden by default; saying so keeps a list without them from reading
+            # as the complete history.
+            if data.get('includeSystem') is False:
+                lines.append(system_runs_hidden_hint(workflow_id, workflow_database_id))
             # Every reason a page can be shorter than --page-size: the cap on distinct assets it
             # resolves for permission checks, and its per-request work budget. Rendered on the empty
             # page too, because that is the case a bare "No executions found." misreports as an
@@ -187,8 +282,19 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
             out.append(f"  Workflow: {ex.get('workflowDatabaseId', 'N/A')}:{ex.get('workflowId', 'N/A')}")
             out.append(f"  Status: {ex.get('executionStatus', 'N/A')}")
             out.append(f"  Started: {ex.get('executionStartDate', 'N/A')}")
+            if ex.get('isSystem') is True:
+                out.append("  System run: yes")
+            # A SKIPPED record counts the file-upload trigger launches a concurrency restriction refused.
+            if ex.get('executionStatus') == 'SKIPPED':
+                out.append(f"  Skipped launches: {ex.get('skippedLaunchCount', 0)}")
+                if ex.get('skipReason'):
+                    out.append(f"  Skip reason: {ex['skipReason']}")
             if ex.get('executionGroupId'):
                 out.append(f"  Group: {ex['executionGroupId']}")
+            # The output kinds the run produced (File / Metadata / Result subset). Omitted when the
+            # run produced none, or for a legacy run whose config row predates the attribute ([]).
+            if ex.get('outputTypes'):
+                out.append(f"  Output Types: {', '.join(ex['outputTypes'])}")
             # Output target of the run. Omitted for a results-only execution, which writes no files
             # and therefore has no destination asset.
             if ex.get('outputLocationType'):
@@ -233,6 +339,9 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
                 for key in ('filterStartDate', 'filterEndDate'):
                     if key not in applied_window and page.get(key):
                         applied_window[key] = page[key]
+                # Whether the service included system runs: a boolean, so False is carried too.
+                if 'includeSystem' not in applied_window and 'includeSystem' in page:
+                    applied_window['includeSystem'] = page['includeSystem']
                 if not json_output:
                     output_status(f"Fetched {len(all_items)} executions (page {page_count})...", False)
                 next_token = page.get('NextToken')
@@ -272,20 +381,36 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
         raise click.ClickException(str(e))
 
 
-@execution.command('details')
-@click.argument('execution_id')
+@execution.group('details', cls=DetailsGroup, invoke_without_command=True)
 @click.option('--include-sub-executions', is_flag=True,
               help="Also report each step's registered sub-processes with per-stage status "
                    "(reads the sub-process execution history)")
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def details(ctx: click.Context, execution_id: str, include_sub_executions: bool, json_output: bool):
-    """Get an execution's full detail and traceability (pipelines, inputs, outputs, metadata).
+def details(ctx: click.Context, include_sub_executions: bool, json_output: bool):
+    """Execution detail reads. With NO subcommand: the full detail / traceability view (unchanged).
+
+    Usage: `vamscli execution details <execution-id>` for the whole view, or a subcommand to page one
+    part of it in full:
+
+    \b
+      metadata  one metadata collection (input / inputDatabase / output), a page at a time
+      files     one file collection (input / output), a page at a time
+      results   the concatenated result text, a page at a time (--auto-paginate for all of it)
+
+    Workflow version is the published workflow state machine version the run started on: latest while
+    the workflow still runs that version, superseded once its state machine has been redeployed
+    (every workflow builder save redeploys it, as do an update that supplies the step list and a
+    pipeline change to a setting the state machine encodes), a bare number when the workflow no
+    longer records a current version, and not recorded for a run started before versions were
+    recorded. Workflow settings and pipeline names are read live and can change without a redeploy,
+    so they may differ from what the run used whatever the version shows.
 
     Asset/file metadata (inputMetadata) and database metadata (inputDatabaseMetadata) are separate
-    collections, and each is reported as a row count here — use --json-output for the rows themselves.
-    The metadata sources the run read from are listed alongside them.
+    collections, and each is reported as a row count here — use 'vamscli execution details metadata'
+    (or --json-output) for the rows themselves. The metadata sources the run read from are listed
+    alongside them.
 
     Every pipeline step lists the log sources known for it (Logs available) with the logId that
     'vamscli execution logs --log-id' reads. With --include-sub-executions a step that runs its own
@@ -295,12 +420,25 @@ def details(ctx: click.Context, execution_id: str, include_sub_executions: bool,
     Large collections are bounded server-side. Any section that came back partial is named in
     truncatedCollections and marked in the output; a pipeline whose configuration body was truncated
     reports the Amazon S3 location of the full body. A truncated metadata collection can be read in
-    full with 'vamscli execution details-metadata'.
+    full with 'vamscli execution details metadata', a truncated file collection with
+    'vamscli execution details files', and the full result text with 'vamscli execution details
+    results'.
 
+    \b
     Examples:
         vamscli execution details my-execution-id
         vamscli execution details my-execution-id --include-sub-executions
+        vamscli execution details metadata my-execution-id --collection output
+        vamscli execution details files my-execution-id --collection output
+        vamscli execution details results my-execution-id
     """
+    # A subcommand (metadata / files / results) handles its own call; the whole-view behavior runs
+    # ONLY when no subcommand was given, so `execution details <id>` is unchanged.
+    if ctx.invoked_subcommand is not None:
+        return
+    execution_id = getattr(ctx, '_details_execution_id', None)
+    if not execution_id:
+        raise click.UsageError("Missing argument 'EXECUTION_ID'.")
     api_client = _api(ctx)
     output_status(f"Retrieving details for execution '{execution_id}'...", json_output)
     try:
@@ -331,6 +469,17 @@ def details(ctx: click.Context, execution_id: str, include_sub_executions: bool,
             out = [
                 f"Execution ID: {message.get('workflowExecutionId', 'N/A')}",
                 f"Workflow: {message.get('workflowDatabaseId', 'N/A')}:{message.get('workflowId', 'N/A')}",
+            ]
+            # The published state machine version the run started on. Null for a run started before
+            # versions were recorded; the key is absent only from a service that does not report it.
+            if 'workflowVersion' in message:
+                version = message.get('workflowVersion')
+                state = {True: 'latest', False: 'superseded'}.get(message.get('workflowVersionCurrent'))
+                if version is None:
+                    out.append("Workflow version: not recorded")
+                else:
+                    out.append(f"Workflow version: {version}" + (f" ({state})" if state else ""))
+            out += [
                 f"Status: {message.get('executionStatus', 'N/A')}",
                 f"Started: {message.get('executionStartDate', 'N/A')}",
                 f"Stopped: {message.get('executionStopDate', 'N/A')}",
@@ -338,6 +487,27 @@ def details(ctx: click.Context, execution_id: str, include_sub_executions: bool,
             ]
             if message.get('executionError'):
                 out.append(f"Error: {message['executionError']}")
+            # A SKIPPED record: the file-upload trigger launches a concurrency restriction refused. The
+            # blocking run is listed only when the API returned it (the caller may read that run).
+            skip = message.get('skip')
+            if isinstance(skip, dict):
+                out.append(f"\nSkipped launches: {skip.get('count', 0)} ({skip.get('scope') or 'N/A'})")
+                if skip.get('reason'):
+                    out.append(f"  Reason: {skip['reason']}")
+                out.append(f"  First skipped: {skip.get('firstSkippedDate') or 'N/A'}")
+                out.append(f"  Last skipped: {skip.get('lastSkippedDate') or 'N/A'}")
+                if skip.get('blockingExecutionId'):
+                    out.append(f"  Blocked by: {skip['blockingExecutionId']}")
+                skip_files = skip.get('files') or []
+                if skip_files:
+                    more = " [more files exist; see 'execution details files']" \
+                        if skip.get('filesTruncated') else ""
+                    out.append(f"  Files ({len(skip_files)}){more}:")
+                    for f in skip_files:
+                        version = f.get('versionId', '')
+                        out.append(f"    {f.get('databaseId', '?')}:{f.get('assetId', '?')}"
+                                   f"{f.get('inputAssetFileKey', '')}"
+                                   + (f"  (v {version})" if version else ""))
             pipelines = message.get('pipelines', [])
             if pipelines:
                 out.append(f"\nPipelines ({len(pipelines)}):")
@@ -352,6 +522,9 @@ def details(ctx: click.Context, execution_id: str, include_sub_executions: bool,
                     if location.get('key'):
                         out.append(f"    Full config body: s3://{location.get('bucket', '?')}/"
                                    f"{location['key']}")
+                        # The run bucket's registration; absent for a run recorded before it was.
+                        if location.get('bucketId'):
+                            out.append(f"    Run bucket ID: {location['bucketId']}")
                     # Registered sub-processes (a nested state machine, a container job) with the
                     # stage status derived from their own execution history; present only with
                     # --include-sub-executions.
@@ -433,15 +606,16 @@ def details(ctx: click.Context, execution_id: str, include_sub_executions: bool,
         raise click.ClickException(str(e))
 
 
-@execution.command('details-metadata')
+@details.command('metadata')
 @click.argument('execution_id')
 @click.option('--collection', type=click.Choice(list(EXECUTION_DETAIL_METADATA_COLLECTIONS)),
               default='input',
               help='Which metadata collection to page: input (asset/file), inputDatabase, or output')
 @click.option('--pipeline-id', help="Only rows produced by this pipeline (one workflow step)")
-@click.option('--page-size', type=int,
+@click.option('--page-size', type=click.IntRange(min=1),
               help=f'Rows per page (max {MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE})')
-@click.option('--max-items', type=int, help='Maximum total rows to fetch (only with --auto-paginate)')
+@click.option('--max-items', type=click.IntRange(min=1),
+              help='Maximum total rows to fetch (only with --auto-paginate)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
 @click.option('--auto-paginate', is_flag=True, help='Automatically fetch all rows')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
@@ -454,15 +628,17 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
 
     'execution details' bounds its metadata collections and names any that came back partial in
     truncatedCollections; this command reads a named collection in full, a page at a time. Rows carry
-    the same shape the details view returns plus the pipelineId that produced them.
+    the same shape the details view returns plus the pipelineId that produced them. A row marked
+    (expanded) is a file record a whole-asset or folder expansion (metadataInputs.assetFileMetadata)
+    added as context for the step; that file is not one of the step's input files.
 
     A pagination token is only valid alongside the --collection and --pipeline-id it was issued with,
     so pass the same ones when resuming with --starting-token.
 
     Examples:
-        vamscli execution details-metadata my-execution-id
-        vamscli execution details-metadata my-execution-id --collection output --auto-paginate
-        vamscli execution details-metadata my-execution-id --pipeline-id my-pipeline --page-size 500
+        vamscli execution details metadata my-execution-id
+        vamscli execution details metadata my-execution-id --collection output --auto-paginate
+        vamscli execution details metadata my-execution-id --pipeline-id my-pipeline --page-size 500
     """
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
@@ -490,7 +666,9 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
         pipeline = row.get('pipelineId', '')
         pipeline_suffix = f"  [{pipeline}]" if pipeline else ""
         if collection == 'output':
-            return (f"  {row.get('targetFilePath', '?')}  "
+            # One key can be written to a file as both file metadata and a file attribute; the type
+            # is what tells those two rows apart.
+            return (f"  {row.get('targetFilePath', '?')}  type={row.get('metadataType') or '-'}  "
                     f"{row.get('metadataKey', '?')}={row.get('metadataValue', '')}{pipeline_suffix}")
         # The input collections key on the entity the metadata was read from; a database-scope row
         # carries no asset, so the scope is named rather than inferred from the blank fields.
@@ -501,9 +679,12 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
         counts = f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'}"
         if attributes:
             counts += f", {len(attributes)} attribute{'' if len(attributes) == 1 else 's'}"
+        # A file record a whole-asset or folder expansion added is context the step was handed, not
+        # one of its input files; a row without the flag (or from an older service) is not expanded.
+        expanded = "  (expanded)" if row.get('expanded') is True else ""
         return (f"  {row.get('databaseId', '?')}:{row.get('assetId', '') or '-'}"
                 f"{row.get('filePath', '')}  scope={row.get('scope', '?')}  "
-                f"{counts}{pipeline_suffix}")
+                f"{counts}{expanded}{pipeline_suffix}")
 
     def _fmt(data: Dict[str, Any]) -> str:
         items = data.get('Items', [])
@@ -577,10 +758,342 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
                      helpful_message="Use 'vamscli execution list' to see available executions.")
         raise click.ClickException(str(e))
     except InvalidExecutionDataError as e:
+        # The route also answers 400 for an invalid --pipeline-id or --page-size, so the token hint
+        # is given only when a token was sent.
         output_error(e, json_output, error_type="Invalid Metadata Page Request",
-                     helpful_message="A pagination token is only valid with the --collection and "
-                                     "--pipeline-id it was issued for.")
+                     helpful_message=("A pagination token is only valid with the --collection and "
+                                      "--pipeline-id it was issued for." if starting_token else None))
         raise click.ClickException(str(e))
+
+
+@details.command('files')
+@click.argument('execution_id')
+@click.option('--collection', type=click.Choice(list(EXECUTION_DETAIL_FILE_COLLECTIONS)),
+              default='input',
+              help='Which file collection to page: input (workflow-level input files) or output '
+                   '(per-pipeline output files)')
+@click.option('--pipeline-id', help="Only output rows produced by this pipeline (one workflow step)")
+@click.option('--page-size', type=click.IntRange(min=1),
+              help=f'Rows per page (max {MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE})')
+@click.option('--max-items', type=click.IntRange(min=1),
+              help='Maximum total rows to fetch (only with --auto-paginate)')
+@click.option('--starting-token', help='Token for pagination (manual pagination)')
+@click.option('--auto-paginate', is_flag=True, help='Automatically fetch all rows')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def details_files(ctx: click.Context, execution_id: str, collection: str,
+                  pipeline_id: Optional[str], page_size: Optional[int], max_items: Optional[int],
+                  starting_token: Optional[str], auto_paginate: bool, json_output: bool):
+    """Page one FILE collection of an execution's detail view.
+
+    'execution details' bounds its file lists and names any that came back partial in
+    truncatedCollections; this reads a named collection (input or output) in full, a page at a time.
+    Rows carry the same scrubbed shape the details view returns; output rows also carry the producing
+    pipelineId. --pipeline-id applies to the output collection only (input files are workflow-level).
+
+    A pagination token is only valid alongside the --collection and --pipeline-id it was issued with,
+    so pass the same ones when resuming with --starting-token.
+
+    Examples:
+        vamscli execution details files my-execution-id --collection input
+        vamscli execution details files my-execution-id --collection output --auto-paginate
+        vamscli execution details files my-execution-id --collection output --pipeline-id my-pipeline
+    """
+    api_client = _api(ctx)
+
+    if auto_paginate and starting_token:
+        raise click.ClickException("Cannot use --auto-paginate with --starting-token.")
+    if max_items and not auto_paginate:
+        output_warning("--max-items only applies with --auto-paginate. Ignoring.", json_output)
+        max_items = None
+    if page_size and page_size > MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE:
+        output_warning(
+            f"--page-size above {MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE} is clamped by the service. "
+            f"Using {MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE}.", json_output)
+        page_size = MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE
+
+    def _base_params() -> Dict[str, Any]:
+        params: Dict[str, Any] = {'collection': collection}
+        if pipeline_id:
+            params['pipelineId'] = pipeline_id
+        if page_size:
+            params['pageSize'] = page_size
+        return params
+
+    def _row(row: Dict[str, Any]) -> str:
+        pipeline = row.get('pipelineId', '')
+        pipeline_suffix = f"  [{pipeline}]" if pipeline else ""
+        if collection == 'output':
+            file_type = row.get('fileType', '')
+            type_prefix = f"{file_type}: " if file_type else ""
+            size = row.get('fileSize')
+            size_suffix = f"  ({size} bytes)" if size not in (None, "") else ""
+            return (f"  {type_prefix}{row.get('relativeFilePath', '?')}"
+                    f"{size_suffix}{pipeline_suffix}")
+        # Input files are keyed on the asset/file they came from; versionId is the concrete S3
+        # version read at launch (empty for folder/whole-asset selections).
+        version = row.get('versionId', '')
+        version_suffix = f"  (v {version})" if version else ""
+        return (f"  {row.get('databaseId', '?')}:{row.get('assetId', '?')}"
+                f"{row.get('inputAssetFileKey', '')}{version_suffix}")
+
+    def _fmt(data: Dict[str, Any]) -> str:
+        items = data.get('Items', [])
+        if not items:
+            return f"No {collection} files found."
+        out = []
+        if data.get('autoPaginated'):
+            out.append(f"Auto-paginated: {data.get('totalItems', 0)} row(s) in "
+                       f"{data.get('pageCount', 0)} page(s)")
+        out.append(f"Collection: {data.get('collection', collection)}")
+        out.append(f"Found {len(items)} file(s):")
+        out.extend(_row(row) for row in items)
+        if data.get('NextToken'):
+            out.append(f"\nNext token: {data['NextToken']}")
+        if data.get('note'):
+            out.append(f"\n{data['note']}")
+        return '\n'.join(out)
+
+    try:
+        if auto_paginate:
+            max_total = max_items or 10000
+            output_status(
+                f"Retrieving {collection} files for execution '{execution_id}' "
+                f"(auto-paginating up to {max_total})...", json_output)
+            all_items = []
+            next_token = None
+            page_count = 0
+            while True:
+                page_count += 1
+                params = _base_params()
+                if next_token:
+                    params['startingToken'] = next_token
+                try:
+                    page = _message(api_client.get_execution_details_files(execution_id, params=params))
+                except BusinessLogicError as e:
+                    if page_count == 1:
+                        raise
+                    raise _resumable(e, next_token, rowsRead=len(all_items))
+                all_items.extend(page.get('Items', []))
+                if not json_output:
+                    output_status(f"Fetched {len(all_items)} file(s) (page {page_count})...", False)
+                next_token = page.get('NextToken')
+                if (not next_token or len(all_items) >= max_total
+                        or page_count >= MAX_EXECUTION_AUTO_PAGINATE_PAGES):
+                    break
+            result = {'Items': all_items, 'collection': collection, 'totalItems': len(all_items),
+                      'autoPaginated': True, 'pageCount': page_count}
+            if next_token and len(all_items) >= max_total:
+                result['NextToken'] = next_token
+                result['note'] = (
+                    f"Reached maximum of {max_total} rows. More may be available — resume with "
+                    f"--starting-token {next_token}")
+            elif next_token and page_count >= MAX_EXECUTION_AUTO_PAGINATE_PAGES:
+                result['NextToken'] = next_token
+                result['note'] = (
+                    f"Stopped after {page_count} pages. More may be available — resume with "
+                    f"--starting-token {next_token}")
+            output_result(result, json_output, cli_formatter=_fmt)
+            return result
+
+        output_status(f"Retrieving {collection} files for execution '{execution_id}'...",
+                      json_output)
+        params = _base_params()
+        if starting_token:
+            params['startingToken'] = starting_token
+        result = _message(api_client.get_execution_details_files(execution_id, params=params))
+        output_result(result, json_output, cli_formatter=_fmt)
+        return result
+    except ExecutionNotFoundError as e:
+        output_error(e, json_output, error_type="Execution Not Found",
+                     helpful_message="Use 'vamscli execution list' to see available executions.")
+        raise click.ClickException(str(e))
+    except InvalidExecutionDataError as e:
+        # The route also answers 400 for an invalid --pipeline-id or --page-size, so the token hint
+        # is given only when a token was sent.
+        output_error(e, json_output, error_type="Invalid File Page Request",
+                     helpful_message=("A pagination token is only valid with the --collection and "
+                                      "--pipeline-id it was issued for." if starting_token else None))
+        raise click.ClickException(str(e))
+    except BusinessLogicError as e:
+        fields = getattr(e, 'json_fields', None) or {}
+        if 'startingToken' not in fields:
+            raise
+        output_error(e, json_output, error_type="File Page Failed",
+                     helpful_message=f"{fields.get('rowsRead', 0)} row(s) were read before it. Resume with "
+                                     f"--starting-token {fields['startingToken']} and the same "
+                                     "--collection and --pipeline-id.")
+        raise click.ClickException(str(e))
+
+
+@details.command('results')
+@click.argument('execution_id')
+@click.option('--output', '-o', 'output_file',
+              help='Write the result text to this file instead of stdout (for large results); '
+                   'auto-paginates unless --no-auto-paginate is given')
+@click.option('--starting-token', help='Token for pagination (resume at the next page)')
+@click.option('--auto-paginate/--no-auto-paginate', default=None,
+              help='Follow NextToken and concatenate every page (default: on with --output, '
+                   'off otherwise)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+def details_results(ctx: click.Context, execution_id: str, output_file: Optional[str],
+                    starting_token: Optional[str], auto_paginate: Optional[bool],
+                    json_output: bool):
+    """Read an execution's concatenated result text, a page at a time.
+
+    The service returns as many result rows (in step order, concatenated) as fit its 5 MiB response
+    budget and a NextToken while more remain. --auto-paginate follows NextToken and concatenates
+    every page into one result; it is the default with --output/-o, which writes the text to a file
+    instead of the terminal. Without it one page is returned and its NextToken is printed (and carried
+    in --json-output) for --starting-token. --starting-token with --auto-paginate continues from that
+    page to the end.
+
+    resultContentTruncated is true when a result row was stored cut at write time or a single row
+    exceeded the response budget and was cut; the cut text is not retrievable here. An empty/legacy
+    run prints nothing and reports zero rows.
+
+    Examples:
+        vamscli execution details results my-execution-id
+        vamscli execution details results my-execution-id -o result.txt
+        vamscli execution details results my-execution-id --auto-paginate --json-output
+        vamscli execution details results my-execution-id --starting-token <token>
+    """
+    api_client = _api(ctx)
+    if auto_paginate is None:
+        auto_paginate = bool(output_file) and not starting_token
+
+    def _page(token: Optional[str]) -> Dict[str, Any]:
+        params = {'startingToken': token} if token else {}
+        page = _message(api_client.get_execution_results(execution_id, params=params))
+        return page if isinstance(page, dict) else {}
+
+    def _open_output() -> Any:
+        try:
+            return open(output_file, 'w', encoding='utf-8')
+        except OSError as e:
+            output_error(e, json_output, error_type="Results File Write Failed",
+                         helpful_message="Check that the --output path is writable.")
+            raise click.ClickException(f"Could not write results to {output_file}: {e}")
+
+    output_status(f"Retrieving results for execution '{execution_id}'"
+                  f"{' (auto-paginating)' if auto_paginate else ''}...", json_output)
+    streamed = False
+    try:
+        if auto_paginate:
+            # With --output each page is written as it arrives, so a page that fails keeps what was
+            # read; the text is held in memory only when stdout must carry it. The file is opened once
+            # the first page has arrived, so a first page that fails leaves an existing file as it was.
+            out = None
+            streamed = bool(output_file)
+            parts = [] if (json_output or not output_file) else None
+            truncated = False
+            row_count = byte_len = page_count = 0
+            next_token = starting_token
+            try:
+                while True:
+                    page_count += 1
+                    try:
+                        page = _page(next_token)
+                    except BusinessLogicError as e:
+                        if page_count == 1:
+                            raise
+                        kept = {'rowsWritten': row_count, 'outputFile': output_file} if out else {}
+                        raise _resumable(e, next_token, pagesRead=page_count - 1, **kept)
+                    piece = page.get('resultContent', '') or ''
+                    if output_file and out is None:
+                        out = _open_output()
+                    if out is not None:
+                        try:
+                            out.write(piece)
+                            out.flush()
+                        except OSError as e:
+                            output_error(e, json_output, error_type="Results File Write Failed",
+                                         helpful_message="Check that the --output path is writable.")
+                            raise click.ClickException(f"Could not write results to {output_file}: {e}")
+                    if parts is not None:
+                        parts.append(piece)
+                    truncated = truncated or bool(page.get('resultContentTruncated'))
+                    row_count += page.get('resultRowCount', 0) or 0
+                    byte_len += page.get('resultContentBytes', 0) or 0
+                    next_token = page.get('NextToken')
+                    if not json_output and next_token:
+                        output_status(f"Fetched {row_count} row(s) (page {page_count})...", False)
+                    if not next_token or page_count >= MAX_EXECUTION_AUTO_PAGINATE_PAGES:
+                        break
+            finally:
+                if out is not None:
+                    out.close()
+            result = {'resultContentTruncated': truncated,
+                      'resultRowCount': row_count, 'resultContentBytes': byte_len,
+                      'autoPaginated': True, 'pageCount': page_count}
+            if parts is not None:
+                result = {'resultContent': ''.join(parts), **result}
+            if next_token:
+                result['NextToken'] = next_token
+                result['note'] = (
+                    f"Stopped after {page_count} pages. More may be available — resume with "
+                    f"--starting-token {next_token}")
+        else:
+            result = _page(starting_token)
+
+        content = result.get('resultContent', '') or ''
+        truncated = bool(result.get('resultContentTruncated'))
+        row_count = result.get('resultRowCount', 0) or 0
+        byte_len = result.get('resultContentBytes', 0) or 0
+        next_token = result.get('NextToken')
+
+        if output_file and not streamed:
+            # Write the returned text to disk in BOTH output modes; stdout still carries the caption
+            # (CLI mode) or the JSON result (--json-output), so the file never replaces it.
+            with _open_output() as fh:
+                fh.write(content)
+
+        def _fmt(_r):
+            out = []
+            if output_file:
+                out.append(f"Wrote {byte_len} byte(s) to {output_file}")
+            else:
+                out.append(content if content else "(no result content)")
+            caption = f"\nResult: {row_count} row(s), {byte_len} byte(s)"
+            if result.get('autoPaginated'):
+                caption += f" in {result.get('pageCount', 0)} page(s)"
+            if truncated:
+                caption += (" — TRUNCATED: a result row was stored cut or exceeded the 5 MiB response "
+                            "budget; the cut text is not retrievable")
+            out.append(caption)
+            if result.get('note'):
+                out.append(result['note'])
+            elif next_token:
+                out.append(f"More results remain. Next token: {next_token} (use --starting-token, "
+                           f"or --auto-paginate to read them all)")
+            return '\n'.join(out)
+
+        output_result(result, json_output, cli_formatter=_fmt)
+        return result
+    except ExecutionNotFoundError as e:
+        output_error(e, json_output, error_type="Execution Not Found",
+                     helpful_message="Use 'vamscli execution list' to see available executions.")
+        raise click.ClickException(str(e))
+    except InvalidExecutionDataError as e:
+        output_error(e, json_output, error_type="Invalid Results Request",
+                     helpful_message="A pagination token is only valid for the results of the "
+                                     "execution it was issued for.")
+        raise click.ClickException(str(e))
+    except BusinessLogicError as e:
+        fields = getattr(e, 'json_fields', None) or {}
+        if 'startingToken' not in fields:
+            raise
+        kept = (f"The first {fields.get('pagesRead', 0)} page(s) were written to {output_file}. "
+                if fields.get('outputFile') else "")
+        output_error(e, json_output, error_type="Results Page Failed",
+                     helpful_message=f"{kept}Resume with --starting-token {fields['startingToken']}"
+                                     + (" (into another --output file)" if fields.get('outputFile') else "")
+                                     + ".")
+        raise click.ClickException(str(e))
+
 
 
 @execution.command('logs')
@@ -672,8 +1185,8 @@ def logs(ctx: click.Context, execution_id: str, mode: str, pipeline_execution_id
 
         def _fmt(_r):
             out = [f"Mode: {message.get('mode', mode)}"]
-            # In truncated mode the backend serves stored log text, or falls back to a live
-            # CloudWatch search when the stored copy is empty; logsSource reports which.
+            # In truncated mode the backend serves the stored log text or a live CloudWatch read,
+            # whichever is more complete; logsSource reports which.
             if message.get('logsSource'):
                 out.append(f"Source: {message['logsSource']}")
             if message.get('pipelineExecutionId'):
@@ -795,6 +1308,9 @@ def abort(ctx: click.Context, execution_id: Optional[str], group_id: Optional[st
             if warnings:
                 out.append("Warnings:")
                 out.extend(f"  - {w}" for w in warnings)
+            not_abortable = _not_abortable(result)
+            if not_abortable:
+                out.append(_left_running_line(not_abortable))
             return '\n'.join(out)
 
         output_result(_payload_with_warnings(result), json_output,

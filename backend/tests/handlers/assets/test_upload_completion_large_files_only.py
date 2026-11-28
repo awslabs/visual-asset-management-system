@@ -54,7 +54,7 @@ def _env(upload_record):
     comes from SIZES by the file's temp key; the external HEAD answers the same sizes."""
     from backend.backend.handlers.assets import uploadFile as uf
 
-    def _size_from_parts(bucket, key, upload_id, parts):
+    def _size_from_parts(bucket, key, upload_id, parts, **_):
         return SIZES["/" + key.rsplit("/", 1)[-1]], True, None
 
     def _head(Bucket, Key, **_):
@@ -67,7 +67,7 @@ def _env(upload_record):
             patch.object(uf, "get_default_bucket_details", return_value={
                 "bucketId": "b1", "bucketName": "asset-bucket", "baseAssetsPrefix": "",
                 "bucketRegion": "us-east-1"}), \
-            patch.object(uf, "bucket_region_for_name", return_value="us-east-1", create=True), \
+            patch.object(uf, "bucket_region_for_name", return_value="us-east-1"), \
             patch.object(uf, "get_database_details", return_value={"databaseId": "db-1"}), \
             patch.object(uf, "asset_upload_table", MagicMock()), \
             patch.object(uf, "asset_table", MagicMock()), \

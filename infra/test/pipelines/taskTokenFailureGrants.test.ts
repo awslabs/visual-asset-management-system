@@ -54,6 +54,17 @@ function walk(dir: string, keep: (name: string) => boolean): string[] {
 }
 
 /**
+ * Whether a module's source references the boto3 `send_task_failure` client method.
+ *
+ * Matches the attribute reference rather than the bare name, so both `sfn.send_task_failure(...)` and a
+ * method passed to a wrapper (`_send(sfn.send_task_failure, ...)`) count, while a module that only names
+ * the method in a docstring or comment, such as RapidPipeline EKS `taskFailureBounds.py`, does not.
+ */
+function callsSendTaskFailure(text: string): boolean {
+    return /\.send_task_failure\b/.test(text);
+}
+
+/**
  * Handler module names (the `.py` stem) that call SendTaskFailure, per pipeline directory.
  *
  * Keyed on the STEM because that is what a CDK builder names in its `handler:` property, which is the
@@ -67,7 +78,7 @@ function handlersReportingFailure(): Map<string, Set<string>> {
         if (!rel.includes("/lambda/")) continue;
         if (rel.includes("/tests/")) continue;
         const text = fs.readFileSync(file, "utf-8");
-        if (!/send_task_failure/.test(text)) continue;
+        if (!callsSendTaskFailure(text)) continue;
         const pipeline = rel.split("/lambda/")[0];
         const stem = path.basename(file, ".py");
         if (!byPipeline.has(pipeline)) byPipeline.set(pipeline, new Set());
@@ -185,6 +196,23 @@ export function buildTemplatedFunction(scope) {
         expect(granted.has("templated")).toBe(true);
         expect(granted.has("$" + "{name}")).toBe(false);
         expect(/SendTaskFailure/.test(synthetic)).toBe(true); // a file-level grep WOULD pass
+    });
+
+    it("the caller detector counts client-method references, not mentions of the name", () => {
+        // Control for the detector. A helper that names the method only in prose has no Lambda function
+        // of its own, so counting it demands a grant no builder can give.
+        expect(
+            callsSendTaskFailure("sfn_client.send_task_failure(taskToken=t, error=e, cause=c)")
+        ).toBe(true);
+        expect(callsSendTaskFailure("_send(sfn.send_task_failure, taskToken=t, error=e)")).toBe(
+            true
+        );
+        expect(
+            callsSendTaskFailure('"""Each `send_task_failure` call takes its error from here."""')
+        ).toBe(false);
+        expect(callsSendTaskFailure("# send_task_failure is bounded in taskFailureBounds")).toBe(
+            false
+        );
     });
 
     it("every handler that reports a failure is granted states:SendTaskFailure BY ITS OWN builder", () => {

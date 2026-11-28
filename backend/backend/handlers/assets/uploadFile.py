@@ -7,15 +7,20 @@ import json
 import uuid
 import time
 import re
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import timedelta
+from common.timestamps import utc_now
 from botocore.config import Config
+from botocore.utils import percent_encode
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.assetProvenance import asset_change_provenance
+from common.assetUploads import UPLOAD_RECORD_NOT_FOUND, completion_refusal, validate_file_extension_against_database
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -26,34 +31,54 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
     VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
+    VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY,
     replace_metadata_copy_args,
 )
 from common.s3PathPatterns import (
     PREVIEW_FILE_PATTERN,
     ALLOWED_PREVIEW_FILE_EXTENSIONS,
-    TEMPORARY_UPLOAD_PREFIX,
+    PREVIEW_FILE_SIZE_LIMIT_BYTES,
     PREVIEW_PREFIX,
+    legacy_staged_upload_key,
+    UPLOAD_STAGING_LAYOUT_PER_UPLOAD,
+    max_uploaded_file_key_bytes,
+    staged_upload_key,
 )
-from common.apiRoutes import API_UPLOADS, API_UPLOAD_COMPLETE, API_UPLOAD_COMPLETE_EXTERNAL
+from common.apiRoutes import API_UPLOADS, API_UPLOAD_COMPLETE, API_UPLOAD_COMPLETE_EXTERNAL, API_UPLOAD_STATUS
+from common import largeObjectCopy as loc
+from common import uploadStatus
 from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
+from common.assetLocations import (
+    NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, contains, held_objects,
+    names_own_object, normalize_base_prefix, object_key_for_request,
+)
+from common.fileAttribution import nested_locations_for_asset_type, nested_locations_of_asset
+from common.workflows.defaultBucket import DefaultBucketNotFoundError, resolve_default_bucket
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_upload
+from customLogging.auditLogging import audited_handler, log_action, log_file_upload
 from botocore.exceptions import ClientError
-from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived
+from common.s3 import (
+    validateS3AssetExtensionsAndContentType,
+    validateUnallowedFileExtensionAndContentType,
+    list_all_objects,
+    is_object_version_archived,
+    region_routing_s3_client,
+    bucket_region_fields,
+    bucket_region_for_name,
+    copy_s3_object_repeat_safe,
+)
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
     CompleteUploadRequestModel, CompleteUploadResponseModel, FileCompletionResult,
     CompleteExternalUploadRequestModel, ExternalFileModel,
-    AssetUploadTableModel
+    AssetUploadTableModel, GetUploadStatusRequestModel, UploadStatusResponseModel,
+    MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES, UPLOAD_PART_URL_FIXED_OVERHEAD_BYTES,
+    UPLOAD_RESPONSE_FILE_OVERHEAD_BYTES, UPLOAD_RESPONSE_BASE_OVERHEAD_BYTES,
 )
-
-#Set environment variable for S3 client configuration
-#'regional' set to add region decriptor to presigned urls for us-east-1 (ignored for non us-east-1 regions)
-os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional" 
 
 # Configure AWS clients with retry configuration
 region = os.environ['AWS_REGION']
@@ -77,20 +102,22 @@ s3_config = Config(
     max_pool_connections=MAX_PARALLEL_S3_WORKERS
 )
 
-s3 = boto3.client('s3', region_name=region, config=s3_config)
-s3_resource = boto3.resource('s3', region_name=region, config=s3_config)
+s3 = region_routing_s3_client()
 lambda_client = boto3.client('lambda', config=s3_config)
 dynamodb = boto3.resource('dynamodb', config=s3_config)
 dynamodb_client = boto3.client('dynamodb', config=s3_config)
 sqs = boto3.client('sqs', config=s3_config)
+sfn_client = boto3.client('stepfunctions', config=Config(retries={'max_attempts': 5, 'mode': 'adaptive'}))
 logger = safeLogger(service_name="UploadFile")
 
 # Constants
 UPLOAD_EXPIRATION_DAYS = 7  # TTL for upload records and S3 multipart uploads
 MAX_PART_SIZE = 150 * 1024 * 1024  # 150MB per part
-MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
+# Maximum size of an uploaded preview file (5 MiB, the shared limit; a preview of exactly that size is accepted)
+MAX_PREVIEW_FILE_SIZE = PREVIEW_FILE_SIZE_LIMIT_BYTES
 MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE = 20
-LARGE_FILE_THRESHOLD_BYTES = 1 * 1024 * 1024 * 1024   # 1GB threshold for asynchronous processing
+# 1 GiB threshold for asynchronous processing, shared with the copy engine and the output step.
+LARGE_FILE_THRESHOLD_BYTES = loc.LARGE_FILE_THRESHOLD_BYTES
 MAX_PARTS_PER_FILE = 10000  # S3 hard limit on parts per multipart upload object
 # Sample size for asset-type detection. This is a best-effort visibility
 # classification (empty vs. single-file vs. folder), not a correctness-critical
@@ -153,7 +180,7 @@ def check_user_rate_limit(user_id: str) -> bool:
     """
     try:
         # Calculate timestamp for 1 minute ago as ISO string
-        one_minute_ago = datetime.utcnow() - timedelta(minutes=1)
+        one_minute_ago = utc_now() - timedelta(minutes=1)
         one_minute_ago_iso = one_minute_ago.isoformat()  # STRING format for DynamoDB
         
         logger.info(f"Checking rate limit for user {user_id} since {one_minute_ago_iso}")
@@ -188,6 +215,18 @@ def generate_presigned_url(key, upload_id, part_number, bucket, expiration=token
     )
     return url
 
+def estimate_initialize_response_file_bytes(relative_key, temp_s3_key, num_parts):
+    """Upper bound on the bytes one file adds to the serialized upload-initialize response.
+
+    The relativeKey is serialized twice, into the JSON body and then into the Lambda proxy
+    envelope, so it is measured that way. Each part's presigned URL carries the temporary key
+    percent-encoded as botocore encodes it for the request path, so a key of non-ASCII
+    characters costs up to three times its UTF-8 length in every part.
+    """
+    part_bytes = UPLOAD_PART_URL_FIXED_OVERHEAD_BYTES + len(percent_encode(temp_s3_key, safe='/~'))
+    return (UPLOAD_RESPONSE_FILE_OVERHEAD_BYTES + len(json.dumps(json.dumps(relative_key)))
+            + num_parts * part_bytes)
+
 def get_database_details(databaseId):
     """Get database details from DynamoDB including file upload restrictions
     
@@ -207,38 +246,27 @@ def get_database_details(databaseId):
         logger.exception(f"Error getting database details: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving database configuration")
 
-def validate_file_extension_against_database(file_path: str, allowed_extensions: str) -> tuple:
-    """Validate file extension against database restrictions
-    
-    Args:
-        file_path: The file path to validate
-        allowed_extensions: Comma-delimited list of allowed extensions (e.g., ".pdf,.jpg,.png")
-        
-    Returns:
-        Tuple of (is_valid, error_message)
-        - is_valid: True if extension is allowed, False otherwise
-        - error_message: Error message if validation fails, None otherwise
-    """
-    # Handle empty or None allowed_extensions (no restrictions)
-    if not allowed_extensions or allowed_extensions.strip() == "":
-        return True, None
-    
-    # Parse comma-delimited extensions and normalize to lowercase
-    allowed_list = [ext.strip().lower() for ext in allowed_extensions.split(',') if ext.strip()]
-    
-    # Check for ".all" bypass
-    if ".all" in allowed_list:
-        return True, None
-    
-    # Extract file extension (case-insensitive)
-    file_extension = os.path.splitext(file_path)[1].lower()
-    
-    # Validate extension
-    if file_extension not in allowed_list:
-        error_message = f"Database does not allow this file extension. Allowed extensions: {', '.join(allowed_list)}"
-        return False, error_message
-    
-    return True, None
+def external_upload_source(workflow_execution_id, asset_bucket, named_source_bucket=None):
+    """The registration ({bucketId, bucketName, ...}) an external completion reads its tempKey files
+    from. A workflow execution's write-back reads from the VAMS default asset bucket, where the
+    pipelines staged the outputs (the run bucket the launch resolved the same way); any other
+    completion reads from the asset's own bucket. Resolved from the registration table, so a caller
+    never names the bucket the files are copied from: `named_source_bucket` (the request's
+    `sourceBucket`) is only logged when it differs from the resolved one."""
+    if not workflow_execution_id:
+        source = asset_bucket
+    else:
+        try:
+            run_bucket = resolve_default_bucket(buckets_table)
+        except DefaultBucketNotFoundError as e:
+            logger.exception(f"The workflow run bucket could not be resolved: {e}")
+            raise VAMSGeneralErrorResponse("The workflow run bucket could not be resolved.")
+        source = asset_bucket if run_bucket.get('bucketId') == asset_bucket.get('bucketId') else run_bucket
+    if named_source_bucket and named_source_bucket != source.get('bucketName'):
+        logger.warning(f"An external completion named source bucket {named_source_bucket}; reading from "
+                       f"{source.get('bucketName')}, the bucket it resolves to")
+    return source
+
 
 def get_default_bucket_details(bucketId):
     """Get default S3 bucket details from database default bucket DynamoDB"""
@@ -258,18 +286,13 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")
@@ -296,14 +319,17 @@ def upload_authorization_object(asset, databaseId, assetId):
         return {**asset, 'object__type': 'asset'}
     return {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
 
-def update_asset_attributes(databaseId, assetId, updates):
-    """Update the named attributes of an existing asset record in DynamoDB.
+def update_asset_attributes(databaseId, assetId, updates, workflow_execution_id=None):
+    """Update the named attributes of an existing asset record in DynamoDB, recording the change
+    provenance beside them.
 
-    Only the supplied attributes are written, so a field another writer changed while
-    the upload was in flight is not reverted. Conditional on the record still existing
-    so an asset removed during the upload is not recreated.
+    Only the supplied attributes and the provenance attributes are written, so a field another
+    writer changed while the upload was in flight is not reverted. Conditional on the record
+    still existing so an asset removed during the upload is not recreated. `workflow_execution_id`
+    is the execution whose outputs the completion writes into the asset, when it is one.
     """
-    keys_map, values_map, expr = to_update_expr(updates)
+    keys_map, values_map, expr = to_update_expr(
+        {**updates, **asset_change_provenance(workflow_execution_id)})
     try:
         asset_table.update_item(
             Key={
@@ -324,6 +350,15 @@ def update_asset_attributes(databaseId, assetId, updates):
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error saving asset.")
+
+
+def legacy_staging_key_for(upload_details, base_assets_prefix, final_s3_key):
+    """The per-path staging key (LEGACY STAGING KEY, #1928) an upload may still be open under, or None
+    for an upload whose record says it stages per upload, which never staged there."""
+    if upload_details.get('stagingLayout') == UPLOAD_STAGING_LAYOUT_PER_UPLOAD:
+        return None
+    return legacy_staged_upload_key(base_assets_prefix, final_s3_key)
+
 
 def save_upload_details(upload_data):
     """Save upload details to DynamoDB"""
@@ -354,7 +389,7 @@ def get_upload_details(uploadId, assetId):
         )
 
         if 'Item' not in response:
-            raise VAMSGeneralErrorResponse("Upload record not found")
+            raise VAMSGeneralErrorResponse(UPLOAD_RECORD_NOT_FOUND)
         return response['Item']
     except Exception as e:
         if isinstance(e, VAMSGeneralErrorResponse):
@@ -389,8 +424,8 @@ def get_initialized_file_keys(upload_details, uploadId):
 
     Completion accepts a submitted relativeKey only if initialization recorded it. A record saved
     before the list was stored has no 'files' attribute; such an upload is completed without the
-    membership check (the blocklist checks still run) and the gap is logged. The table has no
-    TTL, so the gap is bounded by complete_upload refusing a record whose expiresAt has passed:
+    membership check (the blocklist checks still run) and the gap is logged. The gap is bounded
+    by complete_upload refusing a record whose expiresAt has passed:
     a record without the list is completed without the membership check until it expires, seven
     days after it was initialized. External (workflow-output) records never carry the list and
     are refused by complete_upload before this helper is consulted.
@@ -400,6 +435,186 @@ def get_initialized_file_keys(upload_details, uploadId):
         logger.warning(f"Upload record {uploadId} carries no initialized file list; completing without the membership check")
         return None
     return set(initialized_files)
+
+def record_completion_status(uploadId, assetId, file_results, has_failures):
+    """Record the upload's status once its completion ran. An upload with files accepted for
+    asynchronous ingestion keeps its record (processing_async), so the outcome of those files can be
+    read later (GET /uploads/{uploadId}); otherwise a fully successful upload's record is deleted and
+    one with failures is marked completed_with_errors, as before. Never raises."""
+    try:
+        async_keys = uploadStatus.async_relative_keys(file_results)
+        if async_keys:
+            uploadStatus.begin_async_tracking(asset_upload_table, uploadId, assetId, async_keys,
+                                              has_failures)
+        elif has_failures:
+            # Use both uploadId and assetId as the key
+            asset_upload_table.update_item(
+                Key={
+                    'uploadId': uploadId,
+                    'assetId': assetId
+                },
+                UpdateExpression="SET #status = :status",
+                ExpressionAttributeNames={'#status': 'status'},
+                ExpressionAttributeValues={':status': 'completed_with_errors'}
+            )
+        else:
+            # Delete upload record if all successful
+            delete_upload_details(uploadId, assetId)
+    except Exception as e:
+        logger.warning(f"Failed to update upload status: {e}")
+
+
+#######################
+# External completion: once per upload id
+#######################
+
+# Status of an external upload record. initialized (created by the output step) -> processing (a
+# call claimed the completion) -> completed / completed_with_errors / processing_async, or failed
+# when the completion raised. The record is kept once completed, carrying the completion's result,
+# until the table's TTL removes it (expiresAt), so a repeated call can answer with that result.
+EXTERNAL_COMPLETION_INITIALIZED = "initialized"
+EXTERNAL_COMPLETION_PROCESSING = "processing"
+EXTERNAL_COMPLETION_FAILED = "failed"
+# Largest stored completion result (the response body, zlib-compressed), in bytes; well under the
+# 400 KB DynamoDB item limit. A larger result is not stored, and a repeated call is answered 409.
+MAX_STORED_COMPLETION_RESULT_BYTES = 200 * 1024
+# How a repeated call waits for the first call's result while that call still runs.
+REPEATED_COMPLETION_POLL_SECONDS = 2
+REPEATED_COMPLETION_WAIT_MARGIN_SECONDS = 15
+REPEATED_COMPLETION_DEFAULT_WAIT_SECONDS = 60
+REPEATED_COMPLETION_IN_PROGRESS = "The upload completion is already in progress."
+REPEATED_COMPLETION_RESULT_UNAVAILABLE = "The upload completion already ran; its result is not available."
+
+# The invocation's Lambda context, set by lambda_handler, so a repeated completion waits no longer
+# than the function may run.
+_invocation_context = None
+
+
+def claim_external_completion(uploadId, assetId):
+    """Claim an external upload's completion for this call. True for exactly one call per upload id
+    (the record is still initialized); False when another call claimed it. Raises when the record
+    cannot be written."""
+    try:
+        asset_upload_table.update_item(
+            Key={'uploadId': uploadId, 'assetId': assetId},
+            UpdateExpression="SET #status = :processing, completionStartedAt = :now",
+            ConditionExpression=("attribute_exists(uploadId) AND "
+                                 "(attribute_not_exists(#status) OR #status = :initialized)"),
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={':processing': EXTERNAL_COMPLETION_PROCESSING,
+                                       ':initialized': EXTERNAL_COMPLETION_INITIALIZED,
+                                       ':now': utc_now().isoformat()},
+        )
+        return True
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.warning(f"External upload {uploadId} completion was already claimed; answering "
+                           f"with the first call's result")
+            return False
+        logger.exception(f"Error claiming the completion of upload {uploadId}: {e}")
+        raise VAMSGeneralErrorResponse("Error updating upload status.")
+
+
+def record_external_completion_status(uploadId, assetId, file_results, has_failures):
+    """Record an external upload's status once its completion ran. Like record_completion_status,
+    except that the record is kept (not deleted) on success, so a repeated call finds the result.
+    Never raises."""
+    try:
+        async_keys = uploadStatus.async_relative_keys(file_results)
+        if async_keys:
+            uploadStatus.begin_async_tracking(asset_upload_table, uploadId, assetId, async_keys,
+                                              has_failures)
+            return
+        asset_upload_table.update_item(
+            Key={'uploadId': uploadId, 'assetId': assetId},
+            UpdateExpression="SET #status = :status",
+            ConditionExpression="attribute_exists(uploadId)",
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={':status': (uploadStatus.STATUS_COMPLETED_WITH_ERRORS if has_failures
+                                                   else uploadStatus.STATUS_COMPLETED)},
+        )
+    except Exception as e:
+        logger.warning(f"Failed to update upload status: {e}")
+
+
+def store_external_completion_result(uploadId, assetId, status_code, body, status=None):
+    """Store the completion's answer (status code and response body) on its upload record, and the
+    record's status when given. Never raises: a result that is not stored only makes a repeated
+    call answer 409 instead of the result."""
+    try:
+        values = {':code': int(status_code), ':at': utc_now().isoformat()}
+        expression = "SET completionStatusCode = :code, completedAt = :at"
+        compressed = zlib.compress(json.dumps(body, default=str).encode('utf-8'))
+        if len(compressed) <= MAX_STORED_COMPLETION_RESULT_BYTES:
+            values[':result'] = compressed
+            expression += ", completionResult = :result"
+        else:
+            logger.warning(f"Completion result of upload {uploadId} is {len(compressed)} bytes "
+                           f"compressed; not stored")
+        names = {}
+        if status:
+            values[':status'] = status
+            names['#status'] = 'status'
+            expression += ", #status = :status"
+        kwargs = {
+            'Key': {'uploadId': uploadId, 'assetId': assetId},
+            'UpdateExpression': expression,
+            'ConditionExpression': "attribute_exists(uploadId)",
+            'ExpressionAttributeValues': values,
+        }
+        if names:
+            kwargs['ExpressionAttributeNames'] = names
+        asset_upload_table.update_item(**kwargs)
+    except Exception as e:
+        logger.warning(f"Could not store the completion result of upload {uploadId}: {e}")
+
+
+def _repeated_completion_wait_seconds():
+    """Seconds a repeated completion may wait for the first call's result."""
+    try:
+        remaining = _invocation_context.get_remaining_time_in_millis() / 1000.0
+        return max(0.0, remaining - REPEATED_COMPLETION_WAIT_MARGIN_SECONDS)
+    except Exception:
+        return REPEATED_COMPLETION_DEFAULT_WAIT_SECONDS
+
+
+def _stored_completion_response(record, event):
+    """The answer the first call returned, from its upload record."""
+    stored = record.get('completionResult')
+    if stored is None:
+        return general_error(status_code=409, body={'message': REPEATED_COMPLETION_RESULT_UNAVAILABLE},
+                             event=event)
+    raw = stored.value if hasattr(stored, 'value') else bytes(stored)
+    body = json.loads(zlib.decompress(raw).decode('utf-8'))
+    status_code = int(record.get('completionStatusCode', 200))
+    if status_code == 200:
+        return success(body=body)
+    if status_code >= 500:
+        return internal_error(event=event)
+    return general_error(status_code=status_code, body=body, event=event)
+
+
+def answer_repeated_external_completion(uploadId, assetId, event):
+    """Answer a repeated external completion with the first call's result: at once when the first
+    call finished, otherwise once it does (polling the record), or 409 when it does not finish
+    within this invocation's time or ran before results were stored."""
+    deadline = time.monotonic() + _repeated_completion_wait_seconds()
+    while True:
+        record = asset_upload_table.get_item(
+            Key={'uploadId': uploadId, 'assetId': assetId}, ConsistentRead=True).get('Item')
+        if not record:
+            raise VAMSGeneralErrorResponse("Upload record not found")
+        if 'completionStatusCode' in record:
+            return _stored_completion_response(record, event)
+        if record.get('status') != EXTERNAL_COMPLETION_PROCESSING:
+            # Completed by code that stored no result.
+            return general_error(status_code=409, body={'message': REPEATED_COMPLETION_RESULT_UNAVAILABLE},
+                                 event=event)
+        if time.monotonic() + REPEATED_COMPLETION_POLL_SECONDS > deadline:
+            return general_error(status_code=409, body={'message': REPEATED_COMPLETION_IN_PROGRESS},
+                                 event=event)
+        time.sleep(REPEATED_COMPLETION_POLL_SECONDS)
+
 
 def deny_upload_completion(event, databaseId, assetId, uploadId, uploadType, files, reason):
     """Audit-log a denied completion for every submitted file, then refuse the request.
@@ -432,8 +647,8 @@ def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
     """
     return is_object_version_archived(bucket, key, version_id, client=s3)
 
-def determine_asset_type(assetId, bucket, prefix):
-    """Determine the asset type based on S3 contents"""
+def determine_asset_type(assetId, bucket, prefix, nested=None):
+    """Determine the asset type based on S3 contents: the keys the asset owns (a nested asset's keys left out)"""
     try:
         
         logger.info(f"Determining asset type from bucket: {bucket}, prefix: {prefix}")
@@ -442,14 +657,16 @@ def determine_asset_type(assetId, bucket, prefix):
         # file / folder). Capped at ASSET_TYPE_DETECTION_SAMPLE_SIZE — this is a
         # best-effort visibility classification, so a sample is sufficient and
         # avoids adding upload latency by scanning a very large asset in full.
-        contents = list_all_objects(bucket, prefix, client=s3, max_objects=ASSET_TYPE_DETECTION_SAMPLE_SIZE)
+        contents = list(held_objects(prefix, lambda list_prefix, cap: list_all_objects(
+            bucket, list_prefix, client=s3,
+            max_objects=min(cap or ASSET_TYPE_DETECTION_SAMPLE_SIZE, ASSET_TYPE_DETECTION_SAMPLE_SIZE))))
         
         # Filter out archived files
         non_archived_files = []
         file_count = 0
         for item in contents:
-            if item['Key'].endswith('/'):
-                # Skip folder markers
+            if item['Key'].endswith('/') or not contains(prefix, item['Key']) or (nested and not nested.keep(item['Key'])):
+                # Skip folder markers, keys the location does not hold and keys a nested asset's location holds
                 continue
                 
             try:
@@ -519,6 +736,11 @@ def send_subscription_email(database_id, asset_id):
 def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id, asset_id, extra_metadata=None, source_head=None):
     """Copy an object from one S3 location to another with replaced metadata
 
+    The copy is the final write of an upload or a workflow output, so it must not be written twice:
+    Amazon S3 can store the new version and still answer a retryable error. The metadata carries a
+    fresh write token (VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY), counted in the 2 KB limit, and
+    common.s3.copy_s3_object_repeat_safe() retries only after checking that no attempt landed.
+
     Args:
         source_bucket: Source S3 bucket name
         source_key: Source S3 object key
@@ -533,19 +755,15 @@ def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id
         True if successful, False otherwise
     """
     try:
-        # Use s3_resource.copy with ExtraArgs for metadata replacement
-        # This handles large files with managed transfer
-        copy_source = {
-            'Bucket': source_bucket,
-            'Key': source_key
-        }
-
         metadata = {
             DATABASE_ID_METADATA_KEY: database_id,
             ASSET_ID_METADATA_KEY: asset_id
         }
         if extra_metadata:
             metadata.update(extra_metadata)
+        # One token per copy (never the upload id: one upload completes several files).
+        write_token = uuid.uuid4().hex
+        metadata[VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY] = write_token
 
         # The final object keeps the content headers of the object it is copied from
         if source_head is None:
@@ -558,11 +776,11 @@ def copy_s3_object(source_bucket, source_key, dest_bucket, dest_key, database_id
             'ACL': 'bucket-owner-full-control'
         }
 
-        s3_resource.meta.client.copy(
-            CopySource=copy_source,
-            Bucket=dest_bucket,
-            Key=dest_key,
-            ExtraArgs=extra_args
+        copy_s3_object_repeat_safe(
+            source_bucket, source_key, dest_bucket, dest_key,
+            extra_args=extra_args,
+            write_token=write_token,
+            source_size=source_head.get('ContentLength'),
         )
         return True
     except Exception as e:
@@ -596,6 +814,30 @@ def delete_s3_object(bucket, key):
         logger.exception(f"Error deleting S3 object {key}: {e}")
         return False
 
+def destination_written_by_execution(bucket, key, workflow_execution_id):
+    """Whether the current version at ``key`` was written by workflow execution ``workflow_execution_id``.
+
+    A workflow run writes each of its outputs into the asset once, through its end-state step. That step
+    is retried on a timeout, and an attempt cut short after an output's copy landed but before its staged
+    source was deleted leaves the source for the retry to hand over again. A destination whose current
+    version carries this run's change provenance is that output, already written, so the retry must not
+    write a second version. Any other answer, including an unreadable destination, is False and the
+    move goes ahead as before."""
+    if not workflow_execution_id:
+        return False
+    try:
+        head = s3.head_object(Bucket=bucket, Key=key)
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') not in ('404', 'NoSuchKey', 'NotFound'):
+            logger.warning(f"Could not read destination {key} before the move (non-critical): {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Could not read destination {key} before the move (non-critical): {e}")
+        return False
+    metadata = head.get('Metadata') or {}
+    return metadata.get(VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY) == workflow_execution_id
+
+
 def build_upload_change_metadata(user_id):
     """Build the change-provenance metadata for a user-initiated upload.
 
@@ -625,35 +867,52 @@ def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
         VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: execution_id or "",
     }
 
+# A single-file asset's own object is the key its location names. A user upload at its path writes a new
+# version of it, as for any other file; a workflow output never replaces it.
+OWN_FILE_PATH_MESSAGE = OWN_FILE_OUTPUT_REFUSAL
+
+
+def upload_key_too_long_message(max_key_bytes):
+    """The refusal of an upload whose file key is longer than `max_key_bytes`
+    (common/s3PathPatterns.max_uploaded_file_key_bytes for the bucket). Names the bound, not the key."""
+    return (f"File key is too long to upload: a file key, including its asset location, "
+            f"may be at most {max_key_bytes} bytes")
+
+
+def upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key) -> Optional[str]:
+    """Why neither a user upload nor a workflow output may write `final_s3_key` through this asset, or None.
+    A key in the location of another asset nested in this asset's is that asset's (NESTED_PATH_REFUSAL); a key
+    of a location another live asset also holds belongs to neither for bucket sync, which sends its record to
+    the rejected-record queue (SHARED_LOCATION_WRITE_REFUSAL). Read from the location index once it is ready."""
+    nested = nested_locations_of_asset(asset_table, buckets_table, asset, bucket_name, asset_base_key,
+                                       include_shared=True, asset_table_name=asset_storage_table_name)
+    if nested.holder(final_s3_key) is None:
+        return None
+    return SHARED_LOCATION_WRITE_REFUSAL if nested.is_shared_key(final_s3_key) else NESTED_PATH_REFUSAL
+
+
 def normalize_s3_path(asset_base_key, file_path):
-    """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-    
+    """The S3 key an upload's file path names in the asset (common.assetLocations.object_key_for_request).
+
+    A path with a leading '/' is the file's path in the asset; a path without one is the file's full key
+    when the asset's location holds it, else the path in the asset. In a single-file location the file
+    name names the object, its preview name its own preview, and any other path lands in its companion
+    folder.
+
     Args:
         asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-        
+        file_path: The file path from the request
+
     Returns:
-        The properly resolved S3 key without duplication
+        The S3 key, always one the asset's location holds
+
+    Raises:
+        VAMSGeneralErrorResponse: the path names no key of the asset
     """
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-    
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-    
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
+    resolved = object_key_for_request(asset_base_key, file_path)
+    if resolved is None:
+        raise VAMSGeneralErrorResponse("Invalid file path")
+    return resolved
 
 def is_preview_file(file_path: str) -> bool:
     """Check if file is a preview file (.previewFile.X pattern)
@@ -766,7 +1025,7 @@ def check_preview_file_size(bucket_name, key, file_path):
         file_size = head_response.get('ContentLength', 0)
         
         if file_size > MAX_PREVIEW_FILE_SIZE:
-            error_message = f"Preview files exceeds maximum allowed size of 5MB"
+            error_message = f"Preview files exceeds maximum allowed size of 5 MiB (5,242,880 bytes)"
             return False, error_message
         
         return True, None
@@ -806,26 +1065,13 @@ def find_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     preview_files = []
     
     try:
-        # Get the directory and filename parts
-        directory = os.path.dirname(base_file_key)
-        filename = os.path.basename(base_file_key)
-        
-        # Create the prefix for listing objects
-        prefix = f"{directory}/" if directory else ""
-        
-        # Create the pattern to match preview files for this base file
-        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
-        
-        # List objects in the directory
+        # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+        prefix = f"{base_file_key}{PREVIEW_FILE_PATTERN}"
+
         paginator = s3.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
-                key = obj['Key']
-                base_filename = os.path.basename(key)
-                
-                # Check if this is a preview file for our base file
-                if base_filename.startswith(pattern):
-                    preview_files.append(key)
+                preview_files.append(obj['Key'])
         
         # Sort the preview files alphabetically
         preview_files.sort()
@@ -835,12 +1081,13 @@ def find_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     
     return preview_files
 
-def delete_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
+def delete_existing_preview_files(bucket: str, base_file_key: str, keep: Optional[str] = None) -> List[str]:
     """Delete existing preview files for a base file
     
     Args:
         bucket: The S3 bucket name
         base_file_key: The base file key
+        keep: A preview key the caller is about to overwrite; it is not deleted
         
     Returns:
         List of deleted preview file keys
@@ -852,6 +1099,11 @@ def delete_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     
     # Delete each preview file
     for preview_file in preview_files:
+        if preview_file == keep:
+            # The copy that follows writes a new version of this key. A delete marker before it
+            # raises an S3 removal whose provenance cannot be read (a HEAD of a delete marker answers
+            # 405), which the compliance trigger would evaluate as a user change.
+            continue
         try:
             # Add delete marker (soft delete)
             s3.delete_object(Bucket=bucket, Key=preview_file)
@@ -1023,19 +1275,82 @@ def queue_large_file_for_processing(file_info: dict, sqs_queue_url: str) -> bool
 
 
 def accepted_asynchronously(file_results) -> bool:
-    """True when any file was queued for the large-file consumer. Such a file is not in
-    successful_files, which holds only the files the completion copies itself, so a completion
-    must not be failed for lacking those."""
+    """True when any file was accepted for asynchronous ingestion (queued for the large-file consumer
+    or handed to a copy job). Such a file is not in successful_files, which holds only the files this
+    function copies itself, so a completion must not be failed for lacking those."""
     return any(result.success and result.largeFileAsynchronousHandling for result in file_results)
 
 
 def landed_synchronously(file_results) -> bool:
-    """True when any file was copied into the asset by the completion itself. A queued file updates
-    the asset type and notifies subscribers once it lands (the large-file consumer does both)."""
+    """True when any file was copied into the asset by this function. Asynchronously ingested files
+    update the asset type and notify subscribers once they land."""
     return any(result.success and not result.largeFileAsynchronousHandling for result in file_results)
 
 
-def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: str, expected_parts: list) -> tuple:
+_copy_jobs_table = None
+
+
+def copy_jobs_table():
+    """The large object copy jobs table, resolved on first use (only workflow output ingestion
+    needs it)."""
+    global _copy_jobs_table
+    if _copy_jobs_table is None:
+        _copy_jobs_table = dynamodb.Table(get_table_name(ResourceKeys.LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE))
+    return _copy_jobs_table
+
+
+def start_output_copy_job(file_info: dict, head_response: dict, change_metadata: dict, batch_id: str,
+                          workflow_database_id: str) -> str:
+    """Start the large object copy job that ingests one workflow output file and return its job id.
+
+    The job carries the final object's complete user metadata (asset identity plus the workflow
+    change provenance the synchronous path stamps) and the staged object's pinned version and ETag,
+    so the engine sets everything once, on the final object, and a source that changes during the
+    copy fails it instead of producing a mixed object. Raises when the job cannot be started."""
+    job = loc.build_job(
+        kind=loc.KIND_WORKFLOW_OUTPUT,
+        source={
+            "bucket": file_info["sourceBucketName"],
+            "key": file_info["tempS3Key"],
+            "region": file_info.get("sourceBucketRegion") or "",
+            "versionId": head_response.get("VersionId") or "",
+            "etag": head_response.get("ETag") or "",
+            "size": int(head_response.get("ContentLength", 0) or 0),
+        },
+        dest={
+            "bucket": file_info["bucketName"],
+            "key": file_info["finalS3Key"],
+            "region": file_info.get("bucketRegion") or "",
+        },
+        metadata={
+            DATABASE_ID_METADATA_KEY: file_info["databaseId"],
+            ASSET_ID_METADATA_KEY: file_info["assetId"],
+            **(change_metadata or {}),
+        },
+        content_headers={},
+        database_id=file_info["databaseId"],
+        asset_id=file_info["assetId"],
+        upload_id=file_info["uploadId"],
+        upload_type=file_info["uploadType"],
+        # The output step keys its outputs, and the job id that makes a repeated start a no-op, by the
+        # path without its leading '/', which it sends on the wire to mark a path in the asset
+        relative_key=file_info["relativeKey"].lstrip("/"),
+        change_user_id=file_info.get("changeUserId"),
+        scope_id=batch_id,
+        workflow_id=file_info.get("workflowId") or "",
+        workflow_execution_id=file_info.get("workflowExecutionId") or "",
+        workflow_database_id=workflow_database_id or "",
+        batch_id=batch_id,
+        delete_source_on_success=True,
+    )
+    # A throttle or the deploy window's AccessDenied is waited out briefly (the caller is an API
+    # completion or the output step's cross-call; #1123 L1).
+    loc.start_copy_job(copy_jobs_table(), sfn_client, loc.state_machine_arn(), job,
+                       max_wait_seconds=loc.API_CALLER_WAIT_SECONDS)
+    return job["jobId"]
+
+def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: str, expected_parts: list,
+                                         raise_errors: bool = False) -> tuple:
     """Calculate total file size by listing parts of an incomplete multipart upload
     
     Args:
@@ -1043,6 +1358,8 @@ def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: 
         key: The S3 object key
         upload_id: The multipart upload ID
         expected_parts: List of expected part objects with PartNumber and ETag
+        raise_errors: Raise a failed read's exception instead of logging it and returning it as the
+            error message, for a caller that decides how to log it
         
     Returns:
         Tuple of (total_size, success, error_message)
@@ -1086,8 +1403,80 @@ def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: 
         return total_file_size, True, None
         
     except Exception as e:
+        if raise_errors:
+            raise
         logger.exception(f"Error calculating file size from parts: {e}")
         return 0, False, f"Error verifying upload parts: {str(e)}"
+
+
+def _is_no_such_upload(error) -> bool:
+    return isinstance(error, ClientError) and error.response.get('Error', {}).get('Code') == 'NoSuchUpload'
+
+
+def multipart_upload_exists(bucket_name: str, key: str, upload_id_s3: str) -> bool:
+    """Whether the multipart upload `upload_id_s3` is open under `key`. S3 binds an upload id to the
+    key it was created under, so only that key answers."""
+    try:
+        s3.list_parts(Bucket=bucket_name, Key=key, UploadId=upload_id_s3, MaxParts=1)
+        return True
+    except ClientError as e:
+        if not _is_no_such_upload(e):
+            logger.warning(f"Could not read multipart upload {upload_id_s3}: {e}")
+        return False
+
+
+def abort_staged_multipart_upload(bucket_name: str, temp_s3_key: str, upload_id_s3: str,
+                                  legacy_temp_s3_key: Optional[str] = None):
+    """Abort the multipart upload `upload_id_s3` of a file staged under `temp_s3_key`.
+
+    LEGACY STAGING KEY (#1928, see common/s3PathPatterns.legacy_staged_upload_key): an upload
+    initialized before per-upload staging created its multipart upload under the per-path key. When
+    the upload is not open under `temp_s3_key` but is under `legacy_temp_s3_key`, the abort is sent
+    there. Decided by ListParts, not by the abort's answer: S3 answers 204 to an abort of an upload
+    it no longer holds open (one already completed, #1123), so an abort's answer does not say where
+    the upload is. Raises what S3 raised; the callers log it and carry on."""
+    key = temp_s3_key
+    if (legacy_temp_s3_key and not multipart_upload_exists(bucket_name, temp_s3_key, upload_id_s3)
+            and multipart_upload_exists(bucket_name, legacy_temp_s3_key, upload_id_s3)):
+        logger.info(f"Multipart upload {upload_id_s3} was initialized before per-upload staging, "
+                    f"so it is aborted under its per-path staging key")
+        key = legacy_temp_s3_key
+    s3.abort_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id_s3)
+
+
+def locate_staged_multipart_upload(bucket_name: str, temp_s3_key: str, legacy_temp_s3_key: Optional[str],
+                                   upload_id_s3: str, expected_parts: list) -> tuple:
+    """The staging key of the multipart upload `upload_id_s3` and its parts' total size, as
+    (key, total_size, success, error_message).
+
+    The parts are read under the per-upload key `temp_s3_key`. Only when that read fails is
+    `legacy_temp_s3_key` tried (LEGACY STAGING KEY, #1928): an upload initialized before per-upload
+    staging still completes after the upgrade. The legacy key is used only when the upload's own S3
+    upload id is open under it, so a file staged there by another upload is never taken for this
+    one. An upload open under neither key keeps the first read's error.
+
+    The first read's S3 error is logged at ERROR only when it stands. For an upload completed under
+    the legacy key, the first read answers NoSuchUpload by design (#1971), so that error is not
+    logged; any other first-read error that the legacy key then recovers is logged as a warning."""
+    first_read_error = None
+    try:
+        total_size, success, error = calculate_total_file_size_from_parts(
+            bucket_name, temp_s3_key, upload_id_s3, expected_parts, raise_errors=True)
+    except Exception as e:
+        first_read_error = e
+        total_size, success, error = 0, False, f"Error verifying upload parts: {str(e)}"
+    if success or not legacy_temp_s3_key or not multipart_upload_exists(bucket_name, legacy_temp_s3_key, upload_id_s3):
+        if first_read_error is not None:
+            logger.error(f"Error calculating file size from parts: {first_read_error}", exc_info=first_read_error)
+        return temp_s3_key, total_size, success, error
+    if first_read_error is not None and not _is_no_such_upload(first_read_error):
+        logger.warning(f"Reading the parts of multipart upload {upload_id_s3} under its per-upload staging "
+                       f"key failed: {first_read_error}")
+    logger.info(f"Multipart upload {upload_id_s3} was initialized before per-upload staging, "
+                f"so it is completed under its per-path staging key")
+    total_size, success, error = calculate_total_file_size_from_parts(
+        bucket_name, legacy_temp_s3_key, upload_id_s3, expected_parts)
+    return legacy_temp_s3_key, total_size, success, error
 
 #######################
 # API Implementations
@@ -1137,12 +1526,21 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
 
+    # Generate the upload ID ahead of the per-file checks too: each file is staged in a folder named
+    # for it, and the key-length rule measures that staging key.
+    uploadId = f"y{str(uuid.uuid4())}"
+    # The longest final key a file uploaded into this bucket area can have: its staging key must fit
+    # the S3 object key limit.
+    max_upload_key_bytes = max_uploaded_file_key_bytes(baseAssetsPrefix)
+
     # Every remaining per-file rule is checked here, before any upload is initiated. Each reads only
     # relativeKey, file_size, uploadType and the asset's location, so none of it depends on the
     # per-file work below. Run inside that loop instead, a rejection on the second or later file leaves
     # the earlier files with multipart uploads already created in S3 and no upload record to find them
     # by, so they linger until the bucket lifecycle rule expires them.
     temp_s3_keys = []
+    file_num_parts = []
+    estimated_response_bytes = UPLOAD_RESPONSE_BASE_OVERHEAD_BYTES
     for file in request_model.files:
         if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
             raise VAMSGeneralErrorResponse(f"Files contain an unsupported file extension")
@@ -1150,44 +1548,59 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         # Validate the extension of an asset preview and of a .previewFile. file
         if uploadType == "assetPreview" or is_preview_file(file.relativeKey):
             if not validate_preview_file_extension(file.relativeKey):
-                raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif")
+                raise VAMSGeneralErrorResponse(f"Preview files must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp")
 
         # Validate file size for preview files
         if uploadType == "assetPreview" and file.file_size > MAX_PREVIEW_FILE_SIZE:
-            raise VAMSGeneralErrorResponse(f"Preview files exceeds maximum allowed size of 5MB per file")
+            raise VAMSGeneralErrorResponse(f"Preview files exceeds maximum allowed size of 5 MiB (5,242,880 bytes) per file")
 
         # Determine final S3 key based on upload type
         if uploadType == "assetFile":
             # Get the asset's base key from assetLocation
             asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
             final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+            refusal = upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key)
+            if refusal:
+                raise VAMSGeneralErrorResponse(refusal)
         else:  # assetPreview
             #We only want the filename and none of the path if there is a path
             filename = os.path.basename(file.relativeKey)
             final_s3_key = f"{baseAssetsPrefix}{PREVIEW_PREFIX}{assetId}/{filename}"
 
-        # Determine temporary S3 key by adding temp prefix to final key
-        temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+        # The file is staged in this upload's own folder under the temp-uploads prefix, so a concurrent
+        # upload of the same path stages elsewhere and neither completion touches the other's file.
+        temp_s3_key = staged_upload_key(baseAssetsPrefix, uploadId, final_s3_key)
 
         # The request model bounded relativeKey; the keys S3 measures carry the asset prefix and, for
-        # the temporary object, the temp-uploads prefix as well, so a relativeKey inside the limit can
-        # resolve to a key S3 refuses. Refuse both forms here, with a generic message that does not echo
-        # the key, so S3's KeyTooLongError never surfaces as a 500 after an earlier file's multipart
-        # upload has already been created.
-        if exceeds_s3_object_key_limit(final_s3_key) or exceeds_s3_object_key_limit(temp_s3_key):
-            raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
+        # the temporary object, the temp-uploads prefix and the upload's folder as well, so a relativeKey
+        # inside the limit can resolve to a key S3 refuses. A final key over the upload bound is refused
+        # here with a message that names the bound and does not echo the key, so S3's KeyTooLongError
+        # never surfaces as a 500 after an earlier file's multipart upload has already been created. The
+        # staging key is checked against the S3 limit too; the two agree by construction (both derive
+        # from staged_upload_key's layout).
+        if (exceeds_s3_object_key_limit(final_s3_key, max_upload_key_bytes)
+                or exceeds_s3_object_key_limit(temp_s3_key)):
+            raise VAMSGeneralErrorResponse(upload_key_too_long_message(max_upload_key_bytes))
 
+        num_parts = calculate_num_parts(file.file_size, file.num_parts)
+        estimated_response_bytes += estimate_initialize_response_file_bytes(
+            file.relativeKey, temp_s3_key, num_parts)
         temp_s3_keys.append(temp_s3_key)
+        file_num_parts.append(num_parts)
+
+    # The response carries one presigned URL per part, and each URL carries its file's key, so the
+    # total-parts cap alone does not keep the response under the Lambda response limit. Refuse a
+    # request whose estimated response is over the budget here, before any multipart upload exists,
+    # with a message that does not echo the keys.
+    if estimated_response_bytes > MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES:
+        raise VAMSGeneralErrorResponse("Upload request too large; split the files across several requests")
 
     # Additional business logic validation
     if uploadType == "assetPreview" and asset.get('previewLocation'):
         logger.info(f"Asset {assetId} already has a preview. The existing preview will be replaced.")
     
-    # Generate upload ID
-    uploadId = f"y{str(uuid.uuid4())}"
-    
     # Calculate expiration time (7 days from now)
-    now = datetime.utcnow()
+    now = utc_now()
     expires_at = int((now + timedelta(days=UPLOAD_EXPIRATION_DAYS)).timestamp())
     
     # Process files
@@ -1196,9 +1609,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
 
     # Every file has already passed validation above, so no rejection can occur once the first
     # multipart upload has been created.
-    for file, temp_s3_key in zip(request_model.files, temp_s3_keys):
-        # Calculate number of parts
-        num_parts = calculate_num_parts(file.file_size, file.num_parts)
+    for file, temp_s3_key, num_parts in zip(request_model.files, temp_s3_keys, file_num_parts):
         total_parts += num_parts
         
         # Handle zero-byte files differently - don't create them yet, just return special response
@@ -1265,7 +1676,8 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         totalParts=total_parts,
         status="initialized",
         UserId=user_id,  # Include user ID for rate limiting
-        files=[file.relativeKey for file in request_model.files]
+        files=[file.relativeKey for file in request_model.files],
+        stagingLayout=UPLOAD_STAGING_LAYOUT_PER_UPLOAD,
     )
     save_upload_details(upload_record)
     
@@ -1319,29 +1731,52 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     if 'temporaryPrefix' not in upload_details:
         raise VAMSGeneralErrorResponse("Missing temporary prefix in upload details")
     
-    # Update upload status in DynamoDB
+    # Claim the completion: only the first call for an upload id runs it. A repeated call (a client
+    # that gave up waiting and retried, a duplicate delivery) runs nothing and answers with the
+    # first call's result, so the files are not processed twice in parallel and the repeat is not
+    # refused for a record the first call settled.
+    if not claim_external_completion(uploadId, assetId):
+        return answer_repeated_external_completion(uploadId, assetId, event)
     try:
-        # Use both uploadId and assetId as the key
-        asset_upload_table.update_item(
-            Key={
-                'uploadId': uploadId,
-                'assetId': assetId
-            },
-            UpdateExpression="SET #status = :status",
-            ExpressionAttributeNames={'#status': 'status'},
-            ExpressionAttributeValues={':status': 'processing'}
-        )
-    except Exception as e:
-        logger.warning(f"Failed to update upload status: {e}")
+        response = _complete_claimed_external_upload(
+            uploadId, request_model, event, upload_details, asset, user_id, change_metadata)
+    except VAMSGeneralErrorResponse as e:
+        store_external_completion_result(uploadId, assetId, 400, {'message': str(e)},
+                                         status=EXTERNAL_COMPLETION_FAILED)
+        raise
+    except Exception:
+        store_external_completion_result(uploadId, assetId, 500, {'message': 'Internal Server Error'},
+                                         status=EXTERNAL_COMPLETION_FAILED)
+        raise
+    if isinstance(response, dict) and 'statusCode' in response and 'body' in response:
+        store_external_completion_result(uploadId, assetId, response['statusCode'],
+                                         json.loads(response['body']))
+    else:
+        store_external_completion_result(uploadId, assetId, 200,
+                                         json.loads(json.dumps(response.dict(), default=str)))
+    return response
+
+
+def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExternalUploadRequestModel,
+                                      event, upload_details, asset, user_id, change_metadata):
+    """The external completion once this call claimed it (complete_external_upload)."""
+    assetId = request_model.assetId
+    databaseId = request_model.databaseId
+    uploadType = request_model.uploadType
+    workflow_id = request_model.workflowId
+    workflow_execution_id = request_model.workflowExecutionId
+    change_user_id = request_model.changeUserId
 
     # Get bucket details from asset's bucketId. bucket_name is the DESTINATION (the asset's own
     # bucket). source_bucket is where the tempKey files are read from: it equals bucket_name for a
     # normal upload, but a workflow-execution completion stages its outputs in the VAMS default run
-    # bucket (request_model.sourceBucket), which can differ from the output asset's bucket.
+    # bucket, which can differ from the output asset's bucket. That registration is resolved here,
+    # never taken from the caller.
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
-    source_bucket = request_model.sourceBucket or bucket_name
+    source_registration = external_upload_source(workflow_execution_id, bucketDetails, request_model.sourceBucket)
+    source_bucket = source_registration['bucketName']
 
     # Get database details to check file upload restrictions
     database = get_database_details(databaseId)
@@ -1390,7 +1825,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         relativeKey=file.relativeKey,
                         uploadIdS3="external",
                         success=False,
-                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp"
                     ))
                     has_failures = True
                     continue
@@ -1429,7 +1864,26 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             if uploadType == "assetFile":
                 # Get the asset's base key from assetLocation
                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
+                if names_own_object(asset_base_key, file.relativeKey):
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3="external",  # External uploads don't have S3 upload IDs
+                        success=False,
+                        error=OWN_FILE_PATH_MESSAGE
+                    ))
+                    has_failures = True
+                    continue
                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+                refusal = upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key)
+                if refusal:
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3="external",  # External uploads don't have S3 upload IDs
+                        success=False,
+                        error=refusal
+                    ))
+                    has_failures = True
+                    continue
             else:  # assetPreview
                 #We only want the filename and none of the path if there is a path
                 filename = os.path.basename(file.relativeKey)
@@ -1460,7 +1914,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         relativeKey=file.relativeKey,
                         uploadIdS3="external",
                         success=False,
-                        error=f"Preview file {file.relativeKey} exceeds maximum allowed size of 5MB"
+                        error=f"Preview file {file.relativeKey} exceeds maximum allowed size of 5 MiB (5,242,880 bytes)"
                     ))
                     has_failures = True
                     continue
@@ -1468,7 +1922,11 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 # Check if file should be processed asynchronously based on size
                 process_async = False
                 try:
-                    process_async = should_process_asynchronously(file_size)
+                    # An output this workflow run already wrote takes the synchronous path, which only
+                    # removes its staged source (see destination_written_by_execution), rather than
+                    # queueing a second copy.
+                    process_async = should_process_asynchronously(file_size) and not (
+                        destination_written_by_execution(bucket_name, final_s3_key, workflow_execution_id))
                 except Exception as e:
                     logger.warning(f"Error determining if external file {file.relativeKey} should be processed asynchronously: {e}")
                     # Default to synchronous processing for unknown file sizes
@@ -1489,7 +1947,14 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         "tempS3Key": file.tempKey,
                         "finalS3Key": final_s3_key,
                         "bucketName": bucket_name,
+                        # The registrations the consumer checks the two names against.
+                        "bucketId": asset['bucketId'],
+                        "sourceBucketId": source_registration.get('bucketId') or asset['bucketId'],
+                        "bucketRegion": bucketDetails.get('bucketRegion'),
                         "sourceBucketName": source_bucket,
+                        "sourceBucketRegion": (bucketDetails.get('bucketRegion')
+                                               if source_bucket == bucket_name
+                                               else bucket_region_for_name(source_bucket)),
                         "databaseId": databaseId,
                         "assetId": assetId,
                         "uploadId": uploadId,
@@ -1498,7 +1963,39 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         "workflowId": workflow_id,
                         "workflowExecutionId": workflow_execution_id
                     }
-                    
+
+                    # A workflow output whose caller waits on an ingestion batch is copied by the
+                    # large object copy engine, which has no time limit and resumes after a
+                    # failure. There is no synchronous fallback: a file this size does not fit a
+                    # copy inside this function, so a job that cannot be started fails the file.
+                    if request_model.ingestionBatchId:
+                        try:
+                            job_id = start_output_copy_job(
+                                file_info, head_response, change_metadata,
+                                request_model.ingestionBatchId, request_model.workflowDatabaseId)
+                            file_results.append(FileCompletionResult(
+                                relativeKey=file.relativeKey,
+                                uploadIdS3="external",
+                                success=True,
+                                largeFileAsynchronousHandling=True,
+                                ingestionJobId=job_id,
+                            ))
+                            logger.info(f"Large external file {file.relativeKey} handed to copy job {job_id}")
+                        except Exception as e:
+                            logger.exception(f"Could not start the copy job for {file.relativeKey}: {e}")
+                            file_results.append(FileCompletionResult(
+                                relativeKey=file.relativeKey,
+                                uploadIdS3="external",
+                                success=False,
+                                error=loc.REASON_START_FAILED,
+                            ))
+                            has_failures = True
+                        continue
+
+                    # Track the file before it is queued, so an outcome the consumer records while
+                    # this completion still runs is kept.
+                    uploadStatus.track_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
+
                     # Try to queue the file for asynchronous processing with comprehensive error handling
                     try:
                         if queue_large_file_for_processing(file_info, large_file_processing_queue_url):
@@ -1514,11 +2011,13 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                         else:
                             # Failed to queue - fall back to synchronous processing
                             logger.warning(f"Failed to queue large external file {file.relativeKey}, falling back to synchronous processing")
+                            uploadStatus.untrack_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
                             process_async = False
                     except Exception as e:
                         # SQS queuing error - fall back to synchronous processing
                         logger.warning(f"Error queuing large external file {file.relativeKey} for asynchronous processing: {e}")
                         logger.info(f"Falling back to synchronous processing for external file {file.relativeKey}")
+                        uploadStatus.untrack_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
                         process_async = False
                 
             except Exception as e:
@@ -1616,13 +2115,14 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             ))
             has_failures = True
     
-    # Files queued for asynchronous processing count as accepted: a completion whose every file is
-    # over the async threshold is not reported as failed while its files land.
+    # Files accepted for asynchronous ingestion (queued, or handed to a copy job) count as accepted
+    # here, so a completion whose every file is over the async threshold is not reported as failed
+    # while its files land.
     has_async_accepted = accepted_asynchronously(file_results)
 
     # If no files were successfully uploaded, return error
     if not successful_files and not has_async_accepted:
-        delete_upload_details(uploadId, assetId)
+        record_external_completion_status(uploadId, assetId, file_results, True)
         # Check if any file has largeFileAsynchronousHandling=true
         has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
         return CompleteUploadResponseModel(
@@ -1635,7 +2135,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         )
     
     # Only for assetFile uploads, validate that .previewFile. files have corresponding base files
-    if uploadType == "assetFile":
+    if uploadType == "assetFile" and successful_files:
         asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
         
         # Check if there are any .previewFile. files in the successful files
@@ -1671,7 +2171,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                 
                 # If no files remain successful, return error
                 if not successful_files and not has_async_accepted:
-                    delete_upload_details(uploadId, assetId)
+                    record_external_completion_status(uploadId, assetId, file_results, True)
                     # Check if any file has largeFileAsynchronousHandling=true
                     has_async_files = any(result.largeFileAsynchronousHandling for result in file_results)
                     return CompleteUploadResponseModel(
@@ -1691,13 +2191,24 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     def _move_one_file(file_detail):
         """Move a completed upload from temp to final. Returns (relativeKey, success)."""
         try:
+            # A retried workflow end-state step can hand over an output this run already wrote (its
+            # copy landed, its staged source was not yet deleted): finish that move without a second
+            # version. Checked before the preview clean-up below, which would delete that output.
+            if destination_written_by_execution(bucket_name, file_detail['final_s3_key'], workflow_execution_id):
+                logger.info(f"{file_detail['final_s3_key']} already written by this workflow execution; "
+                            "removing the staged source only")
+                delete_s3_object(source_bucket, file_detail['temp_s3_key'])
+                return file_detail['relativeKey'], True
+
             logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
 
-            # If this is a preview file in an assetFile upload, delete any existing preview files for the base file
+            # If this is a preview file in an assetFile upload, delete any existing preview files for
+            # the base file, except the key the copy below overwrites
             if uploadType == "assetFile" and is_preview_file(file_detail['relativeKey']):
                 base_file_path = get_base_file_path(file_detail['relativeKey'])
                 base_file_key = normalize_s3_path(asset_base_key, base_file_path)
-                deleted_files = delete_existing_preview_files(bucket_name, base_file_key)
+                deleted_files = delete_existing_preview_files(bucket_name, base_file_key,
+                                                             keep=file_detail['final_s3_key'])
                 if deleted_files:
                     logger.info(f"Deleted {len(deleted_files)} existing preview files for {base_file_path}")
 
@@ -1737,11 +2248,13 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
                     result.error = "Failed to copy file to final location"
                     has_failures = True
     
-    # Update asset record based on upload type. Only files copied here count: a queued file updates
-    # the asset type and notifies subscribers once it lands (the large-file consumer does both).
+    # Update asset record based on upload type. Only files that landed here count: a file ingested
+    # asynchronously updates the asset type and notifies subscribers once it lands.
     if uploadType == "assetFile" and landed_synchronously(file_results):
         # Determine asset type using the asset's bucket and key location
-        assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
+        nested = nested_locations_for_asset_type(asset_table, asset, bucket_name, asset_base_key,
+                                                 asset_table_name=asset_storage_table_name)
+        assetType = determine_asset_type(assetId, bucket_name, asset_base_key, nested=nested)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
         
         
@@ -1753,7 +2266,8 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
         # If asset already has a type and assetType is None, keep the existing type
         
         # Save updated asset
-        update_asset_attributes(databaseId, assetId, {'assetType': asset['assetType']})
+        update_asset_attributes(databaseId, assetId, {'assetType': asset['assetType']},
+                                workflow_execution_id=workflow_execution_id)
         
         # Send notification to subscribers
         send_subscription_email(databaseId, assetId)
@@ -1768,26 +2282,11 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             }
             
             # Save updated asset
-            update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']})
+            update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']},
+                                    workflow_execution_id=workflow_execution_id)
     
     # Update upload status in DynamoDB
-    try:
-        if has_failures:
-            # Use both uploadId and assetId as the key
-            asset_upload_table.update_item(
-                Key={
-                    'uploadId': uploadId,
-                    'assetId': assetId
-                },
-                UpdateExpression="SET #status = :status",
-                ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={':status': 'completed_with_errors'}
-            )
-        else:
-            # Delete upload record if all successful
-            delete_upload_details(uploadId, assetId)
-    except Exception as e:
-        logger.warning(f"Failed to update upload status: {e}")
+    record_external_completion_status(uploadId, assetId, file_results, has_failures)
     
     # Check if all files failed
     all_files_failed = all(not result.success for result in file_results)
@@ -1849,34 +2348,28 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found")
     
-    # Verify upload details match request
-    if upload_details['assetId'] != assetId or upload_details['databaseId'] != databaseId:
-        raise VAMSGeneralErrorResponse("Upload details do not match request")
-        
-    # Verify upload type matches
-    if upload_details['uploadType'] != uploadType:
-        raise VAMSGeneralErrorResponse(f"Upload type mismatch.")
+    # Refuse a record that does not belong to this request, was initialized for another upload
+    # type, is past its expiresAt, or is an external (workflow-output) record (see
+    # common/assetUploads.py, shared with the ingest-asset complete stage). The expiry check is
+    # also what bounds a record saved before the initialized file list was stored (no 'files'
+    # attribute): it is completable without the membership check only until it expires. External
+    # records carry no initialized file list by design and must only be completed by the internal
+    # route that reads the staged tempKeys, the mirror of the check complete_external_upload makes.
+    refusal = completion_refusal(upload_details, databaseId, assetId, uploadType)
+    if refusal:
+        if refusal.audited:
+            deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
+                                   request_model.files, refusal.reason)
+        raise VAMSGeneralErrorResponse(refusal.reason)
 
-    # Refuse a record past its expiresAt. The table has no TTL, so without this an initialized
-    # record lives until a completion succeeds or the asset is deleted; in particular a record
-    # saved before the initialized file list was stored (no 'files' attribute) would stay
-    # completable without the membership check indefinitely. expiresAt is epoch seconds, set by
-    # every writer (initialize: 7 days; workflow output: 1 day); a missing or unreadable value
-    # counts as expired.
-    try:
-        expires_at = int(upload_details.get('expiresAt', 0))
-    except (TypeError, ValueError):
-        expires_at = 0
-    if expires_at < int(time.time()):
+    # A record kept to report its asynchronously ingested files has been completed already. Files are
+    # tracked while a completion runs, before it marks the record, so only a record marked kept
+    # (processing_async, or settled from it) with tracked files counts.
+    if upload_details.get('asyncFiles') and upload_details.get('status') in (
+            uploadStatus.STATUS_PROCESSING_ASYNC, uploadStatus.STATUS_COMPLETED,
+            uploadStatus.STATUS_COMPLETED_WITH_ERRORS):
         deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
-                               request_model.files, "Upload has expired")
-
-    # Refuse an external (workflow-output) record on this route, the mirror of the check
-    # complete_external_upload makes: external records carry no initialized file list by design
-    # and must only be completed by the internal route that reads the staged tempKeys.
-    if upload_details.get('isExternalUpload', False):
-        deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
-                               request_model.files, "Upload type mismatch.")
+                               request_model.files, "Upload has already been completed.")
     
     # Update upload status in DynamoDB
     try:
@@ -1966,13 +2459,11 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                                 # Construct temp key to abort the upload
                                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
                                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
-                                temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+                                temp_s3_key = staged_upload_key(baseAssetsPrefix, uploadId, final_s3_key)
                                 
-                                s3.abort_multipart_upload(
-                                    Bucket=bucket_name,
-                                    Key=temp_s3_key,
-                                    UploadId=file.uploadIdS3
-                                )
+                                abort_staged_multipart_upload(
+                                    bucket_name, temp_s3_key, file.uploadIdS3,
+                                    legacy_staging_key_for(upload_details, baseAssetsPrefix, final_s3_key))
                             except Exception as abort_error:
                                 logger.warning(f"Error aborting multipart upload for invalid extension: {abort_error}")
                         continue
@@ -1982,12 +2473,35 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 # Get the asset's base key from assetLocation
                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+                refusal = upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key)
+                if refusal:
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3=file.uploadIdS3,
+                        success=False,
+                        error=refusal
+                    ))
+                    has_failures = True
+                    if file.uploadIdS3 != "zero-byte":
+                        try:
+                            abort_staged_multipart_upload(
+                                bucket_name, staged_upload_key(baseAssetsPrefix, uploadId, final_s3_key),
+                                file.uploadIdS3, legacy_staging_key_for(upload_details, baseAssetsPrefix, final_s3_key))
+                        except Exception as abort_error:
+                            logger.warning(f"Error aborting multipart upload for a refused path: {abort_error}")
+                    continue
             else:  # assetPreview
                 #We only want the filename and none of the path if there is a path
                 filename = os.path.basename(file.relativeKey)
                 final_s3_key = f"{baseAssetsPrefix}{PREVIEW_PREFIX}{assetId}/{filename}"
                 
-            temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+            # The file's staging key in this upload's own folder (as initialization built it), and, for
+            # an upload initialized before per-upload staging, the per-path key it used (LEGACY STAGING
+            # KEY, #1928): a multipart upload found only under the legacy key is completed or aborted
+            # there. An upload initialized since has no legacy key.
+            # A zero-byte file is created by this completion, so it always uses the per-upload key.
+            temp_s3_key = staged_upload_key(baseAssetsPrefix, uploadId, final_s3_key)
+            legacy_temp_s3_key = legacy_staging_key_for(upload_details, baseAssetsPrefix, final_s3_key)
             
             # The branches below can create an object under final_s3_key -- the zero-byte branch
             # writes one directly, the multipart branch completes one -- so the name-level
@@ -1998,7 +2512,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 name_check_error = "File contains a potentially malicious executable type object"
             elif (uploadType == "assetPreview" or is_preview_file(file.relativeKey)) \
                     and not validate_preview_file_extension(file.relativeKey):
-                name_check_error = "Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                name_check_error = "Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp"
             
             if name_check_error:
                 # AUDIT LOG: upload denied on the file name before any object was created
@@ -2018,11 +2532,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 # Abort the multipart upload if one exists (zero-byte files never created one)
                 if file.uploadIdS3 != "zero-byte":
                     try:
-                        s3.abort_multipart_upload(
-                            Bucket=bucket_name,
-                            Key=temp_s3_key,
-                            UploadId=file.uploadIdS3
-                        )
+                        abort_staged_multipart_upload(bucket_name, temp_s3_key, file.uploadIdS3, legacy_temp_s3_key)
                     except Exception as abort_error:
                         logger.warning(f"Error aborting multipart upload for rejected file name: {abort_error}")
                 
@@ -2073,11 +2583,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 logger.info(f"No parts provided for file {file.relativeKey}, cancelling its upload")
                 
                 try:
-                    s3.abort_multipart_upload(
-                        Bucket=bucket_name,
-                        Key=temp_s3_key,
-                        UploadId=file.uploadIdS3
-                    )
+                    abort_staged_multipart_upload(bucket_name, temp_s3_key, file.uploadIdS3, legacy_temp_s3_key)
                 except Exception as abort_error:
                     logger.warning(f"Error aborting multipart upload for cancelled file: {abort_error}")
                 
@@ -2107,10 +2613,13 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             # Log the parts we received
             logger.info(f"Received {len(actual_parts)} parts for file {file.relativeKey}: {actual_parts}")
             
-            # Calculate total file size by listing parts before completing upload
-            total_file_size, size_calc_success, size_calc_error = calculate_total_file_size_from_parts(
-                bucket_name, temp_s3_key, file.uploadIdS3, file.parts
+            # Calculate total file size by listing parts before completing upload. This also settles
+            # the staging key: from here on temp_s3_key is the key the multipart upload is open under,
+            # the legacy per-path key for an upload initialized before per-upload staging.
+            temp_s3_key, total_file_size, size_calc_success, size_calc_error = locate_staged_multipart_upload(
+                bucket_name, temp_s3_key, legacy_temp_s3_key, file.uploadIdS3, file.parts
             )
+            legacy_temp_s3_key = None  # settled: the aborts below need no fallback
             
             if not size_calc_success:
                 file_results.append(FileCompletionResult(
@@ -2140,7 +2649,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     relativeKey=file.relativeKey,
                     uploadIdS3=file.uploadIdS3,
                     success=False,
-                    error=f"Preview file exceeds maximum allowed size of 5MB"
+                    error=f"Preview file exceeds maximum allowed size of 5 MiB (5,242,880 bytes)"
                 ))
                 has_failures = True
                 continue
@@ -2159,6 +2668,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     "tempS3Key": temp_s3_key,
                     "finalS3Key": final_s3_key,
                     "bucketName": bucket_name,
+                    # The registration the consumer checks bucketName against.
+                    "bucketId": bucketDetails.get('bucketId'),
+                    "bucketRegion": bucketDetails.get('bucketRegion'),
                     "databaseId": databaseId,
                     "assetId": assetId,
                     "uploadId": uploadId,
@@ -2167,6 +2679,10 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     "changeUserId": user_id
                 }
                 
+                # Track the file before it is queued, so an outcome the consumer records while this
+                # completion still runs is kept.
+                uploadStatus.track_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
+
                 # Try to queue the file for asynchronous processing
                 if queue_large_file_for_processing(file_info, large_file_processing_queue_url):
                     # Successfully queued - mark as successful with async flag
@@ -2182,6 +2698,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 else:
                     # Failed to queue - fall back to synchronous processing
                     logger.warning(f"Failed to queue large file {file.relativeKey}, falling back to synchronous processing")
+                    uploadStatus.untrack_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
                     process_async = False
             
             # Complete multipart upload synchronously (for small files or fallback)
@@ -2237,9 +2754,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     # Default to 0 for unknown file sizes (will process synchronously)
                     file_size = 0
                 
-                # Verify the uploadId matches
+                # Verify the uploadId matches. The staged object is under this upload's own key, so
+                # another upload's id here means the object was not written by this upload's parts;
+                # it is refused and deleted, which removes only this upload's staged object. (An
+                # upload completed under its LEGACY per-path key is handled as before per-upload
+                # staging.)
                 if s3_upload_id != uploadId:
-                    # Delete the uploaded file since metadata doesn't match
                     delete_s3_object(bucket_name, temp_s3_key)
                     
                     file_results.append(FileCompletionResult(
@@ -2260,7 +2780,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=f"Preview file exceeds maximum allowed size of 5MB"
+                        error=f"Preview file exceeds maximum allowed size of 5 MiB (5,242,880 bytes)"
                     ))
                     has_failures = True
                     continue
@@ -2330,7 +2850,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp"
                     ))
                     has_failures = True
                     continue
@@ -2346,7 +2866,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif"
+                        error=f"Preview file must have one of the allowed extensions: .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp"
                     ))
                     has_failures = True
                     continue
@@ -2412,13 +2932,10 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
         except Exception as e:
             logger.exception(f"Error completing multipart upload for {file.relativeKey}: {e}")
             
-            # Abort the multipart upload to clean up S3 resources
+            # Abort the multipart upload to clean up S3 resources (temp_s3_key is defined in the outer
+            # try block; legacy_temp_s3_key is None once the staging key was settled)
             try:
-                s3.abort_multipart_upload(
-                    Bucket=bucket_name,
-                    Key=temp_s3_key,  # Use temp_s3_key directly since it's defined in the outer try block
-                    UploadId=file.uploadIdS3
-                )
+                abort_staged_multipart_upload(bucket_name, temp_s3_key, file.uploadIdS3, legacy_temp_s3_key)
             except Exception as abort_error:
                 logger.exception(f"Error aborting multipart upload: {abort_error}")
             
@@ -2540,11 +3057,13 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     result.error = "Failed to copy file to final location"
                     has_failures = True
 
-    # Update asset record based on upload type. Only files copied here count: a queued file updates
-    # the asset type and notifies subscribers once it lands (the large-file consumer does both).
+    # Update asset record based on upload type. A queued file updates the asset type and notifies
+    # subscribers once it lands (the large-file consumer does both).
     if uploadType == "assetFile" and landed_synchronously(file_results):
         # Determine asset type using the asset's bucket and key location
-        assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
+        nested = nested_locations_for_asset_type(asset_table, asset, bucket_name, asset_base_key,
+                                                 asset_table_name=asset_storage_table_name)
+        assetType = determine_asset_type(assetId, bucket_name, asset_base_key, nested=nested)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
 
 
@@ -2574,23 +3093,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             update_asset_attributes(databaseId, assetId, {'previewLocation': asset['previewLocation']})
     
     # Update upload status in DynamoDB
-    try:
-        if has_failures:
-            # Use both uploadId and assetId as the key
-            asset_upload_table.update_item(
-                Key={
-                    'uploadId': uploadId,
-                    'assetId': assetId
-                },
-                UpdateExpression="SET #status = :status",
-                ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={':status': 'completed_with_errors'}
-            )
-        else:
-            # Delete upload record if all successful
-            delete_upload_details(uploadId, assetId)
-    except Exception as e:
-        logger.warning(f"Failed to update upload status: {e}")
+    record_completion_status(uploadId, assetId, file_results, has_failures)
     
     # Check if all files failed
     all_files_failed = all(not result.success for result in file_results)
@@ -2635,16 +3138,66 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     else:
         return response
 
+UPLOAD_NOT_FOUND_MESSAGE = "Upload not found"
+
+
+def get_upload_status(event):
+    """GET /uploads/{uploadId}?assetId=&databaseId=: the upload's status and the outcome of each file
+    it accepted for asynchronous ingestion.
+
+    Tier 1 (the route) is decided before the parameters are validated, and Tier 2 (GET on the
+    upload's asset) before the record is read. A missing record, a record of another database, a
+    missing asset and a refused asset all answer the same 404, so the route cannot tell an upload
+    that does not exist from one the caller may not see. One GetItem on the asset and one on the
+    upload record."""
+    # Fail closed: with no authenticated identity no authorization can be evaluated.
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    if not casbin_enforcer.enforceAPI(event):
+        return authorization_error()
+
+    params = event.get('queryStringParameters') or {}
+    request_model = parse({
+        'uploadId': (event.get('pathParameters') or {}).get('uploadId', ''),
+        'assetId': params.get('assetId', ''),
+        'databaseId': params.get('databaseId', ''),
+    }, model=GetUploadStatusRequestModel)
+
+    not_found = general_error(status_code=404, body={'message': UPLOAD_NOT_FOUND_MESSAGE}, event=event)
+    asset = get_asset_details(request_model.databaseId, request_model.assetId)
+    authorization_object = upload_authorization_object(asset, request_model.databaseId, request_model.assetId)
+    if not casbin_enforcer.enforce(authorization_object, "GET") or not asset:
+        return not_found
+
+    record = asset_upload_table.get_item(
+        Key={'uploadId': request_model.uploadId, 'assetId': request_model.assetId}).get('Item')
+    if not record or record.get('databaseId') != request_model.databaseId:
+        return not_found
+    body = UploadStatusResponseModel(**uploadStatus.status_view(record)).dict()
+    log_action(event, "uploadStatusGet", database_id=request_model.databaseId,
+               asset_id=request_model.assetId, request_parameters={"uploadId": request_model.uploadId})
+    return success(body=body)
+
+
 #######################
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for file upload APIs"""
-    global claims_and_roles
+    global claims_and_roles, _invocation_context
+    _invocation_context = context
     claims_and_roles = request_to_claims(event)
     
     try:
+        # The status read has no body.
+        request_http = (event.get('requestContext') or {}).get('http') or {}
+        if request_http.get('method') == 'GET' and API_UPLOAD_STATUS.matches(request_http.get('path', '')):
+            return get_upload_status(event)
+
         # Parse request body with enhanced error handling
         body = event.get('body')
         if not body:

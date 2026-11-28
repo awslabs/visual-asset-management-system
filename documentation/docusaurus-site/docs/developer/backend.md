@@ -14,7 +14,17 @@ This guide covers development patterns for the VAMS Python Lambda backend, inclu
 | Logging       | AWS Lambda Powertools Logger with custom redaction   |
 | Testing       | pytest, moto                                         |
 
-Exact versions are pinned in `backend/requirements.txt` and `backend/requirements-dev.txt`, which are generated from `poetry.lock`. Install with `pip install -r requirements.txt` rather than pinning packages by hand.
+Exact versions are pinned in `backend/requirements.txt` and `backend/requirements-dev.txt`, which are exported from `backend/uv.lock`. Install with `pip install -r requirements.txt` rather than pinning packages by hand.
+
+### Python Library Requirements
+
+Backend library requirements follow the uv rules in [Managing Python Dependencies](setup.md#managing-python-dependencies):
+
+-   Declare a library in the `pyproject.toml` of the project that ships it: `backend/lambdaLayers/base/` for packages every handler imports, the authorizer layer for the authorizer, or a pipeline's own layer or container. A handler never installs a package of its own.
+-   Pin direct dependencies exactly where the Lambda runtime must not move (the AWS SDK, Pydantic v1, Casbin, Powertools), and keep `requires-python` at the runtime's Python (3.12 for layers; the backend test project uses 3.13).
+-   After any change run `uv lock` and the export command in the requirements file's header, and commit `pyproject.toml`, `uv.lock` and the export together. A package shared by `backend/` and the base layer moves in both in the same change.
+-   Prefer a release that is at least seven days old (`exclude-newer`), and list every version change in the pull request.
+-   The `python-dependency-audit` CI job must pass: fix an advisory by moving the package, and allowlist it only with a reason and a review date.
 
 :::warning[Pydantic v1 Only]
 VAMS uses Pydantic **v1** (1.10.x). Never use Pydantic v2 syntax (`model_validator`, `model_dump`, `ConfigDict`). Import `BaseModel` from `aws_lambda_powertools.utilities.parser`, not from `pydantic` directly. Violations cause import failures in Lambda.
@@ -26,7 +36,11 @@ VAMS uses Pydantic **v1** (1.10.x). Never use Pydantic v2 syntax (`model_validat
 backend/
   backend/
     common/                          # Shared utilities
-      constants.py                   # ABAC policy, allowed values, file blocklists
+      constants.py                   # ABAC policy, allowed values, file blocklists (core + add-on + custom)
+      addonConstants.py              # Add-on object types, constraint fields and blocklist entries
+      addonApiRoutes.py              # Add-on API routes
+      addonResourceNames.py          # Add-on SSM resource-name keys (AddonResourceKeys)
+      downloadEligibility.py         # Checks a file passes before its content is handed out (asset, key, version pin, blocklist)
       dynamodb.py                    # DynamoDB helpers (to_update_expr, get_asset_object_from_id)
       validators.py                  # Input validation regex patterns and validate() dispatcher
       s3.py                          # S3 file validation (extension + MIME type checks)
@@ -36,18 +50,23 @@ backend/
     customLogging/
       auditLogging.py                # CloudWatch audit logging (9 event types)
       logger.py                      # safeLogger wrapper with sensitive data redaction
+    custom/                          # FORK EXTENSION POINT: routes, resource names, constants (shipped empty)
     handlers/                        # Lambda handlers (one folder per domain)
+      addon/                         # Add-on handlers (Physna, Garnet)
       assets/assetService.py         # Gold standard handler
       auth/                          # Auth handlers (authorizer, constraints, cognito)
       authz/__init__.py              # Casbin ABAC/RBAC enforcer (CasbinEnforcer)
+      custom/                        # FORK EXTENSION POINT: a fork's handlers
       databases/                     # Database CRUD
       metadata/                      # Metadata CRUD
       pipelines/                     # Pipeline management
       workflows/                     # Step Functions workflow management
       ...                            # Additional handler domains
     models/                          # Pydantic v1 models
+      addon/                         # Add-on models (physnaViewer.py)
       assetsV3.py                    # Gold standard model file
       common.py                      # Response helpers, error functions
+      custom/                        # FORK EXTENSION POINT: a fork's models
       pipelines.py                   # Pipeline models
       workflows.py                   # Workflow models
       ...                            # Domain-specific models
@@ -232,14 +251,15 @@ if not casbin_enforcer.enforce(item, "GET"):
 Only `enforceAPI()` takes the Lambda event; `enforce()` never does. Passing the event as the first argument evaluates an object with no constraint fields and denies every request.
 
 :::warning[Object Type Annotation]
-You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types include: `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `apiKey`.
+You must add `object__type` to the item dictionary before calling `enforce()`. Valid object types are the `ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`: the core types `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `complianceSchema`, `complianceEvaluation`, `complianceCascade`, `complianceBinding`, `auditLog` and `bucket`, plus any type a deployment registers as an extension object type in `common/addonConstants.py` or `custom/customConstants.py` (see [Permission object types](customizing-vams.md#permission-object-types)). There is no `apiKey` object type; API-key access is governed by the API-tier route constraints.
 :::
 
 ### Key Authorization Concepts
 
 -   **CasbinEnforcer** uses a 60-second policy cache TTL per user
+-   Each `enforce()` evaluates only the policy lines for the object's `object__type`; lines for other object types cannot match it and are not evaluated
 -   Policy is stored in Amazon DynamoDB (`ConstraintsStorageTable`)
--   Claims are extracted via `request_to_claims(event)` which returns user tokens, roles, and MFA status
+-   Claims are extracted via `request_to_claims(event)` which returns user tokens, roles, MFA status, and how the caller authenticated: `authMethod` (`AUTH_METHOD_API_KEY`, `"apiKey"`, for an API key, otherwise `AUTH_METHOD_JWT`, `"jwt"`) and `apiKeyId` (the key's ID for an API-key caller, otherwise `None`). A handler that issues a credential compares `authMethod` with `AUTH_METHOD_API_KEY` from `handlers.auth`, never a bare string, to refuse a caller that authenticated with an API key
 -   Roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims
 
 ## Pydantic v1 Model Patterns
@@ -460,11 +480,13 @@ from common.validators import (
 
 System-owned key names, path prefixes, and file-name patterns are defined once in dedicated modules under `backend/backend/common/`. Always import these constants instead of redefining the literal values at call sites, so all usages can be found and changed in one place.
 
-| Module                    | Defines                                                                                               |
-| ------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `s3MetadataKeys.py`       | S3 object user-metadata keys (`assetid`, `databaseid`, `vams-*` status and change-provenance keys)    |
-| `s3PathPatterns.py`       | Reserved S3 prefix folders, the `.previewFile.` marker, allowed preview extensions, write prefixes    |
-| `dynamoDbMetadataKeys.py` | Special DynamoDB metadata keys (`REINDEX_METADATA_RECORD`) and internal field prefixes (`VAMS_`, `_`) |
+| Module                    | Defines                                                                                                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `s3MetadataKeys.py`       | S3 object user-metadata keys (`assetid`, `databaseid`, `vams-*` status and change-provenance keys)                                                                                  |
+| `s3PathPatterns.py`       | Reserved S3 prefix folders, the `.previewFile.` marker, allowed preview extensions, write prefixes, and `select_newest_preview_file` (the preview attached when a file has several) |
+| `dynamoDbMetadataKeys.py` | Special DynamoDB metadata keys (`REINDEX_METADATA_RECORD`) and internal field prefixes (`VAMS_`, `_`)                                                                               |
+
+The permission object types, their constraint fields and the upload blocklists in `constants.py` are each built at import as core + add-on (`common/addonConstants.py`) + custom (`custom/customConstants.py`). Import the merged names (`ALLOWED_CONSTRAINT_OBJECT_TYPES`, `CONSTRAINT_OBJECT_TYPE_FIELDS`, `PERMISSION_CONSTRAINT_FIELDS`, `UNALLOWED_FILE_EXTENSION_LIST`, `UNALLOWED_MIME_LIST`), never the `CORE_*` lists they start from. An add-on or fork entry that breaks a rule raises at import; the rules are in [Extending VAMS in a Fork](customizing-vams.md#permission-object-types).
 
 ### S3 Path Patterns
 
@@ -475,8 +497,10 @@ from common.s3PathPatterns import (
     RESERVED_S3_PREFIX_FOLDERS,       # frozenset: pipeline(s), preview(s), temp-upload(s), workspace(s)
     EXCLUDED_FILE_PATH_PATTERNS,      # patterns excluded from generic file processing
     PREVIEW_FILE_PATTERN,             # '.previewFile.' marker substring
-    ALLOWED_PREVIEW_FILE_EXTENSIONS,  # ('.png', '.jpg', '.jpeg', '.svg', '.gif')
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,  # ('.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.bmp')
     TEMPORARY_UPLOAD_PREFIX,          # 'temp-uploads/'
+    staged_upload_key,                # an upload's staging key: '{base}temp-uploads/{upload tag}/{final key}'
+    max_uploaded_file_key_bytes,      # longest uploaded final key for a baseAssetsPrefix (998 at a root)
     PREVIEW_PREFIX,                   # 'previews/' (asset bucket)
     PIPELINES_PREFIX,                 # 'pipelines/' (workflow run I/O in the default bucket)
     AUXILIARY_PREVIEW_PREFIX,         # 'preview/' (auxiliary bucket, singular)
@@ -540,7 +564,8 @@ The logger automatically redacts sensitive fields at all nesting levels, in both
 -   `idJwtToken`
 -   `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`
 -   `apiKey`, `apiKeySecret`, `rawKey`
--   the `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization` and `X-Amz-Security-Token` headers, in any letter case
+-   the `Cookie`, `Set-Cookie`, `X-Api-Key`, `Proxy-Authorization`, `X-Amz-Security-Token` and `x-vams-origin-verify` headers, in any letter case
+-   `vams:originVerifyDigest`, the authorizer context key that carries the digest of the accepted origin verification value
 -   `configBody`, `templateTags`, `tagValues` -- caller-authored template content, also filtered inside a JSON-string request `body`
 
 Redaction is driven by the field name, so a message that interpolates a payload value into a formatted string is written as-is. Log identifiers, counts, and flags rather than rendered bodies or tag values.
@@ -662,7 +687,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
 ## Custom Authentication Hooks
 
-VAMS provides two customization points for organizations to extend authentication behavior without modifying core code. Both files are located in `backend/backend/customConfigCommon/`.
+VAMS provides two customization points for organizations to extend authentication behavior without modifying core code. Both files are located in `backend/backend/customConfigCommon/`. They override **existing** behavior; net-new endpoints and handlers in a fork go in the fork extension points described in [Extending VAMS in a Fork](customizing-vams.md).
 
 ### Login Profile Customization
 
@@ -724,7 +749,7 @@ def customAuthClaimsCheckOverride(claims_and_roles, lambdaRequest):
 
 ## Notification Subscriptions
 
-`handlers/subscription/subscriptionService.py` records who is notified when an asset changes. Each entry is keyed on the event name and the entity (`Asset#{assetId}`) and holds a `subscribers` list; the handler resolves each subscriber to an email address and creates an Amazon SNS `email` subscription on the asset's own topic. `common/snsTopicNames.py` names that topic `AssetTopic{databaseId}-{assetId}-{hash}`: characters SNS does not allow in the asset ID become `-`, `{hash}` is the first 16 hex characters of the asset ID's SHA-256, and the name is shortened before the hash to stay within the 256-character SNS limit. Notification content is the asset name and its current version identifier, sent by `handlers/sendEmail/sendEmail.py`.
+`handlers/subscription/subscriptionService.py` records who is notified when an asset changes. Each entry of `SubscriptionsStorageTableV2` is keyed on the event name and the entity `Asset:<databaseId>:<assetId>` (two databases may hold assets with the same asset ID) and holds a `subscribers` list; the handler resolves each subscriber to an email address and creates an Amazon SNS `email` subscription on the asset's own topic. `common/snsTopicNames.py` names that topic `AssetTopic{databaseId}-{assetId}-{hash}`: characters SNS does not allow in the asset ID become `-`, `{hash}` is the first 16 hex characters of the asset ID's SHA-256, and the name is shortened before the hash to stay within the 256-character SNS limit. Notification content is the asset name and its current version identifier, sent by `handlers/sendEmail/sendEmail.py`.
 
 How a subscriber value becomes an email address:
 
@@ -738,7 +763,7 @@ Step 3 is deliberate — it allows a shared mailbox or resource account that has
 Two properties follow, and both are worth knowing before extending this handler:
 
 -   Amazon SNS sends a confirmation request to each new address and delivers nothing until it is confirmed, so an unrecognized address receives one confirmation email and no asset data.
--   Subscriber values are stored as submitted (user identifiers or addresses), while the topic holds the resolved addresses — and the removal paths do not agree on which form they match. `PUT /subscriptions` unsubscribes by resolved address, and `DELETE /subscriptions` deletes the asset's topic outright, but `DELETE /unsubscribe` matches the submitted value against the topic's endpoints. A user whose profile email differs from their user identifier is therefore dropped from the subscription record while their topic subscription remains.
+-   Subscriber values are stored as submitted (user identifiers or addresses), while the topic holds the resolved addresses. The removal paths therefore release topic endpoints by resolved address: `PUT /subscriptions` unsubscribes the resolved addresses of the subscribers it drops, and `DELETE /unsubscribe` resolves each submitted value through `get_userProfile_Email()` and releases the topic endpoints that match the submitted value or its resolved address, ignoring case. `DELETE /subscriptions` deletes the asset's topic outright.
 
 Subscription management is an administrative form. The Subscription Management page (`/auth/subscriptions`) is the only place an arbitrary recipient list is authored, and it is reachable only by a role granted that `web` route — the seeded `admin` role, whose default constraint allows all web paths. No shipped role template in `documentation/permissionsTemplates/` grants it. The asset details pane offers an ordinary user a self-subscribe toggle, which submits only that user's own identifier; the `/subscriptions` API routes themselves carry no such restriction, so a role granted `POST /subscriptions` (the `database-user` template grants it) can submit any recipient through the API or the CLI.
 :::
@@ -763,3 +788,4 @@ Avoid these common mistakes in backend development.
 -   [CDK Infrastructure](cdk.md) -- Lambda builder patterns and API route wiring
 -   [Frontend Development](frontend.md) -- Consuming backend APIs from the React frontend
 -   [Audit Logging](audit-logging.md) -- Understanding the audit trail system
+-   [Extending VAMS in a Fork](customizing-vams.md) -- Adding endpoints and handlers in fork-owned files that upstream does not edit

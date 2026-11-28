@@ -34,6 +34,11 @@ import {
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    tagEcsTaskDefinition,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 
 export interface ModelOpsConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -311,6 +316,11 @@ export class ModelOpsConstruct extends NestedStack {
             memoryLimitMiB: 16384, // 16 GB
             cpu: 2048, // 2 vCPU
         });
+        // Each task the state machine starts takes these by propagation (propagatedTagSource below).
+        tagEcsTaskDefinition(
+            taskDefinition,
+            pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.modelOps)
+        );
 
         const containerDefinition = taskDefinition.addContainer("ModelOpsContainerDefinition", {
             image: containerImage,
@@ -349,6 +359,9 @@ export class ModelOpsConstruct extends NestedStack {
             propagatedTagSource: ecs.PropagatedTagSource.TASK_DEFINITION,
             securityGroups: props.pipelineSecurityGroups,
             subnets: subnetSelection,
+            // Keeps constructPipeline's output as the state, so PipelineEndTask finds the staged
+            // input copy it deletes (stagedInputS3Uri) on the success route as on the error route.
+            resultPath: "$.ModelOpsTaskResult",
         })
             .addCatch(handleModelOpsError, {
                 resultPath: "$.error",
@@ -605,7 +618,9 @@ export class ModelOpsConstruct extends NestedStack {
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
-                        `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                        },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                         },

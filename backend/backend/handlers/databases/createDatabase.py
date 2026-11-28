@@ -3,16 +3,22 @@
 
 import boto3
 import json
-import datetime
+from common.timestamps import utc_now
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.apiRoutes import API_DATABASE
+from common.bucketRegistrations import (
+    BUCKET_NOT_AVAILABLE_MESSAGE,
+    bucket_authorization_object,
+    choosable_registration,
+)
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.databases import CreateDatabaseRequestModel, CreateDatabaseResponseModel
 
@@ -43,7 +49,7 @@ def create_database(request_model: CreateDatabaseRequestModel):
     """
     try:
         table = dynamodb.Table(db_database)
-        dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
+        dtNow = utc_now().strftime('%B %d %Y - %H:%M:%S')
         
         # Validate bucket exists in S3_ASSET_BUCKETS_STORAGE_TABLE
         # Using query instead of get_item because the table has a sort key
@@ -53,8 +59,10 @@ def create_database(request_model: CreateDatabaseRequestModel):
             KeyConditionExpression=Key('bucketId').eq(request_model.defaultBucketId)
         )
         
-        if not bucket_response.get('Items') or len(bucket_response['Items']) == 0:
-            raise VAMSGeneralErrorResponse("Bucket ID not found")
+        # A registration that is not active (retired, or a runtime one that is pending or disabled) is
+        # not offered for a new database, so it is refused here as an unknown one.
+        if choosable_registration(bucket_response.get('Items') or []) is None:
+            raise VAMSGeneralErrorResponse(BUCKET_NOT_AVAILABLE_MESSAGE)
         
         # Create database with put_item and conditional expression
         # This will fail atomically if database already exists
@@ -89,10 +97,25 @@ def create_database(request_model: CreateDatabaseRequestModel):
         logger.exception(f"Error creating database: {e}")
         raise VAMSGeneralErrorResponse("Error creating database")
 
+def bucket_choice_allowed(casbin_enforcer, bucket_id) -> bool:
+    """Whether the caller may put a new database on `bucket_id`: the registration exists, is active,
+    and the caller may read it (Tier 2 `bucket` GET, which writes the authorization audit record when
+    it refuses). Only the API path checks it; bucket sync creates its databases through
+    create_database() directly."""
+    from boto3.dynamodb.conditions import Key
+    response = dynamodb.Table(s3_asset_buckets_table).query(KeyConditionExpression=Key('bucketId').eq(bucket_id))
+    registration = choosable_registration(response.get('Items') or [])
+    if registration is None:
+        return False
+    return casbin_enforcer.enforce(bucket_authorization_object(registration), "GET")
+
+
 #######################
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for database creation API"""
     claims_and_roles = request_to_claims(event)
@@ -149,8 +172,15 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             if not casbin_enforcer.enforce(database, "POST"):
                 return authorization_error()
 
+            # Tier 2 on the chosen bucket. An unknown, retired or unreadable bucket id gets one answer,
+            # so the answer does not tell them apart.
+            if not bucket_choice_allowed(casbin_enforcer, request_model.defaultBucketId):
+                return validation_error(body={'message': BUCKET_NOT_AVAILABLE_MESSAGE}, event=event)
+
             # Process request
             response = create_database(request_model)
+            log_action(event, "databaseCreate", database_id=request_model.databaseId,
+                       changes=request_model.dict(exclude_none=True))
             return success(body=response.dict())
         else:
             # Not a route handled by this function

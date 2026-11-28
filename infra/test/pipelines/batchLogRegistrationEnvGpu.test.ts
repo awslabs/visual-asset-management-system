@@ -6,9 +6,9 @@
 /**
  * GPU-family counterpart of batchLogRegistrationEnvFargate.test.ts. The job definition NAME differs
  * by family: the splat toolbox names its CfnJobDefinition, so the env carries a plain string that
- * must equal the emitted JobDefinitionName; cosmos and gr00t leave theirs unnamed and derive the
- * name from the Ref; Isaac Lab's EcsJobDefinition already carries the derived name as
- * BATCH_JOB_DEFINITION on the lambda that submits the job.
+ * must equal the emitted JobDefinitionName; cosmos, gr00t and Image to 3D leave theirs unnamed and
+ * derive the name from the Ref (Image to 3D once per enabled model); Isaac Lab's EcsJobDefinition
+ * already carries the derived name as BATCH_JOB_DEFINITION on the lambda that submits the job.
  */
 
 import * as path from "path";
@@ -20,6 +20,7 @@ import { CosmosPredictConstruct } from "../../lib/nestedStacks/pipelines/genAi/n
 import { CosmosReasonConstruct } from "../../lib/nestedStacks/pipelines/genAi/nvidia/cosmos/constructs/cosmosReason-construct";
 import { CosmosTransferConstruct } from "../../lib/nestedStacks/pipelines/genAi/nvidia/cosmos/constructs/cosmosTransfer-construct";
 import { Gr00tFinetuneConstruct } from "../../lib/nestedStacks/pipelines/genAi/nvidia/gr00t/constructs/gr00tFinetune-construct";
+import { ImageTo3dConstruct } from "../../lib/nestedStacks/pipelines/genAi/imageTo3d/constructs/imageTo3d-construct";
 import { IsaacLabTrainingConstruct } from "../../lib/nestedStacks/pipelines/simulation/isaacLabTraining/constructs/isaacLabTraining-construct";
 import {
     ACCOUNT,
@@ -278,6 +279,79 @@ describe("genAi/nvidia/gr00t openPipeline registration environment", () => {
         expectDeclaredStagesInAsl(
             template,
             path.join(PRODUCERS, "genAi", "nvidia", "gr00t", "lambda", "openPipeline.py")
+        );
+    });
+});
+
+describe("genAi/imageTo3d openPipeline registration environment", () => {
+    const MODEL_KEYS = [
+        "sam3d",
+        "stable3dgen",
+        "trellis2",
+        "triposr",
+        "step1x3d",
+        "hunyuan3d",
+        "blenderagent",
+    ];
+    let template: Template;
+
+    beforeAll(() => {
+        const h = makePipelineHarness("ImageTo3dEnvStack", (c) => {
+            const imageTo3d = c.app.pipelines.useImageTo3d;
+            imageTo3d.enabled = true;
+            imageTo3d.huggingFaceToken = HF_TOKEN;
+            imageTo3d.autoRegisterWithVAMS = false;
+            for (const modelKey of MODEL_KEYS) {
+                (imageTo3d.models as any)[modelKey].enabled = true;
+            }
+            // The commercial template's value; getConfig() requires one when the agent is enabled.
+            imageTo3d.models.blenderagent.bedrockModelId = "global.openai.gpt-6-astra";
+        });
+        new ImageTo3dConstruct(h.stack, "ImageTo3dPipeline", {
+            config: h.config,
+            storageResources: h.storage,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+            modelCacheBucket: h.modelCacheBucket,
+            efsFileSystem: h.efsFileSystem,
+            efsSecurityGroup: h.efsSecurityGroup,
+            codeBuildImages: Object.fromEntries(
+                MODEL_KEYS.map((modelKey) => [
+                    modelKey,
+                    {
+                        repository: h.codeBuildImage.repository,
+                        imageUri: `123456789012.dkr.ecr.us-east-1.amazonaws.com/imageto3d:${modelKey}`,
+                        codeBuildProjectName: `imageto3d-${modelKey}`,
+                    },
+                ])
+            ),
+        });
+        template = Template.fromStack(h.stack);
+    });
+
+    test("carries the Batch default log group and each model's derived job definition name", () => {
+        const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
+        expectBatchLogGroupEnv(env);
+        expect(Object.keys(template.findResources("AWS::Batch::JobDefinition"))).toHaveLength(
+            MODEL_KEYS.length
+        );
+        const refs = new Set<string>();
+        for (const modelKey of MODEL_KEYS) {
+            const value = env[`BATCH_JOB_DEFINITION_NAME_${modelKey.toUpperCase()}`];
+            expectDerivedJobDefinitionName(template, value);
+            refs.add(jobDefinitionRefOf(value)!);
+        }
+        // Each model names its own job definition, so its container lines are attributed to its state.
+        expect(refs.size).toEqual(MODEL_KEYS.length);
+    });
+
+    test("every stage name the producer declares is a state of the machine", () => {
+        expectDeclaredStagesInAsl(
+            template,
+            path.join(PRODUCERS, "genAi", "imageTo3d", "lambda", "openPipeline.py")
         );
     });
 });

@@ -37,10 +37,65 @@ GATE_AND_TUNING_ENV_VARS = (
     "VAMS_PROFILE",
     "VAMS_MAX_PAGES",
     "VAMS_PAGE_SIZE",
+    # Remote mode and tool sets: a stray VAMS_MCP_TRANSPORT would make every reload a remote server.
+    "VAMS_MCP_TRANSPORT",
+    "VAMS_MCP_TOOLSETS",
+    "VAMS_MCP_HOST",
+    "VAMS_MCP_PORT",
+    "VAMS_MCP_AUTH_CONFIG",
+    "VAMS_MCP_TOOL_TIMEOUT",
+    "VAMS_MCP_MAX_CALLS_PER_USER",
 )
 
 for _name in GATE_AND_TUNING_ENV_VARS:
     os.environ.pop(_name, None)
+
+# The vamscli profile lives under $HOME (vamscli.constants.get_config_dir). Point HOME at an empty
+# directory BEFORE vams_mcp.server is first imported, so the suite never reads the developer's own
+# profile: CI runs with no profile, and a suite that passes only with a signed-in profile on the
+# host is not a guard. Every test then
+# starts from the same state, nobody signed in, and the `signed_in_by_default` fixture below supplies
+# a mocked client to every test that does not ask for the signed-out state.
+import tempfile  # noqa: E402
+
+ISOLATED_HOME = tempfile.mkdtemp(prefix="vams-mcp-tests-home-")
+os.environ["HOME"] = ISOLATED_HOME
+os.environ.pop("APPDATA", None)
+
+# Tests that exercise the signed-out server ask for one of these fixtures; every other test gets a
+# mocked client in place of the missing one.
+SIGNED_OUT_FIXTURES = {"signed_out", "no_client"}
+
+
+@pytest.fixture(autouse=True)
+def signed_in_by_default(request, monkeypatch):
+    """Install a mocked client when the server has none, unless the test targets the signed-out path.
+
+    With the isolated HOME the server starts degraded (`CLIENT is None`), and `@tool_result` then
+    answers NotAuthenticated before a tool body runs. Tests of a tool's behaviour mock
+    `server.CLIENT` themselves, or register an add-on module with their own mocked client, and expect
+    the body to run, so a stand-in client is set here. Tests of the degraded path request
+    `signed_out` (or `no_client`), which keeps `CLIENT` None.
+    """
+    if SIGNED_OUT_FIXTURES & set(request.fixturenames):
+        yield
+        return
+    from unittest.mock import MagicMock
+
+    from vams_mcp import server
+
+    if server.CLIENT is None:
+        monkeypatch.setattr(server, "CLIENT", MagicMock(name="conftest-default-client"))
+    yield
+
+
+@pytest.fixture
+def no_client(monkeypatch):
+    """The server as it starts with nobody signed in (the isolated HOME holds no profile)."""
+    from vams_mcp import server
+
+    monkeypatch.setattr(server, "CLIENT", None)
+    return server
 
 
 @pytest.fixture(autouse=True)
@@ -61,3 +116,63 @@ def gate_env_stays_cleared():
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
+
+
+@pytest.fixture
+def server_with_switches():
+    """Reload `vams_mcp.server` over a profile whose feature-switch snapshot holds the given switches.
+
+    The add-on tools are registered from the snapshot of the profile the server signs in with
+    (`addon_tools.register_addon_tools`), so a test of which add-on tools a server lists must not
+    depend on the profile of the machine running the suite. The returned context manager builds the
+    server's client as a mock whose `has_feature` answers from `switches` (the real `require_feature`
+    and `unwrap_message` on top of it), applies the gate variables (and, when given, `toolsets`), reloads, yields the module, and
+    reloads it again on exit with the client restored and the gates cleared.
+    """
+    import contextlib
+    import importlib
+    import types
+    from unittest.mock import MagicMock
+
+    from vams_mcp import client as client_module
+    from vams_mcp import server as server_module
+
+    real_client_class = client_module.VamsClient
+
+    @contextlib.contextmanager
+    def _reloaded(switches, enable_writes=False, enable_destructive=False, toolsets=None):
+        def _client(config):
+            mock = MagicMock()
+            mock.config = config
+            mock.has_feature.side_effect = lambda name: name in set(switches)
+            mock.feature_switches.return_value = {
+                "has_feature_switches": True,
+                "enabled": sorted(switches),
+                "total": len(set(switches)),
+                "fetched_at": None,
+            }
+            mock.require_feature = types.MethodType(real_client_class.require_feature, mock)
+            mock.unwrap_message = real_client_class.unwrap_message
+            return mock
+
+        gates = {"VAMS_ENABLE_WRITES": enable_writes, "VAMS_ENABLE_DESTRUCTIVE": enable_destructive}
+        for name, enabled in gates.items():
+            if enabled:
+                os.environ[name] = "true"
+            else:
+                os.environ.pop(name, None)
+        if toolsets:
+            # `toolsets` is VAMS_MCP_TOOLSETS for the reload ("all,audit": every tool, audit included).
+            os.environ["VAMS_MCP_TOOLSETS"] = toolsets
+        client_module.VamsClient = _client
+        try:
+            importlib.reload(server_module)
+            yield server_module
+        finally:
+            client_module.VamsClient = real_client_class
+            for name in gates:
+                os.environ.pop(name, None)
+            os.environ.pop("VAMS_MCP_TOOLSETS", None)
+            importlib.reload(server_module)
+
+    return _reloaded

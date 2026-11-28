@@ -9,12 +9,17 @@ Auto-loaded when working within `web/src/visualizerPlugin/`. See `web/CLAUDE.md`
 The 3D/media viewer system uses a plugin-based architecture:
 
 -   **PluginRegistry** (`core/PluginRegistry.ts`) — Singleton that manages all viewer plugins
--   **viewerConfig.json** (`config/viewerConfig.json`) — JSON configuration for all plugins
--   **manifest.ts** (`viewers/manifest.ts`) — Vite static-analysis paths for dynamic imports
+-   **viewerConfig.json** (`config/viewerConfig.json`) — JSON configuration for the core plugins; `addonViewerConfig.json` (add-on viewers: Physna and the licensed VNTANA and VEERUM viewers) and `customViewerConfig.json` (fork extension point) hold the rest
+-   **manifest.ts** (`viewers/manifest.ts`) — Vite static-analysis paths for dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` for add-on and fork viewers
+-   **viewerSources.ts** (`core/viewerSources.ts`) — Merges the three configs and manifests for the registry (see "Add-on and fork viewers")
 -   **StylesheetManager** (`core/StylesheetManager.ts`) — Per-plugin CSS lifecycle management
 -   **viewerLayers.ts** (`core/viewerLayers.ts`) — `VIEWER_LAYER`, the stacking scale for what a viewer draws over its scene (see "Stacking Over the Scene")
 -   **useOverlap.ts** (`core/useOverlap.ts`) — `useOverlap(a, b)`, whether two elements overlap on screen, and `useInfoBoxClearOfPanel()`, which leaves a viewer's info box out while its open panel overlaps it (see "Stacking Over the Scene")
 -   **types.ts** (`core/types.ts`) — Shared `ViewerPluginProps` and config interfaces
+-   **extensionMatching.ts** (`core/extensionMatching.ts`) — The one filename rule (`filenameExtension`, `extensionToken`), the `NO_EXTENSION` token `(none)`, `describeExtensionToken` and `supportsAllExtensions` (see "Files Without an Extension and the Binary Guard")
+-   **textContent.ts** (`core/textContent.ts`) — `classifyTextSample(bytes, isComplete)` (text, binary or unsupported encoding, from a file's first 8 KiB) and `loadTextFile(url, signal)`, the bounded loader both text viewers use (see "Files Without an Extension and the Binary Guard")
+-   **viewerData.ts** (`core/viewerData.ts`) — `auxiliaryPreviewStreamUrl(apiBase, databaseId, assetId, fileKey, dataPath)`, the auxiliary preview stream URL of one file's viewer data (`{file key}/preview/{dataPath}`, each segment encoded and the slashes kept, the key sent as given: `//x` is the file whose key has an empty segment after the asset's folder, #1977), and `POTREE_VIEWER_METADATA`. The Potree and VEERUM viewers build their point cloud URL with it. It sends the key the host gives as it is: the API reads the full S3 key and the path in the asset and decides which file of the asset a path names, so a viewer never strips or adds a prefix to guess a path (#1855). Keep a path's leading `/`: it marks the path in the asset (search results send `/{path}`), and without it a path that starts with the location key (a subfolder named like the asset) is read as another file's full key.
+-   **streamFailure.ts** (`core/streamFailure.ts`) — `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent` `downloadFailureMessage(response, subject)` turns a failed `downloadAsset` tuple (`[false, message, status?, apiMessage?]`, the fourth entry the API's own `message` from the response body) into the sentence a viewer shows, from what the API answered only: 401 `DOWNLOAD_UNAUTHENTICATED_MESSAGE` ("Your session has expired. Sign in again to view this file."), 403 `DOWNLOAD_FORBIDDEN_MESSAGE` ("You do not have permission to view or download this file."), 410 archived, 404 not found, another 4xx with a message the API's own message (`apiRefusalMessage`, for example the `400` "Asset is quarantined and cannot be downloaded" of the quarantine download block, D166), a tuple with no status because no API answer came back (`[false, message, undefined]`, which `downloadAsset` marks with `markUnanswered` from `services/networkFailure.ts` for these two only: an AWS WAF block with its request ID, or `NETWORK_FAILURE_MESSAGE`) its own message, anything else `subject`; `downloadStatusMessage(status, subject, apiMessage?)` does the same for a viewer that fetched the streaming route itself, and `streamResponseFailureMessage(response, subject)` reads the API's message from that response's body (Needle USD, ThatOpen IFC). `streamResponseFailure(response, subject)` returns the Error such a viewer throws: an `ApiRefusalError` (`isApiRefusalError`) carrying the API's reason when the API refused the file with one, or when a `403` says more than a plain denial (an AWS WAF block's message with its request ID, the stream route's "Asset not distributable"), as `describeStreamFailure` reads it, else an `Error` with the text above; a viewer that collects per-file errors keeps that flag, so a load where no file loaded shows the refusal's reason rather than a generic "No files loaded" sentence (Needle USD, D172). A viewer whose error view adds a format or file hint under its message ("Please ensure the file is a supported 3D format", the Needle USD and ThatOpen IFC format lines, Cesium's "Supported format: .json") leaves it out when the error is such a refusal (D170): Three.js, Needle USD and ThatOpen IFC keep an `errorIsRefusal` flag from `isApiRefusalError`, and Cesium from `isTilesetRefusal` (`CesiumViewerPlugin/tilesetFailure.ts`; in a multi-tileset load only when every failed tileset was refused). The 401/403/404/410 sentences keep the hint as before (#1211). `describeStreamFailure` names such a refusal too. A preview, thumbnail or download button with fixed failure text shows `downloadRefusalReason(response)` (the API's refusal message, or the message of a download with no API answer, else null) in its place (the asset and file preview thumbnails and modals, the asset details pane, the search result thumbnails, the file version download buttons). Nothing in the browser reads a compliance state to decide a refusal: the API decides and the web shows its answer. Every core viewer that downloads a file uses them (Online 3D, PDF, Text, Image, TIFF/TGA, Columnar, Audio, Video, HTML, SuperSplat, both Gaussian splat viewers, ThatOpen IFC, Needle USD, Three.js and the Robotics Data Viewer), and the Text Diff Viewer's per-side messages use the same constants (#1211). The licensed VNTANA viewer uses `downloadFailureMessage` too; Cesium and Potree name stream failures through `describeStreamFailure`, and VEERUM probes a refused point cloud or tileset (`probeStreamFailure`) and names it the same way when the API gave its own reason. Tests of a refusal render the API's real answer from `core/quarantineRefusal.testdata.ts`: its body, `core/quarantineRefusalBody.testdata.json`, is compared with each file route's real response by the backend handler tests (`backend/tests/quarantineRefusalBody.py`, D169), so a test never mocks a message the API does not send.
 
 Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below maps to a directory of that form (e.g. `potree-viewer` → `viewers/PotreeViewerPlugin/`). Per-viewer custom-install scripts live in `web/customInstalls/` (one dir per viewer, plus a shared `utility/` helper dir) and are executed by the `postinstall` chain in `web/package.json`.
 
@@ -22,30 +27,266 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 
 ## Current Viewers
 
-| ID                                 | Name                           | Category | Extensions                                                                                                                               | Status                                              |
-| ---------------------------------- | ------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `online3d-viewer`                  | Online 3D Viewer               | 3d       | .3dm, .amf, .bim, .off, .wrl                                                                                                             | enabled                                             |
-| `potree-viewer`                    | Potree Viewer                  | 3d       | .e57, .las, .laz, .ply                                                                                                                   | enabled                                             |
-| `image-viewer`                     | Image Viewer                   | media    | .png, .jpg, .jpeg, .svg, .gif                                                                                                            | enabled                                             |
-| `html-viewer`                      | HTML Viewer                    | document | .html                                                                                                                                    | enabled                                             |
-| `video-viewer`                     | Video Player                   | media    | .mp4, .webm, .mov, .mkv, .m4v                                                                                                            | enabled                                             |
-| `audio-viewer`                     | Audio Player                   | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                                                                                      | enabled                                             |
-| `columnar-viewer`                  | Columnar Data Viewer           | data     | .fcs, .csv                                                                                                                               | enabled                                             |
-| `pdf-viewer`                       | PDF Viewer                     | document | .pdf                                                                                                                                     | enabled                                             |
-| `cesium-viewer`                    | Cesium 3D Tileset              | 3d       | .json                                                                                                                                    | enabled                                             |
-| `text-viewer`                      | Text Viewer                    | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
-| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat       | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
-| `supersplat-viewer`                | SuperSplat Editor (PlayCanvas) | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
-| `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat      | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
-| `vntana-viewer`                    | VNTANA 3D Viewer               | 3d       | .glb                                                                                                                                     | **disabled** (licensed)                             |
-| `veerum-viewer`                    | VEERUM 3D Viewer               | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed)                             |
-| `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
-| `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
-| `physna-viewer`                    | Physna Viewer                  | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
-| `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
-| `preview-viewer`                   | Preview Viewer                 | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
+| ID                                 | Name                               | Category | Extensions                                                                                                                               | Status                                              |
+| ---------------------------------- | ---------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `online3d-viewer`                  | Online 3D Viewer                   | 3d       | .amf, .bim, .off, .wrl                                                                                                                   | enabled                                             |
+| `online3d-viewer-rhino`            | Online 3D Viewer (Rhinoceros 3D)   | 3d       | .3dm                                                                                                                                     | enabled (requires ALLOWUNSAFEEVAL)                  |
+| `potree-viewer`                    | Potree Viewer                      | 3d       | .e57, .las, .laz, .ply                                                                                                                   | enabled                                             |
+| `image-viewer`                     | Image Viewer                       | media    | .png, .jpg, .jpeg, .svg, .gif, .webp, .bmp                                                                                               | enabled                                             |
+| `tiff-tga-viewer`                  | TIFF/TGA Image Viewer              | media    | .tga, .tif, .tiff                                                                                                                        | enabled                                             |
+| `html-viewer`                      | HTML Viewer                        | document | .html                                                                                                                                    | enabled                                             |
+| `video-viewer`                     | Video Player                       | media    | .mp4, .webm, .mov, .mkv, .m4v                                                                                                            | enabled                                             |
+| `audio-viewer`                     | Audio Player                       | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                                                                                      | enabled                                             |
+| `columnar-viewer`                  | Columnar Data Viewer               | data     | .fcs, .csv                                                                                                                               | enabled                                             |
+| `geotiff-map-viewer`               | GeoTIFF Map Viewer                 | data     | .tif, .tiff                                                                                                                              | enabled (requires LOCATIONSERVICES)                 |
+| `pdf-viewer`                       | PDF Viewer                         | document | .pdf                                                                                                                                     | enabled                                             |
+| `cesium-viewer`                    | Cesium 3D Tileset Viewer           | 3d       | .json                                                                                                                                    | enabled                                             |
+| `text-viewer`                      | Text Viewer                        | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc., and files with no extension (`(none)`)                                  | enabled                                             |
+| `text-diff-viewer`                 | Text Diff Viewer                   | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .sql, etc., and files with no extension (same list as `text-viewer`)                       | enabled (compare-only: 2 files, cross-asset)        |
+| `gaussian-splat-viewer-babylonjs`  | Gaussian Splat Viewer (BabylonJS)  | 3d       | .ply, .spz, .splat, .sog                                                                                                                 | enabled                                             |
+| `supersplat-viewer`                | SuperSplat Editor (PlayCanvas)     | 3d       | .ksplat, .lcc, .ply, .sog, .splat, .spz                                                                                                  | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
+| `gaussian-splat-viewer-playcanvas` | Gaussian Splat Viewer (PlayCanvas) | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
+| `vntana-viewer`                    | VNTANA 3D Viewer                   | 3d       | .glb                                                                                                                                     | **disabled** (licensed add-on)                      |
+| `veerum-viewer`                    | VEERUM 3D Viewer                   | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed add-on)                      |
+| `needletools-usd-viewer`           | Needle USD Viewer (Experimental)   | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
+| `threejs-viewer`                   | Three.js Viewer                    | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .usd, .usda, .usdc, .usdz, .stp, .step, .iges, .igs, .brep                        | enabled                                             |
+| `physna-viewer`                    | Physna Viewer                      | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
+| `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer            | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
+| `robotics-data-viewer`             | Robotics Data Viewer (Lichtblick)  | data     | .mcap, .bag, .db3, .ulg, .ulog                                                                                                           | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
+| `preview-viewer`                   | Preview Viewer                     | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
-> `supersplat-viewer` is an **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see "A Framed Viewer Must Not Receive a Signed URL in the Query String" below before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
+> `supersplat-viewer` is an **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see "A Framed Viewer Must Not Receive a Signed URL in the Query String" below before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor. The install removes the editor's WebMCP tool registration (`registerWebMCP` in upstream `src/main.ts`, v3.7.0+) before building and fails if the built bundle still references `modelContext`: the framed editor is same-origin with VAMS, so its tools must not be offered to a browser agent.
+
+> `robotics-data-viewer` is an **iframe-embedded** viewer — `web/customInstalls/robotics/roboticsViewerInstall.js` builds the Lichtblick web app (MPL-2.0, pinned tag and commit) from source with the VAMS overlay in `web/customInstalls/robotics/overlay/` into `public/viewers/robotics/`. The host component (`RoboticsDataViewerPlugin/`) presigns each file under its own asset and hands the URLs over in the iframe's URL **fragment** (`roboticsDeepLink.ts`). `.mcap` (several files on one timeline) and `.bag` are read with HTTP Range requests; `.db3` (one file or a ROS 2 split bag) and `.ulg`/`.ulog` are downloaded whole, limited to `customParameters.maxWholeFileBytes` (1 GiB) across the selection. No Lichtblick extension can be installed or loaded: an extension is code run in the framed document, which is same-origin with VAMS, so the overlay entrypoint renders upstream `SharedRoot` with an empty extension loader list instead of upstream `WebRoot` (which always adds IndexedDB loaders). The install's build check and `roboticsBuild.test.ts` fail if that changes. User Scripts stay available (they run in a web worker).
+
+> `geotiff-map-viewer` (GeoTIFF Map Viewer, gated on `LOCATIONSERVICES`) draws rasters with the shared code in `web/src/common/cogRaster/`, which the Search map's **Show raster** popup action also uses (`components/search/SearchRasterLayers.tsx`, lazy-loaded). Keep a single implementation there. `rasterResolver.prepareRaster` makes the decision. It refuses from the `ext_crs` and `ext_georeferenced` attributes (#1600) without opening the file (no georeference, unsupported CRS), prefers a converted COG named by the source's `cog_link_cogFile` attribute (#1601, flat `cog_link_*` keys, the value an asset-relative path with a leading slash), falling back to the source. A file opened at a version (a file version other than the latest, or an asset version, whose file version the file-info route's `versions[].assetVersionIds` names) takes a COG only when its `cog_link_cogOfVersionId` is that version (`cogOfPinnedVersion`: the COG as the asset version recorded it, then the COG's latest version, each only if the API grants its download); otherwise that version of the source is drawn, labelled `name (version X)` (or `name (asset version N)` through an asset version), with `staleCog` set and the notice `STALE_COG_PINNED_TEXT`. An unpinned file, and a file the host passes at its latest version, draws its COG and, when the COG's `cog_link_cogOfVersionId` is not the source's latest version, says "COG is from an earlier version of the source". A size lookup for a pinned file reads that version's size. The resolver then always reads the TIFF header, which decides the path: stale or wrong attributes cannot send a file to the tile path. **Only a COG in EPSG:3857 (or 102113, the only alias the library accepts) takes the tile path** (`@geomatico/maplibre-cog-protocol`, `cog://<presigned URL>`, registered once in `cogProtocol.ts`). That library does not reproject and draws a blank layer, with no error, for any other CRS. A small georeferenced file in a CRS bundled in `projections.ts` (no network lookup) is drawn on the placed-image path (`placedImage.ts`). That path uses geotiff.js ranged reads of the smallest overview of at least 2048 px, capped at 2048 px, then a PNG blob on four proj4-projected corners, labelled "approximate placement (not reprojected)" unless the CRS is Web Mercator. Its limits are in `rasterEligibility.ts`: `PLACED_IMAGE_MAX_FILE_BYTES` (128 MiB, also applied to the chosen image's strip or tile byte counts), `PLACED_IMAGE_MAX_DECODE_PIXELS` (100 Mpx) and `PLACED_IMAGE_MAX_DECODE_BYTES` (256 MiB) on the image actually decoded, checked from the header before any pixel is read (geotiff.js decodes the chosen image at full resolution), and `PLACED_IMAGE_MAX_DIAGONAL_KM` (100 km). The placed path fails closed: without a decode plan, an extent, and either the file size (caller, `Content-Range` of the header read, or `fileInfo`) or the byte counts, it refuses. `RasterLayerManager.ts` owns layer order (below the Search map's `geojson-*` layers), opacity, the 8-overlay cap and cleanup (it revokes blob URLs). It refreshes a tile source's presigned URL at 80% of its lifetime (at most 45 minutes, `presignedUrl.ts`) and after a read error on that source, because maplibre reports a refused tile read only as "Request failed"; a read error within 30 s of that fresh URL gets one automatic retry after a short wait (a passing S3 outage clears), and a second such error, or a fourth error refresh, marks the row failed (`entry.failed`, the layer leaves the map) instead of leaving a blank layer; a failed tile row has a **Retry** button (`retry()` on the manager and hook) that rebuilds the layer from a fresh URL, unless the API refused the file: a `RasterDownloadRefused` (403, quarantine 400, 410, 404) gives up at once in `keepFresh` and `retry()`, the row shows the API's own reason and `entry.retryable` is false (no Retry); only transient failures (network, 5xx, tile reads) are retried with backoff. A file is listed once (the manager compares the drawn file by asset, path and effective version, so a source resolved to its COG and the same COG selected by itself are one row, while a pinned version that is not the latest is its own row labelled `name (version X)`, and a file opened through an asset version is labelled `name (asset version N)`; a pin on the latest version and the unpinned file are one row. The file manager names a file by its full stored key and a source's `cog_link_cogFile` by the path inside the asset, so when a listed file has the same file name but another key or version (`possibleDuplicates`), the hook asks the file-info route for each file's `relativePath` and latest version id (`fileIdentity`) and the manager compares those; when the API cannot say, the two stay separate rows). Three failed renewals in a row (backoff 1, 2, 4 min) do the same. The viewer fills the visualizer frame it is placed in (`height: 100%`, an opaque `--vams-bg-primary` background), and sets no height of its own: a fixed height clipped the map and its controls below a shorter frame and let the frame's striped backdrop (`.visualizer-container`) show under it in a taller one or in fullscreen. The map and layer list are wrapping flex items (map basis 480 px and growth 999, list basis 300 px); side by side both fill the frame and the list scrolls inside itself, and below `STACKED_BELOW_PX` the list wraps under the map (the map takes 65% of the frame, at least 360 px, so the top of the list stays in view) and the viewer scrolls. The Search map is drawn flat (`projection="mercator"`, because the basemap style selects the globe, whose fit-to-bounds frames the wrong place for results spread over the world) and frames its hits with `fitBounds` over `locationDataBounds` (`components/search/utils/mapBounds.ts`): the longitude range is the covering arc of each shape part's own interval, so a footprint split at 180 beside Bay Area files frames the Pacific (`east` may exceed 180), and one wide shape (a latitude-cropped global raster) frames the world. In the GeoTIFF Map Viewer's layer list (`RasterLayerPanel` with `visibilityToggle`) each raster has a **Visible** switch (Cloudscape `Toggle`, checked while the raster is shown, with one accessible name for both states, `Visible: <label>`, which starts with the visible word so a speech-input user can say "click Visible" (WCAG 2.5.3) and the checked state carries on/off for a screen reader, and Space operates it; there is no separate Hidden badge; a polite status line says hidden, shown or could not be shown once the manager has applied the change, never at the press; a hidden row's label uses the `text-status-inactive` colour token, which differs from a shown label in both themes, measured 5.6:1 light and 7.0:1 dark (a shown label is 18.5:1 and 10.2:1), not an opacity) instead of Remove: `RasterLayerManager.setVisible` takes a hidden layer's map layer and source off the map (no tile is fetched, the link renewal and any pending retry stop), keeps the row, opacity and order, keeps a placed image's blob URL until the layer is removed or the map goes, and on Show asks for a fresh link first (a refusal shows the API's reason, no Retry). Map errors that still arrive for a hidden layer's removed source are ignored. Zoom to layer is disabled while a layer is hidden; the 8-layer cap counts hidden layers so Show always succeeds. The Search map's panel keeps Remove. The refusal messages say what is wrong (`rasterEligibility.ts`): (a) a Web Mercator TIFF that is too large to place: not cloud-optimized only when the header says `isCog === false`, a COG in an alias the tile reader refuses (900913, 3785, 102100; reason `web-mercator-alias`, re-save advice where the COG Conversion pipeline would skip it, `PIPELINE_WEB_MERCATOR_CODES`), or layout unknown (`layout-unknown`), (b) a COG or TIFF in another projection too large to place as an approximate image (named with `crsLabel`, for example `EPSG:32610 (UTM zone 10N)`, and `COG` or `TIFF` from the header), or in a CRS the viewer does not bundle, (c) too many pixels to draw as an image, (d) no georeferencing (no conversion offered), (e) antimeridian (split it, no conversion offered). Each conversion hint names the COG Conversion pipeline as its documentation does and says it writes `<file>.cog.tif` beside the file in EPSG:3857. A click on a footprint opens the smallest footprint under it, by its polygons' area on the flat map (shoelace over the outer rings in Web Mercator, so a rotated quad counts its real area), the topmost when equal ( `pickFootprint` in `components/search/utils/mapPick.ts`) and anchors its popup at the click, not at the centre of the shape's box, which for a footprint split at longitude 180 is the other side of the world; a popup opened without a click falls back to the centre of the largest part's box (`footprintFallbackAnchor`). A raster whose WGS84 extent passes longitude 180 is refused with its own message (`crosses-antimeridian`), since neither the viewer nor the COG pipeline can handle it. The Search map's popup button toggles Show and Hide raster from the shown set that `SearchRasterLayers` reports. The **Show raster files** switch on the Search map's results-title row (`SearchPageMapView`, on by default, not stored) is a view filter only: off removes the `canShowRaster` hits from the plotted set (so the count and `fitBounds` follow the visible hits) and passes `hidden` to `SearchRasterLayers`, which hides the drawn rasters with `setVisible` and restores exactly those on again; the API still decides each download. A tile layer frames from the header's WGS84 extent, or from the source's own bounds on `sourcedata`; the viewer frames only once `zoomTo` succeeds. The library's geotiff worker pool (one blob worker per core) is module-level and cannot be released; its caches are bounded (16 files, 1,024 tiles, 1 h). Unit fixtures are in `common/cogRaster/__fixtures__/`, regenerated by `generate_fixtures.py`.
+
+---
+
+## Compare Mode
+
+`PluginRegistry.getCompatibleViewers(exts, isMultiFile, isPreview, mode, compareContext)` takes a
+`mode` of `"visualize"` (default, unchanged behavior) or `"compare"`. In compare mode the registry
+surfaces **only** viewers that declare a `compareMode` block with `enabled: true`, whose
+`[minFiles, maxFiles]` window admits the selected file count, and whose shape flags admit the
+selection: N versions of one file requires `allowSameFileDifferentVersions`, N distinct files
+requires `allowDifferentFiles`, and entries spanning assets require `allowCrossAsset`.
+
+The per-viewer admission predicates for both paths live in `core/viewerSelection.ts` (pure,
+unit-tested; the registry re-exports them): `admitsVisualizeSelection(config, exts, isMultiFile)` and
+`admitsCompareSelection(config, exts, compareContext)`. The classification lives in
+`core/compareShape.ts` (pure, unit-tested; the registry re-exports it):
+`deriveCompareContext(files)` returns `{ fileCount, shape, crossAsset }`. **Identity is database +
+asset + key, never the key alone** — `config.json` under assetA and `config.json` under assetB are two
+different files (`shape: "different-files"`, `crossAsset: true`), not two versions of one file.
+
+**Compare-only viewers.** A viewer that renders nothing but `compareFiles` (the Text Diff Viewer)
+declares `compareMode.compareOnly: true`. The visualize path then never offers it — for one file or
+many, whatever `supportsMultiFile` and the extension match say — because visualize never passes
+`compareFiles` and the viewer would fail at once with "needs exactly two files". Keep such a viewer's
+`supportsMultiFile: false`: that flag is the **visualize** multi-file capability (`multiFileKeys`);
+the compare file count is `compareMode.minFiles`/`maxFiles`. Without `compareOnly`, compare capability
+is orthogonal — a viewer may visualize single files and also compare two.
+
+`DynamicViewer` renders compare mode when passed `mode="compare"`; it forwards the ordered files to
+the viewer as `compareFiles` (index 0 = left/base) and sets `compareMode={true}`. Compare-capable
+viewers read `compareFiles` instead of the single-file props.
+
+### Mode availability (what a surface may offer)
+
+**The design rule: a viewer is EITHER a compare-differ (`compareMode.compareOnly: true`) OR a regular
+viewer (single-file, or multi-file via `supportsMultiFile`) — never a hybrid.** The shipped config is
+guarded by `core/viewerSelection.test.ts` ("shipped viewerConfig.json compare contract"): every
+compare-capable viewer is compare-only, and no compare-only viewer is admitted on the visualize path
+for any file count.
+
+Every entry point decides what to offer with the SAME predicates, never with its own extension list:
+
+| Question                                                 | Pure predicate (`core/viewerSelection.ts`)                 | Registry-facing lookup (`core/viewableExtensions.ts`)                |
+| -------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------- |
+| Can one regular viewer visualize these files together?   | `hasVisualizeViewer(configs, exts, isMultiFile)`           | `areFilenamesViewableTogether(filenames)` / `hasViewerForExtensions` |
+| Can one compare viewer diff these files together?        | `hasCompareViewer(configs, exts, compareContext)`          | `areFilesComparableTogether(files)` (derives count + shape)          |
+| Can a differ diff two versions of ONE file of this type? | `LONE_FILE_COMPARE_CONTEXT` (the context it is asked with) | `isFilenameComparableAsVersions(name)`                               |
+| Which modes may the modal offer for this selection?      | `availableViewerModes(configs, exts, isMultiFile, ctx)`    | `availableModesForFiles(files)` → `PluginRegistry.getAvailableModes` |
+| What pair does a lone file enter Compare with?           | `seedCompareFromSingleFile(file)` (`core/compareShape.ts`) | — (hosts call it directly)                                           |
+
+Rules the surfaces follow (and the Playwright spec `e2e/seeded.compare.spec.ts` proves):
+
+-   **`ViewerSelector`** filters its list through `listableViewers(viewers, mode)`: a compare-only
+    viewer is never an option in the Visualize dropdown, whatever list a caller hands it.
+-   **`FileViewerModal`** asks `availableModesForFiles(files)` once the registry is ready. Both modes
+    admitted → the Visualize/Compare toggle (top-right of the body); exactly one → that mode is
+    rendered and the toggle is hidden (a requested `initialMode` no viewer admits is replaced);
+    neither → a "No viewer for this selection" empty state (`data-testid="file-viewer-no-viewer"`)
+    instead of mounting `DynamicViewer`.
+-   **A lone file admits Compare as two versions of itself.** `availableViewerModes` judges a
+    one-file selection by `LONE_FILE_COMPARE_CONTEXT` (`compareContextForSelection`, pure) — the same
+    question as `isFilenameComparableAsVersions` — so one `.txt` (or `README`) offers BOTH modes and one `.png`/`.glb`
+    (no differ admits it) offers Visualize only. In Compare the host hands the viewer
+    `seedCompareFromSingleFile(file)` = `[the viewed entry (pinned versionId, else latest), the same
+file at latest]`; the differ's per-side picker takes it from there, and toggling back shows the one
+    file. The visualize answer is untouched: a compare-only viewer is never offered there for one file.
+    Hosts: `FileViewerModal` (single-file view from `FileDetailsPanel`) and the `ViewFile` page (where
+    `FileVersionsList` / `AssetVersionComparison` "View File" land; toggle beside the File/Preview
+    control, File tab only).
+-   **Search "View Selected" / "Compare Selected"** (`SearchPageListView`) and the file manager's
+    **"Visualize Selected Files" / "Compare Selected Files"** icons (`FileDetailsPanel`) are gated
+    independently — View by the visualize lookup, Compare by the compare lookup with the selection's
+    real count and shape (two `.txt` rows: Compare only; two `.glb` rows: View only; `.txt` + `.png`:
+    neither).
+-   **Version lists** (`FileVersionsList`, `AssetVersionComparison`) render the per-row **Compare**
+    only when `isFilenameComparableAsVersions(relativeKey)` holds; it opens the differ with the row's version
+    on the left and latest on the right. A `.png` row keeps View/Download but gets no Compare.
+
+All lookups return false until `PluginRegistry.initialize()` has run — gate them behind
+`useViewerRegistryReady()` so the control appears once the registry is ready rather than never.
+
+### Text Diff Viewer controls
+
+`TextDiffViewerPlugin/TextDiffViewerComponent.tsx` exposes the `react-diff-viewer-continued` modes as
+compact controls (`data-testid="text-diff-controls"`): layout (Side-by-side / Inline → `splitView`),
+granularity (Line / Word / Character → `compareMethod` `DiffMethod.LINES` / `WORDS` / `CHARS`; Line
+also sets `disableWordDiff`, since the library keeps marking words inside a changed line under any
+`compareMethod` — without it "Line" still shows word-level marks), a
+**Line numbers** toggle (`hideLineNumbers`), a **Collapse unchanged** toggle (`showDiffOnly`) with a
+context-lines picker (`extraLinesSurroundingDiff`, `data-testid="text-diff-context-lines"`, shown only
+while collapsing). The per-side labels (`text-diff-side-label-{left,right}`) and the titles handed to
+the library (`text-diff-title-{left,right}`) are single-line, ellipsis-truncated elements with the full
+label as a tooltip — the library's title block is a fixed 2.4em with a wrapping `<pre>`, so a long
+"name @ version · asset" label was otherwise cut off. In inline layout only the left title block
+renders, so it carries both names ("left → right").
+
+When both sides hold identical text the viewer shows an info notice
+(`data-testid="text-diff-identical-notice"`, "No differences to show — the selected versions are
+identical") above the diff: with **Collapse unchanged** on, the library folds an identical file into a
+single `@@ -0,N +0,N @@` expander and the pane otherwise reads as empty. This is the state a lone
+file's Compare seed (latest vs latest) starts in; the fold row stays so the content can be expanded.
+
+**Layout contract (host + library).** `DynamicViewer` mounts every plugin inside
+`.visualizer-container-canvases`, which `web/src/styles/index.scss` styles with `text-align: center`
+and `line-height: 100%` for the 3D canvases; inherited, they centered every diff line in its cell and
+stopped long lines wrapping. The differ resets both at its root (`textAlign: left`, `lineHeight:
+normal`), as `TextViewerPlugin` does on its highlighter. The library's `pre { margin: 0 }` reset covers
+only the diff table, so the `<pre>` inside each fixed-height (2.4em, overflow hidden) title block kept
+the browser's `1em` top margin and the labels — the first row of the surface — sat a line too low and
+were clipped; `styles={{ titleBlock: { pre: { margin: 0 } } }}` (hoisted, the library memoizes on the
+reference) zeroes it. `renderContent` highlights each line with react-syntax-highlighter's `Light` build
+as an INLINE run: `PreTag`/`CodeTag` spans, `display: inline`, every metric (font, size, line-height,
+colour, wrapping) inherited from the cell, the code tag's `white-space: pre` overridden to `inherit`
+so long lines wrap with the row, and the hljs theme passed explicitly (`Light` ships none — without it
+the tokens carry no colour). Do not give the per-line highlighter block metrics of its own.
+
+### Cross-asset / multi-version contract
+
+Each `compareFiles` entry is a fully resolved `{ databaseId, assetId, key, versionId? }`:
+
+-   `DynamicViewer` fills a missing per-entry `databaseId`/`assetId` from its **top-level** props
+    before classifying and before handing the list to the viewer. The visualize-path
+    `effectiveAssetId` (which falls back to `files[0]`) is never used in compare mode — a second entry
+    must not be re-homed under the first entry's asset.
+-   A missing `versionId` means **latest**. Search-result selections arrive this way
+    (`searchRowToFileInfo`); the version-list surfaces pin the left side to an S3 `versionId`.
+-   A viewer fetches every entry under **its own** database/asset via `downloadAsset` — never a shared
+    pair — and each asset is authorized independently (Casbin, per asset). A per-entry 401/403 (denied),
+    410 (archived) or 404 must be rendered as **that entry's** state while the other entries still
+    render; do not collapse the comparison into one error. `downloadAsset` returns
+    `[false, message, status]` on failure so the status can be classified.
+-   A viewer that opts into `allowCrossAsset` should offer a per-entry **version picker**
+    (`fetchFileVersions` from `AssetVersionService`, one list per db+asset+key) and re-fetch only the
+    entry whose version changed.
+
+Compare mode is reached from four surfaces, all hosted by `FileViewerModal` (which offers a
+Visualize/Compare toggle only when both modes are admitted — see Mode availability): the search
+results multi-select "Compare Selected" action (rows may span assets — each row carries its own
+db/asset), the asset file manager's "Compare Selected Files" icon (`FileDetailsPanel`), and the
+version-comparison "Compare" actions in `AssetVersionComparison.tsx` and `FileVersionsList.tsx`
+(diffing versions of the same file). A SINGLE viewed file reaches it too, through the same toggle, from
+`FileViewerModal` (file manager single-file view) and from the `ViewFile` page. The first
+compare viewer is `text-diff-viewer` (`TextDiffViewerPlugin`), which diffs two text files via
+`react-diff-viewer-continued` (dynamically imported by its `dependencies.ts` so it stays out of the
+base bundle), declares `allowCrossAsset`, keeps per-side state (content, error, version list), and
+renders a readable side beside a denied/archived one.
+
+### `compareMode` config fields
+
+| Field                            | Type     | Description                                                                             |
+| -------------------------------- | -------- | --------------------------------------------------------------------------------------- |
+| `enabled`                        | boolean  | Offer this viewer in compare mode                                                       |
+| `compareOnly`                    | boolean? | Viewer renders only `compareFiles`; never offered on the visualize path (default: no)   |
+| `minFiles` / `maxFiles`          | number   | Inclusive file-count window                                                             |
+| `allowSameFileDifferentVersions` | boolean  | Admit N versions of one file (same db + asset + key)                                    |
+| `allowDifferentFiles`            | boolean  | Admit N distinct files                                                                  |
+| `allowCrossAsset`                | boolean? | Admit entries spanning assets/databases; viewer must handle per-entry 403 (default: no) |
+
+---
+
+## TIFF/TGA Viewer (`RasterImageViewerPlugin/`)
+
+`tiff-tga-viewer` opens `.tga`, `.tif` and `.tiff`, which no browser draws. It downloads the file, decodes it with `utif2` (TIFF) and `tga-js` (TGA), pure JavaScript with no `eval` and no CSP change, and draws to a `<canvas>`. `RasterImageDependencyManager` loads the decoders (and `pako`) with a dynamic `import()` so they stay out of the base bundle.
+
+-   **Untrusted input.** `rasterDecode.ts` reads the TIFF directory chain itself (`inspectTiff`): `UTIF.decode` follows a cyclic chain forever and builds an array of any length a tag names. Pixel and decoded-size caps, strip and tile bounds, a bounded inflate of deflate strips and a JPEG frame-size check run before `UTIF.decodeImage`. A new variant is refused rather than drawn wrongly (BigTIFF, separate colour planes, old-style JPEG, unknown compression, 16-bit palette).
+-   **Caps.** `customParameters.maxDecodeBytes` (256 MiB) and `maxDecodePixels` (100 megapixels) in `viewerConfig.json`. Above a cap or on a decode failure the viewer shows `fileInfo.previewFile` with a notice, else a plain message. A refused download (401/403/404/410) shows the shared message and never falls back.
+-   **Conversion.** Samples of more than 8 bits and floats are scaled between the 0.5th and 99.5th percentile; CMYK becomes RGB; 16-bit TGA is shown opaque (`tga-js` reads its alpha bit the wrong way round).
+-   **Decode worker.** Decoding runs in `rasterWorker.ts` (a same-origin module worker made by `createRasterWorker.ts`; the base CSP already allows `worker-src 'self' blob: data:`, so nothing changes there), so a large image does not freeze the tab and an out-of-memory worker ends in the fallback notice. The worker posts `{type: "ready"}` as its last statement and the page sends the file only after it. `rasterSession.ts` opens a session over the worker and falls back to decoding on the page (`RasterEngine`, same caps) when no worker can be created, when its script fails to load (blocked, 404 after a redeploy, no module worker support: an `error` before `ready`) or when it does not start within 15 s, so a stale or blocked worker file never turns a small image into an error; only a worker that dies after it started ends in the "decoder stopped unexpectedly" notice. `dispose()` rejects a request still in flight. Module workers need Chrome/Edge 80, Firefox 114, Safari 15; `createRasterWorker.ts` holds `import.meta.url` so tests replace it with `jest.mock`. `pakoGlobal.ts` must be imported before `utif2` in the worker: `utif2` reads `self.pako` when `require` is not a function, and deflate TIFFs failed without it.
+-   **Display.** The TIFF Orientation tag (274, values 1-8) is applied after conversion (`orient`); the page picker lists oriented sizes. A truncated run-length TGA is refused (`rleCovers`) because `tga-js` would leave the missing pixels black.
+-   **Tests.** `rasterDecode.test.ts` builds its TIFF and TGA files in code (`rasterFixtures.testdata.ts`); real-file cases are in `web/e2e/viewers.spec.ts`.
+
+---
+
+## Files Without an Extension and the Binary Guard
+
+A viewer opts into files that have no extension (README, LICENSE, Makefile, `.gitignore`) by listing
+the reserved token `(none)` (`NO_EXTENSION`, `core/extensionMatching.ts`) in `supportedExtensions`.
+The shipped `text-viewer` and `text-diff-viewer` list it; no other viewer does
+(`config/viewerConfig.test.ts` and `core/viewerSelection.test.ts` pin that).
+
+-   **One filename rule.** `filenameExtension(name)` reads the last path segment and splits it like
+    Python's `os.path.splitext`: leading dots do not start an extension, and a trailing dot leaves
+    none. `.gitignore`, `.bashrc` and `file.` have no extension; `.eslintrc.json` has `.json`;
+    `.env.example` has `.example` (no viewer). `extensionToken(name)` is that extension lowercased,
+    `(none)` when there is none, and undefined when there is no file name at all (a key ending in
+    `/` is a folder). `PluginRegistry.getFileExtension`/`getFileExtensions`, `extensionOfFilename` and
+    every lookup in `core/viewableExtensions.ts` apply it. A dotfile name declared as an extension
+    (`".gitignore"`) never matches; only `.`-prefixed lowercase values, `*` and `(none)` are valid.
+-   **Same matching.** The token rides the existing string-set matching, so every file must still
+    match: one `README` offers only the Text Viewer (it auto-opens) and, as a lone file, Compare;
+    `LICENSE` + `LICENSE.txt` is admitted by the differ; `README` + `model.glb`, or `README` + `x.3dm`
+    in the multi-file Online 3D Viewer, is admitted by nothing. The `*` wildcard matches the token.
+-   **Gate by name, not by extension.** Entry points ask the filename-based lookups:
+    `isViewableFilename(name)` (the file manager's eye icon, the search row's eye icon and checkbox
+    selection through `isViewableSearchRow`), `isFilenameComparableAsVersions(name)` (the version
+    lists' per-row Compare), `areFilenamesViewableTogether`, `areFilesComparableTogether` and
+    `availableModesForFiles`. Search rows are judged by `str_key`, not the indexed `str_fileext`
+    (the indexer stores `gitignore` for `.gitignore` and nothing for `README`).
+    `extensionOfFilename` is for display and format dispatch only.
+-   **Never show the token.** User-facing text names it with `describeExtensionToken` ("no
+    extension"): `DynamicViewer`'s "No compatible viewers found for file types: …" and
+    `FileViewerModal`'s no-viewer state.
+-   **Binary guard.** A text viewer is offered by name, so it can be handed an image or an archive.
+    Both text viewers load through `loadTextFile` (`core/textContent.ts`) from the presigned URL
+    `downloadAsset` returns. It sends `Range: bytes=0-8191`, classifies the first 8 KiB with
+    `classifyTextSample`, and stops there when they are not text: a binary file is never downloaded
+    whole and never reaches the highlighter. A larger text file takes one more full GET; a 200 (the
+    server ignored `Range`) is read as a stream and cancelled on binary content; S3's 416 for a range
+    on an empty object is empty text; a network `TypeError` (a bucket whose CORS refuses the `Range`
+    preflight) is retried once without `Range`. Classification: a UTF-32 byte-order mark is an
+    unsupported encoding; a UTF-16 LE/BE mark is text, decoded with `TextDecoder`; any NUL byte
+    otherwise is binary, except NULs on one side of each byte pair (UTF-16 without a mark: an
+    unsupported encoding); then the share of control bytes (TAB, LF, VT, FF, CR, backspace and ESC
+    excepted) is binary above 10 %, or above 2 % when the sample is not valid UTF-8. Latin-1 text
+    still renders, with replacement characters. The Text Viewer then shows an info notice
+    (`data-testid="text-viewer-binary-notice"` or `text-viewer-encoding-notice`); the Text Diff
+    Viewer shows it on that side only (`text-diff-side-binary` / `text-diff-side-encoding`) while the
+    other side renders, and logs nothing for it. A new text-style viewer loads through
+    `loadTextFile` too.
+-   **Size cap.** Text larger than `TEXT_VIEWER_MAX_BYTES` (20 MiB, from the 206's
+    `Content-Range` total, the `Content-Length`, or the bytes read so far) is `too-large`: the full
+    GET is not sent, or its body is cancelled at the cap. The Text Viewer shows
+    `text-viewer-too-large-notice`, the Text Diff Viewer `text-diff-side-too-large` on that side.
+    Above `TEXT_HIGHLIGHT_MAX_CHARS` (1 Mi characters) the Text Viewer renders a plain `<pre>`
+    (`text-viewer-plain`) without the highlighter. A failed read of the presigned URL is worded by
+    `textReadFailureMessage`: an S3 403 or 404 is a link to refresh, never a VAMS permission answer,
+    and a `TypeError` is a connection problem.
 
 ---
 
@@ -95,7 +336,7 @@ const MyViewerComponent: React.FC<ViewerPluginProps> = ({
 export default MyViewerComponent;
 ```
 
-`ViewerPluginProps` (`core/types.ts`) is the whole contract a viewer receives. A single file arrives as `assetKey` and `versionId`; a multi-file selection arrives as `multiFileKeys`, with each file's owning asset and database in `multiFiles` (build each file's URL from its own entry, falling back to the top-level `assetId` and `databaseId`). `assetVersionId`, when set, is the asset version to read files from. `viewerMode` is the host's display mode (`"collapse"` when the file page or the file-viewer modal opens, then `"wide"` or `"fullscreen"`); the host's footer controls request a change through `onViewerModeChange`, and the host decides the resulting mode. `customParameters` is the entry's `customParameters` object from `viewerConfig.json`. When `ViewerPluginProps` changes, update the interface listings in `README.md` and `documentation/docusaurus-site/docs/developer/viewer-plugins.md`.
+`ViewerPluginProps` (`core/types.ts`) is the whole contract a viewer receives. A single file arrives as `assetKey` and `versionId`; a multi-file selection arrives as `multiFileKeys`, with each file's owning asset and database in `multiFiles` (build each file's URL from its own entry, falling back to the top-level `assetId` and `databaseId`). A single-file selection also arrives as `fileInfo` (the host's `FileInfo`: size and the generated preview key `previewFile`), absent when the host did not have them; the TIFF/TGA viewer reads its byte cap and fallback preview from it. `assetVersionId`, when set, is the asset version to read files from. `viewerMode` is the host's display mode (`"collapse"` when the file page or the file-viewer modal opens, then `"wide"` or `"fullscreen"`); the host's footer controls request a change through `onViewerModeChange`, and the host decides the resulting mode. `customParameters` is the entry's `customParameters` object from `viewerConfig.json`. When `ViewerPluginProps` changes, update the interface listings in `README.md` and `documentation/docusaurus-site/docs/developer/viewer-plugins.md`.
 
 **Step 3:** Add to `viewers/manifest.ts`:
 
@@ -127,28 +368,64 @@ export const VIEWER_COMPONENTS = {
 
 **Step 5:** If the viewer has external dependencies, create a custom install script in `web/customInstalls/myviewer/` and add it to the `postinstall` chain in `web/package.json`.
 
+### Add-on and fork viewers
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream functionality goes in the add-on lane when it integrates an external solution, depends on an AWS service outside the tier-1 set, or implements a use-case lens for an industry; viewers and pipelines keep their own lanes, and a fork uses the custom lane. The tier-1 services, the exemptions and the toggle rule: root `CLAUDE.md` "Core, add-on and custom". Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+The registry loads three tiers, merged in this order by `core/viewerSources.ts`:
+
+| Tier   | Config                           | Manifest                           | Owner                                                                   |
+| ------ | -------------------------------- | ---------------------------------- | ----------------------------------------------------------------------- |
+| Core   | `config/viewerConfig.json`       | `viewers/manifest.ts`              | upstream                                                                |
+| Add-on | `config/addonViewerConfig.json`  | `viewers/addonManifest.ts`         | upstream (the Physna viewer and the licensed VNTANA and VEERUM viewers) |
+| Custom | `config/customViewerConfig.json` | `viewers/custom/customManifest.ts` | fork extension point (shipped empty)                                    |
+
+An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), is registered in the add-on files, never in `viewerConfig.json` or `manifest.ts` (`infra/test/addon/addonCoreSeparation.test.ts`; `config/viewerConfig.test.ts` checks that the core files hold no `(LICENSED VIEWER)` entry). Its plugin directory stays under `viewers/` like a core viewer's (`viewers/VntanaViewerPlugin/`, `viewers/VeerumViewerPlugin/`, `viewers/PhysnaViewerPlugin/`). To enable a licensed viewer, set `"enabled": true` on its entry in `config/addonViewerConfig.json`; its install script (`web/customInstalls/vntana/`, `web/customInstalls/veerum/`, unchanged in the `postinstall` chain) decides whether to fetch the vendor package with `web/customInstalls/utility/checkViewerEnabled.js`, which reads the core, add-on and custom config files in the registry's order. A fork's viewer lives in `viewers/custom/<Name>Plugin/` and is registered in the custom files (Steps 1–4 apply with those paths); its install steps go in `web/customInstalls/custom/customInstall.js`, which `postinstall` already runs, so a fork does not edit the `postinstall` chain. A custom entry whose `id` repeats a core or add-on `id` is skipped with a console error, and a custom manifest key that repeats a shipped one is ignored, so a fork cannot replace a shipped viewer. Ids prefixed `custom-` are recommended, not enforced. The add-on viewers register after every core viewer, so a priority tie between a core and an add-on viewer resolves to the core one. The catalog table above lists core and add-on viewers only (`config/viewerConfig.test.ts` checks it against both files). `core/viewerSources.test.ts` covers the merge.
+
 ---
 
 ## Plugin Config Fields
 
-| Field                        | Type              | Description                                          |
-| ---------------------------- | ----------------- | ---------------------------------------------------- |
-| `id`                         | string            | Unique plugin identifier                             |
-| `componentPath`              | string            | Path for manifest lookup                             |
-| `dependencyManager`          | string?           | Path to dependency loader module                     |
-| `dependencyManagerClass`     | string?           | Class name in dependency module                      |
-| `dependencyManagerMethod`    | string?           | Load method name                                     |
-| `dependencyCleanupMethod`    | string?           | Cleanup method name                                  |
-| `supportedExtensions`        | string[]          | File extensions this viewer handles                  |
-| `supportsMultiFile`          | boolean           | Can handle multiple files at once                    |
-| `canFullscreen`              | boolean           | Supports fullscreen mode                             |
-| `priority`                   | number            | Lower = listed first when multiple viewers match     |
-| `loadStrategy`               | "lazy" \| "eager" | Not read; every viewer loads on first use            |
-| `category`                   | string            | Viewer category (3d, media, document, data, preview) |
-| `featuresEnabledRestriction` | string[]?         | Required feature flags                               |
-| `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
-| `enabled`                    | boolean           | Whether the plugin is active                         |
-| `customParameters`           | object?           | Viewer-specific configuration                        |
+| Field                        | Type              | Description                                                                   |
+| ---------------------------- | ----------------- | ----------------------------------------------------------------------------- |
+| `id`                         | string            | Unique plugin identifier                                                      |
+| `componentPath`              | string            | Path for manifest lookup                                                      |
+| `dependencyManager`          | string?           | Path to dependency loader module                                              |
+| `dependencyManagerClass`     | string?           | Class name in dependency module                                               |
+| `dependencyManagerMethod`    | string?           | Load method name                                                              |
+| `dependencyCleanupMethod`    | string?           | Cleanup method name                                                           |
+| `supportedExtensions`        | string[]          | Lowercase `.ext` values, `*` (any file) or `(none)` (files with no extension) |
+| `supportsMultiFile`          | boolean           | Can handle multiple files at once                                             |
+| `canFullscreen`              | boolean           | Supports fullscreen mode                                                      |
+| `priority`                   | number            | Lower = listed first when multiple viewers match                              |
+| `loadStrategy`               | "lazy" \| "eager" | Not read; every viewer loads on first use                                     |
+| `category`                   | string            | Viewer category (3d, media, document, data, preview)                          |
+| `featuresEnabledRestriction` | string[]?         | Required feature flags                                                        |
+| `isPreviewViewer`            | boolean?          | True for the preview-only viewer                                              |
+| `enabled`                    | boolean           | Whether the plugin is active                                                  |
+| `customParameters`           | object?           | Viewer-specific configuration                                                 |
+| `compareMode`                | object?           | Compare-mode opt-in (see Compare Mode above)                                  |
+
+---
+
+## Three.js Selection Highlight (`ThreeJSViewerPlugin/utils/selectionHighlight.ts`)
+
+-   A selected object wears a highlight clone of its material library entry, made only by `createHighlightMaterial` and put back only by `releaseHighlight` / `syncSelectionHighlight`, which track each clone by identity (a `WeakMap` to the material it came from) and dispose it on deselect. Never detect a highlight from a colour value; the material editor can set any colour.
+-   A lit mesh material glows through `emissive` (0x4caf50, intensity 0.5). A material with no emissive colour (`PointsMaterial`, line and sprite materials, `MeshBasicMaterial`) is tinted green with `vertexColors` off (#1275).
+-   `supportsWireframe(material)` is false for point, line and sprite materials: Wireframe Mode (Controls tab), the material editor's Wireframe option and the material reset skip them, and never add a `wireframe` property to them.
+
+## Three.js Referenced Files (`ThreeJSViewerPlugin/utils/`)
+
+Every Three.js format that names other files goes through one resolver, `assetDependencyResolver.ts`; do not fetch a referenced file anywhere else.
+
+The viewer reads the main file and every referenced file from a presigned S3 URL that the authorized download route issues (`downloadAsset` through `core/presignedFetch.ts`, which caches a URL in memory for at most 60 seconds and never past its own `X-Amz-Expires`, less a margin of 10 seconds or 20 percent of its lifetime, whichever is smaller; the cache is cleared by `clearStoredSession()` on every sign-out), with no `Authorization` header and no credentials. It does not follow the streaming route: that route answers 307 to the presigned URL, a cross-origin redirect, so the browser sends the S3 request with `Origin: null` and an external bucket whose CORS rule lists only the VAMS web origin sends no `Access-Control-Allow-Origin` (#1623). A refused presign shows the API's own answer through `streamFailure.ts`. An error status from S3 itself is worded as an unavailable or expired link (`PresignedReadError`), after one re-presign when a reused URL got a 403; it is never shown as a VAMS permission or not-found answer. The presign request carries the viewer's abort signal (`apiClient` and `downloadAsset` accept `signal`). Each load run owns its `AbortController`, which its cleanup aborts when the viewer closes or is given other files; an `AbortError` while that controller is aborted is the run's own cancellation, so the load stops without logging or listing the file, and every other error is logged and shown (#1643). The Needle USD and ThatOpen IFC viewers read their main file (and, for Needle USD, every dependency it downloads) the same way, through `fetchPresignedFile` (#1630). The Cesium viewer reads every tileset file the same way through a request hook (`CesiumViewerPlugin/presignedStreamReads.ts`, #1630): while the viewer is mounted it wraps `Cesium.Resource._Implementations.loadWithXhr` and `createImage`, the two functions every Cesium URL request goes through, so a URL under the viewer's stream-route prefix becomes a presign call plus a read of the presigned URL with no `Authorization` or `Content-Type` header (a `RequestErrorEvent` carries a refusal's status and message, so `tilesetFailure.ts` words it as before), and any other URL or a non-GET method passes through. The wrappers are reference counted across mounted viewers and the originals are restored with the last one; `presignedStreamReads.realCesium.test.ts` runs the hook against the real Cesium bundle (skipped when `public/viewers/cesium/Cesium.js` is not installed). The Cesium viewer's independence from `null` in a bucket's CORS rule depends on that hook: when `Resource._Implementations` is missing, the hook logs a warning and the viewer falls back to the streaming route, which then needs `null` like VEERUM. A decoded `.` or `..` segment in a key is never presigned by the hook and goes to the streaming route. The real-Cesium suite runs in CI: the `web-test` job installs the Cesium bundle with `node ./customInstalls/cesium/cesiumInstall.js` (only that viewer's install script, after `npm ci --ignore-scripts`) and sets `REQUIRE_CESIUM_BUNDLE=1`, so a missing bundle fails the suite instead of skipping it. Without the variable (a local run with no bundle) the suite skips with a `SKIPPED` warning, and the stand-in suite `presignedStreamReads.test.ts` still runs. VEERUM still reads the streaming route (its vendor library exposes no hook), so an external bucket used with it needs `null` in its CORS `AllowedOrigins` (`external-s3-setup.md`, Step 2).
+
+-   `assetDependencyResolver.ts` — path rules (relative to the naming file; nothing above the asset root, absolute, or with a scheme is fetched), named limits (`DEPENDENCY_LIMITS`), one download per key, presigned-URL reads (`core/presignedFetch.ts`; a failed read is recorded as `not-found` for a 404 (the API's or S3's) or the download route's own missing-file `400` (`isFileNotFoundAnswer`, flagged `fileNotFound` on the presign error; the answer is pinned by `core/fileNotFoundBody.testdata.json`, which a backend handler test compares with the route's real response; the route checks the object before it signs, so a missing file never reaches S3), `refused` for the API's 401, 403 or another refusal with a reason, and `failed` otherwise, including S3's 403 on a URL the API just signed (S3 refused the read of a file that exists), from the `status` the presign or S3 error carries), and the `LoadingManager` URL modifier: resolved names map to blob URLs, `blob:`/`data:` pass through, anything else gets a transparent placeholder and is recorded for the viewer's notice. `revokeAll()` runs in viewer cleanup.
+-   `dependencyLoading.ts` — `loadWithDependencies()` per format: glTF URI rewrite (`gltfDependencyLoader.ts`; each URI is percent-decoded before it is resolved, kept as written when it is not valid percent-encoding; no other format is decoded), OBJ `mtllib` + `MTLLoader`, COLLADA `<init_from>` pre-scan, 3DS/FBX probe parse (record requests, resolve, re-parse only when a texture loaded). A USD load with no mesh, point or line throws `USD_NO_GEOMETRY_MESSAGE`, which the component shows instead of an empty canvas.
+-   `usdDependencies.ts` — collects USD asset paths (USDA `@…@` scan; USDC: only asset-path-typed fields, read with the bundled `USDCParser`); `subLayers` entries are listed as `sublayer` (not shown) instead of downloaded while `USD_FETCH_SUBLAYERS` is `false` (`buildUsdPackage` option `fetchSubLayers`), stores each file under the exact key three's `USDComposer` looks up (un-normalized join), and repacks an in-memory `.usdz` (root first) for `USDLoader.parse`. `checkZipSize()` (`ZIP_LIMITS`) runs before any `.usdz` is extracted, and before every `.3mf` (also a zip package) is parsed, whatever its first bytes; without the bundle's `unzipSync` a `.3mf` is not parsed (`load3MF` in `fileLoaders.ts`).
+-   `fileLoaders.ts` — `loadFile()` passes a `LoadingManager` to every loader; without one it uses an isolating manager, so no loader fetches by URL on its own. `USD_FORMATS` and `OCCT_FORMATS` are checked against `viewerConfig.json` by `config/viewerConfig.test.ts`.
+-   `occtLoader.ts` — STEP/IGES/BREP share `buildOcctObject()`: meshes without triangles are left out, and a result with none left throws `occtNoGeometryMessage(format)` (#1734). `loadFile()` passes that message through unprefixed so `isOcctNoGeometryError()` matches it and the component shows it like `USD_NO_GEOMETRY_MESSAGE`. Indexes past 65,535 vertices are 32-bit.
+-   The bundle (`web/customInstalls/threejs/threejsInstall.js`) exports `USDLoader`, `USDCParser`, `MTLLoader` and `fflate` (`zipSync`, `unzipSync`) for these modules.
 
 ---
 
@@ -192,22 +469,37 @@ its own; at an equal z-index the element later in the document is drawn above. T
 -   **Prove it with a click.** A z-index alone does not prove an element is clickable (`web/e2e/CLAUDE.md`
     Rule 4): hit-test the target with `document.elementFromPoint` at a narrow width (414 px) as well as a
     wide one.
+-   **The error panel of a viewer that appends its canvas outside React.** The Three.js (#832) and Needle
+    USD (D176) viewers append the renderer's canvas to their scene container themselves. Their error
+    root carries a `key` apart from the viewer root's (`threejs-viewer-error` / `threejs-viewer`,
+    `usd-viewer-error` / `usd-viewer`), so React unmounts the scene container, and the canvas with it,
+    instead of reusing that node for the message, where the canvas pushed the text out of the panel.
+    The message is centred with flex and scrolls (`maxHeight: 100%`, `overflowY: auto`), so a narrow
+    panel never clips it. A new viewer that appends a canvas follows the same pattern and pins it with
+    a test that the canvas is outside the panel and detached (`ThreeJSViewerComponent.test.tsx`,
+    `NeedleUSDViewerComponent.errorPanel.test.tsx`).
 
 ---
 
 ## CSP / `unsafe-eval`
 
-Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (WASM or JIT) use `eval`. Three carry the gate in `viewerConfig.json` (`featuresEnabledRestriction: ["ALLOWUNSAFEEVAL"]`), so the registry does not offer them at all when the deployment has not enabled `allowUnsafeEvalFeatures`:
+Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (WASM or JIT) use `eval`. Five carry the gate in `viewerConfig.json` (`featuresEnabledRestriction: ["ALLOWUNSAFEEVAL"]`), so the registry does not offer them at all when the deployment has not enabled `allowUnsafeEvalFeatures`:
 
 -   Needle USD Viewer
 -   SuperSplat Editor (also iframe-embedded)
 -   ThatOpen IFC BIM Viewer (web-ifc)
+-   Robotics Data Viewer (Lichtblick, also iframe-embedded)
+-   Online 3D Viewer (Rhinoceros 3D, rhino3dm)
 
-The **Three.js viewer is deliberately not gated**: its mesh formats (.glb, .obj, .stl, …) need no `eval`, and gating the whole plugin would remove them too. Only its OCCT CAD path (.stp/.step/.iges/.igs/.brep) has the heavier requirements, and `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports them as a message on the file rather than hiding the viewer — it checks for `SharedArrayBuffer` (the COI headers) and for the OCCT bundle before loading.
+The **Three.js viewer is deliberately not gated**: its mesh formats (.glb, .obj, .stl, …) and USD (.usd/.usda/.usdc/.usdz, parsed by three.js's pure-JavaScript `USDLoader`) need no `eval`, and gating the whole plugin would remove them too. So a deployment without `allowUnsafeEvalFeatures` still opens USD; with it, Needle and Three.js both match USD at priority 1 and the user picks. Only its OCCT CAD path (.stp/.step/.iges/.igs/.brep) has the heavier requirements, and `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports them as a message on the file rather than hiding the viewer — it checks for `SharedArrayBuffer` (the COI headers) and for the OCCT bundle before loading.
 
 `cesium-viewer` is not gated either. The viewer builds a `CesiumWidget` from the widget-less `@cesium/engine` (`CesiumViewerComponent.tsx`), which drops the `@cesium/widgets` Knockout layer whose `new Function` binding compiler was what required `unsafe-eval`; `'wasm-unsafe-eval'` in the base CSP covers what remains. See `web/customInstalls/cesium/README.md` for the build. KTX2/Basis textures and `.spz` splats are the known content types that still need the broader directive.
 
+The Online 3D Viewer is registered twice for this reason (#921): `online3d-viewer` offers .amf/.bim/.off/.wrl ungated, and `online3d-viewer-rhino` offers .3dm only under the gate, both rendering `Online3dViewerComponent` from the one bundle `web/customInstalls/online3dviewer/` builds when either is enabled. If eval is refused anyway, `Online3dViewerPlugin/utils/evalBlocked.ts` replaces the viewer's "Failed to load rhino3dm" with a message naming `app.webUi.allowUnsafeEvalFeatures`.
+
 When adding a viewer that needs `eval`, add the feature-flag gate and update the deployment configuration reference in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.
+
+**No runtime CDN fetches.** A viewer library that loads a helper module from a public CDN at run time (unpkg, jsDelivr) is blocked by the CSP and cannot work in an air-gapped, GovCloud or EU Sovereign deployment. The install script rewrites each such URL in the built bundle to a same-origin copy (or turns the feature off), fails when an expected URL is missing, and fails when any reachable CDN URL remains: `web/customInstalls/online3dviewer/online3dviewerInstall.js` and `web/customInstalls/babylonjs/runtimeFetches.js`. Babylon.js 9's `@adobe/spz` path (SPZ version 4) stays off because Babylon loads it through an inline module script and it needs `unsafe-eval`; the BabylonJS viewer refuses SPZ version 4 with a message (`splatFileHead.ts`).
 
 ---
 
@@ -254,6 +546,22 @@ at the top, and it is the only control that covers both distributions, because t
 is not a substitute: it governs only the request that loads the framed page, not the requests that page
 makes. A viewer that reads `location.hash` itself needs none of this, because a `Referer` never carries
 the fragment.
+
+`robotics-data-viewer` is the reference for the fragment pattern. `RoboticsDataViewerPlugin/roboticsDeepLink.ts`
+builds `<basePath>#ds=<source>&ds.url=<url>…` with one `encodeURIComponent` per value and nothing in the
+query. The framed Lichtblick app reads its deep link from `location.search`, so its VAMS entrypoint
+(`web/customInstalls/robotics/overlay/entrypoint.tsx`) moves the fragment into the query from inside the
+bundle rather than from a shim ahead of it: the move runs after the app has awaited its fonts, because a
+CSS font request sends the document URL as its `Referer` whatever the page's referrer policy. Once the app
+has read its deep link, the entrypoint replaces the document URL with one that carries no signed URL; the
+app's own address-bar sync rewrites the URL through `decodeURIComponent`, which would otherwise split each
+signed URL's `X-Amz-*` parameters into the page's query for the life of the page. The page still opens
+`<head>` with the `no-referrer` `<meta>` and loads its former inline script as `vams-init.js`
+(`web/customInstalls/robotics/postprocessIndexHtml.js`). A vendored app can also show or store the URL it
+was given: the robotics overlay names the player by file name (the app bar and document title showed the
+URL), takes the URLs out of the parameters the app saves as a recent source in IndexedDB, and rewrites
+upstream error text that quotes the URL. Check those surfaces for any framed viewer that receives a signed
+URL.
 
 Note the encoding interaction if you move an existing viewer: SuperSplat decodes `load` **twice**, so its
 value is deliberately double-encoded (see the comment in `SuperSplatViewerComponent.tsx`). Moving the

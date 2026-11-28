@@ -27,6 +27,7 @@ import { RevertVersionModal } from "./components/RevertVersionModal";
 import { EditVersionModal } from "./components/EditVersionModal";
 import { ArchiveVersionModal } from "./components/ArchiveVersionModal";
 import { useAssetVersions } from "./hooks/useAssetVersions";
+import { useAssetArchived } from "../../../context/ArchivedAssetContext";
 import AssetVersionComparison, { EnhancedAssetVersionComparison } from "./AssetVersionComparison";
 
 // TypeScript interfaces
@@ -86,6 +87,8 @@ interface AssetVersionContextType {
     setPageSize: (size: number) => void;
     setSelectedVersion: (version: AssetVersion | null) => void;
     refreshVersions: () => void;
+    /** Tells the page that a version changed, after a change made from the list itself. */
+    onVersionsChanged?: () => void;
     compareMode: boolean;
     setCompareMode: (mode: boolean) => void;
     versionToCompare: AssetVersion | null;
@@ -139,8 +142,14 @@ interface AssetVersionContextType {
 
 export const AssetVersionContext = createContext<AssetVersionContextType | undefined>(undefined);
 
-export const AssetVersionManager: React.FC = () => {
+interface AssetVersionManagerProps {
+    /** Called after a version is created, reverted to, edited, archived or unarchived. */
+    onVersionsChanged?: () => void;
+}
+
+export const AssetVersionManager: React.FC<AssetVersionManagerProps> = ({ onVersionsChanged }) => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
+    const assetArchived = useAssetArchived();
 
     // State for modals
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -524,6 +533,7 @@ export const AssetVersionManager: React.FC = () => {
         setPageSize,
         setSelectedVersion,
         refreshVersions,
+        onVersionsChanged,
         compareMode,
         setCompareMode,
         versionToCompare,
@@ -573,32 +583,39 @@ export const AssetVersionManager: React.FC = () => {
                     <Header
                         variant="h2"
                         actions={
-                            <SpaceBetween direction="horizontal" size="xs">
-                                {compareMode && versionToCompare && (
+                            // An archived asset's versions are listed read-only: comparing reads its
+                            // files and creating a version writes, both of which need it unarchived
+                            assetArchived ? undefined : (
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    {compareMode && versionToCompare && (
+                                        <Button
+                                            onClick={handleCompareWithCurrent}
+                                            variant={compareWithCurrent ? "primary" : "normal"}
+                                        >
+                                            Compare with Current Files
+                                        </Button>
+                                    )}
+                                    {compareMode ? (
+                                        <Button onClick={toggleCompareMode} variant="primary">
+                                            Exit Compare Mode
+                                        </Button>
+                                    ) : (
+                                        <Button
+                                            onClick={toggleComparisonOptions}
+                                            variant={showComparisonOptions ? "primary" : "normal"}
+                                            iconName="copy"
+                                        >
+                                            Compare Versions
+                                        </Button>
+                                    )}
                                     <Button
-                                        onClick={handleCompareWithCurrent}
-                                        variant={compareWithCurrent ? "primary" : "normal"}
+                                        onClick={() => setShowCreateModal(true)}
+                                        variant="primary"
                                     >
-                                        Compare with Current Files
+                                        Create New Version
                                     </Button>
-                                )}
-                                {compareMode ? (
-                                    <Button onClick={toggleCompareMode} variant="primary">
-                                        Exit Compare Mode
-                                    </Button>
-                                ) : (
-                                    <Button
-                                        onClick={toggleComparisonOptions}
-                                        variant={showComparisonOptions ? "primary" : "normal"}
-                                        iconName="copy"
-                                    >
-                                        Compare Versions
-                                    </Button>
-                                )}
-                                <Button onClick={() => setShowCreateModal(true)} variant="primary">
-                                    Create New Version
-                                </Button>
-                            </SpaceBetween>
+                                </SpaceBetween>
+                            )
                         }
                     >
                         Asset Versions
@@ -918,6 +935,7 @@ export const AssetVersionManager: React.FC = () => {
                     onSuccess={() => {
                         setShowCreateModal(false);
                         refreshVersions();
+                        onVersionsChanged?.();
                     }}
                 />
 
@@ -929,6 +947,7 @@ export const AssetVersionManager: React.FC = () => {
                         onSuccess={() => {
                             setShowRevertModal(false);
                             refreshVersions();
+                            onVersionsChanged?.();
                         }}
                     />
                 )}
@@ -943,6 +962,7 @@ export const AssetVersionManager: React.FC = () => {
                         onSuccess={() => {
                             setShowEditModal(false);
                             refreshVersions();
+                            onVersionsChanged?.();
                         }}
                     />
                 )}
@@ -957,6 +977,7 @@ export const AssetVersionManager: React.FC = () => {
                         onSuccess={() => {
                             setShowArchiveModal(false);
                             refreshVersions();
+                            onVersionsChanged?.();
                         }}
                     />
                 )}

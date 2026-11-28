@@ -13,8 +13,8 @@ Three properties the update path has to hold, each of which a passing 200 would 
     pre-mutation check authorizes only the scope the pipeline is LEAVING. The mutated object is
     re-checked, so a scoped role cannot move a pipeline beyond its own policy.
   - LOOKUP BOUND. The referencing-workflow lookup behind the advisory save warnings queries the
-    constant-partition by-date GSI with the reference fields projected, capped in pages and labels,
-    rather than paging the whole workflow table on every save.
+    constant-partition by-date GSI with the reference fields projected, capped in pages, rather than
+    paging the whole workflow table on every save.
 """
 
 import json
@@ -283,8 +283,9 @@ class TestReferencingWorkflowLookupIsBounded:
             "jobNames": ["job1"],
         }]}
         with patch(f"{MOD}._workflow_table", return_value=wf_table):
-            labels = ps._referencing_workflow_labels("db1", "pipe1")
-        assert set(labels) == {"db1:wf1"}, labels
+            matches, complete = ps._referencing_workflows("db1", "pipe1")
+        assert {m["label"] for m in matches} == {"db1:wf1"}, matches
+        assert complete is True
         wf_table.scan.assert_not_called()
         kwargs = wf_table.query.call_args.kwargs
         assert kwargs["IndexName"] == "WorkflowsByDateGSI"
@@ -292,47 +293,66 @@ class TestReferencingWorkflowLookupIsBounded:
         # requested size is bounded in the direction that matters rather than pinned.
         assert 0 < kwargs["Limit"] <= ps.REFERENCING_WORKFLOW_PAGE_SIZE, kwargs["Limit"]
         # Only the attributes the match needs are read off the index, as set containment: naming a
-        # fourth attribute the match later uses is a legitimate change, dropping a needed one
+        # further attribute the match later uses is a legitimate change, dropping a needed one
         # breaks the lookup silently, and fetching the whole item is the cost this bound avoids.
         projected = {name.strip() for name in kwargs["ProjectionExpression"].split(",")}
         assert {"databaseId", "workflowId", "specifiedPipelines"} <= projected, projected
         assert not (projected & {"systemConfig", "description", "jobNames"}), projected
+
+    def test_system_config_is_projected_only_when_asked_for(self):
+        # The validation-drift check reads each referencing workflow's systemConfig; nothing else does.
+        wf_table = MagicMock()
+        wf_table.query.return_value = {"Items": []}
+        with patch(f"{MOD}._workflow_table", return_value=wf_table):
+            ps._referencing_workflows("db1", "pipe1", include_system_config=True)
+        projected = {name.strip() for name in
+                     wf_table.query.call_args.kwargs["ProjectionExpression"].split(",")}
+        assert "systemConfig" in projected, projected
 
     def test_page_count_is_capped(self):
         # A table that always reports more pages must not be paged forever on a save.
         wf_table = _never_exhausted_table(
             [{"databaseId": "db1", "workflowId": "other", "specifiedPipelines": []}])
         with patch(f"{MOD}._workflow_table", return_value=wf_table):
-            labels = ps._referencing_workflow_labels("db1", "pipe1")
-        assert labels == []
+            matches, complete = ps._referencing_workflows("db1", "pipe1")
+        assert matches == []
+        # A walk stopped by its cap says so, which is what turns the count into "at least N".
+        assert complete is False
         # Direction-correct: it did continue past the first page, and it stopped at or below the
         # page cap. A cap TIGHTER than the constant is safer and still passes; an unbounded walk
         # runs into the stub's runaway guard and fails with a message instead of hanging.
         assert 2 <= wf_table.query.call_count <= ps.MAX_REFERENCING_WORKFLOW_PAGES, (
             f"the lookup issued {wf_table.query.call_count} paged reads on one save")
 
-    def test_label_count_is_capped_and_stops_paging(self):
-        # Every row matches, so the label cap is what has to stop the walk.
+    def test_the_count_is_not_cut_off_at_the_warning_label_cap(self):
+        # The warning reports how many workflows are being redeployed, so it counts every match the
+        # page-bounded walk sees rather than stopping at MAX_REFERENCING_WORKFLOWS.
         matching = [{"databaseId": "db1", "workflowId": f"wf{i}",
                      "specifiedPipelines": [{"pipelineDatabaseId:pipelineId": "db1:pipe1"}]}
-                    for i in range(ps.MAX_REFERENCING_WORKFLOWS + 50)]
-        wf_table = _never_exhausted_table(matching)
+                    for i in range(ps.MAX_REFERENCING_WORKFLOWS + 5)]
+        wf_table = MagicMock()
+        wf_table.query.return_value = {"Items": matching}
         with patch(f"{MOD}._workflow_table", return_value=wf_table):
-            labels = ps._referencing_workflow_labels("db1", "pipe1")
-        # The cap is not reached by reporting nothing, and it is an UPPER bound: a tighter cap is
-        # safer and passes.
-        assert labels, "every row matched, so at least one referencing workflow must be reported"
-        assert len(labels) <= ps.MAX_REFERENCING_WORKFLOWS, len(labels)
-        # The LABEL cap is what stopped the walk rather than the page cap: a single page already
-        # carries more matches than the label cap allows, so a walk still paging towards the page
-        # cap would show the label cap does not stop it. Stated as "fewer pages than the page cap",
-        # so an implementation that reads one page ahead is not a failure.
-        assert wf_table.query.call_count < ps.MAX_REFERENCING_WORKFLOW_PAGES, (
-            f"the label cap did not stop the page walk: {wf_table.query.call_count} reads")
+            matches, complete = ps._referencing_workflows("db1", "pipe1")
+        assert len(matches) == ps.MAX_REFERENCING_WORKFLOWS + 5
+        assert complete is True
 
-    def test_a_read_error_degrades_to_no_warning(self):
+    def test_archived_workflows_are_not_counted(self):
+        # The workflow service skips archived workflows in its redeploy walk, so the count does too.
+        wf_table = MagicMock()
+        wf_table.query.return_value = {"Items": [
+            {"databaseId": "db1", "workflowId": "live", "archived": False,
+             "specifiedPipelines": [{"pipelineDatabaseId:pipelineId": "db1:pipe1"}]},
+            {"databaseId": "db1", "workflowId": "gone", "archived": True,
+             "specifiedPipelines": [{"pipelineDatabaseId:pipelineId": "db1:pipe1"}]},
+        ]}
+        with patch(f"{MOD}._workflow_table", return_value=wf_table):
+            matches, _complete = ps._referencing_workflows("db1", "pipe1")
+        assert [m["label"] for m in matches] == ["db1:live"]
+
+    def test_a_read_error_degrades_to_an_incomplete_count(self):
         # The warning is advisory, so a lookup failure must not fail the save.
         wf_table = MagicMock()
         wf_table.query.side_effect = Exception("throttled")
         with patch(f"{MOD}._workflow_table", return_value=wf_table):
-            assert ps._referencing_workflow_labels("db1", "pipe1") == []
+            assert ps._referencing_workflows("db1", "pipe1") == ([], False)

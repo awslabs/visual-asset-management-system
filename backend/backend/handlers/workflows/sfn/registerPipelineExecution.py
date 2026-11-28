@@ -27,11 +27,12 @@ event whose Source names a different pipeline execution is ignored. Log location
 row by (log group, stream, prefix): a redelivered or repeated registration of a location the row
 already holds only fills in descriptive fields the stored entry lacks.
 
-A reported subExecution may be any sub-process resource type (Step Functions execution today;
-AWS Batch job, ECS/Fargate task, etc. later) — it is typed by ``resourceType`` and carries
-whichever locator keys apply (executionArn/stateMachineArn, jobArn, taskArn, ...). All reported
-types are stored now; the abort path acts only on Step Functions executions today and surfaces a
-non-fatal warning for types it cannot yet stop.
+A reported subExecution may be any sub-process resource type — it is typed by ``resourceType`` and
+carries whichever locator keys apply (executionArn/stateMachineArn, jobArn/jobId, farmId/queueId,
+trainingJobArn, pipelineExecutionArn, taskArn, ...). All reported types are stored; the abort and
+failure paths stop Step Functions executions, self-submitted AWS Batch jobs, Deadline Cloud jobs and
+same-account SageMaker training jobs / pipeline executions, and surface a non-fatal warning (plus a
+``notAbortable`` entry on the abort response) for any other type, which is displayed but left running.
 
 A single standing EventBridge rule (source prefix = deployment eventSourcePrefix, detail-type
 = "pipeline.execution.register") routes every such event to this lambda. The lambda appends
@@ -47,6 +48,8 @@ import botocore
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
+from customLogging.auditLogging import audited_handler
 from common.resourceNames import get_table_name, ResourceKeys
 from common.validators import validate
 
@@ -93,6 +96,8 @@ _SUB_EXECUTION_LOCATOR_VALIDATORS = {
     "clusterArn": "ARN",        # ECS cluster (needed to stop a task)
     "farmId": "ID",             # Deadline Cloud farm (with queueId+jobId locates a job)
     "queueId": "ID",            # Deadline Cloud queue
+    "trainingJobArn": "ARN",    # SageMaker training job (stopped by its name, parsed from the ARN)
+    "pipelineExecutionArn": "ARN",  # SageMaker pipeline execution
     "arn": "ARN",               # generic fallback ARN for any other resource type
 }
 
@@ -424,11 +429,12 @@ def register(detail, source=""):
         return
 
 
+@audited_handler
 def lambda_handler(event, context):
     """EventBridge-invoked. The event is an EventBridge envelope; the registration payload is
     in event['detail']. Best-effort: logs and returns on any error (a registration failure must
     not disrupt the pipeline, which reports success/failure via its task token)."""
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
     try:
         detail = event.get("detail", {})
         if isinstance(detail, str):

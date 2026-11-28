@@ -14,6 +14,14 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import ThatOpenWebIfcViewerComponent from "./ThatOpenWebIfcViewerComponent";
+import { downloadAsset } from "../../../services/APIService";
+import { clearPresignedUrlCache } from "../../core/presignedFetch";
+import {
+    QUARANTINE_REFUSAL_MESSAGE,
+    QUARANTINE_REFUSED_DOWNLOAD,
+} from "../../core/quarantineRefusal.testdata";
+
+const IFC_FORMAT_HINT = /Please ensure the file is a supported IFC/;
 
 // --- The That Open bundle, reduced to what the load effect touches ------------
 const token = (name: string) => ({ token: name });
@@ -118,6 +126,7 @@ jest.mock("../../../services/appCache", () => ({
     appCache: { getItem: () => ({ api: "https://api.test/" }) },
 }));
 
+jest.mock("../../../services/APIService", () => ({ downloadAsset: jest.fn() }));
 jest.mock("../../../utils/authTokenUtils", () => ({
     getDualAuthorizationHeader: () => Promise.resolve("Bearer test"),
 }));
@@ -132,6 +141,13 @@ describe("ThatOpenWebIfcViewerComponent", () => {
     beforeEach(() => {
         jest.clearAllMocks();
         disposeCalls.length = 0;
+        // The authorized download route presigns the file (#1630).
+        clearPresignedUrlCache();
+        (downloadAsset as jest.Mock).mockReset();
+        (downloadAsset as jest.Mock).mockImplementation(async ({ key }: { key: string }) => [
+            true,
+            `https://bucket.s3.example.test/${key}?X-Amz-Signature=sig`,
+        ]);
         bundle = makeBundle();
         mockExtractIfcBytes.mockReturnValue(new Uint8Array([1, 2, 3]));
         mockLoadIfcModel.mockResolvedValue({ modelId: "m1", schema: "IFC4" });
@@ -140,6 +156,44 @@ describe("ThatOpenWebIfcViewerComponent", () => {
             headers: { get: () => "2048" },
             arrayBuffer: async () => new ArrayBuffer(8),
         });
+    });
+
+    it("reads the file from its presigned URL, not the streaming route, with no Authorization header (#1630)", async () => {
+        render(<ThatOpenWebIfcViewerComponent {...props} />);
+
+        await waitFor(() => expect(screen.getByText("ifc-panel")).toBeInTheDocument());
+        expect(downloadAsset).toHaveBeenCalledWith(
+            expect.objectContaining({
+                databaseId: "d1",
+                assetId: "a1",
+                key: "models/first.ifc",
+                signal: expect.any(AbortSignal),
+            })
+        );
+        expect((global as any).fetch).toHaveBeenCalledTimes(1);
+        const [url, options] = ((global as any).fetch as jest.Mock).mock.calls[0];
+        expect(url).toBe("https://bucket.s3.example.test/models/first.ifc?X-Amz-Signature=sig");
+        expect(url).not.toContain("/download/stream/");
+        expect(options.headers).toBeUndefined();
+    });
+
+    it("passes the asset version to the presign request (#1630)", async () => {
+        render(<ThatOpenWebIfcViewerComponent {...props} assetVersionId="v2" versionId="s3v" />);
+
+        await waitFor(() => expect(screen.getByText("ifc-panel")).toBeInTheDocument());
+        const request = (downloadAsset as jest.Mock).mock.calls[0][0];
+        expect(request.assetVersionId).toBe("v2");
+        expect(request.versionId).toBeUndefined();
+    });
+
+    it("shows a failed presign as an error and reads nothing from S3 (#1630)", async () => {
+        (downloadAsset as jest.Mock).mockResolvedValue(false);
+
+        render(<ThatOpenWebIfcViewerComponent {...props} />);
+
+        expect(await screen.findByText(/Failed to load: first\.ifc/)).toBeInTheDocument();
+        expect((global as any).fetch).not.toHaveBeenCalled();
+        expect(mockLoadIfcModel).not.toHaveBeenCalled();
     });
 
     it("loads the model and shows the control panel", async () => {
@@ -184,6 +238,29 @@ describe("ThatOpenWebIfcViewerComponent", () => {
 
         await waitFor(() => expect(screen.getByText("ifc-panel")).toBeInTheDocument());
         expect(screen.queryByText(/Failed to load: first\.ifc/)).toBeNull();
+    });
+
+    it("shows the API's refusal alone, with no format hint under it (D170)", async () => {
+        (downloadAsset as jest.Mock).mockResolvedValueOnce(QUARANTINE_REFUSED_DOWNLOAD);
+
+        render(<ThatOpenWebIfcViewerComponent {...props} />);
+
+        expect(await screen.findByText(QUARANTINE_REFUSAL_MESSAGE)).toBeInTheDocument();
+        expect(screen.queryByText(IFC_FORMAT_HINT)).not.toBeInTheDocument();
+        expect(mockLoadIfcModel).not.toHaveBeenCalled();
+    });
+
+    it("[control] keeps the format hint under any other failure", async () => {
+        ((global as any).fetch as jest.Mock).mockResolvedValueOnce({
+            ok: false,
+            status: 415,
+            headers: { get: () => null },
+        });
+
+        render(<ThatOpenWebIfcViewerComponent {...props} />);
+
+        expect(await screen.findByText(/Failed to load: first\.ifc \(415\)/)).toBeInTheDocument();
+        expect(screen.getByText(IFC_FORMAT_HINT)).toBeInTheDocument();
     });
 
     it("aborts the first load before starting the second", async () => {

@@ -26,10 +26,24 @@ import { useNavigate, useParams } from "react-router";
 import { AssetVersionContext, FileVersion, AssetVersionMetadataItem } from "../AssetVersionManager";
 import { downloadAsset } from "../../../../services/APIService";
 import Synonyms from "../../../../synonyms";
+import FileViewerModal from "../../../filemanager/modals/FileViewerModal";
+import { FileInfo } from "../../../../visualizerPlugin/core/types";
+import { isFilenameComparableAsVersions } from "../../../../visualizerPlugin/core/viewableExtensions";
+import {
+    ARCHIVED_TRANSFER_REASON,
+    useAssetArchived,
+} from "../../../../context/ArchivedAssetContext";
+import { useViewerRegistryReady } from "../../../../visualizerPlugin/core/useViewerRegistryReady";
+import { downloadRefusalReason } from "../../../../visualizerPlugin/core/streamFailure";
+import { versionFilePath } from "../versionFilePath";
 
 export const FileVersionsList: React.FC = () => {
     const { databaseId, assetId } = useParams<{ databaseId: string; assetId: string }>();
     const navigate = useNavigate();
+    // The per-row "Compare" action is offered only for a type some compare viewer diffs, which needs
+    // the registry initialized — before that every lookup reports "no viewer" and the action is hidden.
+    const viewerRegistryReady = useViewerRegistryReady();
+    const assetArchived = useAssetArchived();
 
     // Get context values
     const context = useContext(AssetVersionContext);
@@ -103,6 +117,48 @@ export const FileVersionsList: React.FC = () => {
 
     // State for tabs
     const [activeTabId, setActiveTabId] = useState<string>("files");
+
+    // Files handed to the compare host. "Compare with current" diffs a file at its snapshot version
+    // against the same asset-relative key's current/latest content (both share the key, so the
+    // registry classifies the pair as "same-file-versions").
+    const [compareFiles, setCompareFiles] = useState<FileInfo[] | null>(null);
+
+    /** Offer "Compare" only when some compare viewer diffs two versions of this file's type — a
+     *  .png or .glb row gets no Compare action, because no differ would open for it. */
+    const canCompareFile = (file: FileVersion): boolean =>
+        viewerRegistryReady &&
+        !file.isPermanentlyDeleted &&
+        isFilenameComparableAsVersions(file.relativeKey);
+
+    const handleCompareFile = (file: FileVersion) => {
+        if (!canCompareFile(file)) {
+            return;
+        }
+        const filename = file.relativeKey.split("/").pop() || file.relativeKey;
+        // Left = this file pinned to its S3 versionId from the snapshot; right = same key, latest.
+        // FileInfo carries an S3 versionId (not the asset-version number), which downloadAsset uses
+        // to fetch the exact bytes; omitting it on the right side fetches the current content.
+        const snapshotEntry: FileInfo = {
+            filename,
+            key: versionFilePath(file.relativeKey),
+            isDirectory: false,
+            assetId: assetId || undefined,
+            databaseId: databaseId || undefined,
+            versionId: file.versionId,
+            size: file.size,
+            dateCreatedCurrentVersion: file.lastModified,
+            isArchived: file.isArchived,
+        };
+        const currentEntry: FileInfo = {
+            filename,
+            key: versionFilePath(file.relativeKey),
+            isDirectory: false,
+            assetId: assetId || undefined,
+            databaseId: databaseId || undefined,
+            isArchived: file.isArchived,
+        };
+        setCompareFiles([snapshotEntry, currentEntry]);
+    };
 
     // State for metadata filtering
     const [metadataTypeFilter, setMetadataTypeFilter] = useState<string>("all");
@@ -218,7 +274,9 @@ export const FileVersionsList: React.FC = () => {
             return;
         }
 
-        const encodedPath = encodeURIComponent(file.relativeKey);
+        // The file page names the file by its path in the asset with its leading "/" (versionFilePath)
+        const filePath = versionFilePath(file.relativeKey);
+        const encodedPath = encodeURIComponent(filePath);
         const assetVersionId = selectedVersion?.Version;
         let url = `/databases/${databaseId}/assets/${encodeURIComponent(
             String(assetId)
@@ -232,7 +290,7 @@ export const FileVersionsList: React.FC = () => {
         navigate(url, {
             state: {
                 filename: file.relativeKey.split("/").pop() || file.relativeKey,
-                key: file.relativeKey,
+                key: filePath,
                 isDirectory: false,
                 versionId: assetVersionId ? undefined : file.versionId,
                 assetVersionId: assetVersionId,
@@ -259,7 +317,7 @@ export const FileVersionsList: React.FC = () => {
             const response = await downloadAsset({
                 assetId: assetId!,
                 databaseId: databaseId!,
-                key: file.relativeKey,
+                key: versionFilePath(file.relativeKey),
                 versionId: file.versionId,
                 assetVersionId: (selectedVersion?.Version || undefined) as any,
                 downloadType: "assetFile",
@@ -334,7 +392,11 @@ export const FileVersionsList: React.FC = () => {
                     }, 1000);
                 }
             } else {
-                setDownloadError(`Failed to download file: ${file.relativeKey}`);
+                // A download the API refused shows the API's reason (D166).
+                setDownloadError(
+                    downloadRefusalReason(response) ??
+                        `Failed to download file: ${file.relativeKey}`
+                );
                 setDownloadStatus((prev) => ({ ...prev, [file.relativeKey]: "error" }));
                 console.error("Failed to download file");
                 setDownloadingFile(null);
@@ -458,6 +520,11 @@ export const FileVersionsList: React.FC = () => {
                     return <Box>File permanently deleted</Box>;
                 }
 
+                // An archived asset's files cannot be viewed or downloaded
+                if (assetArchived) {
+                    return <Box color="text-body-secondary">{ARCHIVED_TRANSFER_REASON}</Box>;
+                }
+
                 // Show download progress if file is being downloaded
                 if (downloadingFile === item.relativeKey) {
                     return (
@@ -517,7 +584,8 @@ export const FileVersionsList: React.FC = () => {
                     );
                 }
 
-                // Default view
+                // Default view. "Compare" sits between View and Download and is present only for a
+                // type some compare viewer handles; it diffs THIS version (left) against latest (right).
                 return (
                     <SpaceBetween direction="horizontal" size="xs">
                         <Button
@@ -526,6 +594,11 @@ export const FileVersionsList: React.FC = () => {
                         >
                             View File
                         </Button>
+                        {canCompareFile(item) && (
+                            <Button onClick={() => handleCompareFile(item)} iconName="copy">
+                                Compare
+                            </Button>
+                        )}
                         <Button
                             onClick={() => handleDownloadFile(item)}
                             iconName="download"
@@ -897,34 +970,46 @@ export const FileVersionsList: React.FC = () => {
     };
 
     return (
-        <Container
-            header={<Header variant="h3">Version v{selectedVersion?.Version} Details</Header>}
-        >
-            {downloadError && (
-                <Alert type="error" dismissible onDismiss={() => setDownloadError(null)}>
-                    {downloadError}
-                </Alert>
+        <>
+            <Container
+                header={<Header variant="h3">Version v{selectedVersion?.Version} Details</Header>}
+            >
+                {downloadError && (
+                    <Alert type="error" dismissible onDismiss={() => setDownloadError(null)}>
+                        {downloadError}
+                    </Alert>
+                )}
+                <Tabs
+                    activeTabId={activeTabId}
+                    onChange={({ detail }) => setActiveTabId(detail.activeTabId)}
+                    tabs={[
+                        {
+                            id: "files",
+                            label: `Files (${totalFiles})`,
+                            content: renderFilesTab(),
+                        },
+                        {
+                            id: "metadata",
+                            label: `Metadata${
+                                selectedVersionDetails?.versionedMetadata
+                                    ? ` (${selectedVersionDetails.versionedMetadata.length})`
+                                    : ""
+                            }`,
+                            content: renderMetadataTab(),
+                        },
+                    ]}
+                />
+            </Container>
+            {compareFiles && compareFiles.length > 0 && (
+                <FileViewerModal
+                    visible={true}
+                    files={compareFiles}
+                    assetId={assetId || ""}
+                    databaseId={databaseId || ""}
+                    initialMode="compare"
+                    onDismiss={() => setCompareFiles(null)}
+                />
             )}
-            <Tabs
-                activeTabId={activeTabId}
-                onChange={({ detail }) => setActiveTabId(detail.activeTabId)}
-                tabs={[
-                    {
-                        id: "files",
-                        label: `Files (${totalFiles})`,
-                        content: renderFilesTab(),
-                    },
-                    {
-                        id: "metadata",
-                        label: `Metadata${
-                            selectedVersionDetails?.versionedMetadata
-                                ? ` (${selectedVersionDetails.versionedMetadata.length})`
-                                : ""
-                        }`,
-                        content: renderMetadataTab(),
-                    },
-                ]}
-            />
-        </Container>
+        </>
     );
 };

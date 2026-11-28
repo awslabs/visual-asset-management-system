@@ -8,7 +8,7 @@ import boto3
 import json
 import secrets
 import string
-from datetime import datetime
+from common.timestamps import utc_now
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -18,7 +18,7 @@ from common.validators import validate, normalize_userid, find_confusable_userid
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_auth_changes
+from customLogging.auditLogging import log_action, log_auth_changes, audited_handler
 from models.common import (
     validation_error_message,
     APIGatewayProxyResponseV2, internal_error, success,
@@ -123,8 +123,22 @@ def extract_user_attributes(user):
         'enabled': user.get('Enabled', True),
         'userCreateDate': user.get('UserCreateDate').isoformat() if user.get('UserCreateDate') else None,
         'userLastModifiedDate': user.get('UserLastModifiedDate').isoformat() if user.get('UserLastModifiedDate') else None,
-        'mfaEnabled': attributes.get('mfa_enabled', 'false') == 'true'
     }
+
+
+def get_user_mfa_enabled(username):
+    """Whether a Cognito user has an MFA method set up (a non-empty UserMFASettingList).
+
+    ListUsers does not report MFA settings, so each user takes one AdminGetUser call. A user
+    that no longer exists has none; any other error propagates.
+    """
+    try:
+        response = cognito_client.admin_get_user(UserPoolId=user_pool_id, Username=username)
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'UserNotFoundException':
+            return False
+        raise
+    return bool(response.get('UserMFASettingList'))
 
 
 #######################
@@ -163,10 +177,13 @@ def list_cognito_users(starting_token=None, max_results=60):
         for user in response.get('Users', []):
             try:
                 user_data = extract_user_attributes(user)
-                users.append(user_data)
             except Exception as e:
                 logger.warning(f"Error extracting user data: {e}")
                 continue
+            # Outside the per-user guard: a failed lookup fails the request rather than
+            # dropping the user or reporting MFA as off
+            user_data['mfaEnabled'] = get_user_mfa_enabled(user_data['userId'])
+            users.append(user_data)
         
         result = {'users': users}
         
@@ -248,7 +265,7 @@ def create_cognito_user(user_data, claims_and_roles):
         
         logger.info(f"Successfully created Cognito user {user_id}")
         
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return CognitoUserOperationResponseModel(
             success=True,
             message=f"User {user_id} created successfully. A welcome email with temporary password has been sent to their email.",
@@ -333,7 +350,7 @@ def update_cognito_user(user_id, update_data, claims_and_roles):
         
         logger.info(f"Successfully updated Cognito user {user_id}")
         
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return CognitoUserOperationResponseModel(
             success=True,
             message=f"User {user_id} updated successfully",
@@ -379,7 +396,7 @@ def delete_cognito_user(user_id, claims_and_roles):
         
         logger.info(f"Successfully deleted Cognito user {user_id}")
         
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return CognitoUserOperationResponseModel(
             success=True,
             message=f"User {user_id} deleted successfully",
@@ -465,7 +482,7 @@ def reset_user_password(user_id, claims_and_roles):
             )
         logger.info(f"Sent a temporary password to user {user_id}")
 
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return CognitoUserOperationResponseModel(
             success=True,
             message=f"Password reset successfully for user {user_id}. A new temporary password has been sent to their email.",
@@ -537,6 +554,11 @@ def handle_get_request(event):
                 # Fall back to raw user data if conversion fails
                 formatted_users.append(user)
         
+        log_action(event, "cognitoUserList", item_count=len(formatted_users), request_parameters={
+            "startingToken": query_params.get('starting_token'),
+            "pageSize": query_params.get('max_results'),
+        })
+
         response = {'users': formatted_users}
         if 'NextToken' in result:
             response['NextToken'] = result['NextToken']
@@ -617,10 +639,11 @@ def handle_post_request(event):
             result = reset_user_password(user_id, claims_and_roles)
             
             # AUDIT LOG: Password reset
+            # The temporary password is never recorded.
             log_auth_changes(event, "cognitoUserPasswordReset", {
                 "userId": result.userId,
                 "operation": "resetPassword"
-            })
+            }, entity_id=result.userId, ids={"targetUserId": result.userId})
             
             return success(body=result.dict())
         
@@ -658,6 +681,10 @@ def handle_post_request(event):
                 "operation": "create",
                 "email": request_model.email,
                 "phone": request_model.phone
+            }, entity_id=result.userId, ids={"targetUserId": result.userId}, changes={
+                "userId": result.userId,
+                "email": request_model.email,
+                "phone": request_model.phone,
             })
             
             return success(body=result.dict())
@@ -775,6 +802,9 @@ def handle_put_request(event):
             "email": audit_email,
             "phone": audit_phone,
             "clearPhone": clear_phone
+        }, entity_id=result.userId, ids={"targetUserId": result.userId}, changes={
+            "email": audit_email,
+            "phone": "" if clear_phone else audit_phone,
         })
         
         return success(body=result.dict())
@@ -828,7 +858,7 @@ def handle_delete_request(event):
         log_auth_changes(event, "cognitoUserDelete", {
             "userId": result.userId,
             "operation": "delete"
-        })
+        }, entity_id=result.userId, ids={"targetUserId": result.userId})
         
         return success(body=result.dict())
     
@@ -840,6 +870,7 @@ def handle_delete_request(event):
         return internal_error(event=event)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for Cognito user service APIs"""
     global claims_and_roles

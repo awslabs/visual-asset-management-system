@@ -11,6 +11,8 @@ context API Gateway would deliver goes to the real ``request_to_claims`` and the
   only the three table reads stubbed (role assignments per user, constraints per role and per user,
   and the roles a session without MFA may use), so the decision shows whose roles, user-level
   constraints and MFA state were evaluated;
+* the audit actor resolution, which names the user and the credential type a record attributes the
+  request to;
 * the real self-service API key handler (``POST /auth/user/api-keys``), with its tables and the
   Casbin decision stubbed, so the stored key shows whose key was created.
 
@@ -34,6 +36,7 @@ import pytest  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
 
 import backend.backend.handlers.authz as authz  # noqa: E402
+from backend.backend.customLogging import auditLogging  # noqa: E402
 from backend.backend.handlers.auth import apiGatewayAuthorizerRest as rest  # noqa: E402
 from backend.backend.handlers.auth import apiKeyService  # noqa: E402
 # tests/conftest.py replaces handlers.auth.request_to_claims; this is the real function.
@@ -187,11 +190,18 @@ def _database(database_id):
 @pytest.mark.unit
 class TestDecisionsUseTheUsernameClaim:
 
-    def test_the_enforcer_is_built_for_the_username_claim(self, external_idp, decide):
-        event = _handler_event(_token_naming_other_user())
+    def test_the_enforcer_and_the_audit_actor_name_the_username_claim(self, external_idp, decide):
+        event = _handler_event(_token(CALLER, **{"vams:tokens": json.dumps([OTHER_USER]),
+                                                 "vams:authMethod": "apiKey",
+                                                 "vams:apiKeyId": "key-of-another-user"}))
 
         assert decide(event).service_object._user_id == CALLER
-        assert request_to_claims(event)["tokens"] == [CALLER]
+        claims_and_roles = request_to_claims(event)
+        user_context, actor = auditLogging._resolve_actor(event, claims_and_roles)
+        assert user_context["user"] == CALLER
+        assert actor["userId"] == CALLER
+        assert actor["authMethod"] == auditLogging.AUTH_METHOD_EXTERNAL_IDP
+        assert "apiKeyId" not in actor
 
     def test_another_users_roles_are_not_evaluated(self, external_idp, decide):
         enforcer = decide(_handler_event(_token_naming_other_user()))

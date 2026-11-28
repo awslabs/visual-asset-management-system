@@ -85,7 +85,7 @@ Every request is authorized at two levels. **Tier 1** checks whether the user's 
 
 ### Serverless-First Design
 
-All compute in VAMS runs on serverless services. AWS Lambda handles API request processing and event-driven logic. AWS Step Functions orchestrates multi-step pipeline workflows. AWS Batch with Fargate manages container-based processing tasks. This eliminates server management overhead and provides automatic scaling.
+Core VAMS compute runs on serverless and managed services. AWS Lambda handles API request processing and event-driven logic. AWS Step Functions orchestrates multi-step pipeline workflows. AWS Batch manages container-based processing tasks on AWS Fargate, or on Amazon EC2 GPU instances for the GPU pipelines. This eliminates server management overhead and provides automatic scaling.
 
 ### Event-Driven Data Flow
 
@@ -139,9 +139,11 @@ graph TD
     Auth["AuthBuilder<br/>(Cognito / OAuth)"]
     APIBuilder["ApiBuilder<br/>(Primary API Route Wiring)"]
     APIBuilder2["ApiBuilder2<br/>(Secondary API Route Wiring)"]
-    Search["SearchBuilder<br/>(OpenSearch)"]
+    APIBuilder3["ApiBuilder3<br/>(Audit Log Search, when enabled)"]
+    Search["SearchBuilder<br/>(OpenSearch, vector indexing, /search/nlp)"]
     Pipelines["PipelineBuilder<br/>(Processing Pipelines)"]
-    Addons["AddonBuilder<br/>(Garnet Framework, Physna Sync)"]
+    Addons["AddonBuilder<br/>(Garnet Framework, Physna Sync, EDH Workstations)"]
+    Custom["CustomBuilder<br/>(Fork Extension Point)"]
     API["RestApi<br/>(SpecRestApi + Authorizer)"]
     StaticWeb["StaticWeb<br/>(CloudFront or ALB, Conditional)"]
     Location["LocationService<br/>(Conditional)"]
@@ -159,25 +161,36 @@ graph TD
     Names --> APIBuilder
     Storage --> APIBuilder2
     Names --> APIBuilder2
+    Storage --> APIBuilder3
+    Names --> APIBuilder3
     APIBuilder --> APIBuilder2
     Storage --> Search
     Names --> Search
+    APIBuilder2 --> Search
     Storage --> Pipelines
     APIBuilder2 --> Pipelines
+    Pipelines -.->|vectorSearch.enabled| Search
     Storage --> Addons
     Names --> Addons
+    APIBuilder -.-> Addons
+    Storage --> Custom
+    Names --> Custom
     Storage --> API
     Auth --> API
     APIBuilder --> API
     APIBuilder2 --> API
+    APIBuilder3 --> API
     Search --> API
     Addons --> API
+    Custom --> API
     Storage --> StaticWeb
-    API -.->|API endpoint| StaticWeb
+    API --> StaticWeb
+    Auth --> StaticWeb
+    StaticWeb --> Location
 ```
 
 :::tip[Stack Dependencies]
-Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none. The dotted arrow is a cross-stack reference that AWS CloudFormation orders implicitly: StaticWeb reads the REST API endpoint. CustomFeatureEnabledConfig declares no stack dependency; it reads the feature table and AWS KMS key from `storageResources`, so AWS CloudFormation orders it after StorageResourcesBuilder through those references. See [Nested Stack Dependency Chain](details.md#nested-stack-dependency-chain) for the stacks that are built only under certain configurations.
+Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none, except LocationService, which declares its dependency on StaticWeb when the static web stack is built. The dashed arrows are declared only under a condition: AddonBuilder deploys after ApiBuilder only while an enabled add-on invokes a function built there, and SearchBuilder after PipelineBuilder only when `vectorSearch.enabled` is `true`. `SearchBuilder` depends on `ApiBuilder2`, whose `executeWorkflow` function name the vector indexing construct's system-workflow launcher invokes, and, when `vectorSearch.enabled` is `true`, on `PipelineBuilder` as well, so the vector reindex custom resource runs after the system pipelines it launches exist. CustomFeatureEnabledConfig declares no stack dependency; it reads the feature table and AWS KMS key from `storageResources`, so AWS CloudFormation orders it after StorageResourcesBuilder through those references. See [Nested Stack Dependency Chain](details.md#nested-stack-dependency-chain) for the stacks that are built only under certain configurations.
 :::
 
 ## Next Steps

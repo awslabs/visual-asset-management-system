@@ -42,6 +42,12 @@ import {
     suppressCdkNagEcrAuthTokenWildcard,
 } from "../../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    TaggedBatchSubmitJob,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../../constructs/pipelineJobTags";
 import { populateHuggingFaceTokenSecret } from "../../customResources/populateHuggingFaceTokenSecret";
 import { DockerImageAsset, Platform } from "aws-cdk-lib/aws-ecr-assets";
 
@@ -78,7 +84,6 @@ export class CosmosPredictConstruct extends Construct {
         props = { ...defaultProps, ...props };
 
         const region = Stack.of(this).region;
-        const account = Stack.of(this).account;
         const cosmosConfig = props.config.app.pipelines.useNvidiaCosmos;
 
         /**
@@ -352,6 +357,7 @@ yum install -y amazon-efs-utils
 mkdir -p /mnt/efs/cosmos-models
 mount -t efs -o tls ${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models
 echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >> /etc/fstab
+chown -R 10000:10000 /mnt/efs/cosmos-models
 
 --==MYBOUNDARY==--
 `;
@@ -498,6 +504,7 @@ yum install -y amazon-efs-utils
 mkdir -p /mnt/efs/cosmos-models
 mount -t efs -o tls ${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models
 echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >> /etc/fstab
+chown -R 10000:10000 /mnt/efs/cosmos-models
 
 --==MYBOUNDARY==--
 `;
@@ -853,7 +860,11 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 resultPath: "$.error",
             });
 
-            const batchJob = new tasks.BatchSubmitJob(this, `CosmosBatchJob-${modelKey}`, {
+            const batchJob = new TaggedBatchSubmitJob(this, `CosmosBatchJob-${modelKey}`, {
+                jobTags: pipelineJobTags(
+                    props.config,
+                    VAMS_PIPELINE_TAG_VALUES.nvidiaCosmosPredict
+                ),
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: batchJobDefinition.attrJobDefinitionArn,
                 jobQueueArn: jobQueue.ref,
@@ -912,6 +923,7 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                 }
             );
 
+            suppressBatchJobTaggingNag(pipelineStateMachine);
             // Step Functions cancels the submitted Batch job when the execution stops, which needs
             // TerminateJob. Without it an abort leaves the GPU job running to its attempt limit — eight
             // hours on a g6e or p5 instance — and the execution reports stopped while the compute is
@@ -1285,7 +1297,9 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
                         appliesTo: [
                             "Resource::*",
                             "Action::kms:GenerateDataKey*",
-                            `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                            {
+                                regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                            },
                             {
                                 regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                             },

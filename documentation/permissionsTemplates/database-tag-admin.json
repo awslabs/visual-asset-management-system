@@ -34,7 +34,6 @@
             "criteriaAnd": [],
             "criteriaOr": [
                 { "field": "route__path", "operator": "starts_with", "value": "/secure-config" },
-                { "field": "route__path", "operator": "starts_with", "value": "/amplify-config" },
                 { "field": "route__path", "operator": "starts_with", "value": "/auth/routes" },
                 {
                     "field": "route__path",
@@ -96,6 +95,14 @@
                 { "action": "POST", "type": "allow" },
                 { "action": "DELETE", "type": "allow" }
             ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-buckets",
+            "description": "Allow read of every asset bucket registration. Listing buckets also needs the /buckets route; putting a database on a bucket needs read on that bucket",
+            "objectType": "bucket",
+            "criteriaAnd": [{ "field": "bucketId", "operator": "contains", "value": ".*" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
         }
     ]
 }

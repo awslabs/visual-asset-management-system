@@ -155,12 +155,15 @@ def create_retry_config(
 # step with a fresh task token.
 CALLBACK_NON_RETRYABLE_ERRORS = ["States.Timeout", "States.HeartbeatTimeout"]
 
-# The only errors a `.waitForTaskToken` task state may retry: transport/service faults raised while
-# the invocation is being delivered, so no pipeline run started. Once the pipeline holds the task
-# token, every failure it reports arrives through SendTaskFailure as an application error, and
-# retrying that re-runs the whole pipeline — hours of GPU work for a run that cannot succeed, into
-# the same execution-scoped output prefix the previous attempt may still be draining.
-CALLBACK_TRANSIENT_RETRYABLE_ERRORS = [
+# The only errors a pipeline task state retries: transport/service faults raised while the invocation
+# is being delivered, so the pipeline did not run. Every other failure of a fire-and-forget state is
+# the pipeline's own -- a synchronous Lambda's function error, an SQS or EventBridge request the
+# service rejected -- and comes back the same on every attempt, so it goes to the Catch at once. On a
+# `.waitForTaskToken` state, once the pipeline holds the task token every failure it reports arrives
+# through SendTaskFailure as an application error, and retrying that re-runs the whole pipeline --
+# hours of GPU work for a run that cannot succeed, into the same execution-scoped output prefix the
+# previous attempt may still be draining.
+TRANSIENT_DELIVERY_RETRYABLE_ERRORS = [
     "Lambda.ServiceException",
     "Lambda.AWSLambdaException",
     "Lambda.SdkClientException",
@@ -173,18 +176,19 @@ CALLBACK_TRANSIENT_RETRYABLE_ERRORS = [
 def create_task_retry_configs(wait_for_callback: bool = False) -> List[Dict[str, Any]]:
     """Retry list for a pipeline task state.
 
-    Fire-and-forget states retry any error, which can only be an invocation failure. Callback
-    states put the timeout errors first with MaxAttempts 0 — Step Functions uses the FIRST
-    matching retrier, so a callback timeout falls through to the Catch instead of re-invoking
-    the pipeline while the original run may still be in flight — and retry only the transient
-    delivery faults, so an application failure the pipeline reported goes to the Catch.
+    Both kinds of state retry only TRANSIENT_DELIVERY_RETRYABLE_ERRORS, so a deterministic pipeline
+    failure (a Lambda function error, States.TaskFailed) goes straight to the Catch. Callback states
+    additionally put the timeout errors first with MaxAttempts 0 — Step Functions uses the FIRST
+    matching retrier, so a callback timeout falls through to the Catch instead of re-invoking the
+    pipeline while the original run may still be in flight.
     """
+    transient = create_retry_config(error_equals=list(TRANSIENT_DELIVERY_RETRYABLE_ERRORS))
     if wait_for_callback:
         return [
             {"ErrorEquals": list(CALLBACK_NON_RETRYABLE_ERRORS), "MaxAttempts": 0},
-            create_retry_config(error_equals=list(CALLBACK_TRANSIENT_RETRYABLE_ERRORS)),
+            transient,
         ]
-    return [create_retry_config()]
+    return [transient]
 
 
 def create_catch_config(
@@ -357,8 +361,9 @@ def update_state_machine(
     state_machine_arn: str,
     definition: Dict[str, Any],
     role_arn: str,
-    log_group_arn: str
-) -> None:
+    log_group_arn: str,
+    publish: bool = False
+) -> Optional[str]:
     """
     Update an existing Step Functions state machine.
     
@@ -368,10 +373,18 @@ def update_state_machine(
         definition: New ASL definition dictionary
         role_arn: ARN of the IAM role for the state machine
         log_group_arn: ARN of the CloudWatch log group
+        publish: also publish the updated revision as a new version, in the same request
+
+    Returns:
+        The published version ARN when publish is True, else None
     """
     definition_json = serialize_definition(definition)
-    
-    sf_client.update_state_machine(
+
+    kwargs = {}
+    if publish:
+        kwargs['publish'] = True
+
+    response = sf_client.update_state_machine(
         stateMachineArn=state_machine_arn,
         definition=definition_json,
         roleArn=role_arn,
@@ -386,8 +399,27 @@ def update_state_machine(
         },
         tracingConfiguration={
             'enabled': True
-        }
+        },
+        **kwargs
     )
+    if not publish:
+        return None
+    return (response or {}).get('stateMachineVersionArn')
+
+
+def publish_state_machine_version(sf_client, state_machine_arn: str) -> str:
+    """
+    Publish the current revision of a state machine as a new version.
+
+    Args:
+        sf_client: boto3 Step Functions client
+        state_machine_arn: ARN of the state machine
+
+    Returns:
+        The published version ARN
+    """
+    response = sf_client.publish_state_machine_version(stateMachineArn=state_machine_arn)
+    return response['stateMachineVersionArn']
 
 
 def format_s3_uri_with_states_format(
@@ -520,10 +552,10 @@ class TaskStateBuilder(ABC):
                 "workflowExecutionS3InputOutputBucket.$": "$.workflowExecutionS3InputOutputBucket",
 
                 # --- Executing-user context. Both fields resolve to the executing user's NAME.
-                #     The request context the execute call was authorized with — every decoded JWT
-                #     claim, the resolved vams:roles list, the caller's source IP, and the
-                #     account/API identifiers — is threaded only to the workflow's process-output
-                #     state, which is where the output write-back's object-level check reads it.
+                #     The request context the execute call was authorized with — its authorizer
+                #     claims, including the resolved vams:roles list, and the request's method and
+                #     path — is threaded only to the workflow's process-output state, which is
+                #     where the output write-back's object-level check reads it.
                 #     executingRequestContext keeps its place in the body because a pipeline may
                 #     read the key directly. ---
                 "executingUserName.$": "$.executingUserName",
@@ -691,6 +723,37 @@ DEADLINE_TASK_TOKEN_PARAMETER = "VamsTaskToken"
 DEADLINE_PIPELINE_EXECUTION_ID_PARAMETER = "VamsPipelineExecutionId"
 DEADLINE_WORKFLOW_EXECUTION_ID_PARAMETER = "VamsWorkflowExecutionId"
 
+# The ranges Deadline Cloud CreateJob accepts for the job settings a DeadlineCloud pipeline carries,
+# keyed by the pipeline's deadlineCloud setting name. The pipeline API and the createJob task state
+# both check against them, so a value createJob would refuse is caught when the pipeline is saved and
+# again before a definition that carries it is deployed.
+DEADLINE_JOB_SETTING_RANGES = {
+    "priority": (0, 100),
+    "maxRetriesPerTask": (0, 2147483647),
+    "maxFailedTasksCount": (0, 2147483647),
+}
+
+
+def deadline_job_setting(setting: str, value: Any, label: str) -> int:
+    """`value` as an int when it is a whole number in the CreateJob range of `setting`; otherwise a
+    ValueError that names `label` and the range.
+
+    Accepts an int, or a string that int() reads as one (the pipeline API has always stored such a
+    string as given). Refuses a bool, any float (2.5, and 2.0, which DynamoDB cannot store as a
+    float) and any other text."""
+    low, high = DEADLINE_JOB_SETTING_RANGES[setting]
+    number = None
+    if isinstance(value, int) and not isinstance(value, bool):
+        number = value
+    elif isinstance(value, str):
+        try:
+            number = int(value)
+        except ValueError:
+            number = None
+    if number is None or not low <= number <= high:
+        raise ValueError(f"{label} must be an integer from {low} to {high}")
+    return number
+
 
 class DeadlineCloudTaskBuilder(TaskStateBuilder):
     """Builder for AWS Deadline Cloud createJob task states.
@@ -755,11 +818,11 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
         return job_parameters
 
     @staticmethod
-    def _int_setting(field_name: str, value: Any) -> int:
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            raise ValueError(f"DeadlineCloud pipeline setting {field_name} must be an integer")
+    def _int_setting(pipeline_id: str, setting: str, value: Any) -> int:
+        # A stored pipeline is not re-validated when it is read, and createJob refuses a value
+        # outside its range, so the range is checked here too.
+        return deadline_job_setting(
+            setting, value, f"DeadlineCloud pipeline {pipeline_id}: deadlineCloud.{setting}")
 
     @classmethod
     def _client_token_expression(cls, state_name: str, payload: Dict[str, Any]) -> str:
@@ -803,13 +866,14 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
                 "deadlineTemplate on the pipeline resource.")
 
         priority = user_resource.get('deadlinePriority')
+        pipeline_id = pipeline.get('pipelineId', '')
         parameters = {
             "FarmId": farm_id,
             "QueueId": queue_id,
             "Template": template,
             "TemplateType": template_type,
             # 0 is a valid (lowest) priority — only fall back when unset/blank.
-            "Priority": (self._int_setting('deadlinePriority', priority)
+            "Priority": (self._int_setting(pipeline_id, 'priority', priority)
                          if priority not in (None, '') else self.DEFAULT_PRIORITY),
             # Identifies the VAMS pipeline step in the Deadline monitor.
             "NameOverride": state_name,
@@ -822,10 +886,10 @@ class DeadlineCloudTaskBuilder(TaskStateBuilder):
             parameters["StorageProfileId"] = user_resource['deadlineStorageProfileId']
         if user_resource.get('deadlineMaxRetriesPerTask') not in (None, ''):
             parameters["MaxRetriesPerTask"] = self._int_setting(
-                'deadlineMaxRetriesPerTask', user_resource['deadlineMaxRetriesPerTask'])
+                pipeline_id, 'maxRetriesPerTask', user_resource['deadlineMaxRetriesPerTask'])
         if user_resource.get('deadlineMaxFailedTasksCount') not in (None, ''):
             parameters["MaxFailedTasksCount"] = self._int_setting(
-                'deadlineMaxFailedTasksCount', user_resource['deadlineMaxFailedTasksCount'])
+                pipeline_id, 'maxFailedTasksCount', user_resource['deadlineMaxFailedTasksCount'])
 
         state = {
             "Type": "Task",

@@ -149,6 +149,10 @@ Only archived assets can be unarchived. Use `vamscli assets get <ASSET_ID> -d <D
 `--unarchive-files` restores only the files that were archived by the asset archive itself (tracked by `assetArchive` provenance in the file version history). Files archived individually beforehand always stay archived — restore those with `vamscli file unarchive`. Assets archived before provenance tracking have no restorable file set, so no files are restored for them.
 :::
 
+:::tip[Reading an archived asset]
+An archived asset stays readable. Pass `--show-archived` to `file list`, `file info`, `asset-version list` and `get`, `metadata asset list`, `metadata file list`, `metadata asset-link list`, `asset-links list`, and `comment list` to read its files, versions, metadata, relationships, and comments. Every write command refuses an archived asset until it is unarchived.
+:::
+
 ---
 
 ## assets delete
@@ -168,14 +172,27 @@ vamscli assets delete <ASSET_ID> [OPTIONS]
 | `--json-output`    | Flag | No       | Output raw JSON response         |
 
 :::danger[Permanent Deletion]
-This action permanently removes the asset record, all files and versions from Amazon S3, all links and relationships, comments, version history, metadata, and SNS topics. The `--confirm` flag is required. When the command runs in an interactive terminal without `--json-output`, an additional confirmation prompt appears; in a script, pipe or CI job, or with `--json-output`, `--confirm` alone proceeds.
+This action permanently removes the asset record, all files and versions from Amazon S3, all links and relationships, comments, version history, metadata, and SNS topics. When Amazon S3 does not delete every version of the asset's files, the delete is refused and the asset is kept (see below). The `--confirm` flag is required. When the command runs in an interactive terminal without `--json-output`, an additional confirmation prompt appears; in a script, pipe or CI job, or with `--json-output`, `--confirm` alone proceeds.
 :::
+
+When Amazon S3 does not delete every version of the asset's files, for example because a bucket policy denies the delete or the objects are locked, the API refuses the delete with `400` and keeps the asset and the files Amazon S3 kept. The command prints `✗ Delete Refused:` followed by the API's message and a hint, and exits `1`. With `--json-output` it prints one JSON object whose `error_type` is `InvalidAssetDataError`:
+
+```json
+{
+    "error": "Invalid delete operation: VAMS General Error: Error permanently deleting asset: the asset's storage could not be fully deleted. Check that VAMS can delete objects in the asset's storage bucket (its permissions and any object lock), then try again. The asset and its remaining files were kept.",
+    "error_type": "InvalidAssetDataError"
+}
+```
+
+Remove the cause and run the delete again.
 
 ---
 
 ## assets download
 
 Download files from an asset with advanced options for version selection, tree traversal, and shareable links.
+
+To receive a selection as one zip, tar, or tar.gz file instead, use [`zip-download create`](zip-downloads.md#zip-download-create).
 
 ```bash
 vamscli assets download [LOCAL_PATH] [OPTIONS]
@@ -220,6 +237,8 @@ vamscli assets download /local/path -d my-db -a my-asset --asset-version-alias "
 vamscli assets download -d my-db -a my-asset --shareable-links-only
 vamscli assets download /local/path -d my-db -a my-asset --asset-link-children-tree-depth 2
 ```
+
+Each file is saved byte for byte as it is stored, as `aws s3 cp` saves it. A file stored with a `Content-Encoding` (for example a gzip-compressed glTF written straight to the asset bucket) is saved compressed; see [Downloaded File Is Compressed and Does Not Open](../troubleshooting/assets-files.md#downloaded-file-is-compressed-and-does-not-open).
 
 The command exits non-zero when any file did not arrive, so a partial transfer is distinguishable from a complete one. The report still goes to stdout: `overall_success` gives the outcome, and each entry in `failed_downloads` names a file in `relative_key` with the reason in `error`. A file the service declines to issue a download URL for is counted as a failure like any other — an asset that is not distributable, for example, lists its files but permits none of them to be fetched, and that reads as `failed_downloads` entries rather than an empty success. When nothing at all could be prepared, the error message names the reason.
 
@@ -355,7 +374,7 @@ vamscli asset-version list [OPTIONS]
 | ------------------ | ---- | -------- | ---------------------------------------------------------------------------------- |
 | `-d`, `--database` | TEXT | Yes      | Database ID                                                                        |
 | `-a`, `--asset`    | TEXT | Yes      | Asset ID                                                                           |
-| `--show-archived`  | Flag | No       | Include archived versions                                                          |
+| `--show-archived`  | Flag | No       | Include archived versions, and also find an archived asset                         |
 | Pagination options |      | No       | `--page-size` (maximum 1000), `--max-items`, `--starting-token`, `--auto-paginate` |
 | `--json-output`    | Flag | No       | Output raw JSON response                                                           |
 
@@ -366,8 +385,10 @@ vamscli asset-version list [OPTIONS]
 Get details for a specific version, including versioned metadata and attributes.
 
 ```bash
-vamscli asset-version get -d <DB> -a <ASSET> -v <VERSION> [--json-output]
+vamscli asset-version get -d <DB> -a <ASSET> -v <VERSION> [--show-archived] [--json-output]
 ```
+
+`--show-archived` also finds a version of an archived asset.
 
 ---
 
@@ -447,7 +468,7 @@ The `--alias-id` option enables multiple parent-child relationships between the 
 ## asset-links list / get / update / delete
 
 ```bash
-vamscli asset-links list -d my-db --asset-id my-asset [--tree-view]
+vamscli asset-links list -d my-db --asset-id my-asset [--tree-view] [--show-archived]
 vamscli asset-links get --asset-link-id <UUID>
 vamscli asset-links update --asset-link-id <UUID> --tags new-tag
 vamscli asset-links delete --asset-link-id <UUID>

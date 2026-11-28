@@ -12,12 +12,15 @@ from unittest.mock import MagicMock
 import pytest
 
 import vams_mcp
-from vams_mcp import server
+from vams_mcp.client import VamsClient
 
 ASSET_TOOLS = [
-    # (tool, path suffix)
-    ("get_asset", ""),
-    ("list_asset_files", "/listFiles"),
+    # (tool, extra arguments, method, path suffix)
+    ("get_asset", (), "GET", ""),
+    ("update_asset", ({"description": "d"},), "PUT", ""),
+    ("list_asset_files", (), "GET", "/listFiles"),
+    ("archive_asset", (), "DELETE", "/archiveAsset"),
+    ("delete_asset", (), "DELETE", "/deleteAsset"),
 ]
 
 
@@ -35,47 +38,50 @@ class _EmptyAnswer:
 
 
 @pytest.fixture
-def sent(monkeypatch):
-    """The server over a client holding vamscli's real APIClient, whose session records each request
-    and answers an empty 200."""
+def server_and_sent(server_with_switches, monkeypatch):
+    """The server with every gate open over a client holding vamscli's real APIClient, whose session
+    records each request and answers an empty 200."""
     from vamscli.utils.api_client import APIClient
 
-    client = MagicMock()
-    client.config = server.CONFIG
-    client.unwrap_message = server.VamsClient.unwrap_message
-    client.paginate = lambda *args, **kwargs: server.VamsClient.paginate(client, *args, **kwargs)
-    client.get_json = lambda *args, **kwargs: server.VamsClient.get_json(client, *args, **kwargs)
-    client.api = APIClient("https://api.example.com", profile_manager=MagicMock())
-    monkeypatch.setattr(server, "CLIENT", client)
-    requests_sent = []
-    # The client's request log is a file under the vamscli config directory; a test writes none.
-    monkeypatch.setattr("vamscli.utils.logging.log_api_request", lambda *args, **kwargs: None)
-    monkeypatch.setattr("vamscli.utils.logging.log_api_response", lambda *args, **kwargs: None)
-    monkeypatch.setattr(client.api, "_validate_token_before_request", lambda include_auth: None)
-    monkeypatch.setattr(client.api, "_get_headers", lambda include_auth: {})
-    monkeypatch.setattr(
-        client.api.session, "request",
-        lambda method, url, **kwargs: requests_sent.append((method, url)) or _EmptyAnswer())
-    return requests_sent
+    with server_with_switches([], enable_writes=True, enable_destructive=True) as server:
+        client = server.CLIENT
+        client.paginate = lambda *args, **kwargs: VamsClient.paginate(client, *args, **kwargs)
+        client.api = APIClient("https://api.example.com", profile_manager=MagicMock())
+        sent = []
+        # The client's request log is a file under the vamscli config directory; the server tests
+        # assert no such file is written, so the log calls are stubbed rather than run.
+        monkeypatch.setattr("vamscli.utils.logging.log_api_request", lambda *args, **kwargs: None)
+        monkeypatch.setattr("vamscli.utils.logging.log_api_response", lambda *args, **kwargs: None)
+        monkeypatch.setattr(client.api, "_validate_token_before_request", lambda include_auth: None)
+        monkeypatch.setattr(client.api, "_get_headers", lambda include_auth: {})
+        monkeypatch.setattr(
+            client.api.session, "request",
+            lambda method, url, **kwargs: sent.append((method, url)) or _EmptyAnswer())
+        yield server, sent
 
 
-@pytest.mark.parametrize("tool,suffix", ASSET_TOOLS)
-def test_each_sibling_reaches_its_own_asset(sent, tool, suffix):
-    getattr(server, tool)("db-1", "x-q#")
-    getattr(server, tool)("db-1", "x-q")
-    assert [url.split("?", 1)[0] for _, url in sent] == [
-        f"https://api.example.com/database/db-1/assets/x-q%23{suffix}",
-        f"https://api.example.com/database/db-1/assets/x-q{suffix}",
+@pytest.mark.parametrize("tool,extra,method,suffix", ASSET_TOOLS)
+def test_each_sibling_reaches_its_own_asset(server_and_sent, tool, extra, method, suffix):
+    server, sent = server_and_sent
+    getattr(server, tool)("db-1", "x-q#", *extra)
+    getattr(server, tool)("db-1", "x-q", *extra)
+    assert sent == [
+        (method, f"https://api.example.com/database/db-1/assets/x-q%23{suffix}"),
+        (method, f"https://api.example.com/database/db-1/assets/x-q{suffix}"),
     ]
 
 
-def test_list_assets_puts_the_database_id_in_its_own_segment(sent):
+def test_list_assets_puts_the_database_id_in_its_own_segment(server_and_sent):
+    server, sent = server_and_sent
+    client = server.CLIENT
+    client.get_json = lambda *args, **kwargs: VamsClient.get_json(client, *args, **kwargs)
     server.list_assets(database_id="db#1")
     assert [url.split("?", 1)[0] for _, url in sent] == ["https://api.example.com/database/db%231/assets"]
 
 
 @pytest.mark.parametrize("asset_id", ["x-q\t", "x-q%09"])
-def test_a_control_character_is_refused_before_anything_is_sent(sent, asset_id):
+def test_a_control_character_is_refused_before_anything_is_sent(server_and_sent, asset_id):
+    server, sent = server_and_sent
     result = server.get_asset("db-1", asset_id)
     assert "may not contain a control character" in result["error"]
     assert sent == []
@@ -94,3 +100,20 @@ def test_server_endpoints_are_built_with_route_path():
                 offenders.append(f"{source.relative_to(package)}:{node.lineno}")
     assert any(source.name == "server.py" for source in sources), "control: the walk sees the server"
     assert offenders == []
+
+
+COMPLIANCE_TOOLS = [
+    # (tool, arguments, method, path): each id reaches the API as typed, in its own segment
+    ("get_compliance_schema", ("s/x#1%",), "GET", "/compliance/schemas/s%2Fx%231%25"),
+    ("get_asset_compliance_state", ("db/a1", "a#1"), "GET", "/compliance/state/db%2Fa1/a%231"),
+    ("unbind_compliance_schema", ("db/a1",), "DELETE", "/compliance/bind/db%2Fa1"),
+    ("unbind_compliance_schema", ("db#deleted", "a/1"), "DELETE", "/compliance/bind/db%23deleted/a%2F1"),
+    ("evaluate_database_compliance", ("db/a1",), "POST", "/compliance/evaluate/db%2Fa1"),
+]
+
+
+@pytest.mark.parametrize("tool,arguments,method,path", COMPLIANCE_TOOLS)
+def test_a_compliance_id_stays_in_its_own_segment(server_and_sent, tool, arguments, method, path):
+    server, sent = server_and_sent
+    getattr(server, tool)(*arguments)
+    assert [(m, url.split("?", 1)[0]) for m, url in sent] == [(method, f"https://api.example.com{path}")]

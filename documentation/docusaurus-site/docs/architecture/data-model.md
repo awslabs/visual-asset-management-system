@@ -26,6 +26,8 @@ Stores the primary record for each asset within a database.
 
 **Common Attributes:** `assetName`, `assetType`, `description`, `isDistributable`, `tags`, `assetLocation`, `previewLocation`, `bucketId`, `createdAt`, `updatedAt`
 
+**Change provenance:** every upload completion writes `lastChangeSource` (`upload`, or `workflowExecution` when a workflow execution wrote the files back), `lastChangeWorkflowExecutionId` (that execution's id; absent for an upload) and `lastChangeAt`; a user upload's completion also writes `lastUploadAt`, which a workflow execution's write leaves as it is. Creating or reverting to an asset version writes `lastChangeSource` `assetVersion`, a new `lastChangeAt` and the same instant as `lastAssetVersionAt`, removes `lastChangeWorkflowExecutionId` and leaves `lastUploadAt` as it is; an asset edit that changes `assetName`, `description` or `tags` writes `lastChangeSource` `assetEdit` and a new `lastChangeAt` and removes `lastChangeWorkflowExecutionId`. A write of the asset's metadata, a file's metadata or attributes, or an asset link's metadata, and an asset-link create or delete, are recorded by the compliance trigger from the tables' streams rather than by the request: `lastChangeSource` `metadataEdit` (on both linked assets for a link's metadata) or `linkChange` (on both linked assets), `lastChangeAt` the change's own instant (the stream time rounded up to the next second) and `lastChangeRecordedAt` the instant it was recorded, with `lastChangeWorkflowExecutionId` removed; the write is conditioned on the live row (an archived or deleted asset is not stamped) and on `lastChangeAt` not being later, so an older event never moves it backwards. A row a workflow execution's metadata write-back wrote carries `lastChangeWorkflowExecutionId`, and a row it deleted `deletedByWorkflowExecutionId`; the trigger records those as `lastChangeSource` `workflowExecution` with the execution's id, as the file write-back does. `lastUploadAt` and `lastAssetVersionAt` are each moved only by their own kind of change: upload completions and workflow output writes leave `lastAssetVersionAt` as it is, and asset edits, metadata writes and link changes leave both. The compliance trigger reads these attributes from the table's stream image and the row to tell a pipeline rule's own output apart from a user change, to judge an uploaded object or an object a revert copied against the later of `lastUploadAt` and `lastAssetVersionAt`, and to re-evaluate an asset when a version is created, its name, description or tags are edited, its metadata is written or one of its links is created or deleted.
+
 ### Database Storage Table
 
 Stores database (collection) records.
@@ -129,7 +131,7 @@ The partition key is the hierarchical object identifier by `objectType`: `databa
 
 ### Asset Uploads Storage Table
 
-Tracks in-progress file uploads.
+Tracks in-progress file uploads. Each record carries `expiresAt` (epoch seconds; 7 days after an upload is initialized, 1 day for a workflow output upload), and the table's DynamoDB time to live on `expiresAt` removes a record after it expires.
 
 | Attribute  | Type   | Key           |
 | ---------- | ------ | ------------- |
@@ -196,6 +198,26 @@ Stores system-generated file attributes (distinct from user-defined metadata).
 | -------------------------------- | ----------------------------- | -------------- | ---------- |
 | `DatabaseIdAssetIdFilePathIndex` | `databaseId:assetId:filePath` | `attributeKey` | ALL        |
 | `DatabaseIdAssetIdIndex`         | `databaseId:assetId`          | `attributeKey` | ALL        |
+
+### Vector Embeddings Storage Table
+
+Stores one item per embedded file version, plus one item per segment (a video time window or a text chunk) a run published for that version, written only by the vector indexer in the search stack. The table exists in every deployment; its vector index exists only while `app.vectorSearch.enabled` is true.
+
+| Attribute                                                                                                | Type           | Key           | Notes                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------- | -------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId:assetId`                                                                                     | String         | Partition Key | Composite key, so one query covers every item of an asset                                                                                                                                                                                                                                                                                                                                                                        |
+| `fileVersionKey`                                                                                         | String         | Sort Key      | `<key path>#<versionId>` on a whole-file item, `<key path>#<versionId>#<segmentKey>` on a segment item — the file path, hash-bounded so the value stays within the 1,024-byte sort-key limit, then `#` and the S3 version id (`null` on unversioned buckets), then the segment's fixed-width key; `begins_with` on `<key path>#` groups one file's items across versions and on `<key path>#<versionId>#` one version's segments |
+| `databaseId`, `isLatest`, `isArchived`, `fileClass`, `fileExt`, `embeddingModelId`, `segmentKind`        | String         |               | Inline-filter attributes of the vector index. Every item writes all seven — `isLatest`/`isArchived` as `"true"`/`"false"`, `fileExt` as `none` when the file has no extension, `segmentKind` as `none` on a whole-file item and `videoTime` or `textChunk` on a segment — because the index filters by equality only                                                                                                             |
+| `assetId`, `filePath`, `versionId`, `contentType`, `indexedAt`, `previewFileKey`                         | String         |               | Projected into the index for display and joins; `indexedAt` is ISO-8601                                                                                                                                                                                                                                                                                                                                                          |
+| `segmentKey`, `segmentLabel`                                                                             | String         |               | Projected into the index; empty on a whole-file item. A segment's key is `t` and its start millisecond (`t0000083456`) or `c` and its chunk index (`c000012`); the label is its display form (`00:01:23.456–00:01:33.456`, `chunk 12/200 · page 7`)                                                                                                                                                                              |
+| `fileSize`                                                                                               | Number         |               | Projected into the index                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `segmentStartMs`, `segmentEndMs`                                                                         | Number         |               | Projected into the index; the time window of a `videoTime` segment, `null` otherwise                                                                                                                                                                                                                                                                                                                                             |
+| `sourceModalities`                                                                                       | List of String |               | Projected into the index; which parts of the embedded text contributed (see [Vector search](../concepts/vector-search.md#what-is-embedded))                                                                                                                                                                                                                                                                                      |
+| `embedding`                                                                                              | List of Number |               | The vector, rounded to nine significant digits; indexed, never returned by a search                                                                                                                                                                                                                                                                                                                                              |
+| `embeddingDimensions`, `segmentCount`                                                                    | Number         |               | Stored on the item only; `segmentCount` is the number of segments the producing run set out to publish for the file version (the planned window count or the chunk count, carried by the whole-file item and every segment item alike; `0` for a run without segments)                                                                                                                                                           |
+| `sourceText`, `contentEtag`, `bucketId`, `analysisModelId`, `pipelineExecutionId`, `workflowExecutionId` | String         |               | Stored on the item only; `sourceText` holds at most 8,000 characters of the embedded text, as the pipeline's Amazon Bedrock guardrail returned it (masked entities are type tokens)                                                                                                                                                                                                                                              |
+
+**Vector index:** `vec-<embedding model slug>-<dimensions>` on `embedding`, `COSINE` distance, `INCLUDE` projection of the identity, filter, segment, and display attributes above. The seven filter attributes are fixed when the index is created. The index name is derived from `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` and `embeddingDimensions`, so a model change creates a new index and the existing items are cleared and re-embedded rather than migrated. No DynamoDB Streams, TTL, or global secondary indexes.
 
 ### Metadata Schema Storage Table (V2)
 
@@ -301,6 +323,8 @@ Stores pipeline definitions scoped to a database. The `(databaseId, pipelineId)`
 
 The `allListPartition` attribute holds the constant value `pipeline` on every row, so the global "all pipelines" list resolves as a single newest-first query instead of a table scan.
 
+Every row also carries `isSystem` (Boolean). The `vamsSchema` importer writes `true` for a pipeline it registers from a bundle that declares it; the API never writes the attribute, and a row without it reads as `false`.
+
 ### Workflow Storage Table (V2)
 
 Stores workflow definitions scoped to a database.
@@ -319,6 +343,8 @@ Stores workflow definitions scoped to a database.
 | `WorkflowsByDateGSI`     | `allListPartition`    | `dateModified` | ALL        | Global (cross-database) workflow list as a query |
 
 The `allListPartition` attribute holds the constant value `workflow` on every row.
+
+Every row also carries `isSystem` (Boolean). The `vamsSchema` importer writes `true` for a workflow it registers from a bundle that declares it; the API never writes the attribute, and a row without it reads as `false`.
 
 ### Workflow Triggers Storage Table
 
@@ -375,10 +401,22 @@ rather than pointing at definitions that may since have moved.
 
 **Main row** (`WorkflowExecutionsStorageTableV2`) — identity and status only: `executionStatus`,
 `executionStartDate` / `executionStopDate`, `triggerType`, `triggeredByUserId`, `executionGroupId`,
-`executionError`, the full `executionLog`, the Step Functions ARNs, and `lastSfnSyncCheckDate` (which
-bounds how often a status read polls Step Functions). Deliberately carries no output-target or
+`executionError`, the full `executionLog`, the Step Functions ARNs, `lastSfnSyncCheckDate` (which
+bounds how often a status read polls Step Functions), and `isSystem` (the launched workflow's flag,
+copied at launch; the execution lists hide `true` rows by default, and a row written before the flag
+existed has no attribute and is listed as a user run). Deliberately carries no output-target or
 configuration fields — those live on the configuration rows below, so a status list never pays to read
 them.
+
+A `SKIPPED` main row records the `fileUpload` trigger launches a concurrency lock refused. Its id is a
+uuid5 of the lock key and the blocking execution's id, so every refusal by one blocking execution on one
+lock lands on the same record. Each refusal writes the record's configuration row first (the trigger's
+output target and its `pipelineExecutionParameters`, which a re-run replays; kept from the first
+refusal), then its workflow-input rows (the refused launches' files, for the first 100 refusals), and
+last the main row, with one `UpdateItem` that sets the identity fields only if absent and adds one to
+`skippedLaunchCount`. The main row also carries `lastSkippedDate`, `skipScope`, `skipReason` and
+`blockingExecutionId`, and has no ARNs; the record has no pipeline or lock rows. Rows written before skip
+records existed carry none of these attributes and read as not skipped.
 
 **Workflow configuration row** (`WorkflowExecutionConfigurationStorageTable`, `recordType` =
 `configuration`) — the run's workflow-level inputs:
@@ -388,6 +426,7 @@ them.
 | `specifiedPipelinesSnapshot`                              | The ordered pipeline references the workflow held at launch, so a later edit to the workflow does not rewrite history                                                                                                  |
 | `inputMetadata` / `inputMetadataTruncated`                | The grouped input-metadata envelope handed to the pipelines (truncated inline when oversized)                                                                                                                          |
 | `outputLocationType`, `outputAssetId`, `outputDatabaseId` | Where the run wrote: `asset` with a destination, or `none` for a results-only run                                                                                                                                      |
+| `outputTypes`                                             | The output kinds the run produced (`File`, `Metadata`, `Result`, in that order), written at completion and at failure. Absent on a row recorded before the attribute existed, which the read paths report as `[]`      |
 | `outputFileBaseExecutionPathExtension`                    | The **resolved** output path prefix (template tags already substituted), so a re-run reproduces the same layout rather than re-resolving per-run tags                                                                  |
 | `inputMetadataDatabaseId` / `inputMetadataFileS3Key`      | Provenance of the metadata source. `inputMetadataDatabaseId` is the single database the caller **named**, populated only for a run with no input files                                                                 |
 | `metadataSourceDatabases` / `metadataSourceAssets`        | Every database the run actually captured metadata from, and the assets named purely as metadata sources — the read paths gate access on the databases listed here, and a re-run reconstructs the same source selection |
@@ -437,6 +476,14 @@ only one of them pins a version:
     single run can read files from several assets in different buckets — and the concrete S3 `versionId`
     the run read (empty for a folder or whole-asset selection, which has no single version). Capturing the
     version is what makes the history show the exact bytes used rather than the time-relative "latest".
+    The sort key is `databaseId:assetId:inputAssetFileKey` with `#versionId` appended when the run
+    resolved a version, so a run that reads two versions of one file records one row per version. Rows
+    written before v2.7.0 carry the key without the version suffix and read the same way.
+    `versionPinned` records whether the caller named that version at launch (`true`) or the run resolved
+    the file's current version (`false`). A `fileUpload` trigger launch (`SYSTEM_USER`) names the
+    uploaded version so the run reads it, but records `false`: nobody chose that version. A re-run reads a pinned version again and takes the current
+    version of every other file. Rows written before v2.7.0 have no `versionPinned` and re-run on the
+    current version. The attribute is internal and is not returned by the execution APIs.
 -   `PipelineExecutionInputFilesStorageTable` narrows the same selection to one pipeline step. Its rows
     carry only the `databaseId` / `assetId` / `inputAssetFileKey` locator and the owning
     `workflowExecutionId`; there is no `versionId` attribute, because the version for a given file is
@@ -446,6 +493,108 @@ only one of them pins a version:
 `preview`), `relativeFilePath`, `s3Bucket`, `s3Key`, `s3VersionId`, size and content type; `Output*Metadata`
 and `Output*Results` records carry metadata written back to the asset and results text from a results-only
 run. `PipelineExecutionLogsStorageTable` holds the per-step result and error logs.
+
+The same output-files table also holds each run's **ingest ledger**, under the partition
+`ingest#{workflowExecutionId}` rather than a `pipelineExecutionId`, so no output listing reads it. The
+end-state step writes one row per output it hands to ingestion (`ingestState` `moving`, then `ingested`),
+which lets a retried step record outputs an earlier attempt already moved into the asset. An output over
+1 GiB handed to the large object copy engine is `engine-copying` with its copy job's id (`engineJobId`)
+until the run's finalize step reads the job's outcome: `ingested` when the copy landed, the row removed
+when it did not. A `moving` row whose attempt stopped is taken over after 20 minutes; an `engine-copying`
+row is never taken over or handed to ingestion again. Permanently deleting an execution deletes the
+partition.
+
+### Workflow Execution Locks Storage Table
+
+Holds one row per lock a running execution took under its workflow's `concurrencyRestriction`: `perAsset`, `perInputFile`, or `perInputFileVersion`. A launch writes its rows with conditional puts before the state machine starts; the execution's release deletes them, conditional on the holder, when it ends. The time-to-live attribute covers a release that never ran. A system pipeline launch that asks for one of N concurrency slots of its workflow also holds one slot row, `{workflowDatabaseId}:{workflowId}|systemSlot|{n}` (`lockScope` `systemSlot`), for the run's whole life; at most N such runs of the workflow hold one at a time.
+
+| Attribute             | Type   | Key           | Notes                                                                                                                  |
+| --------------------- | ------ | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `lockKey`             | String | Partition Key | `{workflowDatabaseId}:{workflowId}\|{lockScope}\|{scopeKey}`: the asset, the file, or the file version the lock covers |
+| `workflowExecutionId` | String |               | The execution holding the lock; partition key of `WorkflowExecutionLocksByHolderGSI`                                   |
+| `lockScope`           | String |               | `asset`, `assetFile`, or `assetFileVersion`: the restriction the row was taken under; `systemSlot` for a slot row      |
+| `acquiredAt`          | String |               | ISO-8601 acquisition time                                                                                              |
+| `expiresAt`           | Number |               | Epoch seconds; the table's time-to-live attribute, so a lock whose release never ran expires on its own                |
+
+`scopeKey` is `{databaseId}:{assetId}` for an asset, `{databaseId}:{assetId}:{inputAssetFileKey}` for a file (the file's full key in its asset bucket, as the workflow execution inputs table stores it), and that followed by `#{versionId}` for a file version (empty on an unversioned bucket and for a folder or whole-asset selection).
+
+| Index                               | Partition Key         | Sort Key | Projection |
+| ----------------------------------- | --------------------- | -------- | ---------- |
+| `WorkflowExecutionLocksByHolderGSI` | `workflowExecutionId` | --       | KEYS_ONLY  |
+
+The holder index lets a release find every row an execution holds, including rows its input rows cannot rebuild: two versions of one file selected together, or a workflow whose restriction was edited while the run was going. No DynamoDB Streams.
+
+### Compliance Tables
+
+Compliance deploys unconditionally. Schemas are versioned (`internalVersion`); asset state records a bound
+asset's latest verdict and the newest evaluation of it (`lastEvaluationId` / `lastEvaluatedAt`, written
+when an evaluation starts and again when it completes); evaluations are per run; cascades gate
+downstream re-evaluation on approval; the audit table is the compliance event trail.
+
+| Table                            | Partition Key  | Sort Key          |
+| -------------------------------- | -------------- | ----------------- |
+| ComplianceSchemaStorageTable     | `schemaName`   | `internalVersion` |
+| ComplianceAssetStateStorageTable | `databaseId`   | `assetId`         |
+| ComplianceEvaluationStorageTable | `evaluationId` | --                |
+| ComplianceCascadeStorageTable    | `cascadeId`    | --                |
+| ComplianceAuditStorageTable      | `entryId`      | --                |
+
+**Global Secondary Indexes:**
+
+| Table                            | GSI Name                 | Partition Key        | Sort Key          | Purpose                                                                                                                                                                           |
+| -------------------------------- | ------------------------ | -------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ComplianceSchemaStorageTable     | `DatabaseIdIndex`        | `databaseId`         | `schemaName`      | List a database's schemas                                                                                                                                                         |
+| ComplianceSchemaStorageTable     | `LatestVersionIndex`     | `latestVersion`      | `schemaName`      | The latest version of each schema, by name (sparse; the paged schema listing)                                                                                                     |
+| ComplianceAssetStateStorageTable | `SchemaNameIndex`        | `schemaName`         | `complianceState` | List a schema's assets by state (sweep, schema-deletion check)                                                                                                                    |
+| ComplianceAssetStateStorageTable | `ComplianceStateIndex`   | `complianceState`    | `databaseId`      | Assets in one state across databases or in one database, paged (quarantine list, overview state filter and per-state counts)                                                      |
+| ComplianceAssetStateStorageTable | `DatabaseAssetNameIndex` | `databaseId`         | `assetNameSort`   | A database's assets by name (overview `sort=name`)                                                                                                                                |
+| ComplianceEvaluationStorageTable | `AssetIndex`             | `databaseId:assetId` | `evaluatedAt`     | An asset's evaluations, newest first                                                                                                                                              |
+| ComplianceEvaluationStorageTable | `ExecutionIdIndex`       | `executionId`        | --                | Resolve the evaluation a pipeline-rule workflow run belongs to (workflow-completion callback)                                                                                     |
+| ComplianceEvaluationStorageTable | `PipelineRuleWaitIndex`  | `waitingWorkflowKey` | `waitingSince`    | Pipeline rules waiting for a running execution of their workflow, oldest first (sparse; workflow-completion callback)                                                             |
+| ComplianceCascadeStorageTable    | `StateIndex`             | `state`              | `createdAt`       | Pending / completed cascades by state                                                                                                                                             |
+| ComplianceAuditStorageTable      | `AssetIndex`             | `databaseId:assetId` | `timestamp`       | An asset's audit trail                                                                                                                                                            |
+| ComplianceAuditStorageTable      | `EventTypeIndex`         | `eventType`          | `timestamp`       | Audit entries by event type                                                                                                                                                       |
+| ComplianceAuditStorageTable      | `AuditByDateGSI`         | `allListPartition`   | `timestamp`       | The unfiltered audit trail, newest first (every row carries the constant `allListPartition`)                                                                                      |
+| ComplianceAuditStorageTable      | `DatabaseIndex`          | `databaseId`         | `timestamp`       | One database's audit trail, newest first: the listing filtered by database, and the listing of a caller who may read only some databases (one query per database, merged by time) |
+
+### Zip Download Requests Storage Table
+
+Holds one row per Download as Zip job. Every write and every get, cancel and delete starts from the authenticated caller's user ID, so a user changes only their own rows. The all-users list reads `AssetIndex` for one asset, for a caller allowed that route who may read the asset, and the download URL route signs another user's archive for a caller who may download from the asset. Status changes are conditional writes: a terminal status (`SUCCEEDED`, `FAILED`, `CANCELLED`) is final, and the Zip Archive container's writes are further conditional on its own run.
+
+| Attribute                                            | Type   | Key           | Notes                                                                                                  |
+| ---------------------------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------------------ |
+| `userId`                                             | String | Partition Key | The requesting user                                                                                    |
+| `requestId`                                          | String | Sort Key      | Zero-padded base-36 epoch milliseconds, `-`, and a UUID4 hex, so lexicographic order is creation order |
+| `userAssetKey`                                       | String |               | `{userId}#{databaseId}#{assetId}`; partition key of `UserAssetIndex`                                   |
+| `assetKey`                                           | String |               | `{databaseId}#{assetId}`; partition key of `AssetIndex` (written from creation)                        |
+| `databaseId`                                         | String |               | Database of the asset                                                                                  |
+| `assetId`                                            | String |               | Asset archived                                                                                         |
+| `assetName`                                          | String |               | Asset name when the job was created                                                                    |
+| `status`                                             | String |               | `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`, or `CANCELLED`                                             |
+| `archiveFormat`                                      | String |               | `zip`, `tar`, or `tar.gz`                                                                              |
+| `compression`                                        | String |               | `store` or `deflate` (`store` for tar formats)                                                         |
+| `archiveFileName`                                    | String |               | Sanitized archive file name, including its extension                                                   |
+| `archiveKey`                                         | String |               | Archive object key in the auxiliary bucket                                                             |
+| `manifestKey`                                        | String |               | Request manifest key in the auxiliary bucket                                                           |
+| `resolvedManifestKey`                                | String |               | Resolved member list the Zip Archive container writes                                                  |
+| `selectionSummary`                                   | Map    |               | `{files, folders, wholeAsset}` as requested                                                            |
+| `selectionPreview`                                   | List   |               | The first 20 requested entries `{type, relativePath, versionId}`                                       |
+| `assetVersionId`                                     | String |               | The asset version the job is pinned to, when it is                                                     |
+| `filesTotal`, `bytesTotal`                           | Number |               | Totals of the resolved selection                                                                       |
+| `filesDone`, `bytesDone`                             | Number |               | Progress the Zip Archive container writes                                                              |
+| `archiveSizeBytes`                                   | Number |               | Size of the finished archive                                                                           |
+| `errorMessage`                                       | String |               | User-safe failure reason                                                                               |
+| `cancelledBy`                                        | String |               | `user` or `execution`                                                                                  |
+| `workflowExecutionId`                                | String |               | The Zip Archive run; never returned by the API                                                         |
+| `createdAt`, `startedAt`, `completedAt`, `updatedAt` | String |               | ISO-8601 UTC times                                                                                     |
+| `expiresAt`                                          | Number |               | Epoch seconds, `createdAt` plus 7 days; the table's time-to-live attribute                             |
+
+| Index            | Partition Key  | Sort Key    | Projection |
+| ---------------- | -------------- | ----------- | ---------- |
+| `UserAssetIndex` | `userAssetKey` | `requestId` | ALL        |
+| `AssetIndex`     | `assetKey`     | `requestId` | ALL        |
+
+Reads treat a row whose `expiresAt` has passed as absent, since DynamoDB removes expired items some time after they expire. No DynamoDB Streams.
 
 ### Authorization Tables
 
@@ -481,14 +630,16 @@ run. `PipelineExecutionLogsStorageTable` holds the per-step result and error log
 
 ### Classification Tables
 
-| Table                     | Partition Key | Sort Key                   |
-| ------------------------- | ------------- | -------------------------- |
-| TagStorageTableV2         | `databaseId`  | `tagName`                  |
-| TagTypeStorageTableV2     | `databaseId`  | `tagTypeName`              |
-| SubscriptionsStorageTable | `eventName`   | `entityName_entityId`      |
-| CommentStorageTable       | `assetId`     | `assetVersionId:commentId` |
+| Table                       | Partition Key        | Sort Key                                                    |
+| --------------------------- | -------------------- | ----------------------------------------------------------- |
+| TagStorageTableV2           | `databaseId`         | `tagName`                                                   |
+| TagTypeStorageTableV2       | `databaseId`         | `tagTypeName`                                               |
+| SubscriptionsStorageTableV2 | `eventName`          | `entityName:databaseId:entityId`                            |
+| CommentStorageTableV2       | `databaseId:assetId` | `commentId` (LSI `AssetVersionIdLSI`, SK: `assetVersionId`) |
 
 Tags and tag types are database-namespaced. The partition key is the `databaseId` — the literal `GLOBAL` for global entries — and the sort key is the name, so `(databaseId, name)` is the uniqueness boundary and the same name can exist in different databases. Each table carries a name GSI (`tagNameIndex` on `TagStorageTableV2`, `tagTypeNameIndex` on `TagTypeStorageTableV2`) for cross-database name lookups. The former single-key `TagStorageTable`/`TagTypeStorageTable` are retained as legacy migration sources.
+
+Comments and subscriptions are keyed by database and asset id, because the same asset id can exist in more than one database. A comment's partition is `databaseId:assetId` and its sort key is its own `commentId`; the asset version it is about is the `assetVersionId` attribute, which the `AssetVersionIdLSI` index lists by. A soft-deleted comment moves to the `databaseId:assetId#deleted` partition. A subscription's sort key is `entityName:databaseId:entityId`, and the row also carries `entityName`, `databaseId` and `entityId` as plain attributes. The v2.6 `CommentStorageTable` and `SubscriptionsStorageTable`, keyed by asset id alone, are retained as migration sources for the `commentSubscriptionKeys` migration step, which records each comment and subscriber it copies in the comment table under a partition `#commentSubscriptionKeys:<assetId>` that no API reads, so a repeat run never copies one again.
 
 ### Configuration Tables
 
@@ -496,6 +647,10 @@ Tags and tag types are database-namespaced. The partition key is the `databaseId
 | ----------------------------- | ------------- | ---------------------------------------------------- |
 | AppFeatureEnabledStorageTable | `featureName` | --                                                   |
 | S3AssetBucketsStorageTable    | `bucketId`    | `bucketName:baseAssetsPrefix` (GSI: `bucketNameGSI`) |
+
+Each row of `S3AssetBucketsStorageTable` is a bucket registration: one entry of the asset bucket configuration, identified inside VAMS by its `bucketId`. Every deployment writes the configuration's rows, updating only the attributes it owns on each: `bucketName`, `baseAssetsPrefix`, `isVersioningEnabled`, `isDefault`, `bucketRegion`, `bucketAccountId`, `isAccelerated`, `tagSyncedObjects`, `syncCreatedQueueUrl`, `duplicateOfBucketId`, `source` (`static`), `defaultSyncDatabaseId` (bucket sync's fallback database), `bucketKmsKeyArn` (the declared key of an external bucket, or the deployment's key for the bucket it creates when `useKmsCmkEncryption` is on) and `retired`/`retiredAt`. Other attributes of a row stay, and a row whose `source` is `runtime` is never changed by a deployment. A registration is matched on its bucket name and its `baseAssetsPrefix` with one trailing `/`, so it keeps its `bucketId` when the prefix is written with or without the slash. A registration removed from the configuration keeps its row with `retired` set to `true` and `isDefault` set to `false`: assets and databases that name its `bucketId` still resolve, but it answers no lookup by bucket name, is never the default bucket and is not offered for a new database. Two rows that an earlier release wrote for one registration are both kept; the one the others name in `duplicateOfBucketId` answers lookups by bucket name and prefix.
+
+An enabled add-on can add tables of its own; the add-on's page describes their schemas (see [Add-ons Overview](../developer/addons-overview.md)).
 
 ## Amazon S3 Bucket Organization
 
@@ -514,7 +669,7 @@ Where:
 -   `relative_path` is zero or more subdirectory levels within the asset
 -   `filename` is the actual file name
 
-An asset created on an existing bucket folder (`bucketExistingKey`, see [Assets](../concepts/assets.md)) uses that folder as its root instead of `{baseAssetsPrefix}{assetId}/`, so its keys need not contain the asset ID. A file's relative path is the part of its key after the asset's root.
+An asset created on an existing bucket folder (`bucketExistingKey`, see [Assets](../concepts/assets.md)) uses that folder as its root instead of `{baseAssetsPrefix}{assetId}/`, so its keys need not contain the asset ID. A file's relative path is the part of its key after the asset's root. An asset created from a single object key (a `bucketExistingKey` with no trailing `/`) holds that object at `/{file name}`, its companion folder `{key}/` and its previews; see [Files](../api/files.md#list-files).
 
 #### File Output Conventions
 
@@ -538,6 +693,7 @@ by the input file that the data was derived from and one keyed by the execution 
 ```
 {databaseId}/{assetFileKey}/preview/{viewer_subfolder}/{generated_files}
 pipelines/{pipelineName}/{executionId}/{working_files}
+vams.preparedDownloads/{databaseId}/{assetId}/{userHash}/{requestId}/{archiveFileName | manifest.json | resolved-manifest.jsonl}
 ```
 
 Where:
@@ -551,12 +707,18 @@ Where:
     subfolder (for example `PotreeViewer`) so several viewers can coexist for one file
 -   `pipelineName` / `executionId` scope temporary working files to a single run, so concurrent runs of the
     same pipeline cannot collide
+-   `vams.preparedDownloads/` holds Download as Zip jobs: each job's archive, its request manifest, and its
+    resolved member list, under the first 16 hex characters of the SHA-256 of the requesting user's ID
+    (`userHash`) and the job's `requestId`. Lifecycle rules expire the prefix after
+    7 days. The prefix sits beside the per-database prefixes; a database ID
+    cannot contain a dot, so the rules never reach a database's data
 
 Common uses:
 
 -   Potree octree data for point cloud visualization
 -   Temporary pipeline processing files
 -   Pipeline intermediate outputs
+-   Download as Zip archives
 
 :::note
 Because the preview layout is keyed per input file, every file of an asset gets its own viewer-data
@@ -570,7 +732,15 @@ Stores the built React frontend static assets. Served as an origin for Amazon Cl
 
 ### Artefacts Bucket
 
-Stores template notebooks and deployment artefacts. Populated at deploy time from `infra/lib/artefacts/`.
+Stores template notebooks and deployment artefacts. Populated at deploy time from `infra/lib/artefacts/`, with two prefixes that separate uploads write:
+
+```text
+{artefact files from infra/lib/artefacts/}
+vamsSchema/{registrationHash}/pipeline.json, workflow.json, templates/*.json
+addon/{addon}/...
+```
+
+`vamsSchema/` holds the pipeline registration bundles, one prefix per registration. `addon/` is reserved for the trees the add-on stacks upload, one prefix per add-on; an add-on's resources page describes its own (see [Add-ons](../developer/addons-overview.md)). The upload of `infra/lib/artefacts/` owns the bucket root and prunes any object absent from that directory, but excludes both prefixes.
 
 ### Access Logs Bucket
 

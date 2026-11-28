@@ -24,8 +24,9 @@ import MetadataTable from "./MetadataTable";
 import BulkEditMode from "./BulkEditMode";
 import MetadataSearchFilter from "./MetadataSearchFilter";
 import { createMetadata, updateMetadata, deleteMetadata } from "../../services/MetadataService";
+import { useAssetArchived } from "../../context/ArchivedAssetContext";
 import { convertToMetadataRecords } from "./utils/metadataHelpers";
-import { validateMetadataValue } from "./utils/validationHelpers";
+import { buildStoredMetadataValues, validateMetadataValue } from "./utils/validationHelpers";
 
 export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     entityType,
@@ -42,9 +43,11 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     readOnly = false,
     showBulkEdit = true,
     restrictMetadataOutsideSchemas = false,
+    canDelete = true,
 }) => {
-    // When viewing a specific version, force read-only mode
-    const effectiveReadOnly = readOnly || !!assetVersionId;
+    // A specific version, and everything on an archived asset's page, is read-only
+    const assetArchived = useAssetArchived();
+    const effectiveReadOnly = readOnly || !!assetVersionId || assetArchived;
 
     const [editMode, setEditMode] = useState<EditMode>("normal");
     const [error, setError] = useState<string | null>(null);
@@ -99,6 +102,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
 
     const {
         rows,
+        originalRows,
         hasChanges,
         changes,
         initializeRows,
@@ -110,6 +114,13 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     } = useMetadataState(mode === "offline" ? initialData : []);
 
     const { validateRow, validateAll, canCommitChanges } = useMetadataValidation();
+
+    // Values saved on the record. Online, only a value the user changes is checked against its
+    // type and controlled list, as the API does; an offline draft has nothing saved yet.
+    const storedValues = useMemo(
+        () => (mode === "online" ? buildStoredMetadataValues(originalRows) : undefined),
+        [mode, originalRows]
+    );
 
     // Filter rows based on search and filters
     const filteredRows = useMemo(() => {
@@ -457,12 +468,6 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Handle validation error change from inline components
     const handleValidationError = useCallback(
         (index: number, error: string | undefined) => {
-            console.error(
-                "[MetadataContainer] handleValidationError called - index:",
-                index,
-                "error:",
-                error
-            );
             updateRow(index, {
                 validationError: error,
             });
@@ -473,7 +478,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     // Handle commit changes
     const handleCommitChanges = useCallback(async () => {
         // Validate all rows
-        const validation = validateAll(rows);
+        const validation = validateAll(rows, storedValues);
         if (!validation.isValid) {
             setError(`Validation failed: ${validation.errors.join("; ")}`);
             return;
@@ -600,6 +605,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
         fileType,
         activeFileType,
         validateAll,
+        storedValues,
         commitStateChanges,
         refetch,
         onDataChange,
@@ -711,6 +717,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             rows={rows}
                                             mode={mode}
                                             restrictMetadata={restrictMetadata && hasSchemas}
+                                            canDelete={canDelete}
                                             onSave={handleBulkEditSave}
                                             onCancel={() => {
                                                 resetChanges();
@@ -736,11 +743,12 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             onCancelAllChanges={handleCancelAllChanges}
                                             onRefresh={handleRefresh}
                                             hasChanges={hasChanges}
-                                            canCommit={canCommitChanges(rows)}
+                                            canCommit={canCommitChanges(rows, storedValues)}
                                             readOnly={effectiveReadOnly}
                                             isFileAttribute={true}
                                             refreshing={refreshing}
                                             restrictMetadata={restrictMetadata && hasSchemas}
+                                            canDelete={canDelete}
                                         />
                                     ),
                             },
@@ -753,6 +761,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             rows={rows}
                                             mode={mode}
                                             restrictMetadata={restrictMetadata && hasSchemas}
+                                            canDelete={canDelete}
                                             onSave={handleBulkEditSave}
                                             onCancel={() => {
                                                 resetChanges();
@@ -778,11 +787,12 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             onCancelAllChanges={handleCancelAllChanges}
                                             onRefresh={handleRefresh}
                                             hasChanges={hasChanges}
-                                            canCommit={canCommitChanges(rows)}
+                                            canCommit={canCommitChanges(rows, storedValues)}
                                             readOnly={effectiveReadOnly}
                                             isFileAttribute={false}
                                             refreshing={refreshing}
                                             restrictMetadata={restrictMetadata && hasSchemas}
+                                            canDelete={canDelete}
                                         />
                                     ),
                             },
@@ -829,6 +839,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                         rows={rows}
                         mode={mode}
                         restrictMetadata={restrictMetadata && hasSchemas}
+                        canDelete={canDelete}
                         onSave={handleBulkEditSave}
                         onCancel={() => {
                             resetChanges();
@@ -854,11 +865,12 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                         onCancelAllChanges={handleCancelAllChanges}
                         onRefresh={handleRefresh}
                         hasChanges={hasChanges}
-                        canCommit={canCommitChanges(rows)}
+                        canCommit={canCommitChanges(rows, storedValues)}
                         readOnly={effectiveReadOnly}
                         isFileAttribute={false}
                         refreshing={refreshing}
                         restrictMetadata={restrictMetadata && hasSchemas}
+                        canDelete={canDelete}
                     />
                 )}
             </SpaceBetween>

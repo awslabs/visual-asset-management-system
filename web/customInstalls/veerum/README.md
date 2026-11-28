@@ -60,7 +60,7 @@ npm install
 
 Enable the VEERUM viewer for VAMS web install:
 
-1. Open `web/src/visualizerPlugin/config/viewerConfig.json`
+1. Open `web/src/visualizerPlugin/config/addonViewerConfig.json` (the add-on viewer configuration; the licensed viewers are add-on viewers)
 2. Find the `veerum-viewer` entry
 3. Set `"enabled": true`
 
@@ -104,7 +104,7 @@ node web/customInstalls/veerum/veerumInstall.js
 
 -   **`veerumInstall.js`**: Installation script
     -   Cleans previous builds
-    -   Checks if viewer is enabled in viewerConfig.json
+    -   Checks if viewer is enabled in the viewer configuration (`addonViewerConfig.json`, read through `../utility/checkViewerEnabled.js`)
     -   Verifies @veerum/viewer is installed in node_modules
     -   Builds bundle with webpack
     -   Copies bundled files, assets, and textures to `web/public/viewers/veerum/`
@@ -112,7 +112,7 @@ node web/customInstalls/veerum/veerumInstall.js
 ### Build Steps
 
 1. **Cleanup**: Removes previous builds from dist and public directories
-2. **Check Enabled**: Verifies viewer is enabled in viewerConfig.json (skips if disabled)
+2. **Check Enabled**: Verifies viewer is enabled in `addonViewerConfig.json` (skips if disabled)
 3. **Verify Package**: Checks that @veerum/viewer exists in node_modules
 4. **Bundle**: Runs webpack to create the bundled files
 5. **Copy**: Copies bundle files, assets, and textures to `web/public/viewers/veerum/`
@@ -265,7 +265,7 @@ If the viewer fails to load in the application:
 2. Check browser console for script loading errors
 3. Verify `window.VeerumViewerModule` is defined after bundle loads
 4. Check that React and ReactDOM are available globally
-5. Verify viewer is enabled in `viewerConfig.json`
+5. Verify viewer is enabled in `addonViewerConfig.json`
 
 ### React Version Errors
 
@@ -466,7 +466,7 @@ Responsibilities:
 
 ### Configuration
 
-Located at: `web/src/visualizerPlugin/config/viewerConfig.json`
+Located at: `web/src/visualizerPlugin/config/addonViewerConfig.json`
 
 ```json
 {

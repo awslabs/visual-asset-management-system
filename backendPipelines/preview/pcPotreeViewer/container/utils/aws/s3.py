@@ -22,16 +22,67 @@ client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"), co
 s3 = boto3.resource('s3', region_name=os.getenv("AWS_REGION", "us-east-1"), config=retry_config)
 
 
-def download(bucket_name, object_key, file_path):
+# An asset bucket may be in another Region than this container. The pipeline definition carries a
+# bucket name -> Region map (constructPipeline builds it from the manifest's bucket Regions), the
+# entry point registers it, and every request for a registered bucket is signed with a client for
+# that Region; the client above serves the buckets the map leaves out (the auxiliary bucket, a
+# definition from an older Lambda). Per-Region clients keep the adaptive retry mode and address the
+# regional us-east-1 endpoint, which an interface endpoint's private DNS covers where the global
+# s3.amazonaws.com name is not.
+_bucket_regions = {}
+_clients_by_region = {}
+_regional_retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
+                                s3={'us_east_1_regional_endpoint': 'regional'})
+
+
+def register_bucket_regions(bucket_regions):
+    """Record the Region of each named bucket from a definition's bucketRegions map."""
+    for bucket_name, region in (bucket_regions or {}).items():
+        if bucket_name and region:
+            _bucket_regions[bucket_name] = region
+
+
+def client_for_bucket(bucket_name):
+    """The S3 client for the Region a bucket was registered in; the default client otherwise."""
+    region = _bucket_regions.get(bucket_name)
+    if not region or region == client.meta.region_name:
+        return client
+    regional = _clients_by_region.get(region)
+    if regional is None:
+        regional = boto3.client("s3", region_name=region, config=_regional_retry_config)
+        _clients_by_region[region] = regional
+    return regional
+
+
+# Error codes Amazon S3 answers a read of a version that no longer exists with: NoSuchVersion or
+# NoSuchKey (GET), 404 (HEAD of a deleted version), 405 / MethodNotAllowed (a delete marker).
+_MISSING_VERSION_CODES = ("NoSuchVersion", "NoSuchKey", "404", "405", "MethodNotAllowed")
+
+
+class InputVersionMissingError(Exception):
+    """The input file version the run was launched on no longer exists."""
+
+    def __init__(self, object_key, version_id):
+        super().__init__(f"The input file {object_key} at version {version_id} no longer exists; "
+                         f"it was deleted after the run started.")
+
+
+def download(bucket_name, object_key, file_path, version_id=""):
+    """Download an object to ``file_path``; ``version_id`` reads that version, empty the current one.
+    Returns None when the download fails, and raises ``InputVersionMissingError`` when the requested
+    version no longer exists."""
     logger.info(
-        "Downloading Object from S3 Bucket. Bucket: {}, Object: {}, File Path: {}".format(
-            bucket_name, object_key, file_path
+        "Downloading Object from S3 Bucket. Bucket: {}, Object: {}, Version: {}, File Path: {}".format(
+            bucket_name, object_key, version_id or "current", file_path
         )
     )
+    kwargs = {"ExtraArgs": {"VersionId": version_id}} if version_id else {}
     try:
         with open(file_path, "wb") as data:
-            client.download_fileobj(bucket_name, object_key, data)
+            client_for_bucket(bucket_name).download_fileobj(bucket_name, object_key, data, **kwargs)
     except ClientError as e:
+        if version_id and str(e.response.get("Error", {}).get("Code", "")) in _MISSING_VERSION_CODES:
+            raise InputVersionMissingError(object_key, version_id) from e
         logger.exception(e)
         return None
     return file_path
@@ -49,7 +100,7 @@ def uploadV2(bucket_name, object_key, file_path):
         config = TransferConfig(multipart_threshold=1*GB, max_concurrency=10,
                                 multipart_chunksize=100*MB, use_threads=True
                                 )
-        s3.meta.client.upload_file(file_path, bucket_name, object_key,
+        client_for_bucket(bucket_name).upload_file(file_path, bucket_name, object_key,
                                    ExtraArgs={},
                                    Config=config,
                                    Callback=ProgressPercentage(file_path)
@@ -73,7 +124,7 @@ def upload(bucket_name, object_key, file_path):
 
         try:
             # Create Multipart Upload
-            multipart_upload = client.create_multipart_upload(
+            multipart_upload = client_for_bucket(bucket_name).create_multipart_upload(
                 Bucket=bucket_name,
                 Key=object_key,
             )
@@ -100,7 +151,7 @@ def upload(bucket_name, object_key, file_path):
                 part_number = part_number + 1
 
             # Complete Multipart Upload
-            completeResult = client.complete_multipart_upload(
+            completeResult = client_for_bucket(bucket_name).complete_multipart_upload(
                 Bucket=bucket_name,
                 Key=object_key,
                 MultipartUpload={
@@ -116,7 +167,7 @@ def upload(bucket_name, object_key, file_path):
     else:
         try:
             with open(file_path, "rb") as data:
-                client.upload_fileobj(data, bucket_name, object_key)
+                client_for_bucket(bucket_name).upload_fileobj(data, bucket_name, object_key)
         except ClientError as e:
             logger.exception(e)
             return None
@@ -128,7 +179,7 @@ def exists(bucket_name, object_key):
         f"Checking if object exists in S3 Bucket\nBucket:{bucket_name}.\n:Object: {object_key}"
     )
     try:
-        client.head_object(Bucket=bucket_name, Key=object_key)
+        client_for_bucket(bucket_name).head_object(Bucket=bucket_name, Key=object_key)
     except ClientError:
         return False
     return True
@@ -139,7 +190,7 @@ def delete(bucket_name, object_key):
         f"Deleting Object from S3 Bucket\nBucket:{bucket_name}.\n:Object: {object_key}"
     )
     try:
-        client.delete_object(Bucket=bucket_name, Key=object_key)
+        client_for_bucket(bucket_name).delete_object(Bucket=bucket_name, Key=object_key)
     except ClientError as e:
         logger.exception(e)
         return None
@@ -198,7 +249,7 @@ def delete_all_path_contents(bucket_name: str, pathKey: str):
         # splat output routinely exceeds that, which would leave stale files behind
         # when a preview is regenerated.
         object_keys = []
-        paginator = client.get_paginator('list_objects_v2')
+        paginator = client_for_bucket(bucket_name).get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket_name, Prefix=pathKey):
             object_keys.extend(map_object_keys(page.get("Contents", [])))
 
@@ -208,7 +259,7 @@ def delete_all_path_contents(bucket_name: str, pathKey: str):
             # delete objects from bucket path, in batches of the 1,000-key
             # delete_objects maximum
             for i in range(0, len(object_keys), 1000):
-                client.delete_objects(
+                client_for_bucket(bucket_name).delete_objects(
                     Bucket=bucket_name,
                     Delete={
                         'Objects': object_keys[i:i + 1000],
@@ -233,7 +284,7 @@ def get_all_files_in_path(bucket, path):
 
     # Paginate: a single page caps at 1,000 keys, so an asset holding more files than
     # that would be only partially processed.
-    paginator = client.get_paginator('list_objects_v2')
+    paginator = client_for_bucket(bucket).get_paginator('list_objects_v2')
     for page in paginator.paginate(Bucket=bucket, Prefix=path):
         # map object from object list
         for o in page.get("Contents", []):

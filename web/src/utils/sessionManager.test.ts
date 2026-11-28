@@ -87,6 +87,45 @@ describe("sessionManager", () => {
             await ensureValidSession();
             expect(utils.ensureSessionValid).toHaveBeenCalledTimes(2);
         });
+
+        it("runs a refresh asked for during a plain check after that check, not instead of it", async () => {
+            let resolveCheck!: (v: boolean) => void;
+            utils.ensureSessionValid
+                .mockReturnValueOnce(new Promise<boolean>((r) => (resolveCheck = r)))
+                .mockResolvedValueOnce(true);
+            const check = ensureValidSession();
+            const refresh = ensureValidSession(true);
+            resolveCheck(true);
+            await expect(check).resolves.toBe(true);
+            await expect(refresh).resolves.toBe(true);
+            expect(utils.ensureSessionValid.mock.calls).toEqual([[false], [true]]);
+        });
+
+        it("joins a refresh already in flight instead of starting another", async () => {
+            let resolveRefresh!: (v: boolean) => void;
+            utils.ensureSessionValid.mockReturnValue(
+                new Promise<boolean>((r) => (resolveRefresh = r))
+            );
+            const first = ensureValidSession(true);
+            const second = ensureValidSession(true);
+            const plain = ensureValidSession();
+            resolveRefresh(true);
+            await Promise.all([first, second, plain]);
+            expect(utils.ensureSessionValid).toHaveBeenCalledTimes(1);
+        });
+
+        it("does not refresh after a plain check found the session dead", async () => {
+            let resolveCheck!: (v: boolean) => void;
+            utils.ensureSessionValid.mockReturnValueOnce(
+                new Promise<boolean>((r) => (resolveCheck = r))
+            );
+            const check = ensureValidSession();
+            const chained = ensureValidSession(true);
+            resolveCheck(false);
+            await expect(check).resolves.toBe(false);
+            await expect(chained).resolves.toBe(false);
+            expect(utils.ensureSessionValid).toHaveBeenCalledTimes(1);
+        });
     });
 
     describe("scheduleExpiryTimer", () => {
@@ -134,6 +173,19 @@ describe("sessionManager", () => {
             expect(localStorage.getItem("vams-theme-preference")).toBe("light");
             expect(localStorage.getItem("user")).toBeNull();
             expect(localStorage.getItem(SESSION_EXPIRED_KEY)).toBe("true");
+        });
+
+        it("ends a session refused for a missing user id claim with that claim, not as expired", async () => {
+            // authTokenUtils records the claim when a refreshed token lacks it.
+            localStorage.setItem(tokenUtils.MISSING_USER_ID_CLAIM_KEY, "email");
+            localStorage.setItem("user", JSON.stringify({ username: "u" }));
+
+            await logoutExpired("#/assets");
+
+            expect(localStorage.getItem(tokenUtils.MISSING_USER_ID_CLAIM_KEY)).toBe("email");
+            expect(localStorage.getItem(SESSION_EXPIRED_KEY)).toBeNull();
+            expect(localStorage.getItem("user")).toBeNull();
+            expect(redirectSpy).toHaveBeenCalledTimes(1);
         });
 
         it("preserves the viewer settings across the localStorage wipe", async () => {

@@ -59,8 +59,7 @@ describe("date value inside the scrolling table", () => {
             </div>
         );
 
-        // On this release the calendar button has no accessible name (no i18nStrings on the picker).
-        fireEvent.click(screen.getByRole("button", { name: "" }));
+        fireEvent.click(screen.getByRole("button", { name: "Choose date for Release date" }));
 
         const calendar = screen.getByRole("dialog");
         expect(screen.getByTestId("scroller")).not.toContainElement(calendar);

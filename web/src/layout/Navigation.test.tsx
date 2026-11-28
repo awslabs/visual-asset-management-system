@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 
@@ -58,6 +58,17 @@ describe("Navigation", () => {
         expect(findNavLink(container, "#/auth/constraints/")).toBeFalsy();
     });
 
+    it("offers the single Assets and Files link at #/assets/ and no #/search/ item", async () => {
+        // routes.tsx points every search route's active href at #/assets/; that is the one nav item.
+        allowRoutes("/databases", "/assets", "/search");
+        const container = await renderNavigation();
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/assets/")).toBeTruthy();
+        });
+        expect(findNavLink(container, "#/search/")).toBeFalsy();
+    });
+
     it("renders admin auth links when allowed", async () => {
         allowRoutes("/auth/constraints", "/auth/roles", "/auth/userroles");
         const container = await renderNavigation();
@@ -70,24 +81,38 @@ describe("Navigation", () => {
         expect(findNavLink(container, "#/databases/")).toBeFalsy();
     });
 
-    it("renders the User section with API Key Management when allowed", async () => {
-        allowRoutes("/auth/api-keys");
-        const container = await renderNavigation();
-
-        await waitFor(() => {
-            expect(findNavLink(container, "#/auth/api-keys/")).toBeTruthy();
-        });
-    });
-
-    it("hides the User section when API Key Management is not allowed", async () => {
-        allowRoutes("/databases");
+    it("never lists API Key Management in the side navigation, and has no User section", async () => {
+        allowRoutes("/databases", "/auth/api-keys");
         const container = await renderNavigation();
 
         await waitFor(() => {
             expect(findNavLink(container, "#/databases/")).toBeTruthy();
         });
         expect(findNavLink(container, "#/auth/api-keys/")).toBeFalsy();
+        expect(findNavLink(container, "#/auth/api-keys/?mode=user")).toBeFalsy();
+        expect(screen.queryByText("API Key Management")).not.toBeInTheDocument();
         expect(screen.queryByText("User")).not.toBeInTheDocument();
+    });
+
+    it("points to the profile menu when the role's only pages are profile pages", async () => {
+        allowRoutes("/auth/api-keys");
+        await renderNavigation();
+
+        await waitFor(() => {
+            expect(screen.getByText("Your pages are in the profile menu")).toBeInTheDocument();
+        });
+        expect(screen.queryByText("No Access")).not.toBeInTheDocument();
+        expect(createWrapper(document.body).findSideNavigation()).toBeFalsy();
+    });
+
+    it("checks the side and profile routes in one call", async () => {
+        allowRoutes("/databases");
+        await renderNavigation();
+
+        expect(mockCheckWebRoutesAllowed).toHaveBeenCalledTimes(1);
+        const checked = mockCheckWebRoutesAllowed.mock.calls[0][0].map((r) => r.route__path);
+        expect(checked).toContain("/databases");
+        expect(checked).toContain("/auth/api-keys");
     });
 
     it("checks the same route paths the router checks, without a trailing slash", async () => {
@@ -112,14 +137,81 @@ describe("Navigation", () => {
         await waitFor(() => {
             expect(screen.getByText(/don't have access/i)).toBeInTheDocument();
         });
+        expect(screen.getByText("No Access")).toBeInTheDocument();
+        expect(screen.queryByText("Your pages are in the profile menu")).not.toBeInTheDocument();
     });
 
-    it("shows the no-access message when the permission check fails", async () => {
-        mockCheckWebRoutesAllowed.mockRejectedValue(new Error("auth/routes failed"));
+    it("lists Home beside the pages the role may open, although no template grants /", async () => {
+        allowRoutes("/databases");
+        const container = await renderNavigation();
+
+        await waitFor(() => expect(findNavLink(container, "#/databases/")).toBeTruthy());
+        expect(findNavLink(container, "#/")).toBeTruthy();
+    });
+
+    it("announces the could-not-load message as a status", async () => {
+        mockCheckWebRoutesAllowed.mockRejectedValueOnce(new Error("auth/routes failed"));
         await renderNavigation();
 
+        await waitFor(() =>
+            expect(screen.getByRole("status")).toHaveTextContent("Navigation could not be loaded")
+        );
+    });
+
+    it("shows a could-not-load message with Retry when the permission check fails", async () => {
+        mockCheckWebRoutesAllowed.mockRejectedValueOnce(new Error("auth/routes failed"));
+        allowRoutes("/databases");
+        const container = await renderNavigation();
+
         await waitFor(() => {
-            expect(screen.getByText(/don't have access/i)).toBeInTheDocument();
+            expect(screen.getByText("Navigation could not be loaded")).toBeInTheDocument();
         });
+        expect(screen.queryByText(/don't have access/i)).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByText("Retry"));
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/databases/")).toBeTruthy();
+        });
+        expect(mockCheckWebRoutesAllowed).toHaveBeenCalledTimes(2);
+    });
+
+    // TEMPORARY-TEST: pins the removal of the COMPLIANCE feature-flag gate on the Compliance
+    // nav section; the section is now filtered by web-route permission like every other section.
+    it("shows Compliance links when their routes are allowed", async () => {
+        allowRoutes("/compliance/schemas", "/compliance/quarantine");
+        const container = await renderNavigation();
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/compliance/schemas/")).toBeTruthy();
+        });
+        expect(findNavLink(container, "#/compliance/quarantine/")).toBeTruthy();
+        expect(findNavLink(container, "#/compliance/cascades/")).toBeFalsy();
+    });
+
+    // The compliance pages sit in an admin section named like Admin - Data and Admin - Auth.
+    it("labels the compliance section Admin - Compliance", async () => {
+        allowRoutes("/compliance/schemas");
+        const container = await renderNavigation();
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/compliance/schemas/")).toBeTruthy();
+        });
+        expect(screen.getByText("Admin - Compliance")).toBeInTheDocument();
+        expect(screen.queryByText("Compliance")).not.toBeInTheDocument();
+    });
+
+    // Durable guard: a user without the compliance routes never sees the section; the route
+    // filter alone decides whether it renders.
+    it("hides the Compliance section when no compliance routes are allowed", async () => {
+        allowRoutes("/databases");
+        const container = await renderNavigation();
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/databases/")).toBeTruthy();
+        });
+        expect(findNavLink(container, "#/compliance/schemas/")).toBeFalsy();
+        expect(screen.queryByText("Admin - Compliance")).not.toBeInTheDocument();
+        expect(screen.queryByText("Compliance")).not.toBeInTheDocument();
     });
 });

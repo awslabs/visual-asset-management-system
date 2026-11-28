@@ -15,6 +15,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from inprocess_worker import in_process_worker  # noqa: E402
+
 _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _LAMBDA_DIR not in sys.path:
     sys.path.insert(0, _LAMBDA_DIR)
@@ -77,7 +80,7 @@ class TestResolveInputsFromManifest:
         mod = _load()
         manifest = _manifest("/parts/housing/model.obj", "xid/parts/housing/model.obj")
         with patch.object(mod, "fetch_manifest", MagicMock(return_value=manifest)):
-            input_path, output_path, relative_subdir = mod.resolve_inputs_from_manifest(
+            input_path, output_path, relative_subdir, _ = mod.resolve_inputs_from_manifest(
                 {"inputManifestS3Location": "s3://abkt/m.json"})
         assert input_path == "s3://abkt/xid/parts/housing/model.obj"
         assert output_path == "s3://obkt/pipelines/p1/JOB/output/E1/files/"
@@ -123,9 +126,14 @@ class TestConvertInputOutput:
             uploaded["key"] = key
             return key
 
-        with patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p: p)), \
+        def _download(bucket, key, path, **kwargs):
+            # The real download always writes the file, and the handler reads it before loading.
+            open(path, "wb").close()
+            return path
+
+        with patch.object(mod, "download", MagicMock(side_effect=_download)), \
                 patch.object(mod, "uploadV2", MagicMock(side_effect=_upload)), \
-                patch.object(mod, "trimesh", _exporting_trimesh()):
+                patch.object(mod, "run_worker", in_process_worker(_exporting_trimesh())):
             mod.convert_input_output(
                 input_path, "s3://obkt/pipelines/p1/JOB/output/E1/files/",
                 output_filetype, relative_subdir)

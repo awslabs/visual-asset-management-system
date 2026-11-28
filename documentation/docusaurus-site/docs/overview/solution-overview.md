@@ -6,21 +6,26 @@ Organizations working with 3D data face a common set of challenges: spatial asse
 
 Through a web interface, command-line tool, and REST API, VAMS enables any authorized user — not just engineers — to store, search, visualize, transform, and distribute visual assets without requiring specialized desktop software, restrictive licenses, or direct access to storage systems. The solution deploys entirely within your AWS account, ensuring full data sovereignty and control while supporting commercial AWS, AWS GovCloud (US), and AWS European Sovereign Cloud regions.
 
-![VAMS Home Page](/img/home_page_20260323_v2.5.png)
+![VAMS Home Page](/img/home_page_20261109_v2.7.png)
 
 ### Data types
 
 VAMS can store, manage, and version **any file type** — it is not limited to a fixed set of formats. However, the following data types have built-in viewer and pipeline support out of the box. Because VAMS is extensible through custom viewer plugins and processing pipelines, this list represents the current set of native integrations, not a limitation of the platform.
 
-| Category                        | Formats with Built-in Viewer/Pipeline Support                         |
-| ------------------------------- | --------------------------------------------------------------------- |
-| **3D Meshes**                   | glTF, GLB, OBJ, STL, FBX, PLY, DAE, 3DS, 3MF                          |
-| **CAD Models**                  | STEP, STP, IGES, BREP                                                 |
-| **Point Clouds**                | E57, LAS, LAZ                                                         |
-| **Universal Scene Description** | USD, USDA, USDC, USDZ                                                 |
-| **Gaussian Splats**             | PLY (splat), SPZ, SOG                                                 |
-| **Documents and Media**         | PDF, images, video, audio, CSV, HTML, text                            |
-| **Any other file type**         | Stored and versioned in Amazon S3; viewable via custom viewer plugins |
+| Category                        | Formats with Built-in Viewer/Pipeline Support                                                  |
+| ------------------------------- | ---------------------------------------------------------------------------------------------- |
+| **3D Meshes**                   | glTF, GLB, OBJ, STL, FBX, PLY, DAE, 3DS, 3MF, AMF, OFF, WRL, BIM, 3DM¹                         |
+| **CAD Models**                  | STEP, STP, IGES, IGS, BREP                                                                     |
+| **BIM**                         | IFC, IFCZIP¹                                                                                   |
+| **Point Clouds**                | E57, LAS, LAZ, PLY                                                                             |
+| **Geospatial**                  | 3D Tiles tilesets (JSON); GeoTIFF / Cloud Optimized GeoTIFF (map view needs location services) |
+| **Universal Scene Description** | USD, USDA, USDC, USDZ                                                                          |
+| **Gaussian Splats**             | PLY (splat), SPZ, SOG                                                                          |
+| **Robotics Data**               | MCAP, ROS 1 and ROS 2 bags (BAG, DB3), PX4 ULog (ULG, ULOG)¹                                   |
+| **Documents and Media**         | PDF, images, video, audio, CSV, FCS, HTML, text                                                |
+| **Any other file type**         | Stored and versioned in Amazon S3; viewable via custom viewer plugins                          |
+
+¹ BIM (IFC, IFCZIP), Rhinoceros 3D (3DM) and robotics formats need `app.webUi.allowUnsafeEvalFeatures`, which the shipped templates leave off.
 
 For the complete viewer-to-extension mapping, see [File Viewers](../concepts/viewers.md).
 
@@ -41,11 +46,13 @@ For the runtime versions and build tooling VAMS deploys with, and the versions y
 VAMS delivers the following core capabilities:
 
 -   **Asset Management** -- Organize visual assets across databases with metadata, tagging, versioning, and relationship linking
--   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, and media files directly in the browser through 20 built-in viewer plugins
--   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation, and AI-powered labeling
--   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service across assets and files
+-   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, robotics logs, and media files directly in the browser through 25 built-in viewer plugins
+-   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation (3D files, images, TGA/TIFF and video), and AI-powered metadata generation
+-   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service, and natural-language (vector) search powered by Amazon Bedrock embeddings in a DynamoDB vector index, across assets and files
 -   **Fine-Grained Access Control** -- Two-tier Attribute-Based and Role-Based Access Control (ABAC/RBAC) using Casbin policy enforcement
+-   **Compliance Enforcement** -- Bind versioned compliance schemas to databases or assets, evaluate assets automatically, on demand, or in sweeps, and quarantine assets that fail `quarantine`-level rules, with approval-gated cascades and an audit trail
 -   **Multi-Region Deployment** -- Deploy to AWS commercial regions, AWS GovCloud (US), or the AWS European Sovereign Cloud with full partition awareness
+-   **Optional Add-ons** -- Synchronize data to Garnet Framework or Physna, or launch Amazon DCV desktops through the EDH Workstations add-on ([Add-ons Overview](../developer/addons-overview.md))
 
 ---
 
@@ -56,9 +63,9 @@ VAMS provides three primary methods for interacting with your visual asset manag
 | Feature               | Web Interface                        | Command Line Interface (CLI)                | Direct API Access                  |
 | --------------------- | ------------------------------------ | ------------------------------------------- | ---------------------------------- |
 | **Best for**          | Interactive use, visualization       | Automation, scripting, bulk operations      | Custom integrations, applications  |
-| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 23 command groups | Full programmatic control via REST |
+| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 28 command groups | Full programmatic control via REST |
 | **File Upload**       | Drag-and-drop with progress tracking | Advanced chunking and retry logic           | Custom upload with presigned URLs  |
-| **3D Viewing**        | 20 interactive viewer plugins        | Not applicable                              | Not applicable                     |
+| **3D Viewing**        | 25 interactive viewer plugins        | Not applicable                              | Not applicable                     |
 | **Automation**        | Manual operations                    | Full automation with profile support        | Complete automation control        |
 | **Bulk Operations**   | Limited                              | Optimized for bulk tasks                    | Custom bulk implementations        |
 | **CI/CD Integration** | Not suitable                         | Designed for pipeline integration           | Full integration flexibility       |
@@ -71,7 +78,7 @@ The web-based interface provides an intuitive, browser-based experience for visu
 
 ### Command Line Interface (VamsCLI)
 
-The VamsCLI offers powerful automation capabilities through 23 command groups covering assets, databases, files, metadata, pipelines, workflows, executions, directory synchronization, search, permissions, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
+The VamsCLI offers powerful automation capabilities through 28 command groups (27 core groups and the EDH Workstations add-on group) covering assets, databases, files, metadata, pipelines, workflows, executions, directory synchronization, search, permissions, compliance, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
 
 ### Direct API Access
 
@@ -83,11 +90,11 @@ The REST API provides full programmatic access for custom application developmen
 
 VAMS supports three primary deployment modes to meet different organizational and regulatory requirements.
 
-| Deployment Mode                  | Web Distribution                      | Search                                      | Key Characteristics                                                                                                                                                                                                          |
-| -------------------------------- | ------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Commercial AWS**               | Amazon CloudFront + Amazon S3         | Amazon OpenSearch Serverless or Provisioned | Default mode. Full feature set including Amazon Location Service, AWS WAF, and all viewer plugins.                                                                                                                           |
-| **AWS GovCloud (US)**            | Application Load Balancer + Amazon S3 | Amazon OpenSearch Provisioned               | No Amazon CloudFront. Amazon API Gateway is FIPS-compliant by default, and `useFips` adds the AWS KMS FIPS interface VPC endpoint. VPC required. Supports full VPC isolation with VPC endpoints for restricted environments. |
-| **AWS European Sovereign Cloud** | Application Load Balancer + Amazon S3 | Amazon OpenSearch Serverless or Provisioned | Deploys with the GovCloud guardrails (`app.govCloud.enabled: true`): no Amazon CloudFront, no Amazon Location Service, VPC required.                                                                                         |
+| Deployment Mode                  | Web Distribution                      | Search                                                                            | Key Characteristics                                                                                                                                                                                                          |
+| -------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Commercial AWS**               | Amazon CloudFront + Amazon S3         | Amazon OpenSearch Serverless or Provisioned; natural-language search (default on) | Default mode. Full feature set including Amazon Location Service, AWS WAF, and all viewer plugins.                                                                                                                           |
+| **AWS GovCloud (US)**            | Application Load Balancer + Amazon S3 | Amazon OpenSearch Provisioned; natural-language search (optional)                 | No Amazon CloudFront. Amazon API Gateway is FIPS-compliant by default, and `useFips` adds the AWS KMS FIPS interface VPC endpoint. VPC required. Supports full VPC isolation with VPC endpoints for restricted environments. |
+| **AWS European Sovereign Cloud** | Application Load Balancer + Amazon S3 | Amazon OpenSearch Provisioned; no natural-language search                         | Deploys with the GovCloud guardrails (`app.govCloud.enabled: true`): no Amazon CloudFront, no Amazon Location Service, VPC required.                                                                                         |
 
 :::warning[GovCloud Constraints]
 AWS GovCloud deployments require `useGlobalVpc.enabled` set to `true`, `useCloudFront.enabled` set to `false`, and `useLocationService.enabled` set to `false`.
@@ -121,7 +128,7 @@ graph TB
 
     subgraph "Storage"
         S3["Amazon S3<br/>(Asset Buckets)"]
-        DDB["Amazon DynamoDB<br/>(20+ Tables)"]
+        DDB["Amazon DynamoDB<br/>(40+ Tables)"]
         OS["Amazon OpenSearch<br/>(Search Index)"]
     end
 
@@ -129,6 +136,11 @@ graph TB
         COG["Amazon Cognito<br/>/ External OAuth"]
         KMS["AWS KMS<br/>(Encryption)"]
         WAF["AWS WAF<br/>(Optional)"]
+    end
+
+    subgraph "Optional Add-ons"
+        ADDONAPI["Add-on API Functions"]
+        ADDONSYNC["Add-on Sync Functions<br/>via Amazon SQS"]
     end
 
     User --> CF
@@ -148,6 +160,9 @@ graph TB
     KMS --> DDB
     WAF --> CF
     WAF --> ALB
+    AUTH --> ADDONAPI
+    DDB --> ADDONSYNC
+    S3 --> ADDONSYNC
 ```
 
 The request flow follows this path: users authenticate through Amazon Cognito or an external OAuth provider, then access the application through Amazon CloudFront (commercial) or an Application Load Balancer (GovCloud and European Sovereign Cloud). All API requests pass through the REST API, which invokes a custom Lambda authorizer for JWT validation and IP-based access control before routing to the appropriate Lambda handler.
@@ -162,22 +177,25 @@ VAMS integrates with a range of AWS partner solutions and open-source projects f
 
 ### Open-Source Integrations
 
-| Integration                                                                                                                                                 | Category          | Description                                                                           |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------- |
-| [Online 3D Viewer](https://3dviewer.net/)                                                                                                                   | Viewer            | Generalized 3D model viewing for Rhinoceros, AMF, BIM, OFF, and VRML formats          |
-| [Potree](https://potree.github.io/)                                                                                                                         | Viewer + Pipeline | Point cloud viewing and processing for E57, LAS, and LAZ files                        |
-| [BabylonJS](https://www.babylonjs.com/)                                                                                                                     | Viewer            | Gaussian splat visualization with WebXR support                                       |
-| [PlayCanvas](https://playcanvas.com/)                                                                                                                       | Viewer            | Gaussian splat visualization with orbit camera and sorting                            |
-| [CesiumJS](https://cesium.com/platform/cesiumjs/)                                                                                                           | Viewer            | 3D Tileset viewing with geospatial capabilities                                       |
-| [Needle Engine](https://needle.tools/)                                                                                                                      | Viewer            | USD (Universal Scene Description) viewing with WebAssembly support                    |
-| [Three.js](https://threejs.org/)                                                                                                                            | Viewer            | Primary viewer for GLTF, GLB, OBJ, FBX, STL, STEP, IGES, and more                     |
-| [Trimesh](https://trimesh.org/)                                                                                                                             | Pipeline          | 3D mesh conversion and metadata extraction                                            |
-| [CADQuery](https://github.com/CadQuery/cadquery)                                                                                                            | Pipeline          | Open-standard CAD conversion and metadata extraction                                  |
-| [Blender](https://www.blender.org/)                                                                                                                         | Pipeline          | Preview file generation and metadata extraction                                       |
-| [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | Pipeline          | Gaussian splat generation from media files                                            |
-| [Garnet Framework](https://garnet-framework.tech/)                                                                                                          | Addon             | Data synchronization to external NGSI-LD knowledge graphs                             |
-| [Physna](https://physna.com/)                                                                                                                               | Addon             | One-way sync to Physna of supported 3D/CAD files and metadata for geometric 3D search |
-| [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacSim)                                                                                                   | Pipeline          | Reinforcement learning training and evaluation                                        |
+| Integration                                                                                                                                                 | Category          | Description                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------- |
+| [Online 3D Viewer](https://3dviewer.net/)                                                                                                                   | Viewer            | Generalized 3D model viewing for Rhinoceros, AMF, BIM, OFF, and VRML formats                  |
+| [Potree](https://potree.github.io/)                                                                                                                         | Viewer + Pipeline | Point cloud viewing and processing for E57, LAS, and LAZ files                                |
+| [BabylonJS](https://www.babylonjs.com/)                                                                                                                     | Viewer            | Gaussian splat visualization with WebXR support                                               |
+| [PlayCanvas](https://playcanvas.com/)                                                                                                                       | Viewer            | Gaussian splat visualization with orbit camera and sorting                                    |
+| [CesiumJS](https://cesium.com/platform/cesiumjs/)                                                                                                           | Viewer            | 3D Tileset viewing with geospatial capabilities                                               |
+| [Needle Engine](https://needle.tools/)                                                                                                                      | Viewer            | USD (Universal Scene Description) viewing with WebAssembly support                            |
+| [Three.js](https://threejs.org/)                                                                                                                            | Viewer            | Primary viewer for GLTF, GLB, OBJ, FBX, STL, STEP, IGES, and more                             |
+| [Trimesh](https://trimesh.org/)                                                                                                                             | Pipeline          | 3D mesh conversion and metadata extraction                                                    |
+| [CADQuery](https://github.com/CadQuery/cadquery)                                                                                                            | Pipeline          | Open-standard CAD conversion and metadata extraction                                          |
+| [Strands Agents](https://strandsagents.com)                                                                                                                 | Pipeline          | Agent framework for the GenAI CAD STEP agent pipeline                                         |
+| [Blender](https://www.blender.org/)                                                                                                                         | Pipeline          | Preview file generation and metadata extraction                                               |
+| [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | Pipeline          | Gaussian splat generation from media files                                                    |
+| [Garnet Framework](https://garnet-framework.tech/)                                                                                                          | Addon             | Data synchronization to external NGSI-LD knowledge graphs                                     |
+| [Physna](https://physna.com/)                                                                                                                               | Addon             | One-way sync to Physna of supported 3D/CAD files and metadata for geometric 3D search         |
+| [EDH](https://github.com/awslabs/engineering-development-hub)                                                                                               | Addon             | Amazon DCV desktops, desktop AMIs and container jobs on an EDH cluster                        |
+| [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacSim)                                                                                                   | Pipeline          | Reinforcement learning training and evaluation                                                |
+| [FFmpeg](https://ffmpeg.org/)                                                                                                                               | Pipeline          | Audio extraction, FLAC encoding, and key-frame extraction from teardown videos (GPL-licensed) |
 
 ### Licensed Integrations
 

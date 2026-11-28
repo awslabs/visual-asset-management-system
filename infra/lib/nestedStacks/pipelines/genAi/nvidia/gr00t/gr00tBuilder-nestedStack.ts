@@ -71,6 +71,7 @@ export class Gr00tBuilderNestedStack extends NestedStack {
                 vpc: props.vpc,
                 pipelineSubnets: props.pipelineSubnets,
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
+                kmsKey: props.storageResources.encryption.kmsKey,
             });
         }
 

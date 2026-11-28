@@ -1,6 +1,6 @@
 # Reindex Utility
 
-The reindex utility re-indexes Amazon OpenSearch and any attached downstream indexers (such as the Garnet Framework addon) for assets and files. It reads the asset records from Amazon DynamoDB and the file objects in the registered Amazon S3 asset buckets, and re-publishes them to the configured indexing pipeline.
+The reindex utility re-indexes Amazon OpenSearch and any attached downstream indexers (such as the Garnet Framework addon) for assets and files. It reads the asset records from Amazon DynamoDB and the file objects in the registered Amazon S3 asset buckets, and re-publishes them to the configured indexing pipeline. The vector index used by natural-language search is rebuilt by a separate function, the vector reindexer, described in [Vector Index Reindex](#vector-index-reindex).
 
 **Script location:** `infra/deploymentDataMigration/tools/reindex_utility.py`
 
@@ -92,7 +92,7 @@ Direct mode (`--mode direct`) imports the backend reindexer handler and runs it 
 
 -   AWS credentials with the same permissions the reindexer Lambda role has: read on the asset, S3-asset-bucket, and asset-file-metadata Amazon DynamoDB tables; write on the asset-file-metadata table; `s3:ListBucket` and `s3:GetObject` on the asset buckets (the file reindex lists each bucket and reads object metadata); `ssm:GetParameter` on the index-name and endpoint parameters; and Amazon OpenSearch access (only for `--clear-indexes`).
 
-**Direct-mode inputs** (the utility injects the table-name values as environment variables before importing the handler; the backend's resource-name resolver honors these environment-variable overrides ahead of its AWS Systems Manager Parameter Store lookup, so direct mode works without the deployment's resource-name parameters). Find the table-name values under the deployment's `/<name>-<baseStackName>/resourceNames/dynamoTables/` SSM parameters or in the Amazon DynamoDB console. All are required **except** `--backend-path`, `--opensearch-type`, and `--region`, which default as noted:
+**Direct-mode inputs** (the utility injects the table-name values as environment variables before importing the handler; the backend's resource-name resolver honors these environment-variable overrides ahead of its AWS Systems Manager Parameter Store lookup, so direct mode works without the deployment's resource-name parameters). Find the table-name values under the deployment's `/<name>-<baseStackName>-<region>/resourceNames/dynamoTables/` SSM parameters or in the Amazon DynamoDB console. All are required **except** `--backend-path`, `--opensearch-type`, and `--region`, which default as noted:
 
 | Argument                                   | Lambda environment variable              | Description                                                                                                     |
 | :----------------------------------------- | :--------------------------------------- | :-------------------------------------------------------------------------------------------------------------- |
@@ -267,6 +267,16 @@ File Reindexing Results:
   Failed: 0
 ```
 
+### Exit codes
+
+The exit code tells a script or CI job whether the reindex completed.
+
+| Exit code | Meaning                                                                                                                                                                                                                                                                                                             |
+| :-------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `0`       | The run completed with nothing failed, or an `--async` invocation was submitted.                                                                                                                                                                                                                                    |
+| `1`       | The run failed: the invocation failed, the Lambda function raised an error or reached its own time limit, the reindexer answered with an error, or it reported records that failed, errors, or an index clear that did not finish. The utility logs the error, or each reason under `Reindexing did not complete:`. |
+| `2`       | The synchronous invocation timed out on the client. The Lambda function keeps running and its outcome is unverified; check Amazon CloudWatch Logs for the reindexer Lambda function to confirm it completed. A usage error, such as a mistyped option, also exits `2` (from argparse); nothing is invoked then.     |
+
 ## Post-Migration Usage
 
 After running a VAMS version upgrade migration script (e.g., `v2.4_to_v2.5_migration.py`), run the reindex utility to ensure search indexes reflect the migrated data:
@@ -293,6 +303,57 @@ python reindex_utility.py \
 | Lambda 15-minute timeout                           | Dataset too large to reindex within the Lambda limit (watch for this above ~100,000 records) | Monitor the reindexer Lambda's CloudWatch Logs for a timeout. If the run cannot finish within 15 minutes, re-run with `--mode direct`, which runs locally with no execution-time limit.                                               |
 | `ModuleNotFoundError` / import error (direct mode) | Backend source not found or direct-mode libraries missing                                    | Verify `--backend-path` points at the `backend/backend` directory and install the direct-mode libraries (`pip install boto3 botocore urllib3 aws-lambda-powertools opensearch-py`).                                                   |
 | Failed items in results                            | Individual record indexing errors                                                            | Check Amazon CloudWatch Logs for the reindexer Lambda function (lambda mode) or the local console output (direct mode) for detailed error messages per record. Common causes include malformed records or OpenSearch capacity limits. |
+
+## Tag objects that carry VAMS metadata (`--tag-synced`)
+
+Bucket sync writes two object tags on every file version it syncs, `VAMS:databaseId` and `VAMS:assetId`; it does not copy the object onto itself. Objects synced before bucket sync wrote tags carry `databaseid` / `assetid` metadata instead, and no tags. `--tag-synced` tags the current version of each of them, with the values, encoding and skip rules bucket sync uses. It is never run automatically and replaces the reindex for that run.
+
+```bash
+# See what would be tagged (reads each object's tags, writes none)
+python reindex_utility.py --tag-synced --dry-run \
+    --resource-names-ssm-param-prefix /vams-prod-us-east-1/resourceNames --region us-east-1
+
+# Tag them
+python reindex_utility.py --tag-synced \
+    --resource-names-ssm-param-prefix /vams-prod-us-east-1/resourceNames --region us-east-1
+```
+
+-   **Prerequisite:** the `assetLocationIndex` migration step has completed (it writes the index's completion marker). The run is refused until then, because the asset location index decides which asset holds each object; the object's own metadata is not read.
+-   **Inputs:** `--resource-names-ssm-param-prefix` is the core stack output `ResourceNamesSSMParamPrefixOutput`; the asset and bucket table names are read under it (`--asset-storage-table-name` and `--s3-asset-buckets-storage-table-name` override them). It runs locally with the backend source (`--backend-path`) and its Python libraries, like direct mode, using your AWS credentials, which need `dynamodb:Scan` on the bucket table, `dynamodb:Query` on the asset table's `AssetLocationGSI`, `ssm:GetParameter(s)ByPath` under the prefix, and `s3:ListBucket`, `s3:GetObjectTagging` and `s3:PutObjectTagging` on each asset bucket.
+-   **What it tags:** every object of every bucket registration whose `tagSyncedObjects` is not `false`, held by a live asset (the asset whose stored location is the deepest one holding the object; an object whose deepest owner is archived is `notAttributed`, also inside a live asset's location), except folder markers and VAMS system folders. Customer tags are kept and only the two `VAMS:` keys change; an object whose own tags leave no room for both (more than 8 customer tags) is skipped (`tagLimit`). Each object costs one `GetObjectTagging` and, when the VAMS tags are missing or name another asset, one `PutObjectTagging`. A tag write creates no object version, changes no ETag or LastModified, and raises no event bucket sync processes; a bucket with Amazon EventBridge notifications on sends "Object Tags Added" events to its own rules.
+-   **Report:** every object it did not tag (or, in a dry run, would tag) is a line in `tagSynced-<dryRun|run>-report.jsonl` (`--report-file` to change it), with the reason: `notAttributed`, `ambiguous` (two assets claim the location), `systemKey`, `tagLimit`, `accessDenied`. An access-denied bucket is reported once and its remaining objects are not attempted; the exit code is then `1`. A second run writes nothing for objects already tagged. `--limit` bounds the number of objects read.
+
+## Vector Index Reindex
+
+The `vectorReindexer` AWS Lambda function rebuilds the vector embeddings table when `app.vectorSearch.enabled` is set. It exists whenever the SYSTEM GenAI metadata pipeline is on and registers its workflow; with vector search off it accepts only `enqueue`, which analyzes the existing files without embedding them, and refuses `clear` and `both`. It is invoked directly with a JSON payload, or during a deployment when `app.vectorSearch.reindexOnCdkDeploy` is `true` with vector search on, which runs the `both` operation as an AWS CloudFormation custom resource (see [Reindexing on deploy](../../concepts/vector-search.md#reindexing-on-deploy)). Its name is published to AWS Systems Manager Parameter Store at `/<name>-<baseStackName>-<region>/resourceNames/lambdaFunctions/vectorReindexer`.
+
+```json
+{
+    "operation": "both",
+    "dryRun": false,
+    "limit": 500,
+    "databaseId": "my-database",
+    "startAfter": "prefix/asset-id/last-key-processed"
+}
+```
+
+| Field        | Required | Description                                                                                                                                                                         |
+| :----------- | :------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operation`  | yes      | `clear` deletes every vector item; `enqueue` sends one launch message per latest live file version to the system-workflow launch queue; `both` clears to completion, then enqueues. |
+| `dryRun`     | no       | Count what would be deleted or enqueued without writing or sending.                                                                                                                 |
+| `limit`      | no       | Maximum number of files to enqueue.                                                                                                                                                 |
+| `databaseId` | no       | Restrict the run to one database: `clear` deletes only that database's vectors, `enqueue` enumerates only its files.                                                                |
+| `startAfter` | no       | Resume the enumeration after an S3 key; the response of an interrupted run reports the marker.                                                                                      |
+
+Any other top-level key is rejected with a 400 response. The function walks the table and the buckets within one 15-minute invocation and, when fewer than 90 seconds remain, re-invokes itself asynchronously with a continuation token; the response of each invocation reports `deleted`, `enqueued`, `chunks`, `continued`, and `tableEmpty` (after a clear that was not restricted to one database). A first invocation that fails returns a 500 response naming the run; a continuation that fails stops the run and lands once in the reindexer's dead-letter queue, from which the run can be resumed (see [Indexing dead-letter queue holds messages](../../troubleshooting/common-issues.md#indexing-dead-letter-queue-holds-messages)). Run `operation: "clear"` without `databaseId` and wait for a response with `tableEmpty: true` before changing the embedding model.
+
+```bash
+aws lambda invoke --function-name <vector-reindexer-function-name> \
+    --cli-binary-format raw-in-base64-out \
+    --payload '{"operation": "enqueue", "dryRun": true}' response.json
+```
+
+Each launch message becomes one execution of the system GenAI metadata workflow, started as `SYSTEM_USER` through a system pipeline launch (a marked cross-call carrying the system trigger value `System-Reindex`, the run id and chunk as its context, and a request for one of `app.vectorSearch.indexingConcurrency` concurrency slots, so at most that many run at once). The executions carry the stored trigger type `System-Reindex` and an `executionGroupId` of the form `vec-<runId>-<chunk>` (one group per 1,000 files), so they can be listed and aborted as groups with the existing execution commands: `vamscli execution list --group-id vec-<runId>-<chunk>` lists a group and `vamscli execution abort <execution-id> --group-id vec-<runId>-<chunk> --yes` aborts every active execution in it (see [execution commands](../../cli/commands/executions.md)). Reindex executions are ordinary execution records of system runs: nothing removes them on its own, so retaining or clearing them is an operator task, and they cannot be re-run (`400`; run the reindex again instead). Once no member of a group is running, `vamscli execution permanent-delete <execution-id> --yes` removes each execution's records. A file version that is already running the workflow is declined by the workflow's per-input-file-version lock and skipped; a throttled launch is redelivered and dead-letters after three attempts. Files whose asset is archived, folder markers, preview files, and files outside the system workflow's input filters are not enqueued. A reindex re-runs the system workflow, so video-window and content-chunk vectors are re-created under the template's current `VIDEO_SEGMENT_SECONDS` and `CONTENT_CHUNKING` values; the new run's whole-file vector removes the segment vectors an earlier run left on the same file version, and `clear` removes everything else.
 
 ## Related Resources
 

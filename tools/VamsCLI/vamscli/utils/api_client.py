@@ -4,7 +4,7 @@ import json
 import threading
 import requests
 from typing import Dict, Any, List, Optional
-from urllib.parse import unquote, urljoin
+from urllib.parse import unquote, urljoin, urlparse
 
 # Single-flight token refresh: concurrent uploads share one APIClient (one requests.Session)
 # and run API calls on parallel executor threads. Without serialization, a 403/401 on several
@@ -13,6 +13,10 @@ from urllib.parse import unquote, urljoin
 # batch cascades to Forbidden. This module-level lock serializes refreshes; a thread that finds
 # the access token already changed since its failed request reuses it instead of refreshing again.
 _TOKEN_REFRESH_LOCK = threading.Lock()
+# Set on a thread while it holds _TOKEN_REFRESH_LOCK. A re-authentication with saved credentials reads
+# the login profile and the feature switches while the lock is held; a 401 or 403 on those reads must
+# not ask for another refresh, because the lock is not reentrant and the thread would wait on itself.
+_REFRESH_IN_PROGRESS = threading.local()
 
 # Keys an error body may carry the server's message under, in preference order. VAMS handlers return
 # `message`; Amazon API Gateway's own responses use `Message` — an authorizer deny and an unknown
@@ -22,16 +26,108 @@ _TOKEN_REFRESH_LOCK = threading.Lock()
 # permissions problem.
 _ERROR_MESSAGE_KEYS = ("message", "Message", "errorMessage", "error")
 
-# Amazon API Gateway answers a request for a path outside any deployed route — most often a base URL
-# whose deployment stage is missing or misspelled — with a 403 whose body is exactly this. It is
-# indistinguishable from an authorization denial without the hint below.
+# Amazon API Gateway answers a request the deployment's AWS WAF web ACL blocked, and a request for a
+# path outside any deployed route — most often a base URL whose deployment stage is missing or
+# misspelled — with a 403 whose body is exactly this. It is indistinguishable from an authorization
+# denial without the hint below.
 _GATEWAY_UNKNOWN_ROUTE_MESSAGE = "Forbidden"
 _STAGE_HINT = (
-    " (a bare \"Forbidden\" from Amazon API Gateway usually means the request reached no deployed "
-    "route rather than that access was denied — most often the configured base URL is missing the "
-    "REST API stage path, or names the wrong one. Check `vamscli profile info` and re-run "
+    " (a bare \"Forbidden\" from Amazon API Gateway means the deployment's AWS WAF web ACL blocked the "
+    "request, or the request reached no deployed route, most often because the configured base URL is "
+    "missing the REST API stage path or names the wrong one. Check `vamscli profile info` and re-run "
     "`vamscli setup <base-url>` if the stored API Gateway URL has no stage segment.)"
 )
+
+# The party that answered an HTTP 403, as _classify_403 reads it from the response.
+FORBIDDEN_WAF = "waf"
+FORBIDDEN_WAF_OR_STAGE = "waf_or_stage"
+FORBIDDEN_RESOURCE_POLICY = "resource_policy"
+FORBIDDEN_AUTHORIZER = "authorizer"
+FORBIDDEN_NO_ROUTE = "no_route"
+FORBIDDEN_HANDLER = "handler"
+FORBIDDEN_UNKNOWN = "unknown"
+
+# The texts of the 403s _make_request attributes. A block's text holds no sign-in or permission wording,
+# which a person or a connector would act on; a denial's starts with "Access forbidden.".
+_WAF_BLOCKED_MESSAGE = (
+    "The deployment's AWS WAF web ACL blocked this request before it reached VAMS (HTTP 403). A managed "
+    "rule matched something in the request, most often a value in the request body. Signing in again "
+    "does not change the result."
+)
+_WAF_OR_STAGE_MESSAGE = (
+    "Amazon API Gateway refused this request with a bare 403 \"Forbidden\". The deployment's AWS WAF web "
+    "ACL answers a blocked request this way, and so does a base URL that names no deployed stage "
+    "(see 'vamscli profile info'). Signing in again does not change the result."
+)
+_RESOURCE_POLICY_MESSAGE = (
+    "Access forbidden. The API's resource policy refused the request: a private VAMS API accepts requests "
+    "only through the deployment's VPC endpoint. Check the network path, or contact your administrator."
+)
+_AUTHORIZER_DENIED_MESSAGE = (
+    "Access forbidden. The VAMS API authorizer refused the request even with a refreshed token. The "
+    "deployment may restrict API access by source IP address, or this credential is not accepted. "
+    "Contact your administrator."
+)
+# The version check carries no token, so an authorizer deny there is not about a credential.
+_VERSION_CHECK_DENIED_MESSAGE = (
+    "Access forbidden. The VAMS API is reachable, but its authorizer refused the version check (HTTP 403). "
+    "That request carries no sign-in, so the deployment most likely restricts API access by source IP "
+    "address and this machine's address is not in the allowed ranges. Contact your administrator."
+)
+# A per-call token handed to APIClient(bearer_token=...) is never refreshed, so its
+# rejection is reported at once, and in words that do not tell the caller to run a CLI login.
+_INJECTED_TOKEN_REJECTED_MESSAGE = (
+    "Authentication failed: the VAMS API did not accept the supplied token (HTTP 401). It may be "
+    "expired, or issued to a client this deployment does not accept. Sign in again to get a new token."
+)
+_INJECTED_TOKEN_DENIED_MESSAGE = (
+    "Access forbidden. The VAMS API authorizer refused the supplied token. The deployment may restrict "
+    "API access by source IP address, or this token is not accepted. Contact your administrator."
+)
+
+
+def _validated_bearer_token(token: Any) -> str:
+    """Return a per-call bearer token, refusing one that cannot be sent as a header value as is.
+
+    The value is the raw token (a JWT or a VAMS API key), without a "Bearer " prefix; whitespace or a
+    control character anywhere would split or corrupt the Authorization header. The token itself is
+    never echoed in the error.
+    """
+    if not isinstance(token, str) or not token:
+        raise ValueError("bearer_token must be a non-empty string")
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7f for ch in token):
+        raise ValueError(
+            "bearer_token must be the raw token without a 'Bearer ' prefix, whitespace or control characters")
+    return token
+
+
+_REDIRECT_TARGET_REFUSED_MESSAGE = (
+    "The request was redirected to {host}, which refused it (HTTP 403). That host is not the VAMS API, so "
+    "signing in again does not change the result: a presigned URL may have expired, or the network path "
+    "may not reach that host. Retry the command, or contact your administrator."
+)
+
+_REDIRECT_TARGET_FAILED_MESSAGE = (
+    "The request was redirected to {host}, which answered HTTP {status}. That host is not the VAMS API: "
+    "a presigned URL may have expired, or the network path may not reach that host. Retry the command, "
+    "or contact your administrator."
+)
+
+
+def _raise_if_redirect_target_unreachable(error, request_url: str) -> None:
+    """Raise an APIError naming only the host when a request failed at a host it was redirected to.
+
+    The exception text of a failed send repeats the full URL."""
+    failed_url = getattr(getattr(error, 'request', None), 'url', None)
+    if not isinstance(failed_url, str):
+        return
+    host = urlparse(failed_url).netloc
+    if host and host != urlparse(request_url).netloc:
+        raise APIError(
+            f"The request was redirected to {host}, which could not be reached ({type(error).__name__}). "
+            "That host is not the VAMS API: the network path may not reach it. Retry the command, or "
+            "contact your administrator."
+        ) from None
 
 
 def _is_cognito_unavailable(error_message: str) -> bool:
@@ -44,6 +140,17 @@ def _is_cognito_unavailable(error_message: str) -> bool:
     """
     text = (error_message or "").lower()
     return "cognito user management is not available" in text or "cognito configuration error" in text
+
+
+def _api_error_code(response) -> Optional[str]:
+    """The machine-readable `code` an HTTP error body carries (a handler-defined string such as
+    `SOME_CODE`), or None. Never raises, for the reason `_api_error_message` gives."""
+    try:
+        data = response.json() if getattr(response, "content", None) else None
+    except Exception:
+        return None
+    code = data.get("code") if isinstance(data, dict) else None
+    return code if isinstance(code, str) and code else None
 
 
 def _api_error_message(response, fallback: str) -> str:
@@ -88,7 +195,107 @@ def _api_error_message(response, fallback: str) -> str:
 
     return fallback
 
+
+def _is_business_refusal_429(response) -> bool:
+    """True when a 429 is a handler's business refusal rather than throttling; never raises.
+
+    Matched on the exact message, so a throttling 429 from API Gateway, AWS WAF or another handler
+    keeps the backoff."""
+    try:
+        return _api_error_message(response, "") in _BUSINESS_REFUSAL_429_MESSAGES
+    except Exception:
+        return False
+
+
+def _classify_403(response) -> str:
+    """Which party answered an HTTP 403, read from the response alone; never raises.
+
+    Only the authorizer's deny can be cured by a fresh token. A web ACL block, a resource-policy deny,
+    a request outside every deployed route and a handler's refusal answer the same way however often
+    the request is resent.
+    """
+    try:
+        error_type = response.headers.get('x-amzn-ErrorType')
+    except Exception:
+        error_type = None
+    error_type = error_type if isinstance(error_type, str) else ''
+    authorizer_type = error_type.startswith('AccessDeniedException')
+    no_route_type = error_type.startswith(('MissingAuthenticationTokenException', 'IncompleteSignatureException'))
+    data = None
+    parsed_as_json = False
+    try:
+        if getattr(response, 'content', None):
+            data = response.json()
+            parsed_as_json = True
+    except Exception:
+        data = None
+    if isinstance(data, dict):
+        if data.get('blockedBy') == 'waf':
+            return FORBIDDEN_WAF
+        gateway_message = data.get('Message')
+        message = data.get('message')
+        # The API's DEFAULT_4XX response template carries API Gateway's own text under "message".
+        gateway_text = ' '.join(m.lower() for m in (gateway_message, message) if isinstance(m, str))
+        if 'execute-api:invoke' in gateway_text:
+            return FORBIDDEN_RESOURCE_POLICY
+        if ('explicit deny' in gateway_text or 'not authorized to access this resource' in gateway_text
+                or authorizer_type):
+            return FORBIDDEN_AUTHORIZER
+        if (message == 'Missing Authentication Token' or no_route_type
+                or 'authorization header' in str(message or gateway_message or '').lower()):
+            return FORBIDDEN_NO_ROUTE
+        if data == {'message': _GATEWAY_UNKNOWN_ROUTE_MESSAGE}:
+            return FORBIDDEN_WAF_OR_STAGE
+        if isinstance(message, str) and message.strip():
+            return FORBIDDEN_HANDLER
+        return FORBIDDEN_UNKNOWN
+    if authorizer_type:
+        return FORBIDDEN_AUTHORIZER
+    if no_route_type:
+        return FORBIDDEN_NO_ROUTE
+    # Any other JSON names no party; only a body that is not JSON at all is read as text.
+    if parsed_as_json:
+        return FORBIDDEN_UNKNOWN
+    try:
+        text = response.text
+    except Exception:
+        text = None
+    # Amazon CloudFront's error page for a request its web ACL blocked.
+    if isinstance(text, str) and 'request blocked' in text.lower():
+        return FORBIDDEN_WAF
+    return FORBIDDEN_UNKNOWN
+
+
+def _forbidden_request_id(response) -> Optional[str]:
+    """A blocked request's ID: the body's, else its x-amz-apigw-id, x-amz-cf-id or x-amzn-RequestId header."""
+    try:
+        data = response.json() if getattr(response, 'content', None) else None
+    except Exception:
+        data = None
+    if isinstance(data, dict) and isinstance(data.get('requestId'), str) and data['requestId'].strip():
+        return data['requestId'].strip()
+    # The IDs the regional web ACL log, the CloudFront web ACL log and the access log record.
+    for name in ('x-amz-apigw-id', 'x-amz-cf-id', 'x-amzn-RequestId'):
+        try:
+            header = response.headers.get(name)
+        except Exception:
+            header = None
+        if isinstance(header, str) and header.strip():
+            return header.strip()
+    return None
+
+
+def _redirected_host(response, request_url: str) -> Optional[str]:
+    """The host that answered after a followed redirect left the API's host, else None. Never raises."""
+    history = getattr(response, 'history', None)
+    final_url = getattr(response, 'url', None)
+    if not isinstance(history, list) or not history or not isinstance(final_url, str):
+        return None
+    host = urlparse(final_url).netloc
+    return host if host and host != urlparse(request_url).netloc else None
+
 from ..constants import (
+    AUDIT_SEARCH_UNAVAILABLE_MESSAGE, API_AUDIT_LOG_GROUPS, API_AUDIT_QUERIES, API_AUDIT_QUERY, API_AUDIT_QUERY_EXPORT,
     API_VERSION, API_AMPLIFY_CONFIG, DEFAULT_TIMEOUT, DEFAULT_READ_TIMEOUT, MAX_AUTH_RETRIES,
     MINIMUM_API_VERSION,
     API_LOGIN_PROFILE, API_SECURE_CONFIG, API_ASSETS, API_DATABASE_ASSETS, API_DATABASE_ASSET,
@@ -102,23 +309,40 @@ from ..constants import (
     API_ASSET_LINKS, API_ASSET_LINKS_SINGLE, API_ASSET_LINKS_UPDATE, API_ASSET_LINKS_DELETE, API_ASSET_LINKS_FOR_ASSET,
     API_METADATA,
     API_METADATA_SCHEMA_LIST, API_METADATA_SCHEMA_BY_ID,
-    API_COMMENTS_ASSET, API_COMMENTS_ASSET_VERSION, API_COMMENTS_ASSET_VERSION_COMMENT,
+    API_COMMENTS_ASSET, API_COMMENTS_ASSET_COMMENT,
     API_SUBSCRIPTIONS, API_CHECK_SUBSCRIPTION, API_UNSUBSCRIBE,
-    API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING,
+    API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING, API_SEARCH_NLP,
     API_PIPELINES, API_DATABASE_PIPELINES, API_DATABASE_PIPELINE,
     API_PIPELINE_TEMPLATES, API_PIPELINE_TEMPLATE, API_PIPELINE_TEMPLATE_TAG_SCHEMA,
     API_WORKFLOWS, API_DATABASE_WORKFLOWS, API_DATABASE_WORKFLOW,
     API_WORKFLOW_TRIGGERS, API_WORKFLOW_TRIGGER,
     API_WORKFLOW_EXECUTIONS, API_EXECUTE_WORKFLOW, API_WORKFLOW_EXECUTIONS_GLOBAL,
     API_WORKFLOW_EXECUTION, API_WORKFLOW_EXECUTION_DETAILS,
-    API_WORKFLOW_EXECUTION_DETAILS_METADATA, API_WORKFLOW_EXECUTION_LOGS,
+    API_WORKFLOW_EXECUTION_DETAILS_METADATA, API_WORKFLOW_EXECUTION_DETAILS_FILES,
+    API_WORKFLOW_EXECUTION_DETAILS_RESULTS, API_WORKFLOW_EXECUTION_LOGS,
     API_WORKFLOW_EXECUTION_RERUN, API_WORKFLOW_EXECUTION_PERMANENT,
-    API_AUTH_API_KEYS, API_AUTH_API_KEY
+    API_AUTH_API_KEYS, API_AUTH_API_KEY,
+    API_ZIP_DOWNLOADS_ASSET, API_ZIP_DOWNLOADS_ASSET_REQUEST, API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
+    API_ZIP_DOWNLOADS_GLOBAL, API_ZIP_DOWNLOADS_ASSET_ALL_USERS, FEATURE_ZIPDOWNLOADS,
+    ZIP_DOWNLOADS_DISABLED_API_MESSAGE,
+    ZIP_DOWNLOADS_DISABLED_MESSAGE, ZIP_DOWNLOAD_NOT_FOUND_API_MESSAGE,
+    ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE, ZIP_DOWNLOAD_ACTIVE_STATUSES, ADDON_BUSINESS_REFUSAL_429_MESSAGES,
+    ZIP_DOWNLOAD_TERMINAL_STATUSES, ZIP_DOWNLOAD_STREAM_TIMEOUT, ZIP_DOWNLOAD_STREAM_CHUNK_BYTES,
+    ZIP_DOWNLOAD_INTENT_PARAM, ZIP_DOWNLOAD_CANCEL_INTENT,
+    API_COMPLIANCE_SCHEMAS, API_COMPLIANCE_SCHEMA_BY_NAME,
+    API_COMPLIANCE_BIND_DATABASE, API_COMPLIANCE_BIND_ASSET,
+    API_COMPLIANCE_EVALUATE_ASSET, API_COMPLIANCE_EVALUATE_DATABASE, API_COMPLIANCE_SWEEP_SCHEMA,
+    API_COMPLIANCE_EVALUATIONS_ASSET,
+    API_COMPLIANCE_STATE_ASSET, API_COMPLIANCE_STATE_DATABASE,
+    API_COMPLIANCE_QUARANTINE, API_COMPLIANCE_QUARANTINE_RELEASE, API_COMPLIANCE_QUARANTINE_EXCEPTION,
+    API_COMPLIANCE_CASCADES, API_COMPLIANCE_CASCADE_BY_ID,
+    API_COMPLIANCE_CASCADE_APPROVE, API_COMPLIANCE_CASCADE_REJECT,
+    API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
 )
 from ..version import get_version
 from .exceptions import (
-    APIError, VersionMismatchError, AuthenticationError, OverrideTokenError, 
-    TokenExpiredError, PermissionDeniedError,
+    APIError, ConfigurationError, VersionMismatchError, AuthenticationError, OverrideTokenError,
+    TokenExpiredError, PermissionDeniedError, RequestBlockedError,
     APIUnavailableError, AssetNotFoundError, AssetAlreadyExistsError,
     DatabaseNotFoundError, DatabaseAlreadyExistsError, DatabaseDeletionError,
     BucketNotFoundError, InvalidDatabaseDataError, InvalidAssetDataError, FileUploadError,
@@ -134,41 +358,27 @@ from .exceptions import (
     WorkflowNotFoundError, WorkflowExecutionError, WorkflowAlreadyRunningError,
     InvalidWorkflowDataError,
     WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
-    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError
+    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
+    SearchUnavailableError,
+    ZipDownloadError, ZipDownloadDisabledError, ZipDownloadNotFoundError,
+    InvalidZipDownloadRequestError, ZipDownloadLimitError, ZipDownloadNotReadyError,
+    ZipDownloadExpiredError, ZipDownloadStateError, ZipDownloadTransferError,
+    UploadStatusNotFoundError, RouteNotDeployedError,
+    ComplianceSchemaNotFoundError, ComplianceCascadeNotFoundError, InvalidComplianceDataError,
+    AuditSearchError, AuditSearchNotSupportedError, InvalidAuditRequestError, AuditQueryNotFoundError
 )
-from .exceptions import InvalidRequestPathError
+from .exceptions import GlobalInfrastructureError, InvalidRequestPathError
 from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
+from .addon_api_client import AddonAPIClientMixin
+from .custom_api_client import CustomAPIClientMixin
 from .request_paths import _path_segment, route_path  # noqa: F401 - route_path is re-exported
+from .logging import scrub_text
 
-
-def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) -> str:
-    """Build the comment route whose last segment is the composite `assetVersionId:commentId` key.
-
-    The two values are joined with a colon into ONE path segment, so the constant cannot be
-    formatted: `str.format` treats the text after the colon in `{assetVersionId:commentId}` as a
-    format spec and raises. The parts are substituted literally instead.
-
-    Neither part may contain a colon. The handlers split the segment on ':' and read element [1]
-    as the commentId, so a third colon shifts which value is validated, and a missing one makes
-    that index raise — a 500 rather than a rejected request.
-    """
-    from .exceptions import InvalidCommentDataError
-
-    for label, value in (('asset version ID', asset_version_id), ('comment ID', comment_id)):
-        if not value:
-            raise InvalidCommentDataError(f"A {label} is required to address a comment")
-        if ':' in value:
-            raise InvalidCommentDataError(
-                f"The {label} may not contain a colon; it is the separator of the "
-                "assetVersionId:commentId key"
-            )
-
-    return API_COMMENTS_ASSET_VERSION_COMMENT.replace(
-        '{assetId}', _path_segment(asset_id)
-    ).replace(
-        '{assetVersionId:commentId}', f"{_path_segment(asset_version_id)}:{_path_segment(comment_id)}"
-    )
+# The exact 429 bodies that are a handler's business refusal rather than throttling
+# (_is_business_refusal_429): retrying cannot clear them. The core one is the per-user active zip
+# download cap; the add-ons declare theirs in addon_constants.py.
+_BUSINESS_REFUSAL_429_MESSAGES = (ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE,) + tuple(ADDON_BUSINESS_REFUSAL_429_MESSAGES)
 
 
 def _has_control_character(text: str) -> bool:
@@ -200,18 +410,43 @@ def _request_path(endpoint: str) -> str:
     return path
 
 
-class APIClient:
-    """HTTP client for VAMS API Gateway."""
+class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
+    """HTTP client for VAMS API Gateway.
+
+    Inherits the methods the optional add-ons add (``addon_api_client.AddonAPIClientMixin``) and
+    the methods a fork adds (``custom_api_client.CustomAPIClientMixin``, shipped empty).
+    """
     
-    def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None):
+    def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None,
+                 bearer_token: Optional[str] = None):
+        """Create a client for one VAMS API.
+
+        ``bearer_token`` is for a process that serves several users, such as a remote
+        MCP server: it builds one client per request from the caller's own token. The token lives
+        on this instance only. It is sent as ``Authorization: Bearer <token>`` on every
+        authenticated request, never written to a profile file, never refreshed (the client holds
+        no refresh token), and a 401 or authorizer deny is reported at once rather than retried. In
+        that mode no profile is read or written: with no ``profile_manager`` given,
+        ``self.profile_manager`` is None and nothing reads the active profile. The CLI's own
+        commands keep passing a ``profile_manager`` and never set this.
+        """
         self.base_url = base_url.rstrip('/')
-        # A bare ProfileManager() targets the DEFAULT profile, not the active one, so a client
-        # constructed without one would read another deployment's credentials.
-        self.profile_manager = profile_manager or ProfileManager(read_active_profile_name())
+        self._bearer_token = _validated_bearer_token(bearer_token) if bearer_token is not None else None
+        if self._bearer_token is not None:
+            self.profile_manager = profile_manager
+        else:
+            # A bare ProfileManager() targets the DEFAULT profile, not the active one, so a client
+            # constructed without one would read another deployment's credentials.
+            self.profile_manager = profile_manager or ProfileManager(read_active_profile_name())
         self.session = requests.Session()
         # requests reads a timeout only from the per-request keyword, never from an attribute on the
         # Session, so the pair is applied in _make_request instead.
         self.request_timeout = (DEFAULT_TIMEOUT, DEFAULT_READ_TIMEOUT)
+
+    @property
+    def uses_injected_token(self) -> bool:
+        """True when this client authenticates with a per-instance ``bearer_token``."""
+        return self._bearer_token is not None
 
     def _get_headers(self, include_auth: bool = True) -> Dict[str, str]:
         """Get request headers."""
@@ -221,6 +456,9 @@ class APIClient:
         }
         
         if include_auth:
+            if self._bearer_token is not None:
+                headers['Authorization'] = f"Bearer {self._bearer_token}"
+                return headers
             auth_profile = self.profile_manager.load_auth_profile()
             if auth_profile and 'access_token' in auth_profile:
                 headers['Authorization'] = f"Bearer {auth_profile['access_token']}"
@@ -229,7 +467,9 @@ class APIClient:
         
     def _validate_token_before_request(self, include_auth: bool = True):
         """Validate token before making request (pre-flight check for override tokens)."""
-        if not include_auth:
+        if not include_auth or self._bearer_token is not None:
+            # An injected token is checked by the API's authorizer, which answers 401 for an
+            # expired one; there is no saved profile to read an expiry from.
             return
             
         # Check if we have an override token and validate it
@@ -250,7 +490,20 @@ class APIClient:
         `raise_http_errors` leaves a non-2xx as the original `requests.exceptions.HTTPError` instead
         of converting it to an `APIError` here, for callers that map the status code and the handler's
         response body onto their own domain exception. An endpoint whose path has an empty, '.' or '..'
-        segment raises `InvalidRequestPathError` before anything is sent (`_request_path`).
+        segment, a control character, '?' or '#' raises `InvalidRequestPathError` before anything is
+        sent (`_request_path`).
+
+        A 403 is read first (`_classify_403`), whatever `raise_http_errors` says. After one send, a web
+        ACL block (with auth, a bare "Forbidden" too) raises `RequestBlockedError`, a request outside
+        every deployed route an `APIError`, and, with auth, a handler's or the resource policy's refusal
+        `PermissionDeniedError`. Only the authorizer's deny, or a 403 of no known shape, is refreshed and
+        resent.
+
+        A 401 means the credential did not authenticate (VAMS 2.7.0 and later answer an expired or
+        invalid token, and an unknown, disabled or expired API key, with 401; issue #1212). It is
+        refreshed and resent up to MAX_AUTH_RETRIES times, and one that persists raises
+        `AuthenticationError`. The authorizer-deny refresh above is kept for deployments older than
+        2.7.0, which answer the same credentials with a 403.
         """
         # Import logging utilities
         from .logging import log_api_request, log_api_response
@@ -299,8 +552,10 @@ class APIClient:
                 # Don't fail if logging fails
                 pass
             
-            # Handle 429 rate limiting with exponential backoff
-            if response.status_code == 429:
+            # Handle 429 rate limiting with exponential backoff. A 429 whose body is a known business
+            # refusal (the per-user active zip download cap, an add-on's quota) is not throttling: backing
+            # off cannot clear it, so it goes straight to the caller's status mapping.
+            if response.status_code == 429 and not _is_business_refusal_429(response):
                 if retry_config.should_retry(throttle_retry_count):
                     # Parse Retry-After header if present
                     retry_after = None
@@ -336,6 +591,9 @@ class APIClient:
                     raise RetryExhaustedError(error_msg)
             
             # Handle 401 errors with retry logic
+            if response.status_code == 401 and include_auth and self._bearer_token is not None:
+                # An injected per-call token has no refresh token behind it, so nothing is retried.
+                raise AuthenticationError(_INJECTED_TOKEN_REJECTED_MESSAGE)
             if response.status_code == 401 and include_auth and retry_count < MAX_AUTH_RETRIES:
                 # For override tokens, don't retry - fail immediately with clear message
                 if self.profile_manager.is_override_token():
@@ -353,43 +611,84 @@ class APIClient:
                     )
                 else:
                     raise AuthenticationError("Authentication failed. Please run 'vamscli auth login' to re-authenticate.")
+
+            # A 401 that persists through every refresh: the API's authorizer answers a credential
+            # that does not authenticate (expired, invalid, or an unknown, disabled or expired API
+            # key) with 401. Reported as a sign-in problem, whatever raise_http_errors says, instead
+            # of falling through to a generic "API request failed (401)" APIError.
+            if response.status_code == 401 and include_auth:
+                raise AuthenticationError(
+                    "Authentication failed: the VAMS API did not accept the credential even after "
+                    "refreshing it (HTTP 401). Please run 'vamscli auth login' to re-authenticate."
+                )
             
-            # Handle 403 errors - distinguish between expired tokens and permission issues
-            if response.status_code == 403 and include_auth and retry_count < MAX_AUTH_RETRIES:
-                # For override tokens, check if expired
-                if self.profile_manager.is_override_token():
-                    if self.profile_manager.is_token_expired():
-                        raise TokenExpiredError(
-                            "Override token has expired. Please provide a new token with "
-                            "'vamscli auth set-override -u <user-id> --token-stdin' or "
-                            "'vamscli auth login --user-id <user-id> --token-override-stdin'"
-                        )
-                    else:
-                        # Token not expired, this is a permission issue
-                        raise PermissionDeniedError(
-                            "Access forbidden. You do not have permission to perform this action. "
-                            "Contact your administrator if you believe this is an error."
-                        )
-                
-                # For Cognito tokens, try to refresh and retry
-                if self._try_refresh_token(token_before=request_token):
-                    return self._make_request(
-                        method, endpoint, include_auth, retry_count + 1,
-                        throttle_retry_count, raise_http_errors, **kwargs
+            # A 403 is answered by one of several parties, told apart by the response, or by the host a
+            # followed redirect reached. Only the authorizer's deny can be cured by a fresh token, so
+            # nothing else is refreshed or resent.
+            if response.status_code == 403:
+                redirected_host = _redirected_host(response, url)
+                if redirected_host:
+                    raise APIError(_REDIRECT_TARGET_REFUSED_MESSAGE.format(host=redirected_host))
+                forbidden = _classify_403(response)
+                if forbidden == FORBIDDEN_WAF or (forbidden == FORBIDDEN_WAF_OR_STAGE and include_auth):
+                    raise RequestBlockedError(
+                        _WAF_BLOCKED_MESSAGE if forbidden == FORBIDDEN_WAF else _WAF_OR_STAGE_MESSAGE,
+                        request_id=_forbidden_request_id(response),
+                        confirmed=forbidden == FORBIDDEN_WAF,
                     )
-                else:
-                    # Refresh failed - could be expired token or permission issue
-                    # Check if token is expired
-                    if self.profile_manager.is_token_expired():
-                        raise TokenExpiredError(
-                            "Authentication token has expired. Please run 'vamscli auth login' to re-authenticate."
+                if forbidden == FORBIDDEN_NO_ROUTE:
+                    raise RouteNotDeployedError(
+                        f"No deployed API route matches {method.upper()} {urlparse(url).path} (HTTP 403). "
+                        "The deployment may be older than this CLI, or the add-on that serves the route "
+                        "is not deployed."
+                    )
+                if include_auth and forbidden == FORBIDDEN_RESOURCE_POLICY:
+                    raise PermissionDeniedError(_RESOURCE_POLICY_MESSAGE)
+                if include_auth and forbidden == FORBIDDEN_HANDLER:
+                    code = _api_error_code(response)
+                    raise PermissionDeniedError.for_code(code)(
+                        f"Access forbidden. {_api_error_message(response, _GATEWAY_UNKNOWN_ROUTE_MESSAGE)}",
+                        code=code)
+                if include_auth and self._bearer_token is not None:
+                    # The authorizer refused the injected token; there is no refresh to try.
+                    raise PermissionDeniedError(_INJECTED_TOKEN_DENIED_MESSAGE)
+                if include_auth and retry_count < MAX_AUTH_RETRIES:
+                    # For override tokens, check if expired
+                    if self.profile_manager.is_override_token():
+                        if self.profile_manager.is_token_expired():
+                            raise TokenExpiredError(
+                                "Override token has expired. Please provide a new token with "
+                                "'vamscli auth set-override -u <user-id> --token-stdin' or "
+                                "'vamscli auth login --user-id <user-id> --token-override-stdin'"
+                            )
+                        else:
+                            # Token not expired, this is a permission issue
+                            raise PermissionDeniedError(
+                                "Access forbidden. You do not have permission to perform this action. "
+                                "Contact your administrator if you believe this is an error."
+                            )
+
+                    # For Cognito tokens, try to refresh and retry
+                    if self._try_refresh_token(token_before=request_token):
+                        return self._make_request(
+                            method, endpoint, include_auth, retry_count + 1,
+                            throttle_retry_count, raise_http_errors, **kwargs
                         )
                     else:
-                        # Not expired, this is a permission issue
-                        raise PermissionDeniedError(
-                            "Access forbidden. You do not have permission to perform this action. "
-                            "Contact your administrator if you believe this is an error."
-                        )
+                        # Refresh failed - could be expired token or permission issue
+                        # Check if token is expired
+                        if self.profile_manager.is_token_expired():
+                            raise TokenExpiredError(
+                                "Authentication token has expired. Please run 'vamscli auth login' to re-authenticate."
+                            )
+                        else:
+                            # Not expired, this is a permission issue
+                            raise PermissionDeniedError(
+                                "Access forbidden. You do not have permission to perform this action. "
+                                "Contact your administrator if you believe this is an error."
+                            )
+                if include_auth:
+                    raise PermissionDeniedError(_AUTHORIZER_DENIED_MESSAGE)
             
             response.raise_for_status()
             return response
@@ -398,49 +697,59 @@ class APIClient:
             # Re-raise specific errors without wrapping
             raise
         except requests.exceptions.HTTPError as e:
+            # A host the request was redirected to (a presigned Amazon S3 URL) is named by its host
+            # and status only, as the 403 case above does: the exception text repeats the full URL.
+            redirected_host = _redirected_host(e.response, url)
+            if redirected_host:
+                raise APIError(_REDIRECT_TARGET_FAILED_MESSAGE.format(
+                    host=redirected_host, status=e.response.status_code)) from None
             if raise_http_errors:
                 # The caller maps the status code and the handler's body itself.
                 raise
 
             # Handle other HTTP errors with appropriate messages
             status_code = e.response.status_code
+            fallback = scrub_text(str(e))
 
             if status_code == 429:
                 # This shouldn't happen due to the check above, but just in case
-                raise RateLimitExceededError(f"Rate limit exceeded: {e}")
+                raise RateLimitExceededError(f"Rate limit exceeded: {fallback}")
             elif status_code >= 500:
                 # Server errors (500, 502, 503, 504, etc.)
-                error_message = _api_error_message(e.response, str(e))
+                error_message = _api_error_message(e.response, fallback)
                 raise APIError(
                     f"Server error ({status_code}): {error_message}. "
                     "The VAMS API is experiencing issues. Please try again later."
                 )
             elif status_code == 404:
                 # Not found errors
-                error_message = _api_error_message(e.response, str(e))
+                error_message = _api_error_message(e.response, fallback)
                 raise APIError(f"Resource not found (404): {error_message}")
             elif status_code == 400:
                 # Bad request errors
-                error_message = _api_error_message(e.response, str(e))
+                error_message = _api_error_message(e.response, fallback)
                 raise APIError(f"Invalid request (400): {error_message}")
             else:
                 # Other HTTP errors
-                error_message = _api_error_message(e.response, str(e))
+                error_message = _api_error_message(e.response, fallback)
                 raise APIError(f"API request failed ({status_code}): {error_message}")
         except requests.exceptions.ConnectionError as e:
+            _raise_if_redirect_target_unreachable(e, url)
             raise APIError(
                 f"Connection error: Unable to connect to the VAMS API. "
                 "Please check your network connection and verify the API Gateway URL is correct. "
-                f"Details: {e}"
+                f"Details: {scrub_text(str(e))}"
             )
         except requests.exceptions.Timeout as e:
+            _raise_if_redirect_target_unreachable(e, url)
             raise APIError(
                 f"Request timeout: The VAMS API did not respond in time. "
                 "The service may be experiencing high load. Please try again later. "
-                f"Details: {e}"
+                f"Details: {scrub_text(str(e))}"
             )
         except requests.exceptions.RequestException as e:
-            raise APIError(f"Request failed: {e}")
+            _raise_if_redirect_target_unreachable(e, url)
+            raise APIError(f"Request failed: {scrub_text(str(e))}")
             
     def _try_refresh_token(self, token_before: Optional[str] = None) -> bool:
         """Try to refresh the authentication token or re-authenticate using saved credentials.
@@ -451,17 +760,32 @@ class APIClient:
         (token_before) and reuse it instead of triggering another refresh + token rotation."""
         from .logging import log_auth_diagnostic, log_config_diagnostic
 
+        if self._bearer_token is not None:
+            # An injected token is never refreshed or replaced from a profile.
+            return False
+
+        if getattr(_REFRESH_IN_PROGRESS, "active", False):
+            # A request made by this thread's own refresh: it is answered without a further refresh.
+            log_auth_diagnostic(
+                auth_type="token_refresh", status="nested_request_not_refreshed",
+                details={'profile_name': self.profile_manager.profile_name})
+            return False
+
         with _TOKEN_REFRESH_LOCK:
-            # Another thread may have already refreshed while we waited for the lock. If the saved
-            # access token differs from the one our failed request carried, treat it as refreshed.
-            if token_before is not None:
-                current = (self.profile_manager.load_auth_profile() or {}).get('access_token')
-                if current and current != token_before:
-                    log_auth_diagnostic(
-                        auth_type="token_refresh", status="reused_concurrent_refresh",
-                        details={'profile_name': self.profile_manager.profile_name})
-                    return True
-            return self._do_refresh_token()
+            _REFRESH_IN_PROGRESS.active = True
+            try:
+                # Another thread may have already refreshed while we waited for the lock. If the saved
+                # access token differs from the one our failed request carried, treat it as refreshed.
+                if token_before is not None:
+                    current = (self.profile_manager.load_auth_profile() or {}).get('access_token')
+                    if current and current != token_before:
+                        log_auth_diagnostic(
+                            auth_type="token_refresh", status="reused_concurrent_refresh",
+                            details={'profile_name': self.profile_manager.profile_name})
+                        return True
+                return self._do_refresh_token()
+            finally:
+                _REFRESH_IN_PROGRESS.active = False
 
     def _do_refresh_token(self) -> bool:
         """Perform the actual token refresh / re-auth. Callers hold _TOKEN_REFRESH_LOCK."""
@@ -681,14 +1005,35 @@ class APIClient:
                 'match': api_version == cli_version
             }
             
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to check API version: {e}")
             
     def get_amplify_config(self) -> Dict[str, Any]:
-        """Get Amplify configuration from API."""
+        """Get Amplify configuration from API.
+
+        A redirect hop to plain http is refused, unless the base URL is itself http and the hop stays
+        on its host: `setup` accepts plain http only for a loopback base URL. Every hop is checked, not
+        only the last.
+        """
         try:
             response = self.get(API_AMPLIFY_CONFIG, include_auth=False)
+            history = getattr(response, 'history', None)
+            final_url = getattr(response, 'url', None)
+            if isinstance(history, list) and history and isinstance(final_url, str):
+                base = urlparse(self.base_url)
+                # history[0] is the request the caller made; each later entry and the final response
+                # is a hop a redirect chose.
+                for hop_url in [getattr(r, 'url', '') for r in history[1:]] + [final_url]:
+                    hop = urlparse(hop_url if isinstance(hop_url, str) else '')
+                    if hop.scheme == 'http' and (base.scheme != 'http' or hop.hostname != base.hostname):
+                        raise ConfigurationError(
+                            f"The deployment redirected the configuration read to plain http ({hop.hostname}). "
+                            "Run setup with the deployment's https URL.")
             return response.json()
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get Amplify configuration: {e}")
     
@@ -727,6 +1072,20 @@ class APIClient:
                     f"a VAMS version older than {MINIMUM_API_VERSION}."
                 )
             
+            if response.status_code == 403:
+                forbidden = _classify_403(response)
+                if forbidden == FORBIDDEN_WAF:
+                    raise RequestBlockedError(_WAF_BLOCKED_MESSAGE, request_id=_forbidden_request_id(response))
+                if forbidden == FORBIDDEN_WAF_OR_STAGE:
+                    raise APIUnavailableError(
+                        "VAMS API answered the version check with a bare 403 \"Forbidden\": the deployment's "
+                        "AWS WAF web ACL blocked the request, or the stored API Gateway URL names no deployed "
+                        "stage (see 'vamscli profile info')."
+                    )
+                if forbidden == FORBIDDEN_AUTHORIZER:
+                    # The API answered, so this is a refusal and not an outage.
+                    raise PermissionDeniedError(_VERSION_CHECK_DENIED_MESSAGE)
+
             response.raise_for_status()
             version_data = response.json()
             api_version = version_data.get('version', 'unknown')
@@ -743,7 +1102,7 @@ class APIClient:
                 'compatible': True
             }
             
-        except APIUnavailableError:
+        except (APIUnavailableError, RequestBlockedError, GlobalInfrastructureError):
             # Re-raise our specific errors
             raise
         except requests.exceptions.ConnectionError:
@@ -777,20 +1136,12 @@ class APIClient:
                 'user_id': user_id,
                 'profile_refreshed': True
             }
-
-        except (AuthenticationError, OverrideTokenError, TokenExpiredError, PermissionDeniedError) as e:
-            # _make_request already maps 401/403 onto these. Do not wrap them as
-            # APIError — auth login treats AuthenticationError as a hard failure,
-            # while APIError is only a warning and would report success (#817).
-            self.profile_manager.delete_auth_profile()
-            if isinstance(e, AuthenticationError):
-                raise
-            raise AuthenticationError(str(e)) from e
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code in [401, 403]:
-                # Authentication failed - clear credentials
-                self.profile_manager.delete_auth_profile()
+                # Authentication failed - clear credentials (an injected token has none saved)
+                if self.profile_manager is not None and self._bearer_token is None:
+                    self.profile_manager.delete_auth_profile()
                 
                 if e.response.status_code == 401:
                     raise AuthenticationError(
@@ -806,6 +1157,8 @@ class APIClient:
                 # Other HTTP errors
                 raise APIError(f"Login profile API call failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to call login profile API: {e}")
     
@@ -823,13 +1176,6 @@ class APIClient:
         try:
             response = self.get(API_SECURE_CONFIG, include_auth=True)
             return response.json()
-
-        except (AuthenticationError, OverrideTokenError, TokenExpiredError, PermissionDeniedError) as e:
-            # Same wrapping trap as call_login_profile (#817): keep auth failures
-            # typed so callers can fail closed instead of treating them as APIError.
-            if isinstance(e, AuthenticationError):
-                raise
-            raise AuthenticationError(str(e)) from e
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code in [401, 403]:
@@ -837,6 +1183,9 @@ class APIClient:
             else:
                 raise APIError(f"Feature switches API call failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to fetch feature switches: {e}")
     
@@ -876,6 +1225,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create asset: {e}")
     
@@ -920,6 +1272,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update asset: {e}")
     
@@ -963,6 +1318,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get asset: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset: {e}")
 
@@ -995,6 +1353,9 @@ class APIClient:
             else:
                 raise APIError(f"Upload initialization failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to initialize upload: {e}")
 
@@ -1051,6 +1412,9 @@ class APIClient:
             else:
                 raise APIError(f"Upload completion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to complete upload: {e}")
 
@@ -1076,6 +1440,9 @@ class APIClient:
             else:
                 raise APIError(f"Folder creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create folder: {e}")
 
@@ -1095,8 +1462,54 @@ class APIClient:
             else:
                 raise APIError(f"Failed to list files: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list asset files: {e}")
+
+    def get_upload_status(self, database_id: str, asset_id: str, upload_id: str) -> Dict[str, Any]:
+        """Status of an upload and the outcome of each of its files ingested asynchronously
+        (files over 1 GiB). A 404 means no such upload is visible to the caller, or its files all
+        landed at completion (its record is removed then).
+
+        Final answers (UploadStatusNotFoundError for a 404 or a deployment without the route,
+        InvalidAssetDataError for a 400, AuthenticationError for a 401) are told apart from
+        transient failures (APIError: a 5xx, a network error), which a caller may poll again."""
+        from ..constants import API_UPLOAD_STATUS
+
+        try:
+            endpoint = route_path(API_UPLOAD_STATUS, uploadId=upload_id)
+            # raise_http_errors: the status code reaches the mapping below instead of becoming a
+            # generic APIError in _make_request.
+            response = self.get(endpoint, include_auth=True,
+                                params={"databaseId": database_id, "assetId": asset_id},
+                                raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise UploadStatusNotFoundError(
+                    f"Upload '{upload_id}' not found for asset '{asset_id}' in database "
+                    f"'{database_id}' (an upload whose files all landed at completion "
+                    f"keeps no status)")
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                raise InvalidAssetDataError(f"Invalid upload status request: {error_message}")
+            elif e.response.status_code == 401:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to get upload status: {e}")
+
+        except RouteNotDeployedError as e:
+            # The deployment has no upload status route (older than this CLI).
+            raise UploadStatusNotFoundError(str(e))
+
+        except (GlobalInfrastructureError, APIError):
+            raise
+
+        except Exception as e:
+            raise APIError(f"Failed to get upload status: {e}")
 
     def get_file_info(self, database_id: str, asset_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get detailed information about a specific file."""
@@ -1118,6 +1531,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get file info: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get file information: {e}")
 
@@ -1145,6 +1561,9 @@ class APIClient:
             else:
                 raise APIError(f"File move failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to move file: {e}")
 
@@ -1172,6 +1591,9 @@ class APIClient:
             else:
                 raise APIError(f"File copy failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to copy file: {e}")
 
@@ -1199,6 +1621,9 @@ class APIClient:
             else:
                 raise APIError(f"File archive failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to archive file: {e}")
 
@@ -1226,6 +1651,9 @@ class APIClient:
             else:
                 raise APIError(f"File unarchive failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to unarchive file: {e}")
 
@@ -1249,6 +1677,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset preview deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete asset preview: {e}")
 
@@ -1276,6 +1707,9 @@ class APIClient:
             else:
                 raise APIError(f"Auxiliary files deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete auxiliary preview files: {e}")
 
@@ -1283,7 +1717,9 @@ class APIClient:
         """Permanently delete a file or files under a prefix."""
         try:
             endpoint = route_path(API_DELETE_FILE, databaseId=database_id, assetId=asset_id)
-            response = self.delete(endpoint, include_auth=True, json=delete_data)
+            # raise_http_errors: the status code reaches the mapping below instead of becoming a
+            # generic APIError in _make_request.
+            response = self.delete(endpoint, include_auth=True, json=delete_data, raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -1303,6 +1739,9 @@ class APIClient:
             else:
                 raise APIError(f"File deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete file: {e}")
 
@@ -1331,6 +1770,9 @@ class APIClient:
             else:
                 raise APIError(f"File revert failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to revert file version: {e}")
 
@@ -1358,6 +1800,9 @@ class APIClient:
             else:
                 raise APIError(f"Set primary file failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to set primary file: {e}")
 
@@ -1414,6 +1859,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset archive failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to archive asset: {e}")
 
@@ -1476,6 +1924,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset unarchive failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to unarchive asset: {e}")
 
@@ -1505,8 +1956,10 @@ class APIClient:
             }
             if reason:
                 data['reason'] = reason
-                
-            response = self.delete(endpoint, include_auth=True, json=data)
+
+            # raise_http_errors: the status code reaches the mapping below instead of becoming a
+            # generic APIError in _make_request.
+            response = self.delete(endpoint, include_auth=True, json=data, raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -1531,6 +1984,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete asset: {e}")
 
@@ -1572,6 +2028,9 @@ class APIClient:
             else:
                 raise APIError(f"Database creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create database: {e}")
 
@@ -1625,6 +2084,9 @@ class APIClient:
             else:
                 raise APIError(f"Database update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update database: {e}")
 
@@ -1660,6 +2122,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get database: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get database: {e}")
 
@@ -1691,6 +2156,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to list databases: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list databases: {e}")
 
@@ -1726,6 +2194,9 @@ class APIClient:
             else:
                 raise APIError(f"Database deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete database: {e}")
 
@@ -1753,6 +2224,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to list buckets: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list buckets: {e}")
 
@@ -1789,6 +2263,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to list tags: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list tags: {e}")
 
@@ -1828,6 +2305,9 @@ class APIClient:
             else:
                 raise APIError(f"Tag creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create tags: {e}")
 
@@ -1868,6 +2348,9 @@ class APIClient:
             else:
                 raise APIError(f"Tag update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update tags: {e}")
 
@@ -1906,6 +2389,9 @@ class APIClient:
             else:
                 raise APIError(f"Tag deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete tag: {e}")
 
@@ -1940,6 +2426,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to list tag types: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list tag types: {e}")
 
@@ -1976,6 +2465,9 @@ class APIClient:
             else:
                 raise APIError(f"Tag type creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create tag types: {e}")
 
@@ -2010,6 +2502,9 @@ class APIClient:
             else:
                 raise APIError(f"Tag type update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update tag types: {e}")
 
@@ -2053,6 +2548,9 @@ class APIClient:
             else:
                 raise APIError(f"Tag type deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete tag type: {e}")
 
@@ -2100,6 +2598,9 @@ class APIClient:
             else:
                 raise AssetVersionOperationError(f"Asset version creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create asset version: {e}")
 
@@ -2154,6 +2655,9 @@ class APIClient:
             else:
                 raise AssetVersionRevertError(f"Asset version revert failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to revert asset version: {e}")
 
@@ -2193,6 +2697,9 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to get asset versions: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to get asset versions: {e}")
@@ -2234,10 +2741,14 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get asset history: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset history: {e}")
 
-    def get_asset_version(self, database_id: str, asset_id: str, asset_version_id: str) -> Dict[str, Any]:
+    def get_asset_version(self, database_id: str, asset_id: str, asset_version_id: str,
+                          show_archived: bool = False) -> Dict[str, Any]:
         """
         Get details for a specific asset version using the /database/{databaseId}/assets/{assetId}/getVersion/{assetVersionId} GET endpoint.
         
@@ -2245,6 +2756,7 @@ class APIClient:
             database_id: Database ID
             asset_id: Asset ID
             asset_version_id: Asset version ID
+            show_archived: Also find an archived asset
         
         Returns:
             API response data with version details
@@ -2262,7 +2774,10 @@ class APIClient:
                 assetId=asset_id, 
                 assetVersionId=asset_version_id
             )
-            response = self.get(endpoint, include_auth=True)
+            if show_archived:
+                response = self.get(endpoint, include_auth=True, params={'showArchived': 'true'})
+            else:
+                response = self.get(endpoint, include_auth=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -2281,6 +2796,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get asset version: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset version: {e}")
 
@@ -2335,6 +2853,9 @@ class APIClient:
             else:
                 raise AssetVersionOperationError(f"Asset version update failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update asset version: {e}")
 
@@ -2386,6 +2907,9 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise AssetVersionArchiveError(f"Asset version archive failed: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to archive asset version: {e}")
@@ -2439,6 +2963,9 @@ class APIClient:
             else:
                 raise AssetVersionArchiveError(f"Asset version unarchive failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to unarchive asset version: {e}")
 
@@ -2485,6 +3012,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset link creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create asset link: {e}")
 
@@ -2517,6 +3047,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get asset link: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset link: {e}")
 
@@ -2555,6 +3088,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset link update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update asset link: {e}")
 
@@ -2587,10 +3123,14 @@ class APIClient:
             else:
                 raise APIError(f"Asset link deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete asset link: {e}")
 
-    def get_asset_links_for_asset(self, database_id: str, asset_id: str, child_tree_view: bool = False) -> Dict[str, Any]:
+    def get_asset_links_for_asset(self, database_id: str, asset_id: str, child_tree_view: bool = False,
+                                  show_archived: bool = False) -> Dict[str, Any]:
         """
         Get asset links for a specific asset using the /database/{databaseId}/assets/{assetId}/asset-links GET endpoint.
         
@@ -2598,6 +3138,7 @@ class APIClient:
             database_id: Database ID
             asset_id: Asset ID
             child_tree_view: Whether to return children as a tree structure
+            show_archived: Also find an archived asset
         
         Returns:
             API response data with asset links (related, parents, children)
@@ -2613,6 +3154,8 @@ class APIClient:
             params = {}
             if child_tree_view:
                 params['childTreeView'] = 'true'
+            if show_archived:
+                params['showArchived'] = 'true'
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -2636,12 +3179,16 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get asset links: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset links for asset: {e}")
 
     # Unified Metadata API Methods (v2.2+)
 
-    def get_asset_metadata_v2(self, database_id: str, asset_id: str, page_size: int = 100, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
+    def get_asset_metadata_v2(self, database_id: str, asset_id: str, page_size: int = 100, starting_token: str = None, asset_version_id: str = None,
+                              show_archived: bool = False) -> Dict[str, Any]:
         """
         Get metadata for an asset using the new unified API.
 
@@ -2651,6 +3198,7 @@ class APIClient:
             page_size: Page size for pagination (default: 100, maximum 1000)
             starting_token: Token for pagination
             asset_version_id: Optional asset version ID to retrieve metadata snapshot
+            show_archived: Also find an archived asset
 
         Returns:
             API response with metadata list and optional NextToken
@@ -2668,6 +3216,8 @@ class APIClient:
                 params['startingToken'] = starting_token
             if asset_version_id:
                 params['assetVersionId'] = asset_version_id
+            if show_archived:
+                params['showArchived'] = 'true'
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -2686,6 +3236,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get asset metadata: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset metadata: {e}")
 
@@ -2737,6 +3290,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset metadata update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update asset metadata: {e}")
 
@@ -2779,11 +3335,15 @@ class APIClient:
             else:
                 raise APIError(f"Asset metadata deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete asset metadata: {e}")
 
     def get_file_metadata_v2(self, database_id: str, asset_id: str, file_path: str, metadata_type: str = 'metadata',
-                            page_size: int = 100, starting_token: str = None, asset_version_id: str = None) -> Dict[str, Any]:
+                            page_size: int = 100, starting_token: str = None, asset_version_id: str = None,
+                            show_archived: bool = False) -> Dict[str, Any]:
         """
         Get metadata or attributes for a file using the new unified API.
 
@@ -2795,6 +3355,7 @@ class APIClient:
             page_size: Page size for pagination (default: 100, maximum 1000)
             starting_token: Token for pagination
             asset_version_id: Optional asset version ID to retrieve metadata snapshot
+            show_archived: Also find an archived asset
 
         Returns:
             API response with metadata list and optional NextToken
@@ -2816,6 +3377,8 @@ class APIClient:
                 params['startingToken'] = starting_token
             if asset_version_id:
                 params['assetVersionId'] = asset_version_id
+            if show_archived:
+                params['showArchived'] = 'true'
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -2836,6 +3399,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get file metadata: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get file metadata: {e}")
 
@@ -2894,6 +3460,9 @@ class APIClient:
             else:
                 raise APIError(f"File metadata update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update file metadata: {e}")
 
@@ -2944,10 +3513,14 @@ class APIClient:
             else:
                 raise APIError(f"File metadata deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete file metadata: {e}")
 
-    def get_asset_link_metadata_v2(self, asset_link_id: str, page_size: int = 100, starting_token: str = None) -> Dict[str, Any]:
+    def get_asset_link_metadata_v2(self, asset_link_id: str, page_size: int = 100, starting_token: str = None,
+                                   show_archived: bool = False) -> Dict[str, Any]:
         """
         Get metadata for an asset link using the new unified API.
         
@@ -2955,6 +3528,7 @@ class APIClient:
             asset_link_id: Asset link ID
             page_size: Page size for pagination (default: 100, maximum 1000)
             starting_token: Token for pagination
+            show_archived: Also find a linked asset that is archived
         
         Returns:
             API response with metadata list and optional NextToken
@@ -2970,6 +3544,8 @@ class APIClient:
             params = {'pageSize': page_size}
             if starting_token:
                 params['startingToken'] = starting_token
+            if show_archived:
+                params['showArchived'] = 'true'
                 
             response = self.get(endpoint, include_auth=True, params=params)
             return response.json()
@@ -2983,6 +3559,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get asset link metadata: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset link metadata: {e}")
 
@@ -3028,6 +3607,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset link metadata update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update asset link metadata: {e}")
 
@@ -3064,6 +3646,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset link metadata deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete asset link metadata: {e}")
 
@@ -3101,6 +3686,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get database metadata: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get database metadata: {e}")
 
@@ -3144,6 +3732,9 @@ class APIClient:
             else:
                 raise APIError(f"Database metadata update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update database metadata: {e}")
 
@@ -3178,6 +3769,9 @@ class APIClient:
             else:
                 raise APIError(f"Database metadata deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete database metadata: {e}")
 
@@ -3231,6 +3825,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get metadata schema: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get metadata schema: {e}")
 
@@ -3295,6 +3892,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to list metadata schemas: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list metadata schemas: {e}")
 
@@ -3338,6 +3938,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get metadata schema: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get metadata schema by ID: {e}")
 
@@ -3384,6 +3987,9 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Metadata schema creation failed: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to create metadata schema: {e}")
@@ -3439,6 +4045,9 @@ class APIClient:
             else:
                 raise APIError(f"Metadata schema update failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update metadata schema: {e}")
 
@@ -3493,6 +4102,9 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Metadata schema deletion failed: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to delete metadata schema: {e}")
@@ -3567,6 +4179,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset download failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to download asset file: {e}")
 
@@ -3626,6 +4241,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset bulk download failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to generate bulk download URLs: {e}")
 
@@ -3681,6 +4299,9 @@ class APIClient:
             else:
                 raise APIError(f"Asset preview download failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to download asset preview: {e}")
 
@@ -3738,12 +4359,16 @@ class APIClient:
             staged_response.raise_for_status()
             return staged_response.json()
         except requests.exceptions.RequestException as e:
+            # Named by status and host only: the exception text repeats the presigned URL.
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            host = urlparse(staged_url).netloc
+            detail = f"HTTP {status} from {host}" if status else f"{type(e).__name__} reaching {host}"
             raise APIError(
                 "Asset export failed: the export payload was staged for download but could not be "
-                f"retrieved from its presigned URL ({e}). The URL expires after "
+                f"retrieved from its presigned URL ({detail}). The URL expires after "
                 f"{payload.get('presignedExportPayloadExpiresIn', 'the configured')} seconds; retry "
                 "the export if it has elapsed."
-            )
+            ) from None
         except ValueError as e:
             raise APIError(
                 "Asset export failed: the staged export payload was retrieved but is not valid "
@@ -3808,8 +4433,355 @@ class APIClient:
             else:
                 raise APIError(f"Asset export failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to export asset: {e}")
+
+    # ------------------------------------------------------------------
+    # Download as Zip (prepared downloads) API Methods
+    # ------------------------------------------------------------------
+    # A job archives a selection of one asset's files on the server and keeps the archive for 7
+    # days. Every job belongs to the user who created it; the API reports a
+    # job of another user, or of another asset than the path names, as "Zip download not found".
+    # The DELETE route CANCELS a job that is still queued or running and DELETES a finished one, so
+    # cancel_zip_download and delete_zip_download read the job first and refuse the wrong state
+    # rather than letting one verb perform the other.
+
+    def _zip_downloads_precheck(self) -> None:
+        """Refuse before any request when the profile's feature switches say zip downloads are off.
+
+        Only a profile whose switches were actually read decides here: every deployment publishes
+        at least its web and auth switches, so an empty or missing record means the switches were
+        never read, and the API's 404 body decides instead.
+        """
+        profile_manager = self.profile_manager
+        if profile_manager is None:
+            return
+        try:
+            info = profile_manager.get_feature_switches_info()
+        except Exception:
+            return
+        if not isinstance(info, dict) or not info.get('has_feature_switches'):
+            return
+        enabled = info.get('enabled')
+        if not isinstance(enabled, (list, tuple, set)) or not enabled:
+            return
+        if FEATURE_ZIPDOWNLOADS not in enabled:
+            raise ZipDownloadDisabledError(ZIP_DOWNLOADS_DISABLED_MESSAGE)
+
+    @staticmethod
+    def _zip_http_error(e: "requests.exceptions.HTTPError", action: str,
+                        database_id: Optional[str] = None, asset_id: Optional[str] = None,
+                        url_request: bool = False) -> Exception:
+        """Map a zip download route's HTTP error onto the CLI's exception for it."""
+        status = e.response.status_code
+        message = _api_error_message(e.response, str(e))
+        if status == 404:
+            if message == ZIP_DOWNLOADS_DISABLED_API_MESSAGE:
+                return ZipDownloadDisabledError(ZIP_DOWNLOADS_DISABLED_MESSAGE)
+            if message == ZIP_DOWNLOAD_NOT_FOUND_API_MESSAGE:
+                return ZipDownloadNotFoundError(message)
+            if asset_id and 'asset' in message.lower():
+                return AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+            return ZipDownloadNotFoundError(message)
+        if status == 429:
+            return ZipDownloadLimitError(message)
+        if status == 409:
+            return ZipDownloadNotReadyError(message)
+        if status == 410:
+            if url_request:
+                return ZipDownloadExpiredError(message)
+            return InvalidZipDownloadRequestError(f"Zip download request refused: {message}")
+        if status == 400:
+            return InvalidZipDownloadRequestError(f"Zip download request refused: {message}")
+        if status == 401:
+            return AuthenticationError(f"Authentication failed: {e}")
+        return APIError(f"Failed to {action}: {message}")
+
+    def _zip_request(self, method: str, endpoint: str, action: str,
+                     database_id: Optional[str] = None, asset_id: Optional[str] = None,
+                     url_request: bool = False, **kwargs) -> Dict[str, Any]:
+        """Issue one zip download call after the feature precheck and map its errors."""
+        self._zip_downloads_precheck()
+        try:
+            response = self._make_request(method, endpoint, include_auth=True,
+                                          raise_http_errors=True, **kwargs)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            raise self._zip_http_error(e, action, database_id, asset_id, url_request)
+
+        except GlobalInfrastructureError:
+            raise
+
+        except ZipDownloadError:
+            raise
+
+        except Exception as e:
+            raise APIError(f"Failed to {action}: {e}")
+
+    def create_zip_download(self, database_id: str, asset_id: str,
+                            request_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a zip download job using the POST /database/{databaseId}/assets/{assetId}/download/zip
+        endpoint.
+
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            request_data: CreateZipDownloadRequestModel body: `selection` (1..1000 entries of
+                {type: file|folder|asset, relativePath, versionId?}), optional `assetVersionId` or
+                `assetVersionIdAlias` (mutually exclusive with each other and with per-file
+                versionIds), `archiveFormat`, `compression`, `archiveFileName`.
+
+        Returns:
+            The job item (requestId, status, archiveFileName, progress, ...).
+
+        Raises:
+            ZipDownloadDisabledError: When the deployment does not offer zip downloads
+            InvalidZipDownloadRequestError: When the selection, pin or limits are refused (the whole
+                job is refused when any selected file is archived, deleted, in an archive storage
+                tier or of a blocked type)
+            ZipDownloadLimitError: When the caller already has the maximum number of active jobs
+            AssetNotFoundError: When the asset cannot be resolved
+            APIError: When the API call fails, including a launch failure (500) or a transient
+                launch condition to try again (503)
+        """
+        endpoint = route_path(API_ZIP_DOWNLOADS_ASSET, databaseId=database_id, assetId=asset_id)
+        return self._zip_request('POST', endpoint, "create the zip download",
+                                 database_id, asset_id, json=request_data)
+
+    def list_zip_downloads(self, database_id: Optional[str] = None, asset_id: Optional[str] = None,
+                           max_items: Optional[int] = None, page_size: Optional[int] = None,
+                           starting_token: Optional[str] = None,
+                           all_users: bool = False) -> Dict[str, Any]:
+        """
+        List zip download jobs, newest first: the caller's for one asset
+        (GET /database/{databaseId}/assets/{assetId}/download/zip) when both IDs are given, else
+        the caller's across every asset (GET /download/zip). With ``all_users`` (both IDs
+        required), every user's jobs for the asset
+        (GET /database/{databaseId}/assets/{assetId}/download/zip-all-users), each with
+        ``requestedBy`` and ``isOwn``. Every list row carries the API's ``canDownload`` /
+        ``canRemove`` decisions for the caller.
+
+        Args:
+            database_id: Database ID (together with asset_id, or neither)
+            asset_id: Asset ID (together with database_id, or neither)
+            max_items: Maximum jobs to return (1-1000, optional)
+            page_size: Jobs per page (1-1000, optional)
+            starting_token: Pagination token from a previous page's NextToken (optional)
+            all_users: List every user's jobs for the asset (needs both IDs)
+
+        Returns:
+            {"Items": [job, ...], "NextToken"?: "..."}. Expired jobs, and jobs on assets the caller
+            can no longer read, are left out.
+
+        Raises:
+            ZipDownloadDisabledError: When the deployment does not offer zip downloads
+            InvalidZipDownloadRequestError: When the paging parameters are refused
+            AssetNotFoundError: When the asset cannot be resolved (or, for all users, read)
+            APIError: When the API call fails
+        """
+        if bool(database_id) != bool(asset_id):
+            raise InvalidZipDownloadRequestError(
+                "Give both the database ID and the asset ID to list one asset's zip downloads, "
+                "or neither to list them across assets")
+        if all_users and not database_id:
+            raise InvalidZipDownloadRequestError(
+                "Listing every user's zip downloads needs the database ID and the asset ID")
+        params: Dict[str, Any] = {}
+        if max_items is not None:
+            params['maxItems'] = max_items
+        if page_size is not None:
+            params['pageSize'] = page_size
+        if starting_token:
+            params['startingToken'] = starting_token
+        if database_id and all_users:
+            endpoint = route_path(API_ZIP_DOWNLOADS_ASSET_ALL_USERS,
+                                 databaseId=database_id, assetId=asset_id)
+        elif database_id:
+            endpoint = route_path(API_ZIP_DOWNLOADS_ASSET, databaseId=database_id, assetId=asset_id)
+        else:
+            endpoint = API_ZIP_DOWNLOADS_GLOBAL
+        return self._zip_request('GET', endpoint, "list zip downloads",
+                                 database_id, asset_id, params=params)
+
+    def get_zip_download(self, database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+        """
+        Get one zip download job using the
+        GET /database/{databaseId}/assets/{assetId}/download/zip/{requestId} endpoint.
+
+        Returns:
+            The job item. Reading a job also finalizes one whose run already ended.
+
+        Raises:
+            ZipDownloadDisabledError: When the deployment does not offer zip downloads
+            ZipDownloadNotFoundError: When the job does not exist, has expired, or is not the caller's
+            APIError: When the API call fails
+        """
+        endpoint = route_path(
+            API_ZIP_DOWNLOADS_ASSET_REQUEST,
+            databaseId=database_id, assetId=asset_id, requestId=request_id)
+        return self._zip_request('GET', endpoint, "get the zip download", database_id, asset_id)
+
+    def get_zip_download_url(self, database_id: str, asset_id: str,
+                             request_id: str) -> Dict[str, Any]:
+        """
+        Issue a short-lived presigned URL for a finished archive using the
+        POST /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url endpoint.
+
+        The URL is a bearer credential: anyone holding it can download the archive until it expires.
+        Never print or log it; the CLI streams it to a file instead.
+
+        Returns:
+            {"url", "expiresIn", "archiveFileName", "archiveSizeBytes"}
+
+        Raises:
+            ZipDownloadDisabledError: When the deployment does not offer zip downloads
+            ZipDownloadNotFoundError: When the job does not exist, has expired, or is not the caller's
+            ZipDownloadNotReadyError: When the job has not succeeded (409)
+            ZipDownloadExpiredError: When the archive is no longer stored (410)
+            InvalidZipDownloadRequestError: When the asset is no longer distributable, or a file
+                in the archive is no longer downloadable
+            APIError: When the API call fails, including a 503 when the archive's files could not
+                all be checked in time (the server's message says to try again)
+        """
+        endpoint = route_path(
+            API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
+            databaseId=database_id, assetId=asset_id, requestId=request_id)
+        return self._zip_request('POST', endpoint, "issue the zip download URL",
+                                 database_id, asset_id, url_request=True, json={})
+
+    def _delete_zip_download_request(self, database_id: str, asset_id: str,
+                                     request_id: str, action: str,
+                                     cancel_intent: bool = False) -> Dict[str, Any]:
+        endpoint = route_path(
+            API_ZIP_DOWNLOADS_ASSET_REQUEST,
+            databaseId=database_id, assetId=asset_id, requestId=request_id)
+        kwargs: Dict[str, Any] = {}
+        if cancel_intent:
+            kwargs['params'] = {ZIP_DOWNLOAD_INTENT_PARAM: ZIP_DOWNLOAD_CANCEL_INTENT}
+        return self._zip_request('DELETE', endpoint, action, database_id, asset_id, **kwargs)
+
+    def cancel_zip_download(self, database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+        """
+        Cancel a queued or running zip download (DELETE on the request route with
+        `intent=cancel`) after checking that it is still active. The run is stopped and its partial
+        archive discarded; the job stays listed as CANCELLED until it expires or is deleted. The
+        cancel intent means the API never deletes the job, even if it finished after the check.
+
+        Returns:
+            {"message": "Zip download cancelled", "action": "cancelled"}. Should the job finish
+            between the check and the call, nothing is deleted: `action` says "ended" and
+            `status` gives the job's final status (SUCCEEDED or FAILED).
+
+        Raises:
+            ZipDownloadStateError: When the job has already finished (use delete_zip_download)
+            ZipDownloadNotFoundError / ZipDownloadDisabledError / APIError: as get_zip_download
+        """
+        job = self.get_zip_download(database_id, asset_id, request_id)
+        status = job.get('status') if isinstance(job, dict) else None
+        if status not in ZIP_DOWNLOAD_ACTIVE_STATUSES:
+            raise ZipDownloadStateError(
+                f"Zip download '{request_id}' has already finished ({status}); delete it instead")
+        return self._delete_zip_download_request(
+            database_id, asset_id, request_id, "cancel the zip download", cancel_intent=True)
+
+    def delete_zip_download(self, database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
+        """
+        Delete a finished zip download (SUCCEEDED, FAILED or CANCELLED) and its stored archive,
+        after checking that it has finished. Not reversible.
+
+        Returns:
+            {"message": "Zip download deleted", "action": "deleted"}
+
+        Raises:
+            ZipDownloadStateError: When the job is still queued or running (cancel it first)
+            ZipDownloadNotFoundError / ZipDownloadDisabledError / APIError: as get_zip_download
+        """
+        job = self.get_zip_download(database_id, asset_id, request_id)
+        status = job.get('status') if isinstance(job, dict) else None
+        if status not in ZIP_DOWNLOAD_TERMINAL_STATUSES:
+            raise ZipDownloadStateError(
+                f"Zip download '{request_id}' is still {status or 'active'}; cancel it first")
+        return self._delete_zip_download_request(
+            database_id, asset_id, request_id, "delete the zip download")
+
+    def download_zip_archive(self, url: str, local_path: str, expected_size: Optional[int] = None,
+                             progress_callback=None) -> int:
+        """
+        Stream a finished archive from its presigned URL to `local_path`, without VAMS auth.
+
+        The bytes go to `<local_path>.vamsdownload` and are moved into place only once complete and,
+        when `expected_size` is known, of that size, so a failed transfer never leaves a partial file
+        at the final path. No error text carries the URL (a bearer credential in its query string).
+
+        Args:
+            url: The presigned URL from get_zip_download_url
+            local_path: Destination file path
+            expected_size: The archive's size in bytes, when known
+            progress_callback: Called as progress_callback(bytes_done, total_or_None) per chunk
+
+        Returns:
+            The number of bytes written.
+
+        Raises:
+            ZipDownloadTransferError: When the transfer fails or the size does not match
+        """
+        import os
+
+        temp_path = f"{local_path}.vamsdownload"
+        written = 0
+        completed = False
+        try:
+            # A separate request with no VAMS auth: the presigned URL authorizes itself, and Amazon
+            # S3 rejects a request presenting two authorization mechanisms. The session carries no
+            # default Authorization header (headers are built per request in _make_request).
+            with self.session.get(url, stream=True, timeout=ZIP_DOWNLOAD_STREAM_TIMEOUT) as response:
+                if response.status_code != 200:
+                    hint = (" The download link may have expired; run the download again."
+                            if response.status_code == 403 else "")
+                    raise ZipDownloadTransferError(
+                        f"The archive download was refused (HTTP {response.status_code}).{hint}")
+                total = expected_size
+                if total is None and response.headers.get('Content-Length'):
+                    try:
+                        total = int(response.headers['Content-Length'])
+                    except (TypeError, ValueError):
+                        total = None
+                with open(temp_path, 'wb') as handle:
+                    for chunk in response.iter_content(chunk_size=ZIP_DOWNLOAD_STREAM_CHUNK_BYTES):
+                        if not chunk:
+                            continue
+                        handle.write(chunk)
+                        written += len(chunk)
+                        if progress_callback:
+                            progress_callback(written, total)
+            if expected_size is not None and written != expected_size:
+                raise ZipDownloadTransferError(
+                    f"The archive download was incomplete: expected {expected_size} bytes, "
+                    f"received {written}")
+            os.replace(temp_path, local_path)
+            completed = True
+            return written
+
+        except requests.exceptions.RequestException as e:
+            # The exception text of a connection error names the full URL; report its type only.
+            raise ZipDownloadTransferError(
+                f"The archive download failed ({type(e).__name__}) after {written} bytes")
+
+        except OSError as e:
+            raise ZipDownloadTransferError(f"The archive could not be written locally: {e.strerror or e}")
+
+        finally:
+            # Any failure or interruption (Ctrl+C included) leaves no partial file behind.
+            if not completed:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
     # ------------------------------------------------------------------
     # Pipeline / Workflow / Execution V2 API Methods
@@ -3897,6 +4869,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to list pipelines: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to list pipelines: {e}")
 
@@ -3913,6 +4887,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get pipeline: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get pipeline: {e}")
 
@@ -3932,6 +4908,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to create pipeline: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to create pipeline: {e}")
 
@@ -3948,6 +4926,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to update pipeline: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to update pipeline: {e}")
 
@@ -3962,6 +4942,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to archive pipeline: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to archive pipeline: {e}")
 
@@ -3995,6 +4977,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to list templates: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to list templates: {e}")
 
@@ -4011,6 +4995,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get template: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get template: {e}")
 
@@ -4031,6 +5017,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to create template: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to create template: {e}")
 
@@ -4050,6 +5038,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to update template: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to update template: {e}")
 
@@ -4066,6 +5056,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to delete template: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to delete template: {e}")
 
@@ -4085,6 +5077,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get tag schema: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get tag schema: {e}")
 
@@ -4104,6 +5098,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to set tag schema: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to set tag schema: {e}")
 
@@ -4125,6 +5121,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to list workflows: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to list workflows: {e}")
 
@@ -4141,6 +5139,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get workflow: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get workflow: {e}")
 
@@ -4157,6 +5157,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to create workflow: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to create workflow: {e}")
 
@@ -4173,6 +5175,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to update workflow: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to update workflow: {e}")
 
@@ -4187,6 +5191,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to archive workflow: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to archive workflow: {e}")
 
@@ -4208,6 +5214,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to list triggers: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to list triggers: {e}")
 
@@ -4231,6 +5239,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get trigger: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get trigger: {e}")
 
@@ -4251,6 +5261,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to set trigger: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to set trigger: {e}")
 
@@ -4268,6 +5280,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to delete trigger: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to delete trigger: {e}")
 
@@ -4295,6 +5309,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise WorkflowExecutionError(f"Workflow execution failed: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to execute workflow: {e}")
 
@@ -4327,6 +5343,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to list workflow executions: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to list workflow executions: {e}")
 
@@ -4334,7 +5352,8 @@ class APIClient:
         """List executions globally (permission-filtered). GET /workflows/executions.
 
         params may include the filter query strings: workflowId, workflowDatabaseId, status,
-        triggerType, groupId, triggeredByUserId, plus pageSize/startingToken.
+        triggerType, groupId, triggeredByUserId, includeSystem ('true'/'false'; system workflow runs
+        are hidden by default), plus pageSize/startingToken.
         """
         try:
             return self._pwe_request('GET', API_WORKFLOW_EXECUTIONS_GLOBAL, params=params or {})
@@ -4342,6 +5361,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to list executions: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to list executions: {e}")
 
@@ -4357,7 +5378,8 @@ class APIClient:
 
         Collections are bounded server-side; truncatedCollections names any that came back partial
         ('pipelines.subExecutions' means every sub-execution kept its summary but lost its stages).
-        A pipeline entry carries renderedConfigLocation ({bucket, key}) whenever that object exists
+        A pipeline entry carries renderedConfigLocation ({bucket, key}, plus bucketId and relativeKey
+        for a run recorded with its run bucket's registration) whenever that object exists
         — not only on truncation — because it is the FULLY substituted body the step ran with,
         while the inline renderedConfig is pre-system-tag. renderedConfigTruncated reports only
         whether the inline copy was shortened."""
@@ -4370,6 +5392,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get execution details: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get execution details: {e}")
 
@@ -4394,8 +5418,62 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get execution detail metadata: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get execution detail metadata: {e}")
+
+    def get_execution_details_files(self, execution_id: str,
+                                    params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Get one page of an execution's detail FILES.
+        GET /workflows/executions/{executionId}/details/files.
+
+        params may include: collection (input | output — no inputDatabase), pageSize, startingToken,
+        pipelineId. Rows carry the same scrubbed file shape the details view returns; output rows also
+        carry the producing pipelineId. NextToken is absent on the last page, so its presence is the
+        only signal that more rows exist. A token is only valid alongside the same collection and
+        pipelineId it was issued with."""
+        try:
+            endpoint = route_path(API_WORKFLOW_EXECUTION_DETAILS_FILES, executionId=execution_id)
+            return self._pwe_request('GET', endpoint, params=params or {})
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidExecutionDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get execution detail files: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
+        except Exception as e:
+            raise APIError(f"Failed to get execution detail files: {e}")
+
+    def get_execution_results(self, execution_id: str,
+                              params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Get one page of an execution's concatenated result text.
+        GET /workflows/executions/{executionId}/details/results.
+
+        Output-only; no collection parameter. Returns one page: {resultContent, resultContentTruncated,
+        resultRowCount, resultContentBytes} for the rows that fit the service's 5 MiB response budget,
+        plus NextToken while more remain (pass it back as params['startingToken']). Concatenating every
+        page's resultContent yields the whole result. An empty/legacy run returns the empty shape
+        (resultContent '', counts zero, no NextToken), never an error."""
+        try:
+            endpoint = route_path(API_WORKFLOW_EXECUTION_DETAILS_RESULTS, executionId=execution_id)
+            return self._pwe_request('GET', endpoint, params=params or {})
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidExecutionDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get execution results: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
+        except Exception as e:
+            raise APIError(f"Failed to get execution results: {e}")
 
     def get_execution_logs(self, execution_id: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Get an execution's logs. GET /workflows/executions/{executionId}/logs.
@@ -4430,6 +5508,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get execution logs: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get execution logs: {e}")
 
@@ -4448,6 +5528,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to abort execution: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to abort execution: {e}")
 
@@ -4467,6 +5549,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to re-run execution: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to re-run execution: {e}")
 
@@ -4486,6 +5570,8 @@ class APIClient:
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to permanently delete execution: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to permanently delete execution: {e}")
 
@@ -4514,11 +5600,17 @@ class APIClient:
             API response data with search results
         
         Raises:
+            SearchUnavailableError: 503 with the server's message: OpenSearch is enabled but could not
+                answer the request now
             AuthenticationError: When authentication fails
-            APIError: When API call fails or search is disabled
+            APIError: 400 (invalid parameters), 404 (search disabled or route absent), other failures,
+                each with the server's message
         """
         try:
-            response = self.post(API_SEARCH, data=search_params, include_auth=True)
+            # raise_http_errors: the status codes and the handler's message are mapped below; without it
+            # the request wrapper turns every 4xx/5xx into a generic APIError first.
+            response = self.post(API_SEARCH, data=search_params, include_auth=True,
+                                 raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -4533,13 +5625,73 @@ class APIClient:
                 else:
                     raise APIError(f"Search endpoint not found: {error_message}")
                     
+            elif e.response.status_code == 503:
+                raise SearchUnavailableError(_api_error_message(e.response, str(e)))
+
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
-                raise APIError(f"Search query failed: {e}")
+                raise APIError(f"Search query failed ({e.response.status_code}): "
+                               f"{_api_error_message(e.response, str(e))}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to execute search query: {e}")
+
+    def search_nlp(self, search_params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute a natural-language (vector) search using the /search/nlp POST endpoint.
+
+        Args:
+            search_params: Parameters matching NlpSearchRequestModel:
+                - query: natural-language text (1-1000 characters), embedded server-side
+                - entityTypes: ["file"] (default) or ["asset"]
+                - databaseIds: restrict to these databases (at most 100)
+                - includeArchived, includeSegments, fileClasses, fileExtensions, size (1-100)
+                - filters, metadataQuery, metadataSearchMode: OpenSearch-only constraints
+
+        Returns:
+            The raw response body: an OpenSearch-style envelope whose hits carry `_vector`,
+            plus top-level `nlp` and `warnings`
+
+        Raises:
+            SearchUnavailableError: 503 with the server's message: the vector index is being built,
+                the OpenSearch-only constraints could not be applied, or search is busy
+            AuthenticationError: 401/403
+            APIError: 400 (invalid parameters), 404 (route absent - feature off), other failures
+        """
+        try:
+            # raise_http_errors: the status codes and the handler's message are mapped below; without it
+            # the request wrapper turns every 4xx/5xx into a generic APIError first.
+            response = self.post(API_SEARCH_NLP, data=search_params, include_auth=True,
+                                 raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                raise APIError(f"Invalid search parameters: {error_message}")
+
+            elif e.response.status_code == 404:
+                error_message = _api_error_message(e.response, str(e))
+                raise APIError(f"Natural-language search endpoint not found "
+                               f"(is the VECTORSEARCH feature enabled?): {error_message}")
+
+            elif e.response.status_code == 503:
+                raise SearchUnavailableError(_api_error_message(e.response, str(e)))
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Natural-language search failed: {e}")
+
+        except GlobalInfrastructureError:
+            raise
+
+        except Exception as e:
+            raise APIError(f"Failed to execute natural-language search: {e}")
 
     def search_simple(self, search_params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -4566,11 +5718,17 @@ class APIClient:
             API response data with search results
         
         Raises:
+            SearchUnavailableError: 503 with the server's message: OpenSearch is enabled but could not
+                answer the request now
             AuthenticationError: When authentication fails
-            APIError: When API call fails or search is disabled
+            APIError: 400 (invalid parameters), 404 (search disabled or route absent), other failures,
+                each with the server's message
         """
         try:
-            response = self.post(API_SEARCH_SIMPLE, data=search_params, include_auth=True)
+            # raise_http_errors: the status codes and the handler's message are mapped below; without it
+            # the request wrapper turns every 4xx/5xx into a generic APIError first.
+            response = self.post(API_SEARCH_SIMPLE, data=search_params, include_auth=True,
+                                 raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -4585,11 +5743,18 @@ class APIClient:
                 else:
                     raise APIError(f"Search endpoint not found: {error_message}")
                     
+            elif e.response.status_code == 503:
+                raise SearchUnavailableError(_api_error_message(e.response, str(e)))
+
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
-                raise APIError(f"Simple search query failed: {e}")
+                raise APIError(f"Simple search query failed ({e.response.status_code}): "
+                               f"{_api_error_message(e.response, str(e))}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to execute simple search query: {e}")
 
@@ -4621,6 +5786,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get search mapping: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get search mapping: {e}")
 
@@ -4654,6 +5822,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to list roles: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list roles: {e}")
 
@@ -4699,6 +5870,9 @@ class APIClient:
             else:
                 raise APIError(f"Role creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create role: {e}")
 
@@ -4749,6 +5923,9 @@ class APIClient:
             else:
                 raise APIError(f"Role update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update role: {e}")
 
@@ -4788,6 +5965,9 @@ class APIClient:
             else:
                 raise APIError(f"Role deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete role: {e}")
 
@@ -4829,6 +6009,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to list Cognito users: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list Cognito users: {e}")
 
@@ -4878,6 +6061,9 @@ class APIClient:
             else:
                 raise APIError(f"User creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create Cognito user: {e}")
 
@@ -4928,6 +6114,9 @@ class APIClient:
             else:
                 raise APIError(f"User update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update Cognito user: {e}")
 
@@ -4972,6 +6161,9 @@ class APIClient:
             else:
                 raise APIError(f"User deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete Cognito user: {e}")
 
@@ -5022,6 +6214,9 @@ class APIClient:
             else:
                 raise APIError(f"Password reset failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to reset Cognito user password: {e}")
 
@@ -5060,6 +6255,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to list constraints: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list constraints: {e}")
 
@@ -5090,6 +6288,9 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to list API routes: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to list API routes: {e}")
@@ -5122,6 +6323,9 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to list allowed API routes: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to list allowed API routes: {e}")
@@ -5156,6 +6360,9 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to list constraint permission objects: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to list constraint permission objects: {e}")
@@ -5196,6 +6403,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get constraint: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get constraint: {e}")
 
@@ -5251,6 +6461,8 @@ class APIClient:
                 
         except InvalidConstraintDataError:
             raise
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to create constraint: {e}")
 
@@ -5298,6 +6510,9 @@ class APIClient:
             else:
                 raise APIError(f"Constraint update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update constraint: {e}")
 
@@ -5337,6 +6552,9 @@ class APIClient:
             else:
                 raise APIError(f"Constraint deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete constraint: {e}")
 
@@ -5382,7 +6600,7 @@ class APIClient:
             else:
                 raise TemplateImportError(f"Template import failed: {e}")
 
-        except (InvalidConstraintDataError, AuthenticationError, TemplateImportError):
+        except (InvalidConstraintDataError, AuthenticationError, TemplateImportError, GlobalInfrastructureError):
             raise
         except Exception as e:
             raise APIError(f"Failed to import constraints template: {e}")
@@ -5422,6 +6640,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to list user roles: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list user roles: {e}")
 
@@ -5464,6 +6685,9 @@ class APIClient:
             else:
                 raise APIError(f"User role creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create user roles: {e}")
 
@@ -5508,6 +6732,9 @@ class APIClient:
             else:
                 raise APIError(f"User role update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update user roles: {e}")
 
@@ -5547,6 +6774,9 @@ class APIClient:
             else:
                 raise APIError(f"User role deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete user roles: {e}")
 
@@ -5601,6 +6831,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to list API keys: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list API keys: {e}")
 
@@ -5645,6 +6878,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get API key: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get API key: {e}")
 
@@ -5682,6 +6918,9 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"API key creation failed: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to create API key: {e}")
@@ -5726,6 +6965,9 @@ class APIClient:
             else:
                 raise APIError(f"API key update failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update API key: {e}")
 
@@ -5766,6 +7008,9 @@ class APIClient:
             else:
                 raise APIError(f"API key deletion failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete API key: {e}")
 
@@ -5802,6 +7047,9 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to list user API keys: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to list user API keys: {e}")
@@ -5849,6 +7097,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to get user API key: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get user API key: {e}")
 
@@ -5889,6 +7140,9 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"API key creation failed: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to create user API key: {e}")
@@ -5937,6 +7191,9 @@ class APIClient:
             else:
                 raise APIError(f"API key update failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update user API key: {e}")
 
@@ -5979,6 +7236,9 @@ class APIClient:
             else:
                 raise APIError(f"API key deletion failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete user API key: {e}")
 
@@ -6008,98 +7268,99 @@ class APIClient:
             params['startingToken'] = starting_token
         return params
 
-    def list_asset_comments(self, asset_id: str, max_items: Optional[int] = None,
+    def list_asset_comments(self, database_id: str, asset_id: str, max_items: Optional[int] = None,
                             page_size: Optional[int] = None,
-                            starting_token: Optional[str] = None) -> Dict[str, Any]:
+                            starting_token: Optional[str] = None,
+                            show_archived: bool = False,
+                            asset_version_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        List every comment on an asset using the /comments/assets/{assetId} GET endpoint.
+        List the comments on an asset using the /comments/database/{databaseId}/assets/{assetId}
+        GET endpoint, optionally only those on one asset version.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID
             max_items: Maximum number of comments to return (optional)
             page_size: Comments per page (optional)
             starting_token: Pagination token (optional)
+            show_archived: Also find an archived asset
+            asset_version_id: Only the comments on this asset version (optional query filter)
 
         Returns:
             API response data: {"message": [comments]}. The route bounds the read with the
             pagination parameters but returns no NextToken, so the token cannot be followed.
 
         Raises:
-            AssetNotFoundError: When the asset cannot be resolved
+            AssetNotFoundError: When the database holds no such asset
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = route_path(API_COMMENTS_ASSET, assetId=asset_id)
+        endpoint = route_path(API_COMMENTS_ASSET, databaseId=database_id, assetId=asset_id)
+        params = self._comment_pagination_params(max_items, page_size, starting_token)
+        if show_archived:
+            # Also find an archived asset
+            params['showArchived'] = 'true'
+        if asset_version_id:
+            params['assetVersionId'] = asset_version_id
 
         try:
             response = self.get(
-                endpoint, include_auth=True, raise_http_errors=True,
-                params=self._comment_pagination_params(max_items, page_size, starting_token))
+                endpoint, include_auth=True, raise_http_errors=True, params=params)
             return response.json()
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                raise AssetNotFoundError(f"Asset '{asset_id}' not found")
+                raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to list comments: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list comments: {e}")
 
-    def list_asset_version_comments(self, asset_id: str, asset_version_id: str,
+    def list_asset_version_comments(self, database_id: str, asset_id: str, asset_version_id: str,
                                     max_items: Optional[int] = None,
                                     page_size: Optional[int] = None,
-                                    starting_token: Optional[str] = None) -> Dict[str, Any]:
+                                    starting_token: Optional[str] = None,
+                                    show_archived: bool = False) -> Dict[str, Any]:
         """
-        List the comments on one version of an asset using the
-        /comments/assets/{assetId}/assetVersionId/{assetVersionId} GET endpoint.
+        List the comments on one version of an asset: the asset's comment listing filtered by
+        the assetVersionId query parameter.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID
             asset_version_id: Asset version ID
             max_items: Maximum number of comments to return (optional)
             page_size: Comments per page (optional)
             starting_token: Pagination token (optional)
+            show_archived: Also find an archived asset
 
         Returns:
             API response data: {"message": [comments]}
 
         Raises:
-            AssetNotFoundError: When the asset cannot be resolved
+            AssetNotFoundError: When the database holds no such asset
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = route_path(
-            API_COMMENTS_ASSET_VERSION,
-            assetId=asset_id, assetVersionId=asset_version_id)
+        return self.list_asset_comments(
+            database_id, asset_id, max_items=max_items, page_size=page_size,
+            starting_token=starting_token, show_archived=show_archived,
+            asset_version_id=asset_version_id)
 
-        try:
-            response = self.get(
-                endpoint, include_auth=True, raise_http_errors=True,
-                params=self._comment_pagination_params(max_items, page_size, starting_token))
-            return response.json()
-
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                raise AssetNotFoundError(f"Asset '{asset_id}' not found")
-            elif e.response.status_code in [401, 403]:
-                raise AuthenticationError(f"Authentication failed: {e}")
-            else:
-                raise APIError(f"Failed to list version comments: {e}")
-
-        except Exception as e:
-            raise APIError(f"Failed to list version comments: {e}")
-
-    def get_comment(self, asset_id: str, asset_version_id: str, comment_id: str) -> Dict[str, Any]:
+    def get_comment(self, database_id: str, asset_id: str, comment_id: str) -> Dict[str, Any]:
         """
-        Get a single comment using the composite-key GET endpoint
-        /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}.
+        Get a single comment using the
+        /comments/database/{databaseId}/assets/{assetId}/{commentId} GET endpoint.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID
-            asset_version_id: Asset version ID the comment is attached to
             comment_id: Comment ID
 
         Returns:
@@ -6108,14 +7369,15 @@ class APIClient:
         Raises:
             CommentNotFoundError: When no such comment exists. The endpoint answers 200 with an
                 empty object rather than a 404, so the emptiness is what identifies it.
-            InvalidCommentDataError: When the two key parts cannot form the composite key
-            AssetNotFoundError: When the asset cannot be resolved
+            InvalidCommentDataError: When the request is rejected
+            AssetNotFoundError: When the database holds no such asset
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        from .exceptions import CommentNotFoundError
+        from .exceptions import CommentNotFoundError, InvalidCommentDataError
 
-        endpoint = build_comment_path(asset_id, asset_version_id, comment_id)
+        endpoint = route_path(API_COMMENTS_ASSET_COMMENT, databaseId=database_id, assetId=asset_id,
+                              commentId=comment_id)
 
         try:
             response = self.get(endpoint, include_auth=True, raise_http_errors=True)
@@ -6123,11 +7385,17 @@ class APIClient:
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                raise AssetNotFoundError(f"Asset '{asset_id}' not found")
+                raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+            elif e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                raise InvalidCommentDataError(f"Comment could not be read: {error_message}")
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to get comment: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to get comment: {e}")
@@ -6136,41 +7404,42 @@ class APIClient:
             raise CommentNotFoundError(f"Comment '{comment_id}' not found")
         return body
 
-    def add_comment(self, asset_id: str, asset_version_id: str, comment_id: str,
+    def add_comment(self, database_id: str, asset_id: str, asset_version_id: str,
                     comment_body: str) -> Dict[str, Any]:
         """
-        Add a comment using the composite-key POST endpoint
-        /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}.
+        Add a comment using the /comments/database/{databaseId}/assets/{assetId} POST endpoint.
+
+        The endpoint generates the comment's ID and returns it.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID
-            asset_version_id: Asset version ID to attach the comment to
-            comment_id: Comment ID (the caller owns this value; the endpoint writes
-                unconditionally, so reusing an existing one overwrites that comment)
+            asset_version_id: Asset version ID the comment is about
             comment_body: Comment text
 
         Returns:
-            API response data: {"message": "Succeeded"}
+            API response data: {"message": "Succeeded", "commentId": "<generated id>"}
 
         Raises:
             InvalidCommentDataError: When the request is rejected, including a comment body over
                 the endpoint's length limit
-            AssetNotFoundError: When the asset cannot be resolved
+            AssetNotFoundError: When the database holds no such asset
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
         from .exceptions import InvalidCommentDataError
 
-        endpoint = build_comment_path(asset_id, asset_version_id, comment_id)
+        endpoint = route_path(API_COMMENTS_ASSET, databaseId=database_id, assetId=asset_id)
 
         try:
-            response = self.post(endpoint, data={'commentBody': comment_body},
-                                 include_auth=True, raise_http_errors=True)
+            response = self.post(
+                endpoint, data={'commentBody': comment_body, 'assetVersionId': asset_version_id},
+                include_auth=True, raise_http_errors=True)
             return response.json()
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                raise AssetNotFoundError(f"Asset '{asset_id}' not found")
+                raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
             elif e.response.status_code == 400:
                 error_message = _api_error_message(e.response, str(e))
                 raise InvalidCommentDataError(f"Comment could not be added: {error_message}")
@@ -6179,20 +7448,23 @@ class APIClient:
             else:
                 raise APIError(f"Failed to add comment: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to add comment: {e}")
 
-    def update_comment(self, asset_id: str, asset_version_id: str, comment_id: str,
+    def update_comment(self, database_id: str, asset_id: str, comment_id: str,
                        comment_body: str) -> Dict[str, Any]:
         """
-        Replace a comment's text using the composite-key PUT endpoint
-        /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}.
+        Replace a comment's text using the
+        /comments/database/{databaseId}/assets/{assetId}/{commentId} PUT endpoint.
 
         Only the comment's creator may edit it; the endpoint answers 403 otherwise.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID
-            asset_version_id: Asset version ID the comment is attached to
             comment_id: Comment ID
             comment_body: New comment text
 
@@ -6207,7 +7479,8 @@ class APIClient:
         """
         from .exceptions import CommentNotFoundError, InvalidCommentDataError
 
-        endpoint = build_comment_path(asset_id, asset_version_id, comment_id)
+        endpoint = route_path(API_COMMENTS_ASSET_COMMENT, databaseId=database_id, assetId=asset_id,
+                              commentId=comment_id)
 
         try:
             response = self.put(endpoint, data={'commentBody': comment_body},
@@ -6216,8 +7489,8 @@ class APIClient:
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                # The endpoint reports both a missing comment ("Record not found") and an
-                # unresolvable asset ("Asset not found") as 404, so its message is carried through.
+                # The endpoint reports both a missing comment ("Record not found") and a missing
+                # asset ("Asset not found") as 404, so its message is carried through.
                 error_message = _api_error_message(e.response, str(e))
                 raise CommentNotFoundError(f"Comment could not be updated: {error_message}")
             elif e.response.status_code == 400:
@@ -6228,20 +7501,23 @@ class APIClient:
             else:
                 raise APIError(f"Failed to update comment: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update comment: {e}")
 
-    def delete_comment(self, asset_id: str, asset_version_id: str, comment_id: str) -> Dict[str, Any]:
+    def delete_comment(self, database_id: str, asset_id: str, comment_id: str) -> Dict[str, Any]:
         """
-        Delete a comment using the composite-key DELETE endpoint
-        /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}.
+        Delete a comment using the
+        /comments/database/{databaseId}/assets/{assetId}/{commentId} DELETE endpoint.
 
         The comment is soft-deleted: the record moves to a '#deleted' partition rather than being
         removed. Only the comment's creator may delete it; the endpoint answers 403 otherwise.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID
-            asset_version_id: Asset version ID the comment is attached to
             comment_id: Comment ID
 
         Returns:
@@ -6255,7 +7531,8 @@ class APIClient:
         """
         from .exceptions import CommentNotFoundError, InvalidCommentDataError
 
-        endpoint = build_comment_path(asset_id, asset_version_id, comment_id)
+        endpoint = route_path(API_COMMENTS_ASSET_COMMENT, databaseId=database_id, assetId=asset_id,
+                              commentId=comment_id)
 
         try:
             response = self.delete(endpoint, include_auth=True, raise_http_errors=True)
@@ -6273,6 +7550,9 @@ class APIClient:
             else:
                 raise APIError(f"Failed to delete comment: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete comment: {e}")
 
@@ -6280,7 +7560,7 @@ class APIClient:
     # Subscription API Methods
     # ------------------------------------------------------------------
     # /subscriptions carries all four verbs and keys a subscription on
-    # (eventName, entityName, entityId); the subscribers list is part of the record. The endpoint
+    # (eventName, entityName, databaseId, entityId); the subscribers list is part of the record. The endpoint
     # requires a non-empty subscribers list on DELETE as well, even though the delete removes the
     # whole record. /unsubscribe is the different operation: it removes ONE subscriber from a
     # record that otherwise stays. Both answer with the {"message": ...} envelope.
@@ -6322,25 +7602,30 @@ class APIClient:
             else:
                 raise APIError(f"Failed to list subscriptions: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list subscriptions: {e}")
 
     @staticmethod
-    def _subscription_body(event_name: str, entity_name: str, entity_id: str,
+    def _subscription_body(event_name: str, entity_name: str, database_id: str, entity_id: str,
                            subscribers: List[str]) -> Dict[str, Any]:
         """The request body every /subscriptions and /unsubscribe write takes.
 
-        All four keys are required on all of them — the endpoint rejects a body missing any one,
-        including a DELETE, where the subscribers list is validated but not used.
+        All five keys are required on all of them — the endpoint rejects a body missing any one,
+        including a DELETE, where the subscribers list is validated but not used. An asset is
+        identified by its database and asset id, so databaseId names the entity's database.
         """
         return {
             'eventName': event_name,
             'entityName': entity_name,
+            'databaseId': database_id,
             'entityId': entity_id,
             'subscribers': list(subscribers),
         }
 
-    def create_subscription(self, event_name: str, entity_name: str, entity_id: str,
+    def create_subscription(self, event_name: str, entity_name: str, database_id: str, entity_id: str,
                             subscribers: List[str]) -> Dict[str, Any]:
         """
         Create a subscription, or add subscribers to an existing one, using the
@@ -6349,6 +7634,7 @@ class APIClient:
         Args:
             event_name: Event to subscribe to (the API accepts 'Asset Version Change')
             entity_name: Entity type (the API accepts 'Asset')
+            database_id: Database ID of the entity's asset
             entity_id: ID of the entity — the assetId for an Asset subscription
             subscribers: VAMS user IDs to subscribe. Each is resolved to the e-mail on the
                 user's profile, falling back to the user ID when it is itself an e-mail address.
@@ -6368,7 +7654,7 @@ class APIClient:
         try:
             response = self.post(
                 API_SUBSCRIPTIONS,
-                data=self._subscription_body(event_name, entity_name, entity_id, subscribers),
+                data=self._subscription_body(event_name, entity_name, database_id, entity_id, subscribers),
                 include_auth=True, raise_http_errors=True)
             return response.json()
 
@@ -6386,10 +7672,13 @@ class APIClient:
             else:
                 raise APIError(f"Failed to create subscription: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create subscription: {e}")
 
-    def update_subscription(self, event_name: str, entity_name: str, entity_id: str,
+    def update_subscription(self, event_name: str, entity_name: str, database_id: str, entity_id: str,
                             subscribers: List[str]) -> Dict[str, Any]:
         """
         Replace a subscription's subscriber list using the /subscriptions PUT endpoint.
@@ -6400,6 +7689,7 @@ class APIClient:
         Args:
             event_name: Event the subscription is for
             entity_name: Entity type
+            database_id: Database ID of the entity's asset
             entity_id: ID of the entity
             subscribers: The complete new list of VAMS user IDs
 
@@ -6418,7 +7708,7 @@ class APIClient:
         try:
             response = self.put(
                 API_SUBSCRIPTIONS,
-                data=self._subscription_body(event_name, entity_name, entity_id, subscribers),
+                data=self._subscription_body(event_name, entity_name, database_id, entity_id, subscribers),
                 include_auth=True, raise_http_errors=True)
             return response.json()
 
@@ -6436,10 +7726,13 @@ class APIClient:
             else:
                 raise APIError(f"Failed to update subscription: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update subscription: {e}")
 
-    def delete_subscription(self, event_name: str, entity_name: str, entity_id: str,
+    def delete_subscription(self, event_name: str, entity_name: str, database_id: str, entity_id: str,
                             subscribers: List[str]) -> Dict[str, Any]:
         """
         Delete a whole subscription using the /subscriptions DELETE endpoint. For an Asset
@@ -6448,6 +7741,7 @@ class APIClient:
         Args:
             event_name: Event the subscription is for
             entity_name: Entity type
+            database_id: Database ID of the entity's asset
             entity_id: ID of the entity
             subscribers: Required by the endpoint, which validates the list and then removes the
                 whole record regardless of its contents
@@ -6468,7 +7762,7 @@ class APIClient:
             response = self.delete(
                 API_SUBSCRIPTIONS,
                 include_auth=True, raise_http_errors=True,
-                json=self._subscription_body(event_name, entity_name, entity_id, subscribers))
+                json=self._subscription_body(event_name, entity_name, database_id, entity_id, subscribers))
             return response.json()
 
         except requests.exceptions.HTTPError as e:
@@ -6485,10 +7779,13 @@ class APIClient:
             else:
                 raise APIError(f"Failed to delete subscription: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete subscription: {e}")
 
-    def unsubscribe(self, event_name: str, entity_name: str, entity_id: str,
+    def unsubscribe(self, event_name: str, entity_name: str, database_id: str, entity_id: str,
                     subscriber: str) -> Dict[str, Any]:
         """
         Remove one subscriber from a subscription using the /unsubscribe DELETE endpoint. The
@@ -6497,6 +7794,7 @@ class APIClient:
         Args:
             event_name: Event the subscription is for
             entity_name: Entity type
+            database_id: Database ID of the entity's asset
             entity_id: ID of the entity
             subscriber: The one VAMS user ID to remove. The endpoint reads only the first entry
                 of the list it is sent, so this takes a single value rather than a list.
@@ -6517,7 +7815,7 @@ class APIClient:
             response = self.delete(
                 API_UNSUBSCRIBE,
                 include_auth=True, raise_http_errors=True,
-                json=self._subscription_body(event_name, entity_name, entity_id, [subscriber]))
+                json=self._subscription_body(event_name, entity_name, database_id, entity_id, [subscriber]))
             return response.json()
 
         except requests.exceptions.HTTPError as e:
@@ -6533,10 +7831,13 @@ class APIClient:
             else:
                 raise APIError(f"Failed to unsubscribe: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to unsubscribe: {e}")
 
-    def check_subscription(self, asset_id: str, user_id: str) -> Dict[str, Any]:
+    def check_subscription(self, database_id: str, asset_id: str, user_id: str) -> Dict[str, Any]:
         """
         Check whether a user is subscribed to an asset's version changes using the
         /check-subscription POST endpoint.
@@ -6545,6 +7846,7 @@ class APIClient:
         neither is a parameter here.
 
         Args:
+            database_id: Database ID of the asset
             asset_id: Asset ID to check
             user_id: VAMS user ID to look for among the subscribers
 
@@ -6564,7 +7866,7 @@ class APIClient:
         try:
             response = self.post(
                 API_CHECK_SUBSCRIPTION,
-                data={'assetId': asset_id, 'userId': user_id},
+                data={'databaseId': database_id, 'assetId': asset_id, 'userId': user_id},
                 include_auth=True, raise_http_errors=True)
             return response.json()
 
@@ -6580,5 +7882,904 @@ class APIClient:
             else:
                 raise APIError(f"Failed to check subscription: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to check subscription: {e}")
+
+    # Compliance API Methods
+
+    # Every compliance handler answers a rejected request with a 400 whose `message` names the cause,
+    # and reserves 404 for a schema or cascade that does not exist. One mapper classifies the message
+    # so each method stays a single call; `action` is the verb phrase the surfaced error begins with.
+
+    @staticmethod
+    def _compliance_not_found_error(message: str):
+        """The domain exception for a "not found" message, chosen by the entity it names.
+
+        Every handler message leads with the entity word ("Schema 'x' not found", "Asset db:a not
+        found", "Database 'x' not found", "Cascade not found or not in pending_approval state"), so
+        the leading word is tried first; the contains pass is the fallback for any other wording.
+        Asset is tried before database in that pass because an asset message quotes
+        `databaseId:assetId`.
+        """
+        lowered = message.lower()
+        by_entity = (
+            ('schema', ComplianceSchemaNotFoundError),
+            ('cascade', ComplianceCascadeNotFoundError),
+            ('asset', AssetNotFoundError),
+            ('database', DatabaseNotFoundError),
+        )
+        for entity, exception_class in by_entity:
+            if lowered.startswith(entity):
+                return exception_class(message)
+        for entity, exception_class in by_entity:
+            if entity in lowered:
+                return exception_class(message)
+        return InvalidComplianceDataError(message)
+
+    def _compliance_request(self, method: str, endpoint: str, action: str,
+                            body: Optional[Dict[str, Any]] = None,
+                            params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Call a compliance route and map its errors onto the compliance exception family.
+
+        A POST or PUT always carries a JSON body, an empty object when the route takes no fields:
+        the handlers parse `event["body"]` unconditionally, so a request without one fails inside
+        the handler rather than being rejected with a message.
+
+        Raises:
+            ComplianceSchemaNotFoundError / ComplianceCascadeNotFoundError / AssetNotFoundError /
+                DatabaseNotFoundError: When the handler reports the named entity as not found
+            InvalidComplianceDataError: When the handler rejects the request (400)
+            AuthenticationError: When authentication fails
+            APIError: When the API call fails for any other reason
+        """
+        verb = {'GET': self.get, 'POST': self.post, 'PUT': self.put, 'DELETE': self.delete}[method]
+        kwargs: Dict[str, Any] = {}
+        if method in ('POST', 'PUT'):
+            kwargs['json'] = body if body is not None else {}
+        if params:
+            kwargs['params'] = params
+        # The endpoint arrives built with route_path, so each id is one path segment and reaches the
+        # API as typed (a deleted database's `<id>#deleted` included).
+
+        try:
+            response = verb(endpoint, include_auth=True, raise_http_errors=True, **kwargs)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            error_message = _api_error_message(e.response, str(e))
+            if status in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {error_message}")
+            if status == 404 or (status == 400 and 'not found' in error_message.lower()):
+                raise self._compliance_not_found_error(error_message)
+            if status == 400:
+                raise InvalidComplianceDataError(f"{action} failed: {error_message}")
+            raise APIError(f"{action} failed: {error_message}")
+
+        except GlobalInfrastructureError:
+            raise
+        except Exception as e:
+            raise APIError(f"{action} failed: {e}")
+
+    # ---- Schemas ------------------------------------------------------
+
+    def list_compliance_schemas(self, database_id: Optional[str] = None,
+                                max_items: Optional[int] = None,
+                                starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List one page of compliance schemas using the /compliance/schemas GET endpoint.
+
+        Args:
+            database_id: When given, only schemas scoped to this database plus GLOBAL schemas are
+                returned; otherwise every schema the caller may read.
+            max_items: Schemas per page (1-200; the handler applies 100 when omitted)
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {"schemas": [...], "NextToken"?: str, "createScopes"?: [...]} — the
+            latest version of each schema, in schemaName order. `NextToken` is present while more
+            schemas remain; a page can be short, or empty, while it is (rows the caller may not
+            read are left out). `createScopes` is on every page of a listing without database_id.
+
+        Raises:
+            InvalidComplianceDataError: When max_items or the pagination token is rejected
+        """
+        params = dict(self._compliance_page_params(max_items, starting_token) or {})
+        if database_id:
+            params['databaseId'] = database_id
+        return self._compliance_request(
+            'GET', API_COMPLIANCE_SCHEMAS, "Listing compliance schemas", params=params or None)
+
+    def get_compliance_schema(self, schema_name: str) -> Dict[str, Any]:
+        """
+        Get the latest version of a compliance schema using the
+        /compliance/schemas/{schemaName} GET endpoint.
+
+        Returns:
+            API response data: {schemaName, databaseId, description, schemaBody, version, createdAt}
+
+        Raises:
+            ComplianceSchemaNotFoundError: When the schema does not exist
+        """
+        endpoint = route_path(API_COMPLIANCE_SCHEMA_BY_NAME, schemaName=schema_name)
+        return self._compliance_request(
+            'GET', endpoint, f"Getting compliance schema '{schema_name}'")
+
+    def create_compliance_schema(self, schema_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Register a compliance schema using the /compliance/schemas POST endpoint.
+
+        Args:
+            schema_data: Schema definition:
+                - schemaName: Schema name (required; ID-pattern, 3-63 characters)
+                - schemaBody: The schema document (required) — a vams-rules-v1 document
+                  ({"schemaFormat": "vams-rules-v1", "rules": {...}}); any other body is
+                  rejected. A pipeline rule's `inputFiles` selects which of the asset's files the
+                  workflow receives (mode matching, wholeAsset or explicit)
+                - databaseId: Database the schema is scoped to, or 'GLOBAL' (defaults to GLOBAL)
+                - description: Free text
+
+        Returns:
+            API response data: {message, schemaName, databaseId, internalVersion, warnings}.
+            `warnings` (a list, empty when nothing applies) names pipeline rules of the body that
+            share a workflow: they run one after another on an asset when the workflow restricts
+            concurrency. The save succeeded whatever it holds.
+
+        Raises:
+            DatabaseNotFoundError: When the scoping database does not exist
+            InvalidComplianceDataError: When the schema body or fields are rejected, or databaseId
+                names a database while an existing schema of that name is bound (database binding
+                or asset override) in another database; GLOBAL is not refused for that reason
+        """
+        return self._compliance_request(
+            'POST', API_COMPLIANCE_SCHEMAS, "Compliance schema registration", body=schema_data)
+
+    def update_compliance_schema(self, schema_name: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Write a new version of a compliance schema using the /compliance/schemas/{schemaName}
+        PUT endpoint.
+
+        Args:
+            schema_name: Schema to update
+            update_data: Fields to change; any of schemaBody, description, databaseId. An omitted
+                databaseId keeps the schema's current scope.
+
+        Returns:
+            API response data: {message, schemaName, databaseId, internalVersion, warnings}
+            (`warnings` as for create_compliance_schema)
+
+        Raises:
+            ComplianceSchemaNotFoundError: When the schema does not exist
+            InvalidComplianceDataError: When the new body is rejected, the schema is a system
+                schema that cannot be modified, or databaseId names a database while the schema is
+                bound (database binding or asset override) in another database; moving it to
+                GLOBAL is not refused for that reason
+        """
+        endpoint = route_path(API_COMPLIANCE_SCHEMA_BY_NAME, schemaName=schema_name)
+        return self._compliance_request(
+            'PUT', endpoint, f"Compliance schema '{schema_name}' update", body=dict(update_data))
+
+    def delete_compliance_schema(self, schema_name: str) -> Dict[str, Any]:
+        """
+        Remove an unbound compliance schema using the /compliance/schemas/{schemaName} DELETE
+        endpoint. Every version of the schema is removed.
+
+        Returns:
+            API response data: the standard success envelope
+
+        Raises:
+            ComplianceSchemaNotFoundError: When the schema does not exist
+            InvalidComplianceDataError: When the schema is still bound to a database or an asset
+        """
+        endpoint = route_path(API_COMPLIANCE_SCHEMA_BY_NAME, schemaName=schema_name)
+        return self._compliance_request(
+            'DELETE', endpoint, f"Compliance schema '{schema_name}' deletion")
+
+    @staticmethod
+    def _compliance_page_params(max_items: Optional[int],
+                                starting_token: Optional[str]) -> Optional[Dict[str, Any]]:
+        """`maxItems` / `startingToken` query parameters, or None when neither is set."""
+        params: Dict[str, Any] = {}
+        if max_items is not None:
+            params['maxItems'] = max_items
+        if starting_token:
+            params['startingToken'] = starting_token
+        return params or None
+
+    # ---- Bindings -----------------------------------------------------
+
+    def get_compliance_bindings(self, database_id: str, max_items: Optional[int] = None,
+                                starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read a database's compliance schema binding and one page of its asset-level overrides
+        using the /compliance/bind/{databaseId} GET endpoint.
+
+        Args:
+            max_items: Overrides per page; the handler applies DEFAULT_COMPLIANCE_LIST_PAGE_SIZE
+                when omitted and clamps larger values to MAX_COMPLIANCE_LIST_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {databaseId, databaseSchema, complianceAutoEval,
+            assetOverrides: [{assetId, schemaName, complianceState}] (one page),
+            assetOverrideCount (the total across every page), "NextToken"?: str,
+            applyStatus, apply: the last binding change applied in the background (status,
+            operation, counts, startedAt, lastProgressAt, finishedAt) or None}
+
+        Raises:
+            DatabaseNotFoundError: When the database does not exist
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        endpoint = route_path(API_COMPLIANCE_BIND_DATABASE, databaseId=database_id)
+        return self._compliance_request(
+            'GET', endpoint, f"Getting compliance bindings for '{database_id}'",
+            params=self._compliance_page_params(max_items, starting_token))
+
+    def bind_compliance_schema(self, database_id: str, schema_name: str,
+                               asset_id: Optional[str] = None,
+                               auto_eval: Optional[bool] = None) -> Dict[str, Any]:
+        """
+        Bind a compliance schema to a database (PUT /compliance/bind/{databaseId}) or, when
+        `asset_id` is given, to one asset as an override of the database binding
+        (PUT /compliance/bind/{databaseId}/{assetId}).
+
+        Args:
+            database_id: Database to bind, or the asset's database
+            schema_name: A GLOBAL schema or one scoped to this database
+            asset_id: Bind this asset instead of the database
+            auto_eval: Whether assets in the database are re-evaluated automatically
+                (database binding only; the asset route does not read it)
+
+        Returns:
+            API response data — database (HTTP 202, applied in the background): {message,
+            schemaName, databaseId, complianceAutoEval, changed, applyStatus, applyId, assetCount,
+            apply}; the schema already bound: {message, changed: False, ...counts 0}; asset:
+            {message, databaseId, assetId, schemaName, schemaSource}
+
+        Raises:
+            ComplianceSchemaNotFoundError: When the schema does not exist
+            DatabaseNotFoundError: When the database does not exist
+            InvalidComplianceDataError: When the schema is not visible to the database
+        """
+        body: Dict[str, Any] = {'schemaName': schema_name}
+        if asset_id:
+            endpoint = route_path(API_COMPLIANCE_BIND_ASSET, databaseId=database_id, assetId=asset_id)
+            action = f"Binding schema '{schema_name}' to asset '{asset_id}'"
+        else:
+            endpoint = route_path(API_COMPLIANCE_BIND_DATABASE, databaseId=database_id)
+            action = f"Binding schema '{schema_name}' to database '{database_id}'"
+            if auto_eval is not None:
+                body['complianceAutoEval'] = auto_eval
+        return self._compliance_request('PUT', endpoint, action, body=body)
+
+    def unbind_compliance_schema(self, database_id: str,
+                                 asset_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Remove a database's compliance schema binding (DELETE /compliance/bind/{databaseId}) or,
+        when `asset_id` is given, an asset's override so it falls back to the database binding
+        (DELETE /compliance/bind/{databaseId}/{assetId}).
+
+        Returns:
+            API response data — database (HTTP 202, applied in the background): {message,
+            databaseId, previousSchema, changed, applyStatus, applyId, assetCount, apply}; asset:
+            {message, databaseId, assetId, fallbackSchema, schemaSource}. Both routes answer 200
+            when there was nothing to remove.
+
+        Raises:
+            DatabaseNotFoundError: When the database does not exist
+        """
+        if asset_id:
+            endpoint = route_path(API_COMPLIANCE_BIND_ASSET, databaseId=database_id, assetId=asset_id)
+            action = f"Removing the schema override from asset '{asset_id}'"
+        else:
+            endpoint = route_path(API_COMPLIANCE_BIND_DATABASE, databaseId=database_id)
+            action = f"Removing the schema binding from database '{database_id}'"
+        return self._compliance_request('DELETE', endpoint, action)
+
+    # ---- Evaluation and state -----------------------------------------
+
+    def evaluate_asset_compliance(self, database_id: str, asset_id: str,
+                                  schema_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Evaluate an asset using the /compliance/evaluate/{databaseId}/{assetId} POST endpoint.
+
+        Args:
+            schema_name: Schema to evaluate against; defaults to the asset's bound schema. The
+                caller needs read access to it, and it must be GLOBAL or available to the asset's
+                database.
+
+        Returns:
+            API response data: {message, evaluationId, schemaName, verdict, complianceState,
+            ruleResults, pipelineRulesPending, pipelineRulesWaiting, dryRun: False}. The metadata
+            and relationship rules run synchronously; each pipeline rule launches a workflow
+            execution and is counted in pipelineRulesPending. A pipeline rule whose workflow's
+            concurrency lock another execution holds waits for it to end and then launches; it is
+            counted in pipelineRulesWaiting as well. While the asset holds an active exception
+            against the schema evaluated, a failing verdict leaves complianceState `exception`
+            rather than quarantining the asset.
+
+            Naming a schema other than the asset's bound one is a dry run: {message, dryRun: True,
+            schemaName, schemaVersion, verdict, complianceState (the asset's current state,
+            unchanged), ruleResults, hasRuleErrors, errorRules, pipelineRulesNotRun} and no
+            evaluationId. Nothing is recorded: no evaluation record, no state change, no audit
+            entry, no workflow launch, no cascade. Pipeline rules do not run in a dry run; each is
+            a rule result with status `error`, counted in pipelineRulesNotRun.
+
+        Raises:
+            AssetNotFoundError: When the asset does not exist
+            ComplianceSchemaNotFoundError: When the named schema does not exist
+            InvalidComplianceDataError: When no schema is given and the asset has none bound, or
+                the named schema is not available to the asset's database
+            PermissionDeniedError: When the caller may not read the named schema (403)
+        """
+        endpoint = route_path(API_COMPLIANCE_EVALUATE_ASSET, databaseId=database_id, assetId=asset_id)
+        body = {'schemaName': schema_name} if schema_name else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Evaluating asset '{asset_id}'", body=body)
+
+    def sweep_compliance_schema(self, schema_name: str,
+                                starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Re-evaluate every asset bound to a schema using the /compliance/sweep/{schemaName} POST
+        endpoint (one call of the sweep).
+
+        Args:
+            starting_token: The previous call's NextToken, to continue that sweep; omit to start one.
+
+        Returns:
+            API response data: {message, schemaName, assetsTriggered: [{databaseId, assetId, ...}],
+            skipped, skippedNotAuthorized, skippedArchived, superseded, assetsRemaining,
+            NextToken?}. `skipped` counts the bound assets not evaluated: `skippedNotAuthorized`
+            those the caller is not authorized to evaluate or may not read (never listed) and
+            `skippedArchived` the archived ones the caller may see (their records are left as they
+            are; an archived asset the caller may not see is counted nowhere). A call reads the
+            bound assets a page at a time under a time budget and may end before it has read them
+            all: `NextToken` is present while any asset remains (read or not), and the next call
+            passes it back to continue. `assetsRemaining` counts only the assets this call read
+            and did not reach; it can be 0 while `NextToken` is present.
+        """
+        endpoint = route_path(API_COMPLIANCE_SWEEP_SCHEMA, schemaName=schema_name)
+        body = {'startingToken': starting_token} if starting_token else {}
+        return self._compliance_request('POST', endpoint, f"Sweeping schema '{schema_name}'",
+                                        body=body)
+
+    def evaluate_database_compliance(self, database_id: str,
+                                     starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Evaluate every tracked asset of one database, each against its own bound schema (the
+        database binding or the asset's override), using the /compliance/evaluate/{databaseId}
+        POST endpoint (one call of the evaluation). No other database is evaluated.
+
+        Args:
+            starting_token: The previous call's NextToken, to continue that evaluation; omit to
+                start one.
+
+        Returns:
+            API response data: {message, databaseId, assetsTriggered: [{databaseId, assetId,
+            schemaName, evaluationId, verdict, superseded?}], assetsRemaining, superseded,
+            registered, withoutSchema, skipped, skippedNotAuthorized, skippedArchived,
+            NextToken?}. `skippedArchived` counts the archived assets the caller may see, which
+            are not evaluated (their records are left as they are; 0 for a caller who may not see
+            the database's archive), `skippedNotAuthorized` the assets the caller may not read
+            (not evaluated, never listed), and `skipped` the two. `NextToken` is present while any
+            tracked asset remains (read or not): pass it back to continue. `assetsRemaining` counts
+            only the assets this call read and did not reach; it can be 0 while `NextToken` is
+            present. `registered` counts assets of a bound
+            database registered under the binding by this call; `withoutSchema` counts tracked
+            assets whose record names no schema (not evaluated).
+        """
+        endpoint = route_path(API_COMPLIANCE_EVALUATE_DATABASE, databaseId=database_id)
+        body = {'startingToken': starting_token} if starting_token else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Evaluating the assets of database '{database_id}'", body=body)
+
+    def list_compliance_evaluations(self, database_id: str, asset_id: str,
+                                    max_items: Optional[int] = None,
+                                    starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read an asset's evaluation history using the /compliance/evaluations/{databaseId}/{assetId}
+        GET endpoint.
+
+        Args:
+            max_items: Page size; the handler applies DEFAULT_COMPLIANCE_EVALUATIONS_PAGE_SIZE when
+                omitted and clamps larger values to MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {"evaluations": [...], "NextToken"?: str}, most recent first.
+        """
+        endpoint = route_path(API_COMPLIANCE_EVALUATIONS_ASSET, databaseId=database_id, assetId=asset_id)
+        return self._compliance_request(
+            'GET', endpoint, f"Listing evaluations for asset '{asset_id}'",
+            params=self._compliance_page_params(max_items, starting_token))
+
+    def get_compliance_state(self, database_id: str, asset_id: str) -> Dict[str, Any]:
+        """
+        Read one asset's compliance record using the /compliance/state/{databaseId}/{assetId} GET
+        endpoint.
+
+        Returns:
+            API response data: the compliance record (databaseId, assetId, complianceState,
+            schemaName, schemaSource, lastEvaluationId, ...). complianceState is one of compliant,
+            non_compliant, quarantined, exception, pending_evaluation or unknown; an asset in the
+            `exception` state carries the exception fields (exceptionGranted, exceptionReason,
+            exceptionGrantedBy, exceptionGrantedAt, exceptionSchemaName, exceptionSchemaVersion).
+            An asset that is not tracked answers complianceState "unknown" with a null schemaName
+            rather than a 404.
+        """
+        endpoint = route_path(API_COMPLIANCE_STATE_ASSET, databaseId=database_id, assetId=asset_id)
+        return self._compliance_request(
+            'GET', endpoint, f"Getting compliance state for asset '{asset_id}'")
+
+    def get_database_compliance_state(self, database_id: str, max_items: Optional[int] = None,
+                                      starting_token: Optional[str] = None,
+                                      filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Read a database's compliance overview using the /compliance/state/{databaseId} GET
+        endpoint.
+
+        Args:
+            max_items: Asset records per page; the handler applies DEFAULT_COMPLIANCE_LIST_PAGE_SIZE
+                when omitted and clamps larger values to MAX_COMPLIANCE_LIST_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+            filters: Server-side filters, sent as query parameters: `state`, `schemaName`,
+                `schemaSource` (database | asset), `evaluationError` ("true" | "false"), `text`
+                (case-insensitive contains on the asset name or id) and `sort` (assetId | name)
+
+        Returns:
+            API response data: {databaseId, totalAssets, summary: {compliant, non_compliant,
+            pending_evaluation, quarantined, exception, unknown, error}, assets: [records with
+            assetName], "NextToken"?: str}. `totalAssets` and `summary` cover every tracked asset,
+            whatever the filters; `assets` is one page of the filtered rows.
+
+        Raises:
+            DatabaseNotFoundError: When the database id names no database (the route answers 400
+                "Database not found" rather than an empty overview)
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        endpoint = route_path(API_COMPLIANCE_STATE_DATABASE, databaseId=database_id)
+        params = dict(self._compliance_page_params(max_items, starting_token) or {})
+        params.update({key: value for key, value in (filters or {}).items() if value})
+        return self._compliance_request(
+            'GET', endpoint, f"Getting compliance state for database '{database_id}'",
+            params=params or None)
+
+    # ---- Quarantine ---------------------------------------------------
+
+    def list_quarantined_assets(self, max_items: Optional[int] = None,
+                                starting_token: Optional[str] = None,
+                                database_id: Optional[str] = None,
+                                text: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List quarantined assets using the /compliance/quarantine GET endpoint.
+
+        Args:
+            max_items: Records per page; the handler applies DEFAULT_COMPLIANCE_LIST_PAGE_SIZE when
+                omitted and clamps larger values to MAX_COMPLIANCE_LIST_PAGE_SIZE
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {"quarantinedAssets": [compliance records with assetName],
+            "NextToken"?: str}. The page is filtered to the databases the caller may read after it
+            is fetched, so a page can be empty while a NextToken is present.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        params = dict(self._compliance_page_params(max_items, starting_token) or {})
+        if database_id:
+            params['databaseId'] = database_id
+        if text:
+            params['text'] = text
+        return self._compliance_request(
+            'GET', API_COMPLIANCE_QUARANTINE, "Listing quarantined assets",
+            params=params or None)
+
+    def release_quarantine(self, database_id: str, asset_id: str,
+                           reason: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Release an asset from quarantine using the
+        /compliance/quarantine/{databaseId}/{assetId}/release POST endpoint.
+
+        Args:
+            reason: Recorded in the audit trail; the handler supplies a default when omitted
+
+        Returns:
+            API response data: {message}
+
+        Raises:
+            AssetNotFoundError: When the asset is not tracked for compliance
+            InvalidComplianceDataError: When the asset is not quarantined
+        """
+        endpoint = route_path(API_COMPLIANCE_QUARANTINE_RELEASE, databaseId=database_id, assetId=asset_id)
+        body = {'reason': reason} if reason else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Releasing asset '{asset_id}' from quarantine", body=body)
+
+    def grant_quarantine_exception(self, database_id: str, asset_id: str,
+                                   reason: str) -> Dict[str, Any]:
+        """
+        Grant a quarantined asset an exception using the
+        /compliance/quarantine/{databaseId}/{assetId}/exception POST endpoint.
+
+        The asset moves to the `exception` state. The exception is scoped to the asset's bound
+        schema at its current version and holds until it is revoked or an evaluation against a
+        different schema or a newer version supersedes it.
+
+        Args:
+            reason: Required justification, recorded on the asset and in the audit trail
+
+        Returns:
+            API response data: {message, reason, grantedBy, complianceState}
+
+        Raises:
+            AssetNotFoundError: When the asset is not tracked for compliance
+            InvalidComplianceDataError: When the asset is not quarantined or the reason is missing
+        """
+        endpoint = route_path(API_COMPLIANCE_QUARANTINE_EXCEPTION,
+            databaseId=database_id, assetId=asset_id)
+        return self._compliance_request(
+            'POST', endpoint, f"Granting an exception for asset '{asset_id}'",
+            body={'reason': reason})
+
+    def revoke_quarantine_exception(self, database_id: str, asset_id: str) -> Dict[str, Any]:
+        """
+        Revoke an asset's active exception using the
+        /compliance/quarantine/{databaseId}/{assetId}/exception DELETE endpoint.
+
+        The exception fields are cleared and the asset returns to the state its last evaluation's
+        verdict maps to — quarantined again when that verdict was quarantined — or to
+        `pending_evaluation` when it has no recorded evaluation.
+
+        Returns:
+            API response data: {message, databaseId, assetId, complianceState}
+
+        Raises:
+            AssetNotFoundError: When the asset is not tracked for compliance
+            InvalidComplianceDataError: When the asset has no active exception
+        """
+        endpoint = route_path(API_COMPLIANCE_QUARANTINE_EXCEPTION,
+            databaseId=database_id, assetId=asset_id)
+        return self._compliance_request(
+            'DELETE', endpoint, f"Revoking the exception of asset '{asset_id}'")
+
+    # ---- Cascades -----------------------------------------------------
+
+    def list_compliance_cascades(self, state: Optional[str] = None,
+                                 database_id: Optional[str] = None, text: Optional[str] = None,
+                                 max_items: Optional[int] = None,
+                                 starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List cascades using the /compliance/cascades GET endpoint.
+
+        Args:
+            state: pending_approval (the default), executing, completed or aborted
+            database_id: Only cascades whose trigger asset is in this database
+            text: Case-insensitive contains on the trigger asset's name or id
+            max_items / starting_token: Paging (at most 200 per page; the previous NextToken)
+
+        Returns:
+            API response data: {"cascades": [...], "NextToken"?: str}, newest first, each row
+            carrying `databaseId` / `assetId` / `assetName` (the trigger asset) beside
+            `triggeredByDatabaseId` / `triggeredByAssetId`; a row is listed only when the caller
+            may read the trigger asset's database.
+        """
+        params = dict(self._compliance_page_params(max_items, starting_token) or {})
+        for key, value in (('state', state), ('databaseId', database_id), ('text', text)):
+            if value:
+                params[key] = value
+        return self._compliance_request(
+            'GET', API_COMPLIANCE_CASCADES, "Listing compliance cascades", params=params or None)
+
+    def get_compliance_cascade(self, cascade_id: str) -> Dict[str, Any]:
+        """
+        Read a cascade using the /compliance/cascades/{cascadeId} GET endpoint.
+
+        Returns:
+            API response data: the cascade record (cascadeId, state, triggeredByDatabaseId,
+            triggeredByAssetId, triggerReason, createdAt, approvalTimeoutAt, ...)
+
+        Raises:
+            ComplianceCascadeNotFoundError: When the cascade does not exist
+        """
+        endpoint = route_path(API_COMPLIANCE_CASCADE_BY_ID, cascadeId=cascade_id)
+        return self._compliance_request(
+            'GET', endpoint, f"Getting compliance cascade '{cascade_id}'")
+
+    def create_compliance_cascade(self, database_id: str, asset_id: str,
+                                  reason: Optional[str] = None,
+                                  require_approval: bool = True) -> Dict[str, Any]:
+        """
+        Create a cascade for an asset's dependents using the /compliance/cascades POST endpoint.
+
+        Args:
+            database_id: Database of the asset whose change triggers the cascade
+            asset_id: The triggering asset
+            reason: Recorded as the trigger reason; the handler supplies a default when omitted
+            require_approval: When true the cascade waits in pending_approval for approve/reject;
+                when false it starts executing at once
+
+        Returns:
+            API response data: {message, cascadeId, state}. With `require_approval` the handler
+            answers 200 and `state` is pending_approval. Without it the handler writes the cascade
+            in state executing, starts the executor asynchronously and answers 202; the request
+            does not wait for the evaluations. Poll `get_compliance_cascade` until `state` is
+            completed or aborted (a rejected cascade carries `rejectionReason`, any other aborted
+            cascade `abortReason`).
+
+        Raises:
+            InvalidComplianceDataError: When the request is rejected, or the executor could not be
+                started (the cascade is then recorded as aborted)
+        """
+        body: Dict[str, Any] = {
+            'databaseId': database_id,
+            'assetId': asset_id,
+            'requireApproval': require_approval,
+        }
+        if reason:
+            body['reason'] = reason
+        return self._compliance_request(
+            'POST', API_COMPLIANCE_CASCADES, "Compliance cascade creation", body=body)
+
+    def approve_compliance_cascade(self, cascade_id: str,
+                                   reason: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Approve a pending cascade using the /compliance/cascades/{cascadeId}/approve POST
+        endpoint. The handler moves the cascade to executing, starts the executor asynchronously
+        and answers 202; the request does not wait for the evaluations.
+
+        Returns:
+            API response data: {message, cascadeId, state} with `state` executing. Poll
+            `get_compliance_cascade` until `state` is completed or aborted.
+
+        Raises:
+            ComplianceCascadeNotFoundError: When the cascade does not exist or is not pending
+            InvalidComplianceDataError: When the executor could not be started (the cascade is then
+                recorded as aborted)
+        """
+        endpoint = route_path(API_COMPLIANCE_CASCADE_APPROVE, cascadeId=cascade_id)
+        body = {'reason': reason} if reason else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Approving cascade '{cascade_id}'", body=body)
+
+    def reject_compliance_cascade(self, cascade_id: str,
+                                  reason: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Reject a pending cascade using the /compliance/cascades/{cascadeId}/reject POST endpoint.
+
+        Returns:
+            API response data: {message, cascadeId}
+
+        Raises:
+            ComplianceCascadeNotFoundError: When the cascade does not exist or is not pending
+        """
+        endpoint = route_path(API_COMPLIANCE_CASCADE_REJECT, cascadeId=cascade_id)
+        body = {'reason': reason} if reason else {}
+        return self._compliance_request(
+            'POST', endpoint, f"Rejecting cascade '{cascade_id}'", body=body)
+
+    # ---- Audit --------------------------------------------------------
+
+    def _compliance_audit_params(self, start_date: Optional[str], end_date: Optional[str],
+                                 max_items: Optional[int],
+                                 starting_token: Optional[str]) -> Dict[str, Any]:
+        params: Dict[str, Any] = {}
+        if start_date:
+            params['startDate'] = start_date
+        if end_date:
+            params['endDate'] = end_date
+        params.update(self._compliance_page_params(max_items, starting_token) or {})
+        return params
+
+    def query_compliance_audit(self, event_type: Optional[str] = None,
+                               start_date: Optional[str] = None, end_date: Optional[str] = None,
+                               max_items: Optional[int] = None,
+                               starting_token: Optional[str] = None,
+                               database_id: Optional[str] = None, asset_id: Optional[str] = None,
+                               text: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Query the compliance audit trail using the /compliance/audit GET endpoint.
+
+        Args:
+            event_type: Only entries of this type (schema_bound_to_database, compliance_check,
+                quarantine_released, exception_granted, exception_revoked, exception_superseded,
+                cascade_triggered, ...). Without it the handler reads the whole trail in
+                timestamp order. Entries are filtered to the databases the caller may read.
+            start_date / end_date: ISO 8601 bounds on the entry timestamp
+            max_items: Entries per page; the handler applies COMPLIANCE_AUDIT_DEFAULT_LIMIT when
+                omitted and clamps larger values to MAX_COMPLIANCE_AUDIT_PAGE_SIZE. Sent as
+                `maxItems`, which the route reads ahead of its `limit` alias.
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {"entries": [...], "NextToken"?: str}, most recent first.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        params = self._compliance_audit_params(start_date, end_date, max_items, starting_token)
+        # databaseId narrows the trail to one database (with assetId, to one asset); text is a
+        # case-insensitive contains on the asset name at the time, the asset id or the actor.
+        for key, value in (('eventType', event_type), ('databaseId', database_id),
+                           ('assetId', asset_id), ('text', text)):
+            if value:
+                params[key] = value
+        return self._compliance_request(
+            'GET', API_COMPLIANCE_AUDIT, "Querying the compliance audit trail",
+            params=params or None)
+
+    def get_asset_compliance_audit(self, database_id: str, asset_id: str,
+                                   start_date: Optional[str] = None,
+                                   end_date: Optional[str] = None,
+                                   max_items: Optional[int] = None,
+                                   starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read one asset's compliance audit history using the
+        /compliance/audit/{databaseId}/{assetId} GET endpoint.
+
+        Args:
+            start_date / end_date: ISO 8601 bounds on the entry timestamp
+            max_items: Entries per page; the handler applies COMPLIANCE_AUDIT_DEFAULT_LIMIT when
+                omitted and clamps larger values to MAX_COMPLIANCE_AUDIT_PAGE_SIZE. This route has
+                no eventType filter.
+            starting_token: The NextToken of a previous page
+
+        Returns:
+            API response data: {"entries": [...], "NextToken"?: str}, most recent first.
+
+        Raises:
+            InvalidComplianceDataError: When the pagination token is malformed
+        """
+        endpoint = route_path(API_COMPLIANCE_AUDIT_ASSET, databaseId=database_id, assetId=asset_id)
+        params = self._compliance_audit_params(start_date, end_date, max_items, starting_token)
+        return self._compliance_request(
+            'GET', endpoint, f"Reading the audit history for asset '{asset_id}'",
+            params=params or None)
+
+    # ------------------------------------------------------------------
+    # Audit log search (core feature): groups, start, read, stop, export
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _audit_http_error(e: "requests.exceptions.HTTPError", action: str) -> Exception:
+        """Map an audit route's HTTP error onto the CLI's exception for it.
+
+        The API answers with generic messages that never name a group or a handle, and so does the
+        CLI: a 404 is one error whether the handle is unknown, expired, someone else's or no longer
+        allowed. A 403 never reaches here (`_make_request` raises it as a permission denial)."""
+        status = e.response.status_code
+        message = _api_error_message(e.response, str(e))
+        if status == 404:
+            return AuditQueryNotFoundError(
+                "Search not found. The handle is unknown, has expired or is not yours.")
+        if status == 400:
+            return InvalidAuditRequestError(f"Audit request refused: {message}")
+        if status == 401:
+            return AuthenticationError(f"Authentication failed: {e}")
+        if status == 429:
+            return AuditSearchError(
+                "The audit search was throttled. Wait a moment and try again.")
+        return APIError(f"Failed to {action}: {message}")
+
+    def _audit_request(self, method: str, endpoint: str, action: str, **kwargs) -> Dict[str, Any]:
+        """Issue one audit call and map its errors. A deployment without the routes (the gateway
+        answers a path it does not have with a 'Missing Authentication Token' 403)
+        raises AuditSearchNotSupportedError."""
+        try:
+            response = self._make_request(method, endpoint, include_auth=True,
+                                          raise_http_errors=True, **kwargs)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            raise self._audit_http_error(e, action)
+
+        except RouteNotDeployedError:
+            raise AuditSearchNotSupportedError(
+                AUDIT_SEARCH_UNAVAILABLE_MESSAGE)
+
+        except GlobalInfrastructureError:
+            raise
+
+        except AuditSearchError:
+            raise
+
+        except Exception as e:
+            raise APIError(f"Failed to {action}: {e}")
+
+    def list_audit_log_groups(self) -> Dict[str, Any]:
+        """
+        List the audit log groups the caller may search, the actions and entity types written to
+        them, and the deployment's search limits, using GET /audit/log-groups.
+
+        Returns:
+            {"logGroups": [...], "actions": [...], "entityTypes": [...], "outcomes": [...],
+            "limits": {...}}. An empty `logGroups` is a normal answer for a caller who may search none.
+
+        Raises:
+            AuditSearchNotSupportedError: When the deployment has no audit search routes
+            PermissionDeniedError: When the caller may not use audit search
+            APIError: When the API call fails
+        """
+        return self._audit_request('GET', API_AUDIT_LOG_GROUPS, "list the audit log groups")
+
+    def start_audit_query(self, filters: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Start an audit search using POST /audit/queries. The body is the filter object (see
+        `vamscli.utils.audit_search.build_filters`); the API accepts no query text.
+
+        Returns:
+            {"queryId": str, "status": "Running", "warnings": [...]}
+
+        Raises:
+            InvalidAuditRequestError: When a filter, the window or a cap is refused (400)
+            PermissionDeniedError: When the route or any named log group is not allowed (one generic 403)
+            AuditSearchNotSupportedError / APIError: as list_audit_log_groups
+        """
+        return self._audit_request('POST', API_AUDIT_QUERIES, "start the audit search", json=filters)
+
+    def get_audit_query(self, query_id: str, wait: Optional[int] = None,
+                        page_size: Optional[int] = None, starting_token: Optional[str] = None,
+                        sort: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read a search with GET /audit/queries/{queryId}: its status and statistics, and, once it is
+        Complete, one page of rows (`Items`, with `NextToken` when more follow).
+
+        Args:
+            query_id: The handle `start_audit_query` returned
+            wait: Seconds the server may hold the request until the search ends (long poll)
+            page_size: Rows per page (1-500)
+            starting_token: The NextToken of the previous page
+            sort: asc or desc
+
+        Raises:
+            AuditQueryNotFoundError: Unknown, expired, not the caller's or no longer allowed (one 404)
+            InvalidAuditRequestError: When a parameter is refused (400)
+            AuditSearchNotSupportedError / APIError: as list_audit_log_groups
+        """
+        params: Dict[str, Any] = {}
+        if wait is not None:
+            params['wait'] = wait
+        if page_size is not None:
+            params['pageSize'] = page_size
+        if starting_token:
+            params['startingToken'] = starting_token
+        if sort:
+            params['sort'] = sort
+        endpoint = route_path(API_AUDIT_QUERY, queryId=query_id)
+        return self._audit_request('GET', endpoint, "read the audit search", params=params or None)
+
+    def stop_audit_query(self, query_id: str) -> Dict[str, Any]:
+        """
+        Stop a search and free its concurrency slot using DELETE /audit/queries/{queryId}.
+
+        Returns:
+            {"queryId": str, "status": str}. A search that already ended keeps its status.
+
+        Raises:
+            AuditQueryNotFoundError / AuditSearchNotSupportedError / APIError: as get_audit_query
+        """
+        endpoint = route_path(API_AUDIT_QUERY, queryId=query_id)
+        return self._audit_request('DELETE', endpoint, "stop the audit search")
+
+    def export_audit_query(self, query_id: str, export_format: str = 'csv',
+                           starting_token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Read one export chunk of a Complete search using GET /audit/queries/{queryId}/export.
+
+        Returns:
+            {"queryId", "format", "content": str, "rowCount", "warnings", "NextToken"?}. Join the
+            `content` of the chunks in order; follow `NextToken` until it is absent.
+
+        Raises:
+            InvalidAuditRequestError: When the format is refused or the search has not finished
+            AuditQueryNotFoundError / AuditSearchNotSupportedError / APIError: as get_audit_query
+        """
+        params: Dict[str, Any] = {'format': export_format}
+        if starting_token:
+            params['startingToken'] = starting_token
+        endpoint = route_path(API_AUDIT_QUERY_EXPORT, queryId=query_id)
+        return self._audit_request('GET', endpoint, "export the audit search", params=params)
+

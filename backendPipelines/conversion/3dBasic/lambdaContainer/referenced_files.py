@@ -28,6 +28,14 @@ anywhere.
 
 ``resolve_reference`` applies the path rules above to one name and ``local_path_for`` keeps its local
 copy under the local root; the collectors in ``_COLLECTORS`` list the names each format references.
+
+USD layers and packages, COLLADA documents and FBX files are read for their references by the
+collectors in ``reference_collectors.py`` (vendored from the 3D thumbnail container), which need a
+format library or an XML parse. Those run in the worker child, never in this process: the caller passes
+``scan``, which reads a batch of fetched files there and returns their references. For these formats a
+reference that cannot be used never fails the fetch; it is skipped and recorded with its kind (a
+geometry layer, a data file, a texture or other file) in ``FetchReport.skipped_entries``, which the run
+reports as an incomplete conversion (or, with MISSING_REFERENCES fail, refuses before converting).
 """
 
 import json
@@ -36,6 +44,7 @@ import posixpath
 import re
 import shutil
 import struct
+import warnings
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
@@ -61,9 +70,33 @@ _SHOWN_LENGTH = 200
 
 _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
 
+# Skipped references kept in FetchReport.skipped_entries.
+MAX_RECORDED_SKIPPED = 1000
+# Levels of referencing followed for a USD or COLLADA input (sublayers of sublayers, references of
+# references); the same bound usd_io applies when it opens the stage.
+SCENE_MAX_DEPTH = 8
+# The kinds a reference can have, as in reference_collectors.py.
+KIND_GEOMETRY_LAYER = "geometryLayer"
+KIND_DATA_FILE = "dataFile"
+KIND_TEXTURE_OR_OTHER = "textureOrOther"
+KIND_METADATA = "metadata"
+KIND_RENDERER_MDL = "rendererMdl"
+KIND_UNSAMPLED_TEXTURE = "unsampledTexture"
+# Kinds that load nothing into the converted model, so their absence is not reported.
+_UNREPORTED_KINDS = (KIND_METADATA, KIND_RENDERER_MDL)
+
 
 class ReferencedFileError(ValueError):
-    """A buffer the input model references cannot be used: rejected, missing, or over a limit."""
+    """A buffer the input model references cannot be used: rejected, missing, or over a limit.
+
+    ``for_size`` is True when a size or memory limit refused it (the AWS Batch tier may be able to
+    convert it); ``needed_bytes`` is then the total of the files the input references with the one
+    that crossed the limit, when known."""
+
+    def __init__(self, message, for_size=False, needed_bytes=None):
+        super().__init__(message)
+        self.for_size = for_size
+        self.needed_bytes = needed_bytes
 
 
 class Reference(NamedTuple):
@@ -76,12 +109,67 @@ class Reference(NamedTuple):
     required: bool
 
 
+class ScannedReference(NamedTuple):
+    """A reference a scanned collector (reference_collectors.py) returned, with what the file is to the
+    converted model (KIND_*)."""
+    raw: object
+    percent_encoded: bool
+    required: bool
+    kind: str
+
+
+# Texture image formats. An image costs memory in proportion to its decoded pixels, not to its file
+# size (a 12,000 x 12,000 PNG of one colour is under 1 MB and decodes to 576 MB), so images are budgeted
+# apart from the files that carry geometry.
+IMAGE_EXTENSIONS = frozenset({
+    ".png", ".jpg", ".jpeg", ".tga", ".tif", ".tiff", ".bmp", ".gif", ".webp", ".dds", ".ppm", ".pgm",
+    ".exr", ".hdr"})
+# Bytes per decoded pixel the budget assumes (RGBA).
+DECODED_BYTES_PER_PIXEL = 4
+# An image whose pixel size cannot be read from its header is counted as its file size times this.
+UNMEASURED_IMAGE_EXPANSION = 8
+
+
+def is_image(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in IMAGE_EXTENSIONS
+
+
+def decoded_image_bytes(path: str, file_size: int) -> int:
+    """Bytes the image decodes to as RGBA, from its header (nothing is decoded). A file whose header
+    cannot be read is estimated from its file size; one past Pillow's decompression-bomb limit counts
+    as too large for any budget."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return file_size * UNMEASURED_IMAGE_EXPANSION
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with Image.open(path) as image:
+                width, height = image.size
+        return int(width) * int(height) * DECODED_BYTES_PER_PIXEL
+    except Image.DecompressionBombError:
+        return 1 << 62
+    except Exception:
+        return file_size * UNMEASURED_IMAGE_EXPANSION
+
+
 @dataclass
 class FetchLimits:
     max_files: int = DEFAULT_MAX_FILES
+    # Bytes of every file fetched, images included.
     max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES
     max_depth: int = DEFAULT_MAX_DEPTH
     disk_headroom_bytes: int = DEFAULT_DISK_HEADROOM_BYTES
+    # Bytes of the fetched files that are not images (buffers, material libraries); None for no limit
+    # beyond max_total_bytes.
+    max_geometry_bytes: Optional[int] = None
+    # Decoded bytes the images may take, as a function of the bytes of the input and of the non-image
+    # files fetched so far (the geometry memory they share the function with); None for no limit.
+    image_budget: Optional[Callable[[int], int]] = None
+    # The reason recorded for a reference below max_depth (REFERENCE_HANDLING selected-only); None
+    # for the depth message.
+    not_followed_reason: Optional[str] = None
 
 
 @dataclass
@@ -97,6 +185,25 @@ class FetchReport:
     # how many were skipped in all.
     skipped: List[str] = field(default_factory=list)
     skipped_count: int = 0
+    # The references left out because of a size limit (file bytes, decoded image bytes, the disk), as
+    # "name: reason", the first MAX_SKIPPED_LOGGED, and how many in all. The run reports these in its
+    # completion message.
+    skipped_for_size: List[str] = field(default_factory=list)
+    skipped_for_size_count: int = 0
+    # The declared sizes (HeadObject) of every referenced file found in the asset, fetched or left out
+    # for size. A larger job is sized from this and the input, not from what was fetched.
+    declared_bytes: int = 0
+    # Bytes of the non-image files fetched, and decoded bytes of the images fetched.
+    geometry_bytes: int = 0
+    image_decoded_bytes: int = 0
+    # Every reference that was not fetched, once per (reference, reason), at most
+    # MAX_RECORDED_SKIPPED: {"reference", "referrer", "reason", "kind", "rejected", "forSize"}.
+    # ``reference`` is the root-relative path of a file that was looked up, or the name as authored
+    # for one refused as outside the asset (``rejected``).
+    skipped_entries: List[dict] = field(default_factory=list)
+    # The fetched files and the files they name, as (referrer, root-relative path) pairs, for the
+    # dependency graph of REFERENCE_HANDLING convert-linked.
+    edges: List[Tuple[str, str]] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -131,15 +238,22 @@ def resolve_reference(reference, referrer_dir: str = "", percent_encoded: bool =
 
 
 def local_path_for(local_root: str, relative_path: str) -> Optional[str]:
-    """The local path mirroring ``relative_path`` under ``local_root``, or None if it would leave it."""
+    """The local path mirroring ``relative_path`` under ``local_root``, or None if it would leave it, or
+    if a folder on its way is already a file there (a single-file asset's object sits at its file name,
+    while ``{file name}/x`` names a file of its companion folder), so the reference is not fetched."""
     base = os.path.realpath(local_root)
     target = os.path.realpath(os.path.join(base, relative_path))
     if target == base or not target.startswith(base + os.sep):
         return None
+    parent = os.path.dirname(target)
+    while parent != base:
+        if os.path.exists(parent) and not os.path.isdir(parent):
+            return None
+        parent = os.path.dirname(parent)
     return target
 
 
-def confinement_root(input_key: str, relative_subdir: str = "") -> Tuple[str, str]:
+def confinement_root(input_key: str, relative_subdir: str = "", asset_root: str = "") -> Tuple[str, str]:
     """``(root_key, input_relative_path)``: the S3 prefix references are confined to, and the input's
     path below it.
 
@@ -149,9 +263,23 @@ def confinement_root(input_key: str, relative_subdir: str = "") -> Tuple[str, st
     file an earlier workflow step wrote, which is keyed by its asset-relative path under the run's
     output files folder. When the key does not end with that path -- a direct invocation with no
     manifest, for one -- the root is the input file's own directory, the narrowest confinement.
+
+    ``asset_root`` is the manifest's ``assetRootS3Key`` when the input is read from that root's bucket.
+    One without a trailing ``/`` is a single-file asset: it names one object, and what the asset holds
+    besides it is its companion folder ``{key}/``. An input that is that object, or lies in that
+    folder, is confined to the folder, never to the object's parent directory, which holds keys the
+    asset does not hold. The object itself sits at its file name there, beside the folder's files, as
+    the asset presents them.
     """
     input_key = input_key or ""
     name = posixpath.basename(input_key)
+    single_file = (asset_root or "").lstrip("/")
+    if single_file and not single_file.endswith("/"):
+        folder = single_file + "/"
+        if input_key == single_file:
+            return folder, name
+        if input_key.startswith(folder) and len(input_key) > len(folder):
+            return folder, input_key[len(folder):]
     own_directory = input_key[:len(input_key) - len(name)]
     subdir = (relative_subdir or "").strip("/")
     if subdir:
@@ -159,6 +287,10 @@ def confinement_root(input_key: str, relative_subdir: str = "") -> Tuple[str, st
         if (input_key == suffix or input_key.endswith("/" + suffix)) and resolve_reference(suffix) == suffix:
             return input_key[:len(input_key) - len(suffix)], suffix
     return own_directory, name
+
+
+def _mb(value: int) -> str:
+    return f"{value / 1024 ** 2:,.0f} MB"
 
 
 def _shown(value) -> str:
@@ -207,9 +339,10 @@ def _glb_references(path: str) -> List[Reference]:
 # The OBJ and MTL collectors return exactly the names trimesh's OBJ loader asks its resolver for
 # (trimesh.exchange.obj ``load_obj`` and ``parse_mtl``, trimesh 4.8.3), so the fetch requests, and its
 # warnings name, only files the loader reads. Both read the text as the loader does: UTF-8, whole.
-# trimesh decodes other encodings only with charset_normalizer, which the image does not install, so
-# it reads no name from a file that is not UTF-8; here such a file raises, and nothing is fetched
-# for it.
+# An OBJ input whose text is not UTF-8 has already failed the run before this fetch
+# (``check_input_text`` in lambda.py). An MTL that is not UTF-8 raises here and nothing is fetched for
+# it; trimesh decodes other encodings only with charset_normalizer, which the image does not install,
+# so it reads no material from that MTL either and the model converts without one.
 # ``tests/test_3dbasic_real_conversions.py`` compares these names with the ones the installed trimesh
 # asks for.
 
@@ -275,15 +408,53 @@ _COLLECTORS: Dict[str, Callable[[str], List[Reference]]] = {
     ".ply": _ply_references,
 }
 
+# Formats whose references are read in the worker child (reference_collectors.py), through ``scan``.
+SCANNED_EXTENSIONS = frozenset({".usd", ".usda", ".usdc", ".usdz", ".dae", ".fbx"})
+USD_EXTENSIONS = frozenset({".usd", ".usda", ".usdc", ".usdz"})
+
 # How a fetched file is read for further references, by the extension of the file that referenced
 # it: an OBJ names only its material library, which the loader reads as an MTL whatever its name. A
-# buffer or image a glTF names is data, never a document, and a fetched model is not loaded.
+# buffer or image a glTF names is data, never a document, and a fetched model is not loaded. A USD
+# layer or package a USD file names is read as what its own extension says (``_followed_kind``).
 _FOLLOWED = {".obj": ".mtl"}
+
+
+def _followed_kind(referrer_ext: str, target: str) -> Optional[str]:
+    if referrer_ext in USD_EXTENSIONS:
+        ext = os.path.splitext(target)[1].lower()
+        return ext if ext in USD_EXTENSIONS else None
+    return _FOLLOWED.get(referrer_ext)
 
 
 def has_references(ext: str) -> bool:
     """True when files of this extension can reference other files the container fetches."""
-    return ext.lower() in _COLLECTORS
+    return ext.lower() in _COLLECTORS or ext.lower() in SCANNED_EXTENSIONS
+
+
+def _references_from_scan(entries) -> List[Reference]:
+    """``Reference`` values from the ``(value, percent_encoded, required, kind)`` tuples a scanned
+    collector returns. None of them is required here: a USD layer, COLLADA image or FBX texture that
+    cannot be fetched is skipped and reported, and the worker refuses the conversion if nothing
+    loadable remains. A COLLADA document's external instance is not composed by the loader, so it is
+    not fetched (``_NOT_COMPOSED``)."""
+    references = []
+    for value, percent_encoded, _required, kind in entries:
+        references.append(ScannedReference(value, bool(percent_encoded), False, kind or ""))
+    return references
+
+
+# The reason recorded for a COLLADA document's external instance: the loader does not compose other
+# COLLADA files, so its geometry is missing from the converted model however it is fetched.
+_NOT_COMPOSED = "the COLLADA loader does not compose instances from other files"
+
+
+def _kind_of(reference, relative: Optional[str]) -> str:
+    kind = getattr(reference, "kind", "")
+    if kind:
+        return KIND_TEXTURE_OR_OTHER if kind == KIND_UNSAMPLED_TEXTURE else kind
+    if reference.required:
+        return KIND_DATA_FILE
+    return KIND_TEXTURE_OR_OTHER
 
 
 # --------------------------------------------------------------------------------------------------
@@ -308,15 +479,21 @@ def _object_size(client, bucket: str, key: str):
 
 def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_path: str,
                            local_input_path: str, local_root: str,
-                           limits: Optional[FetchLimits] = None, logger=None) -> FetchReport:
+                           limits: Optional[FetchLimits] = None, logger=None,
+                           scan: Optional[Callable[[List[Tuple[str, str]]], Dict[str, object]]] = None
+                           ) -> FetchReport:
     """Fetch every file the input references, transitively, into ``local_root``.
 
     ``local_input_path`` is the input already downloaded at ``input_relative_path`` under
     ``local_root``; each fetched file lands at its own root-relative path beside it, so relative
     references resolve locally exactly as they do in the asset. ``client`` is the Amazon S3 client
-    the input was downloaded with. A buffer reference that is rejected, names no object, or would pass a
+    for ``bucket``'s Region. A buffer reference that is rejected, names no object, or would pass a
     limit raises ``ReferencedFileError``; any other such reference is skipped, with a warning on
     ``logger`` and in ``FetchReport.skipped``.
+
+    ``scan`` reads the references of the formats in ``SCANNED_EXTENSIONS``: it is given
+    ``[(local path, extension)]`` and returns, per local path, the collector's tuples or an error text.
+    Without it those formats fetch nothing (their references are left to the loader's own confinement).
     """
     limits = limits or FetchLimits()
     report = FetchReport()
@@ -326,15 +503,40 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
 
     # Root-relative path -> local file, for every file the loader may be served; and root-relative
     # path -> the failure message, for every name already looked up and not fetched.
+    input_bytes = os.path.getsize(local_input_path)
     available = {input_relative_path: local_input_path}
     unavailable: Dict[str, str] = {}
+    # The references a size or memory limit refused, with the bytes the referenced files would total.
+    size_refused: Dict[str, int] = {}
     looked_up = 0
     queue = deque([(local_input_path, input_relative_path, ext, 0)])
+    scanned: Dict[str, object] = {}
+    recorded = set()
 
-    def refuse(reference: Reference, rel_path: str, name: str, failure: str, reason: str):
+    def record(reference: Reference, rel_path: str, name: str, reason: str, rejected: bool, for_size: bool):
+        kind = _kind_of(reference, None)
+        if kind in _UNREPORTED_KINDS:
+            return
+        key = (name, reason)
+        if key in recorded or len(report.skipped_entries) >= MAX_RECORDED_SKIPPED:
+            return
+        recorded.add(key)
+        report.skipped_entries.append({
+            "reference": name, "referrer": rel_path, "reason": reason, "kind": kind,
+            "rejected": rejected, "forSize": for_size,
+            "unsampled": getattr(reference, "kind", "") == KIND_UNSAMPLED_TEXTURE})
+
+    def refuse(reference: Reference, rel_path: str, name: str, failure: str, reason: str,
+               for_size: bool = False, rejected: bool = False, raw_name: str = None,
+               needed_bytes: int = None):
         """Fail on a required reference; skip an optional one with a warning naming it."""
         if reference.required:
-            raise ReferencedFileError(failure)
+            raise ReferencedFileError(failure, for_size=for_size, needed_bytes=needed_bytes)
+        record(reference, rel_path, raw_name if raw_name is not None else name, reason, rejected, for_size)
+        if for_size:
+            report.skipped_for_size_count += 1
+            if report.skipped_for_size_count <= MAX_SKIPPED_LOGGED:
+                report.skipped_for_size.append(f"{name}: {reason}")
         report.skipped_count += 1
         if report.skipped_count <= MAX_SKIPPED_LOGGED:
             warning = (f"Skipped {name}, referenced by {rel_path}: {reason}. The model is converted "
@@ -346,7 +548,20 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
     while queue:
         local_path, rel_path, file_ext, depth = queue.popleft()
         try:
-            references = _COLLECTORS[file_ext](local_path)
+            if file_ext in SCANNED_EXTENSIONS:
+                if scan is None:
+                    continue
+                if local_path not in scanned:
+                    # Every queued file of a scanned format is read in one worker run.
+                    batch = [(local_path, file_ext)] + [(item[0], item[2]) for item in queue
+                                                         if item[2] in SCANNED_EXTENSIONS and item[0] not in scanned]
+                    scanned.update(scan(batch))
+                result = scanned.get(local_path)
+                if isinstance(result, str) or result is None:
+                    raise ValueError(result or "the references could not be read")
+                references = _references_from_scan(result)
+            else:
+                references = _COLLECTORS[file_ext](local_path)
         except Exception as e:
             # A file whose references cannot be read is not one the loader can read either, so the
             # load reports it in its own terms. Nothing is fetched for it, and the resolver serves
@@ -359,11 +574,18 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
         for reference in references:
             raw = reference.raw
             if too_deep:
+                reason = limits.not_followed_reason or (
+                    f"it is {depth + 1} levels below the input, and this pipeline follows at most "
+                    f"{limits.max_depth}")
                 refuse(reference, rel_path, _shown(raw),
                        f"{rel_path} references further files {depth + 1} levels below the input; "
-                       f"this pipeline follows at most {limits.max_depth}.",
-                       f"it is {depth + 1} levels below the input, and this pipeline follows at most "
-                       f"{limits.max_depth}")
+                       f"this pipeline follows at most {limits.max_depth}.", reason,
+                       raw_name=resolve_reference(raw, referrer_dir, reference.percent_encoded) or str(raw),
+                       rejected=resolve_reference(raw, referrer_dir, reference.percent_encoded) is None)
+                continue
+            if file_ext == ".dae" and getattr(reference, "kind", "") == KIND_GEOMETRY_LAYER:
+                record(reference, rel_path, resolve_reference(raw, referrer_dir, True) or str(raw),
+                       _NOT_COMPOSED, resolve_reference(raw, referrer_dir, True) is None, False)
                 continue
             relative = resolve_reference(raw, referrer_dir, percent_encoded=reference.percent_encoded)
             target = local_path_for(local_root, relative) if relative else None
@@ -373,15 +595,18 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
                        f"in the same asset. Only files inside the input's own asset are fetched: "
                        f"change the reference to a path relative to {rel_path}, or embed the data, "
                        f"and run the conversion again.",
-                       "it is not a relative path to a file in the same asset")
+                       "it is not a relative path to a file in the same asset", rejected=True,
+                       raw_name=str(raw))
                 continue
+            report.edges.append((rel_path, relative))
             if relative in available:
                 report.by_reference.setdefault(raw.strip(), available[relative])
                 continue
             if relative in unavailable:
                 # Already looked up and not fetched, and already reported once if it was skipped.
                 if reference.required:
-                    raise ReferencedFileError(unavailable[relative])
+                    raise ReferencedFileError(unavailable[relative], for_size=relative in size_refused,
+                                              needed_bytes=size_refused.get(relative))
                 continue
             if looked_up >= limits.max_files:
                 failure = (f"The input references more than {limits.max_files} files; this "
@@ -403,34 +628,89 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
                        f"again to include it)")
                 continue
             size, version_id = measured
+            report.declared_bytes += size
+            image = is_image(relative)
             if report.total_bytes + size > limits.max_total_bytes:
                 failure = (f"The files the input references exceed {limits.max_total_bytes} bytes "
                            f"(reached at {relative}, {size} bytes).")
                 unavailable[relative] = failure
+                size_refused[relative] = report.total_bytes + size
                 refuse(reference, rel_path, relative, failure,
                        f"its {size} bytes take the referenced files past "
-                       f"{limits.max_total_bytes} bytes")
+                       f"{limits.max_total_bytes} bytes", for_size=True,
+                       needed_bytes=report.total_bytes + size)
                 continue
+            if (not image and limits.max_geometry_bytes is not None
+                    and report.geometry_bytes + size > limits.max_geometry_bytes):
+                failure = (f"{relative} ({size} bytes) takes the model's files past the "
+                           f"{limits.max_geometry_bytes} bytes this function can convert beyond the "
+                           f"input.")
+                unavailable[relative] = failure
+                size_refused[relative] = report.total_bytes + size
+                refuse(reference, rel_path, relative, failure,
+                       f"its {size} bytes take the model's files past the "
+                       f"{limits.max_geometry_bytes} bytes this function can convert beyond the input",
+                       for_size=True, needed_bytes=report.total_bytes + size)
+                continue
+            image_room = None
+            if image and limits.image_budget is not None:
+                image_room = max(limits.image_budget(input_bytes + report.geometry_bytes)
+                                 - report.image_decoded_bytes, 0)
+                if size > image_room:
+                    # Decoded, an image is never smaller than its file.
+                    failure = f"{relative} ({size} bytes) is larger than the memory left for textures."
+                    unavailable[relative] = failure
+                    refuse(reference, rel_path, relative, failure,
+                           f"its {size} bytes are more than the {_mb(image_room)} of texture memory "
+                           f"left in this function", for_size=True)
+                    continue
             free = shutil.disk_usage(local_root).free
             if size + limits.disk_headroom_bytes > free:
                 failure = (f"{relative} ({size} bytes) does not fit in the {free} bytes of working "
                            f"disk left.")
                 unavailable[relative] = failure
                 refuse(reference, rel_path, relative, failure,
-                       f"its {size} bytes exceed the {free} bytes of working disk left")
+                       f"its {size} bytes exceed the {free} bytes of working disk left",
+                       for_size=True)
                 continue
             os.makedirs(os.path.dirname(target), exist_ok=True)
             extra = {"VersionId": version_id} if version_id else None
             with open(target, "wb") as handle:
                 client.download_fileobj(Bucket=bucket, Key=key, Fileobj=handle, ExtraArgs=extra)
+            if os.path.getsize(target) != size:
+                # Replaced between the size check and the read (a versioned object is pinned).
+                os.remove(target)
+                failure = f"{relative} changed while it was being read."
+                unavailable[relative] = failure
+                refuse(reference, rel_path, relative, failure,
+                       "it changed while it was being read; run the conversion again to include it")
+                continue
+            if image and image_room is not None:
+                decoded = decoded_image_bytes(target, size)
+                if decoded > image_room:
+                    os.remove(target)
+                    failure = (f"{relative} decodes to {decoded} bytes, more than the {image_room} "
+                               f"bytes of texture memory left.")
+                    unavailable[relative] = failure
+                    refuse(reference, rel_path, relative, failure,
+                           f"it decodes to {_mb(decoded)}, more than the {_mb(image_room)} of texture "
+                           f"memory left in this function", for_size=True)
+                    continue
+                report.image_decoded_bytes += decoded
+            if not image:
+                report.geometry_bytes += size
             report.fetched.append(relative)
             report.total_bytes += size
             available[relative] = target
             report.by_reference.setdefault(raw.strip(), target)
-            child_kind = _FOLLOWED.get(file_ext)
+            child_kind = _followed_kind(file_ext, relative)
             if child_kind is not None:
                 queue.append((target, relative, child_kind, depth + 1))
 
+    fetched_names = {posixpath.basename(path) for path in report.fetched}
+    report.skipped_entries = [
+        entry for entry in report.skipped_entries
+        if not (entry["unsampled"] and posixpath.basename(entry["reference"].replace("\\", "/")) in fetched_names)]
     if logger is not None:
         if report.skipped_count > MAX_SKIPPED_LOGGED:
             logger.warning(f"Skipped {report.skipped_count - MAX_SKIPPED_LOGGED} further referenced "

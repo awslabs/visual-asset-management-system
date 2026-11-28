@@ -48,7 +48,8 @@ def _regex(value):
 
 
 # Every distinct criterion value the shipped permission templates and the seeded admin / read-only
-# constraints carry. Literals, one wildcard, and the two template placeholders.
+# constraints carry. Literals, one wildcard, the two route patterns of the read-only POST grants, and
+# the two template placeholders.
 SHIPPED_CRITERION_VALUES = [
     '.*',
     'GLOBAL',
@@ -58,10 +59,15 @@ SHIPPED_CRITERION_VALUES = [
     'archiveFile',
     '/logs',
     '/permanent',
-    '/amplify-config',
     '/api/amplify-config',
+    '/addon/edh/admin',
+    '/addon/edh/catalog',
+    '/addon/edh/workstations',
     '/addon/physna/viewer',
     '/asset-links',
+    '/audit/',
+    '/auth/audit-log-search',
+    '(?:{{ALLOWED_GROUPS}})',
     '/assetIngestion',
     '/assets',
     '/auth/api-keys',
@@ -72,10 +78,20 @@ SHIPPED_CRITERION_VALUES = [
     '/buckets',
     '/check-subscription',
     '/comments',
+    '/compliance',
+    '/compliance/schemas',
     '/database',
-    '/database/[^/]+/assets/[^/]+/download',
+    '/database/',
     '/databases',
+    '/database/[^/]+/assets/[^/]+/download',
+    '/database/[^/]+/assets/[^/]+/export',
+    '/download/zip',
+    '/edh/admin',
+    '/edh/workstations',
     '/executions',
+    '/execute',
+    '/workflows/GLOBAL/',
+    '/workflows/{{DATABASE_ID}}/',
     '/ingest-asset',
     '/metadata',
     '/metadataschema',
@@ -91,6 +107,11 @@ SHIPPED_CRITERION_VALUES = [
     '/workflows',
     '/workflows/executions',
     '/workflows/executions/',
+    '/zipdownloads',
+    '{{DATABASE_ID}}#deleted',
+    '/database/{{DATABASE_ID}}/',
+    '/database/{{DATABASE_ID}}/metadata',
+    '/unarchiveAsset',
 ]
 
 

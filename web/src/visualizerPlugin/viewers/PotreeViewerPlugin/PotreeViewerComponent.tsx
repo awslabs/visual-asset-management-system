@@ -8,7 +8,10 @@ import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { PotreeDependencyManager } from "./dependencies";
 import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
+import { describeStreamFailure, probeStreamFailure } from "../../core/streamFailure";
+import { auxiliaryPreviewStreamUrl, POTREE_VIEWER_METADATA } from "../../core/viewerData";
 
+const PREVIEW_MISSING_MESSAGE = "Potree Viewer Auxiliary Preview files not currently available";
 // How often the point cloud's authorization header is renewed while the viewer is open.
 const AUTH_HEADER_REFRESH_MS = 30_000;
 
@@ -26,6 +29,8 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
     const [config] = useState(appCache.getItem("config"));
     const [potreeInstance, setPotreeInstance] = useState<any>(null);
     const [error, setError] = useState<string | null>(null);
+    // The preview files are absent (404), the one failure the Potree pipeline fixes.
+    const [previewMissing, setPreviewMissing] = useState(false);
     const [dismissedVersionWarning, setDismissedVersionWarning] = useState(false);
     // The header object handed to loadPointCloud. Potree's node loader copies its properties into
     // every node and hierarchy request, so renewing Authorization in place keeps later requests
@@ -69,18 +74,14 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
             if (!potreeInstance || !assetKey || loaded || !config) return;
 
             try {
-                // Pass only the asset-relative path (not the databaseId or the leading assetId).
-                // The stream endpoint prepends {databaseId}/{assetLocationKey} to resolve the
-                // database-scoped per-file aux preview location. If assetKey is the full,
-                // assetId-prefixed key, strip that leading assetId segment first.
-                let relativeAssetKey = assetKey || "";
-                if (relativeAssetKey.startsWith(assetId + "/")) {
-                    relativeAssetKey = relativeAssetKey.slice(assetId.length + 1);
-                }
-                const fileKey = relativeAssetKey + "/preview/PotreeViewer/metadata.json";
-                const url = `${config.api}database/${databaseId}/assets/${encodeURIComponent(
-                    assetId
-                )}/auxiliaryPreviewAssets/stream/${fileKey}`;
+                // The file's key as the host gives it; the API decides which file it names.
+                const url = auxiliaryPreviewStreamUrl(
+                    config.api,
+                    databaseId,
+                    assetId,
+                    assetKey,
+                    POTREE_VIEWER_METADATA
+                );
 
                 // Get a valid, fresh authorization header (automatically refreshes token if expired)
                 const authorizationHeader = await getDualAuthorizationHeader();
@@ -89,7 +90,19 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
                 };
                 authHeaderRef.current = authHeader;
 
-                // If we get here, the files are available, proceed with loading
+                // Potree's loader rejects without the HTTP status, so a failure is probed for it.
+                const reportLoadFailure = async (cause: unknown) => {
+                    console.error("Potree loading error: ", cause);
+                    const failure = await probeStreamFailure(url, authHeader);
+                    if (failure.status === 404) {
+                        setPreviewMissing(true);
+                        setError(PREVIEW_MISSING_MESSAGE);
+                    } else {
+                        setError(describeStreamFailure("the point cloud preview", failure));
+                    }
+                    setShowNoAssetMessage(true);
+                };
+
                 if (engineElement.current) {
                     engineElement.current.setAttribute("pc", url);
 
@@ -116,39 +129,26 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
                             // Load and add point cloud to scene
                             potreeInstance
                                 .loadPointCloud(url, "Point Cloud", authHeader)
-                                .then(
-                                    (e: any) => {
-                                        const pointcloud = e.pointcloud;
-                                        const material = pointcloud.material;
+                                .then((e: any) => {
+                                    const pointcloud = e.pointcloud;
+                                    const material = pointcloud.material;
 
-                                        material.activeAttributeName = "rgba";
-                                        material.minSize = 2;
-                                        material.pointSizeType = potreeInstance.PointSizeType.FIXED;
+                                    material.activeAttributeName = "rgba";
+                                    material.minSize = 2;
+                                    material.pointSizeType = potreeInstance.PointSizeType.FIXED;
 
-                                        viewer.scene.addPointCloud(pointcloud);
-                                        viewer.fitToScreen();
+                                    viewer.scene.addPointCloud(pointcloud);
+                                    viewer.fitToScreen();
 
-                                        console.log("Point cloud loaded successfully");
-                                    },
-                                    (e: any) => {
-                                        console.error("Potree loading error: ", e);
-                                        setError(
-                                            "Potree Viewer Auxiliary Preview files not currently available"
-                                        );
-                                        setShowNoAssetMessage(true);
-                                    }
-                                )
-                                .catch((error: any) => {
-                                    console.error("Point cloud loading error:", error);
-                                    setError(
-                                        "Potree Viewer Auxiliary Preview files not currently available"
-                                    );
-                                    setShowNoAssetMessage(true);
-                                });
-                        } catch (viewerError) {
+                                    console.log("Point cloud loaded successfully");
+                                }, reportLoadFailure)
+                                .catch(reportLoadFailure);
+                        } catch (viewerError: any) {
                             console.error("Error creating Potree viewer:", viewerError);
                             setError(
-                                "Potree Viewer Auxiliary Preview files not currently available"
+                                `Unable to start the Potree viewer: ${
+                                    viewerError?.message || String(viewerError)
+                                }`
                             );
                             setShowNoAssetMessage(true);
                         }
@@ -156,9 +156,11 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
                 }
 
                 setLoaded(true);
-            } catch (error) {
+            } catch (error: any) {
                 console.error("Error loading point cloud asset:", error);
-                setError("Potree Viewer Auxiliary Preview files not currently available");
+                setError(
+                    `Unable to load the point cloud preview: ${error?.message || String(error)}`
+                );
                 setShowNoAssetMessage(true);
                 setLoaded(true);
             }
@@ -193,7 +195,10 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
             <div style={{ position: "relative", height: "100%" }} id="potree-root">
                 <div
                     style={{
-                        color: "#d13212",
+                        color: "var(--vams-color-error)",
+                        background: "var(--vams-bg-primary)",
+                        borderRadius: "8px",
+                        boxSizing: "border-box",
                         fontSize: "1.4em",
                         lineHeight: "1.5",
                         width: "100%",
@@ -205,13 +210,17 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
                         padding: "20px",
                     }}
                 >
-                    {error || "Potree Viewer Auxiliary Preview files not currently available"}
-                    <br />
-                    <br />
-                    <span style={{ fontSize: ".9em", color: "#d13212" }}>
-                        Please run the Point Cloud Potree Viewer Pipeline to enable visualization
-                        for this asset file
-                    </span>
+                    {error || PREVIEW_MISSING_MESSAGE}
+                    {previewMissing && (
+                        <>
+                            <br />
+                            <br />
+                            <span style={{ fontSize: ".9em", color: "var(--vams-color-error)" }}>
+                                Please run the Point Cloud Potree Viewer Pipeline to enable
+                                visualization for this asset file
+                            </span>
+                        </>
+                    )}
                 </div>
             </div>
         );
@@ -222,7 +231,11 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
             <div style={{ position: "relative", height: "100%" }} id="potree-root">
                 <div
                     style={{
-                        color: "#666",
+                        color: "var(--vams-text-secondary)",
+                        background: "var(--vams-bg-primary)",
+                        borderRadius: "8px",
+                        boxSizing: "border-box",
+                        padding: "12px 16px",
                         fontSize: "1.2em",
                         lineHeight: "1.5",
                         width: "100%",

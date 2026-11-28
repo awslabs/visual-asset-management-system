@@ -7,7 +7,7 @@ import json
 import base64
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from common.timestamps import utc_now
 from typing import Dict, List, Optional, Tuple, Any
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
@@ -17,16 +17,25 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.s3MetadataKeys import VAMS_PRIMARY_TYPE_METADATA_KEY
-from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.s3PathPatterns import (
+    PREVIEW_FILE_PATTERN,
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    select_newest_preview_file,
+)
 from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
-from common.dynamodb import query_all_items
-from common.s3 import validateUnallowedFileExtensionAndContentType, presigned_get_object_params
+from common.dynamodb import query_all_items, batch_get_items
+from common.assetLocations import contains, is_folder_location, normalize_base_prefix, relative_path_in
+from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.validators import validate
+from common.s3 import region_routing_s3_client, bucket_region_fields, presigned_get_object_params
+from common.compliance.quarantineGuard import (
+    QuarantineBlockedResponse, check_quarantine_block, quarantine_refusal,
+)
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_file_download_bulk
+from customLogging.auditLogging import audited_handler, log_action, log_file_download_bulk
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from models.assetExport import (
@@ -42,9 +51,6 @@ from models.assetExport import (
 # Configure AWS clients with retry configuration
 region = os.environ.get('AWS_REGION', 'us-east-1')
 
-# Set environment variable for S3 client configuration
-os.environ["AWS_S3_US_EAST_1_REGIONAL_ENDPOINT"] = "regional"
-
 # Standardized retry configuration for all AWS clients
 retry_config = Config(
     retries={
@@ -53,8 +59,7 @@ retry_config = Config(
     }
 )
 
-s3_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'}, retries={'max_attempts': 5, 'mode': 'adaptive'})
-s3_client = boto3.client('s3', region_name=region, config=s3_config)
+s3_client = region_routing_s3_client()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
@@ -99,10 +104,12 @@ buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 # carrying isBase64Encoded as literal text, so a compressed base64 body is not readable by a
 # client, and an inline body is additionally bounded by the 6 MB Lambda response limit.
 INLINE_RESPONSE_MAX_BYTES = 102400  # 100KB
-# Auxiliary-bucket prefix holding staged export payloads. The function's S3 put/get grant is
-# scoped to this prefix (ASSET_EXPORT_STAGING_PREFIX in
-# infra/lib/lambdaBuilder/assetFunctions.ts), so the two values move together.
-EXPORT_STAGING_PREFIX = "assetExports/"
+# Auxiliary-bucket prefix holding staged export payloads. The function's S3 put/get grant and the
+# bucket's lifecycle expiry for staged payloads are scoped to this prefix
+# (ASSET_EXPORT_STAGING_PREFIX in infra/config/config.ts), so the two values move together. The
+# bucket's preview and viewer data sits under {databaseId}/, and the dot is a character no database
+# ID can contain, so the expiry on this prefix never reaches a database's auxiliary data.
+EXPORT_STAGING_PREFIX = "vams.assetExports/"
 ALLOWED_PREVIEW_EXTENSIONS = ALLOWED_PREVIEW_FILE_EXTENSIONS
 # Concurrency cap for parallel per-asset export work. Bounds Lambda memory; not a data cap.
 MAX_PARALLEL_EXPORT_WORKERS = 10
@@ -144,16 +151,13 @@ def get_default_bucket_details(bucketId: str) -> Dict:
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse("Database configuration invalid")
         
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         bucket_details = {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
         
         # Cache the result
@@ -215,7 +219,7 @@ def create_pagination_token(last_index: int, asset_tree: List[Dict],
     token_data = {
         'lastAssetIndex': last_index,
         'assetTree': asset_tree,
-        'timestamp': datetime.utcnow().isoformat()
+        'timestamp': utc_now().isoformat()
     }
     if file_resume_after_key:
         token_data['fileResumeAfterKey'] = file_resume_after_key
@@ -412,47 +416,53 @@ def flatten_tree_to_list(tree_data: Dict, root_asset_id: str, root_database_id: 
 #######################
 
 def batch_get_assets(asset_identifiers: List[Dict]) -> Dict[str, Dict]:
-    """Batch get asset details for multiple assets"""
+    """Batch get asset details for multiple assets.
+
+    Keys the batch read leaves unresolved after its retry budget are read individually, so a
+    throttled batch degrades to slower reads rather than to an export missing those assets.
+    """
     asset_details = {}
-    
-    # Process in batches of 100 (DynamoDB batch_get_item limit)
-    batch_size = 100
-    for i in range(0, len(asset_identifiers), batch_size):
-        batch = asset_identifiers[i:i + batch_size]
-        
+
+    keys = [
+        {
+            'databaseId': item['databaseId'],
+            'assetId': item['assetId']
+        }
+        for item in asset_identifiers
+    ]
+
+    try:
+        rows, unresolved_keys = batch_get_items(dynamodb, asset_storage_table_name, keys)
+
+        for item in rows:
+            key = f"{item['databaseId']}:{item['assetId']}"
+            asset_details[key] = item
+
+        if unresolved_keys:
+            logger.warning(
+                f"{len(unresolved_keys)} asset keys unretrieved by batch get; reading them individually")
+            asset_details.update(_get_assets_individually(unresolved_keys))
+
+    except Exception as e:
+        logger.exception(f"Error in batch get assets: {e}")
+        # Fall back to individual gets
+        asset_details.update(_get_assets_individually(keys))
+
+    return asset_details
+
+
+def _get_assets_individually(keys: List[Dict]) -> Dict[str, Dict]:
+    """One get_item per key, keyed by ``databaseId:assetId``; a failed read is logged and skipped."""
+    asset_details = {}
+    for key in keys:
         try:
-            request_items = {
-                asset_storage_table_name: {
-                    'Keys': [
-                        {
-                            'databaseId': item['databaseId'],
-                            'assetId': item['assetId']
-                        }
-                        for item in batch
-                    ]
-                }
-            }
-            
-            response = dynamodb.batch_get_item(RequestItems=request_items)
-            
-            for item in response.get('Responses', {}).get(asset_storage_table_name, []):
-                key = f"{item['databaseId']}:{item['assetId']}"
-                asset_details[key] = item
-                
-        except Exception as e:
-            logger.exception(f"Error in batch get assets: {e}")
-            # Fall back to individual gets for this batch
-            for item in batch:
-                try:
-                    response = asset_table.get_item(
-                        Key={'databaseId': item['databaseId'], 'assetId': item['assetId']}
-                    )
-                    if 'Item' in response:
-                        key = f"{item['databaseId']}:{item['assetId']}"
-                        asset_details[key] = response['Item']
-                except Exception as inner_e:
-                    logger.warning(f"Error getting asset {item['assetId']}: {inner_e}")
-    
+            response = asset_table.get_item(
+                Key={'databaseId': key['databaseId'], 'assetId': key['assetId']}
+            )
+            if 'Item' in response:
+                asset_details[f"{key['databaseId']}:{key['assetId']}"] = response['Item']
+        except Exception as inner_e:
+            logger.warning(f"Error getting asset {key['assetId']}: {inner_e}")
     return asset_details
 
 # How many metadata keys one aggregated log line names. Rule 9: a metadata key is an identifier,
@@ -772,6 +782,45 @@ def get_asset_version_info(databaseId: str, assetId: str, versionId: str) -> Opt
         logger.warning(f"Error getting version info for {databaseId}:{assetId} version {versionId}: {e}")
         return None
 
+def version_entry_key(file_key) -> str:
+    """The key a version entry is compared and deduplicated by: its path with exactly one leading '/'
+    removed, the key's part after the asset's location. The same rule as assetVersions.version_entry_key:
+    'x' and the legacy '/x' name one file, '//x' names the key with an empty segment after the location."""
+    file_key = str(file_key or '')
+    return file_key[1:] if file_key.startswith('/') else file_key
+
+
+def stored_version_entry_key(file_key) -> str:
+    """The form a version entry is stored and handed out in ('x', or '//x' for a key whose first segment
+    after the location is empty), as assetVersions.stored_version_entry_key."""
+    key = version_entry_key(file_key)
+    return '/' + key if key.startswith('/') else key
+
+
+def names_no_file(file_key) -> bool:
+    """Whether a version entry's key is made only of '/' (or is empty): the asset root, not a file."""
+    return not str(file_key or '').strip('/')
+
+
+def collapse_version_entries(items: List[Dict]) -> List[Dict]:
+    """The rows of an asset version's files, one per file, keyed by version_entry_key.
+
+    A version a file list created before #1795 can name one file both as '/a.txt' and 'a.txt' (D1),
+    and can hold a '/' row that names no file. The row stored in the current form
+    (stored_version_entry_key) wins, the first one read otherwise, and a row that names no file is
+    left out. '//a.txt' is another file and stays its own entry.
+    """
+    chosen: Dict[str, Dict] = {}
+    for item in items:
+        stored_key = str(item.get('fileKey') or '')
+        if names_no_file(stored_key):
+            continue
+        relative_key = version_entry_key(stored_key)
+        if relative_key not in chosen or stored_key == stored_version_entry_key(stored_key):
+            chosen[relative_key] = item
+    return list(chosen.values())
+
+
 def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) -> Optional[Dict]:
     """Get file versions for a specific asset version using the table PK (databaseId:assetId:assetVersionId is now the table PK)
 
@@ -797,10 +846,12 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
         if not items:
             return None
 
+        # The key is handed out in the form new entries are stored in (stored_version_entry_key), once
+        # per file; an entry stored before #1795 can carry a leading slash ('/x' for 'x').
         files = []
-        for item in items:
+        for item in collapse_version_entries(items):
             file_info = {
-                'relativeKey': item.get('fileKey'),
+                'relativeKey': stored_version_entry_key(item.get('fileKey')),
                 'versionId': item.get('versionId'),
                 'size': item.get('size'),
                 'lastModified': item.get('lastModified'),
@@ -812,7 +863,7 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
             'assetId': assetId,
             'assetVersionId': assetVersionId,
             'files': files,
-            'createdAt': items[0].get('createdAt') if items else datetime.utcnow().isoformat()
+            'createdAt': items[0].get('createdAt') if items else utc_now().isoformat()
         }
         
     except Exception as e:
@@ -849,8 +900,10 @@ def list_s3_files(bucket: str, prefix: str, max_objects: Optional[int] = None,
     files = []
 
     try:
-        if not prefix.endswith('/'):
-            prefix = prefix + '/'
+        # The listing prefix is the location key itself; a single-file location also matches keys
+        # that only share its characters, so each listed key is kept only when the location holds it
+        location = prefix
+        single_file = not is_folder_location(location)
 
         list_kwargs = {'Bucket': bucket, 'Prefix': prefix, 'MaxKeys': S3_LISTING_PAGE_SIZE}
         if start_after_key:
@@ -876,6 +929,9 @@ def list_s3_files(bucket: str, prefix: str, max_objects: Optional[int] = None,
                 if start_after_key and key <= start_after_key:
                     continue
 
+                if single_file and not contains(location, key):
+                    continue
+
                 is_folder = key.endswith('/')
 
                 # Dropped before the row is built, so it is neither returned nor counted against
@@ -884,10 +940,12 @@ def list_s3_files(bucket: str, prefix: str, max_objects: Optional[int] = None,
                     continue
 
                 relative_path = key
-                if relative_path.startswith(prefix):
-                    relative_path = relative_path[len(prefix):]
-                    if not relative_path.startswith('/'):
-                        relative_path = '/' + relative_path
+                if single_file:
+                    relative_path = relative_path_in(location, key)
+                elif relative_path.startswith(prefix):
+                    # One '/' added after the folder, so a key with an empty segment right after it is
+                    # '//x', the path that names it (#1977)
+                    relative_path = relative_path_in(location, relative_path) or '/' + relative_path[len(prefix):]
 
                 item = {
                     'fileName': os.path.basename(key),
@@ -1029,10 +1087,11 @@ def generate_presigned_url(bucket: str, key: str, version_id: str) -> Optional[s
         if version_id and version_id != 'null':
             params['VersionId'] = version_id
 
-        # SVG keys get the image/svg+xml type and an attachment disposition (common.s3)
+        # A download URL saves the file under its own name (an attachment disposition); SVG keys
+        # also get the image/svg+xml type (common.s3)
         url = s3_client.generate_presigned_url(
             'get_object',
-            Params=presigned_get_object_params(params),
+            Params=presigned_get_object_params(params, attachment=True),
             ExpiresIn=int(presigned_url_timeout)
         )
         
@@ -1089,29 +1148,6 @@ def is_allowed_preview_extension(file_path: str) -> bool:
         extension = '.' + file_path.split(PREVIEW_FILE_PATTERN)[1]
         return extension.lower() in ALLOWED_PREVIEW_EXTENSIONS
     return False
-
-def get_top_preview_file(preview_files: List[str], filter_extensions: bool = True) -> Optional[str]:
-    """Get the top preview file from a list of preview files
-    
-    Args:
-        preview_files: List of preview file keys
-        filter_extensions: Whether to filter by allowed extensions
-        
-    Returns:
-        The top preview file key or None if no valid preview files
-    """
-    if not preview_files:
-        return None
-    
-    if filter_extensions:
-        # Filter by allowed extensions
-        allowed_files = [f for f in preview_files if is_allowed_preview_extension(f)]
-        if allowed_files:
-            return allowed_files[0]  # Return the first allowed file
-        return None
-    else:
-        # Return the first file without filtering
-        return preview_files[0]
 
 def spends_file_budget(file: Dict, include_folders: bool = False) -> bool:
     """Whether a listed row costs the caller one unit of `maxFiles`.
@@ -1301,6 +1337,12 @@ def process_asset_batch(
         asset["object__type"] = "asset"
         # Default deny: only authorize if enforcer exists AND grants access
         if casbin_enforcer and casbin_enforcer.enforce(asset, "GET"):
+            # Single choke point for the quarantine block: every asset whose files are about to
+            # be signed passes here once, after its Tier-2 check. A quarantined asset without a
+            # granted exception fails the whole export before any presigned GET URL is minted.
+            # An export that mints no file URLs delivers no file bytes and is not blocked.
+            if request_model.generatePresignedUrls:
+                check_quarantine_block(asset_info['databaseId'], asset_info['assetId'])
             authorized_assets[position] = (asset_info, asset)
         else:
             logger.warning(f"Permission denied for asset {asset_info['assetId']}")
@@ -1474,13 +1516,16 @@ def process_asset_batch(
                 else:
                     base_files_list.append(file)
 
-            # Create lookup for preview files by base file key
+            # Preview candidates by base file key: (key, lastModified, isArchived), so the export
+            # attaches the same preview as the file listings (select_newest_preview_file).
             preview_lookup = {}
             for preview_file in preview_files_list:
                 base_key = get_base_file_for_preview(preview_file['key'])
-                if base_key not in preview_lookup:
-                    preview_lookup[base_key] = []
-                preview_lookup[base_key].append(preview_file['key'])
+                preview_lookup.setdefault(base_key, []).append((
+                    preview_file['key'],
+                    preview_file.get('dateCreatedCurrentVersion'),
+                    preview_file.get('isArchived', False),
+                ))
 
             # The executable blocklist check the download and stream routes make before they
             # hand out content, run on the version about to be signed for every file the loop
@@ -1576,9 +1621,10 @@ def process_asset_batch(
                 preview_file_path = ''
                 if not file['isFolder']:
                     base_file_key = file['key']
-                    preview_files_for_base = preview_lookup.get(base_file_key, [])
-                    top_preview = get_top_preview_file(preview_files_for_base, filter_extensions=True)
-                    if top_preview:
+                    top_preview = select_newest_preview_file(preview_lookup.get(base_file_key, []))
+                    if top_preview and not is_folder_location(asset_location_key):
+                        preview_file_path = relative_path_in(asset_location_key, top_preview) or ''
+                    elif top_preview:
                         if top_preview.startswith(asset_location_key):
                             preview_relative = top_preview[len(asset_location_key):]
                             if not preview_relative.startswith('/'):
@@ -1856,6 +1902,12 @@ def export_assets(
 # Request Handlers
 #######################
 
+
+def _exported_files(asset) -> List:
+    files = asset.get('files') if isinstance(asset, dict) else getattr(asset, 'files', None)
+    return files if isinstance(files, list) else []
+
+
 def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
     """Handle POST /export requests"""
     try:
@@ -1921,6 +1973,12 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
             event
         )
         
+        exported = response_data.get('assets') or []
+        log_action(event, "assetExport", database_id=path_params['databaseId'], asset_id=path_params['assetId'],
+                   item_count=len(exported),
+                   file_count=sum(len(_exported_files(asset)) for asset in exported),
+                   request_parameters=request_model.dict(exclude_none=True))
+
         # Deliver inline, or redirect to a presigned URL when the payload is too large
         return build_export_response(
             response_data,
@@ -1935,6 +1993,9 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
         return authorization_error(event=event)
     except VAMSAssetNotFoundResponse:
         return general_error(status_code=404, body={'message': 'Asset not found'}, event=event)
+    except QuarantineBlockedResponse as refusal:
+        # An expected refusal: one INFO line, no traceback (D174).
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -1946,6 +2007,8 @@ def handle_post_export(event, context) -> APIGatewayProxyResponseV2:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for asset export operations"""
     global claims_and_roles, bucket_cache
@@ -1978,6 +2041,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except QuarantineBlockedResponse as refusal:
+        # An expected refusal: one INFO line, no traceback (D174).
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

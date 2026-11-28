@@ -39,7 +39,10 @@ const SYSTEM_TAG_GROUPS: TagGroup[] = [
             { tag: "executionId", desc: "This workflow execution's id." },
             { tag: "workflowId", desc: "The workflow's id." },
             { tag: "workflowDatabaseId", desc: "The workflow's database id." },
-            { tag: "triggerType", desc: "How the run started (Manual / fileUpload)." },
+            {
+                tag: "triggerType",
+                desc: "How the run started: Manual, File-Upload, or a system trigger value such as System-Reindex (the stored trigger vocabulary).",
+            },
             { tag: "executingUserName", desc: "User id that launched the run." },
         ],
     },
@@ -50,7 +53,10 @@ const SYSTEM_TAG_GROUPS: TagGroup[] = [
             { tag: "pipelineId", desc: "The pipeline's id." },
             { tag: "pipelineName", desc: "The pipeline's name." },
             { tag: "pipelineDatabaseId", desc: "The pipeline's database id." },
-            { tag: "jobName", desc: "The per-pipeline job name in the workflow." },
+            {
+                tag: "jobName",
+                desc: "This step's job name for this run: its generated job name plus its pipeline execution id.",
+            },
         ],
     },
     {

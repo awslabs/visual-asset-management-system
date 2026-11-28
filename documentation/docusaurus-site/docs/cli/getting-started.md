@@ -47,7 +47,7 @@ Before using VamsCLI, you must configure it to connect to your VAMS deployment. 
 vamscli setup https://your-vams-url.example.com
 ```
 
-The `setup` command accepts any HTTP or HTTPS URL that points to your VAMS deployment, including Amazon CloudFront distributions, Application Load Balancers (ALB), Amazon API Gateway endpoints, or custom domains. When you point it directly at an Amazon API Gateway `execute-api` endpoint, pass the bare endpoint URL — VamsCLI appends the REST API stage path (`/api`) automatically.
+The `setup` command accepts an HTTPS URL that points to your VAMS deployment (plain HTTP only for `localhost` or a loopback address), including Amazon CloudFront distributions, Application Load Balancers (ALB), Amazon API Gateway endpoints, or custom domains. When you point it directly at an Amazon API Gateway `execute-api` endpoint, pass the bare endpoint URL — VamsCLI appends the REST API stage path (`/api`) automatically. When you point it at the API custom domain (`app.api.apiGatewayRest.customDomain`), include the stage path, for example `https://api.vams.example.com/api`. After a deployment enables the API custom domain, run `vamscli setup <BASE_URL> --force` again for each profile so it stores the custom domain's base URL (see [Setup and Authentication](commands/setup-and-auth.md)).
 
 :::tip[Multiple Environments]
 Use the `--profile` flag to configure separate profiles for different environments:
@@ -96,14 +96,14 @@ See [Setup and Authentication Commands](commands/setup-and-auth.md) for the full
 If your VAMS deployment uses an external OAuth identity provider (IdP), use the token override mechanism:
 
 ```bash
-vamscli auth set-override -u your.email@example.com --token "eyJhbGciOiJ..."
+echo "$VAMS_TOKEN" | vamscli auth set-override -u your.email@example.com --token-stdin
 ```
 
 You can specify an expiration time for the override token using Unix timestamps, ISO 8601 format, or relative seconds:
 
 ```bash
-vamscli auth set-override -u user@example.com --token "token..." --expires-at "+3600"
-vamscli auth set-override -u user@example.com --token "token..." --expires-at "2025-12-31T23:59:59Z"
+echo "$VAMS_TOKEN" | vamscli auth set-override -u user@example.com --token-stdin --expires-at "+3600"
+echo "$VAMS_TOKEN" | vamscli auth set-override -u user@example.com --token-stdin --expires-at "2025-12-31T23:59:59Z"
 ```
 
 :::warning[Override Token Limitations]
@@ -115,7 +115,7 @@ Override tokens do not support automatic refresh. When an override token expires
 If you have a VAMS API key (created through the web UI or API), you can use it directly without a password login. Store the key as an override token, naming the user ID the key was created for:
 
 ```bash
-vamscli auth set-override -u api-key-user@example.com --token "your-api-key-value"
+echo "$VAMS_API_KEY" | vamscli auth set-override -u api-key-user@example.com --token-stdin
 ```
 
 The override persists in the profile and is used by every subsequent command until it is replaced by another `auth set-override` or `auth login`, or removed with `vamscli auth clear-override`.

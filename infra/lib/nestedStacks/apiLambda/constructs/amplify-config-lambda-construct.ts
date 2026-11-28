@@ -114,6 +114,22 @@ interface InlineLambdaProps {
     externalOAuthIdpDisplayName?: string;
 
     /**
+     * External OAUTH IDP access-token claim whose value is the VAMS user id
+     * (`useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim`). `"undefined"` when not set, in which
+     * case the web application uses `cognito:username`, then `username`, then `sub`, as the API
+     * authorizer does; set, both use only this claim.
+     */
+    externalOAuthIdpUserIdClaim?: string;
+
+    /**
+     * External OAUTH IDP access-token claims the API authorizer reads the audience from, in order,
+     * as a comma-separated list of claim NAMES (`aud`, `client_id`; never audience values), from the
+     * validated `useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims`. `"undefined"` when not set.
+     * Clients that predate the field assume `aud`.
+     */
+    externalOAuthIdpAudienceClaims?: string;
+
+    /**
      * Name of deployed stack
      */
     stackName: string;
@@ -220,6 +236,21 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     externalOAuthIdpDisplayName:
                         props.config.app.authProvider.useExternalOAuthIdp.idpDisplayName ||
                         "undefined",
+                    // Published only for an external IdP deployment (the value is validated
+                    // there); a leftover value on a Cognito deployment publishes nothing.
+                    externalOAuthIdpUserIdClaim: props.config.app.authProvider.useExternalOAuthIdp
+                        .enabled
+                        ? props.config.app.authProvider.useExternalOAuthIdp
+                              .lambdaAuthorizorJWTUserIdClaim || "undefined"
+                        : "undefined",
+                    // Claim NAMES only (closed allowlist validated by config.ts), published only
+                    // for an external IdP deployment; never audience values.
+                    externalOAuthIdpAudienceClaims: props.config.app.authProvider
+                        .useExternalOAuthIdp.enabled
+                        ? props.config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims?.join(
+                              ","
+                          ) || "undefined"
+                        : "undefined",
                     stackName: props.stackName!,
                     contentSecurityPolicy: "",
                     bannerHtmlMessage: props.config.app.webUi.optionalBannerHtmlMessage || "",
@@ -240,9 +271,11 @@ export class AmplifyConfigLambdaConstruct extends Construct {
     private getJavascriptInlineFunction(props: InlineLambdaProps) {
         const resp = JSON.stringify(props);
 
-        return `
-            exports.handler = async function(event, context) {
-                const config = ${resp};
+        // A non-empty build-time API URL (the REST API custom domain) is returned as is, whichever
+        // host the request arrived through.
+        const deriveApiUrl = props.api
+            ? ""
+            : `
                 // Derive the API base URL from the invoking request rather than from a
                 // CDK reference to the REST API. Referencing the API id at deploy time
                 // would create an Api <-> Lambda circular dependency (this Lambda is
@@ -259,14 +292,18 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     }
                 } catch (e) {
                     // Fall back to the build-time value if request context is unavailable.
-                }
+                }`;
+
+        return `
+            exports.handler = async function(event, context) {
+                const config = ${resp};${deriveApiUrl}
                 return {
                     headers: {
                         'Content-Type': 'application/json',
                         'Cache-Control': 'no-cache, no-store',
                         // REST API returns the Lambda response verbatim (no auto-CORS). Under
                         // ALB fronting this endpoint is fetched cross-origin (the ALB
-                        // 301-redirects /api/* to the execute-api host), so the response must
+                        // 302-redirects /api/* to the execute-api host), so the response must
                         // carry the CORS origin header for the browser to read it.
                         'Access-Control-Allow-Origin': '*'
                     },

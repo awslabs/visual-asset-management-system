@@ -130,8 +130,12 @@ def import_constraints(template_data, profile=None, dry_run=False):
         return False
 
 
+VAMSCLI_TIMEOUT_SECONDS = 60
+
+
 def run_vamscli(args, profile=None, capture_output=True):
-    """Run a vamscli command and return the result."""
+    """Run a vamscli command and return the result. A command that does not finish within
+    VAMSCLI_TIMEOUT_SECONDS is returned as a failed result, like any other failure."""
     cmd = ["vamscli"]
     if profile:
         cmd.extend(["--profile", profile])
@@ -139,15 +143,20 @@ def run_vamscli(args, profile=None, capture_output=True):
 
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
-    result = subprocess.run( # nosemgrep: dangerous-subprocess-use-audit
-        cmd,
-        capture_output=capture_output,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=60,
-        env=env,
-    )
+    try:
+        result = subprocess.run( # nosemgrep: dangerous-subprocess-use-audit
+            cmd,
+            capture_output=capture_output,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=VAMSCLI_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            cmd, 1, stdout="",
+            stderr=f"vamscli did not finish within {VAMSCLI_TIMEOUT_SECONDS} seconds")
     return result
 
 
@@ -189,7 +198,7 @@ def delete_role(role_name, profile=None, dry_run=False):
         return True
     else:
         stderr = result.stderr.strip() if result.stderr else ""
-        print(f"    WARNING deleting role: {stderr or result.stdout}")
+        print(f"    ERROR deleting role: {stderr or result.stdout}")
         return False
 
 
@@ -207,7 +216,7 @@ def assign_user_to_role(user_id, role_name, profile=None, dry_run=False):
         return True
     else:
         stderr = result.stderr.strip() if result.stderr else ""
-        print(f"    WARNING assigning user: {stderr or result.stdout}")
+        print(f"    ERROR assigning user: {stderr or result.stdout}")
         return False
 
 
@@ -324,7 +333,9 @@ def apply_template(template_path, var_values, profile=None, dry_run=False,
         print("  Note: Constraints with server-generated IDs are not automatically")
         print("  deleted. Use the VAMS UI or 'vamscli role constraint' commands")
         print("  to remove orphaned constraints if needed.")
-        delete_role(role_name, profile=profile, dry_run=dry_run)
+        if not delete_role(role_name, profile=profile, dry_run=dry_run):
+            print("\nStatus: Incomplete (failed: role deletion)")
+            sys.exit(1)
         print("\nDeletion complete.")
         return
 
@@ -341,19 +352,23 @@ def apply_template(template_path, var_values, profile=None, dry_run=False,
         print("FATAL: Could not create role. Aborting.")
         sys.exit(1)
 
+    failed_steps = []
+
     # Import constraints via the template import API
     print(f"\n--- Importing Constraints ({len(constraints)} total) ---")
     import_success = import_constraints(template_data, profile=profile, dry_run=dry_run)
 
     if not import_success:
-        print("\nWARNING: Constraint import failed.")
+        print("\nERROR: Constraint import failed.")
+        failed_steps.append("constraint import")
     else:
         print(f"\nConstraint import completed.")
 
     # Assign user if requested
     if assign_user:
         print(f"\n--- Assigning User ---")
-        assign_user_to_role(assign_user, role_name, profile=profile, dry_run=dry_run)
+        if not assign_user_to_role(assign_user, role_name, profile=profile, dry_run=dry_run):
+            failed_steps.append("user assignment")
 
     # Summary
     print(f"\n{'='*60}")
@@ -362,9 +377,13 @@ def apply_template(template_path, var_values, profile=None, dry_run=False,
     print(f"Constraints: {len(constraints)}")
     if dry_run:
         print("Status: DRY RUN complete (no changes made)")
+    elif failed_steps:
+        print(f"Status: Incomplete (failed: {', '.join(failed_steps)})")
     else:
         print("Status: Complete")
     print(f"{'='*60}")
+    if failed_steps:
+        sys.exit(1)
 
 
 def main():
@@ -427,7 +446,7 @@ Examples:
       --variables '{"DATABASE_ID": "my-db"}' \\
       --role-description "Secure admin for my-db" --mfa-required
 
-See documentation/PermissionsGuide.md for template details and constraint design.
+See the Permissions developer guide (documentation/docusaurus-site/docs/developer/permissions.md) for template details and constraint design.
         """,
     )
 

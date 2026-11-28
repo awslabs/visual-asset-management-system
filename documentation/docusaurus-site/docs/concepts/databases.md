@@ -76,18 +76,21 @@ Key points about bucket mapping:
 
 ### Metadata schema restrictions
 
-When `restrictMetadataOutsideSchemas` is set to `true`, all metadata operations for assets and files within the database are validated against applied metadata schemas. If no schema is applied to a given entity, the restriction has no effect for that entity.
+When `restrictMetadataOutsideSchemas` is set to `true`, user and API metadata writes for assets and files within the database are validated against applied metadata schemas. Asset link metadata is validated when the database of either linked asset sets it, on create and update alike. If no schema is applied to a given entity, the restriction has no effect for that entity.
 
-This setting is useful for enforcing data quality standards across a team or project. Metadata keys and value types must match the schema definition, and no ad-hoc metadata fields are permitted.
+This setting is useful for enforcing data quality standards across a team or project. Users and API callers cannot add ad-hoc metadata fields, and the values they set must match the schema definition.
+
+The restriction applies to user and API metadata writes. It refuses a key that is new to the record and not defined by an applied schema. A key already stored on the record passes, including when its value changes. Pipeline write-backs are not restricted: a pipeline can add keys outside the schema, and those keys then pass on later edits of the record. Value types and controlled lists are likewise checked only for the values a user or API write sets, so a stored value the schema would refuse does not block edits of other fields.
 
 ### File upload extension restrictions
 
-The `restrictFileUploadsToExtensions` field allows administrators to limit which file types can be uploaded through the web interface and CLI. This restriction:
+The `restrictFileUploadsToExtensions` field allows administrators to limit which file types can be uploaded through the VAMS API. This restriction:
 
--   Applies to uploads via the VAMS web application and VAMS CLI.
+-   Applies to every upload through the VAMS API (the web application, VamsCLI, other API clients, ingest-asset and workflow outputs).
 -   Does **not** apply to files placed directly into the Amazon S3 bucket.
 -   Uses a comma-separated format: `.jpg,.png,.pdf`.
--   Supports the special value `.all` to explicitly allow all extensions.
+-   Accepts entries that start with a dot and contain letters, digits, `_` and further dots, such as `.x_t` or `.tar.gz`. A file matches an entry when its name ends with the entry, compared case-insensitively, and the part of the name before the entry holds a character other than a dot. See [File type restrictions](files-and-versions.md#file-type-restrictions).
+-   Supports the special value `.all`: when `.all` is in the list, all extensions are allowed and the rest of the list is ignored.
 -   Operates in addition to the system-wide blocked file extensions list (e.g., `.exe`, `.dll`, `.bat` are always blocked).
 
 :::tip[Combining restrictions]

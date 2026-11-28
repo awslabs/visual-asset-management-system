@@ -35,12 +35,32 @@ export const DEADLINE_TEMPLATE_TYPES = ["JSON", "YAML"];
 // (models/pipelines.py MAX_DEADLINE_TEMPLATE_LENGTH).
 const MAX_DEADLINE_TEMPLATE_LENGTH = 256 * 1024;
 
-// Deadline job priority and task counts. The createJob task state casts each to an integer, so a
-// fractional value is not the value that would run, and a negative one is rejected outright.
-const deadlineCountSchema = z.preprocess(
-    blankNumberToUndefined,
-    z.number().int("Must be a whole number").min(0, "Cannot be negative").optional()
-);
+// The range AWS Deadline Cloud CreateJob accepts for each DeadlineCloud job setting. Mirrors
+// DEADLINE_JOB_SETTING_RANGES in backend/backend/common/workflows/stepfunctions_builder.py, which the
+// API checks on save: keep the two in step, so the form never refuses a value the API accepts.
+export const DEADLINE_JOB_SETTING_RANGES = {
+    priority: { min: 0, max: 100 },
+    maxRetriesPerTask: { min: 0, max: 2147483647 },
+    maxFailedTasksCount: { min: 0, max: 2147483647 },
+} as const;
+
+// One message per setting for every value outside its range (fractional, negative, above the maximum,
+// non-finite or not a number), naming the range as the API does. The check is a refinement on an
+// unknown value rather than z.number().int().max(): zod treats a non-number or a failed .int() as
+// fatal and then skips the object's superRefine, which would hide the DeadlineCloud farmId, queueId
+// and template messages until the next save.
+const deadlineCountSchema = ({ min, max }: { min: number; max: number }) =>
+    z.preprocess(
+        blankNumberToUndefined,
+        z
+            .unknown()
+            .refine(
+                (val) =>
+                    val === undefined ||
+                    (typeof val === "number" && Number.isInteger(val) && val >= min && val <= max),
+                `Must be a whole number from ${min} to ${max.toLocaleString("en-US")}`
+            )
+    );
 
 // Mirrors of the backend resource patterns (common/validators.py: aws_partition_group and
 // aws_dns_suffix_group), so a malformed value is reported inline beside its field instead of coming
@@ -114,9 +134,9 @@ const deadlineCloudConfigSchema = z.object({
     farmId: z.string().optional(),
     queueId: z.string().optional(),
     storageProfileId: z.string().optional(),
-    priority: deadlineCountSchema,
-    maxRetriesPerTask: deadlineCountSchema,
-    maxFailedTasksCount: deadlineCountSchema,
+    priority: deadlineCountSchema(DEADLINE_JOB_SETTING_RANGES.priority),
+    maxRetriesPerTask: deadlineCountSchema(DEADLINE_JOB_SETTING_RANGES.maxRetriesPerTask),
+    maxFailedTasksCount: deadlineCountSchema(DEADLINE_JOB_SETTING_RANGES.maxFailedTasksCount),
     templateType: z
         .string()
         .optional()
@@ -220,7 +240,7 @@ const executionConfigSchema = z
         if (data.executionType === "SQS") {
             if (!data.sqs?.queueUrl) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "SQS queueUrl is required",
                     path: ["sqs", "queueUrl"],
                 });
@@ -232,14 +252,14 @@ const executionConfigSchema = z
             // default event bus. A supplied value is still format-checked by eventBridgeConfigSchema.
             if (!data.eventBridge?.source) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "EventBridge source is required",
                     path: ["eventBridge", "source"],
                 });
             }
             if (!data.eventBridge?.detailType) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "EventBridge detailType is required",
                     path: ["eventBridge", "detailType"],
                 });
@@ -249,14 +269,14 @@ const executionConfigSchema = z
         if (data.executionType === "DeadlineCloud") {
             if (!data.deadlineCloud?.farmId) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "DeadlineCloud farmId is required",
                     path: ["deadlineCloud", "farmId"],
                 });
             }
             if (!data.deadlineCloud?.queueId) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "DeadlineCloud queueId is required",
                     path: ["deadlineCloud", "queueId"],
                 });
@@ -267,14 +287,14 @@ const executionConfigSchema = z
             // would save and then break every workflow that referenced it.
             if (!data.deadlineCloud?.template) {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "DeadlineCloud job template is required",
                     path: ["deadlineCloud", "template"],
                 });
             }
             if (data.waitForCallback !== "Enabled") {
                 ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
+                    code: "custom",
                     message: "DeadlineCloud requires waitForCallback to be Enabled",
                     path: ["waitForCallback"],
                 });

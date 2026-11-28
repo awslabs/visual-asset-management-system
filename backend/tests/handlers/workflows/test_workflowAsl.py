@@ -107,7 +107,8 @@ class TestWorkflowAslAdapter:
         assert wa._state_machine_exists(sf_client, "arn:gone") is False
 
     def test_deploy_state_machine_empty_refrecords_short_circuits(self):
-        # No pipelines to deploy: keep any existing arn and return no job names (no env/boto3 read).
-        assert wa.deploy_state_machine("db1", "wflow1", [], existing_arn="") == ("", [])
+        # No pipelines to deploy: keep any existing arn and return no job names and no version (no
+        # env/boto3 read).
+        assert wa.deploy_state_machine("db1", "wflow1", [], existing_arn="") == ("", [], "")
         assert wa.deploy_state_machine(
-            "db1", "wflow1", [], existing_arn="arn:existing") == ("arn:existing", [])
+            "db1", "wflow1", [], existing_arn="arn:existing") == ("arn:existing", [], "")

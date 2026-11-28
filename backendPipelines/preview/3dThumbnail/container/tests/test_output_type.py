@@ -71,10 +71,11 @@ def _stage():
     )
 
 
-def _run(tmp_path, input_parameters, frame_count=8):
+def _run(tmp_path, input_parameters, frame_count=8, calls=None):
     """Run the stage to completion against stubbed I/O and rendering.
 
-    Returns (result, uploaded S3 key, the name of the image_utils writer that was used)."""
+    Returns (result, uploaded S3 key, the name of the image_utils writer that was used). Pass a dict
+    as ``calls`` to receive the renderer and writer mocks."""
     directories = {}
 
     def _create_dir(parts):
@@ -102,19 +103,23 @@ def _run(tmp_path, input_parameters, frame_count=8):
 
     upload = MagicMock(side_effect=lambda bucket, key, path: key)
     frames = list(range(frame_count))
+    rotating = MagicMock(return_value=frames)
+    static = MagicMock(return_value="still-view")
+    writers = {name: MagicMock(side_effect=_writer(name))
+               for name in ("ensure_under_size_limit", "save_jpeg", "save_png")}
+    if calls is not None:
+        calls.update(rotating=rotating, static=static, **writers)
 
     with patch.object(core, "_create_dir", _create_dir), \
             patch.object(core, "_check_existing_preview", MagicMock(return_value=None)), \
             patch.object(core, "_load_file", MagicMock(return_value=MagicMock())), \
             patch.object(core, "_normalize_up_axis", lambda data, ext: data), \
-            patch.object(core.renderer, "generate_rotating_frames",
-                         MagicMock(return_value=frames)), \
+            patch.object(core.renderer, "generate_rotating_frames", rotating), \
+            patch.object(core.renderer, "generate_static_frame", static), \
             patch.object(core.image_utils, "ensure_under_size_limit",
-                         MagicMock(side_effect=_writer("ensure_under_size_limit"))), \
-            patch.object(core.image_utils, "save_jpeg",
-                         MagicMock(side_effect=_writer("save_jpeg"))), \
-            patch.object(core.image_utils, "save_png",
-                         MagicMock(side_effect=_writer("save_png"))), \
+                         writers["ensure_under_size_limit"]), \
+            patch.object(core.image_utils, "save_jpeg", writers["save_jpeg"]), \
+            patch.object(core.image_utils, "save_png", writers["save_png"]), \
             patch.object(core.s3, "get_object_size", MagicMock(return_value=1024)), \
             patch.object(core.s3, "download", _download), \
             patch.object(core.s3, "upload", upload):

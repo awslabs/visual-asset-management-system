@@ -16,6 +16,8 @@
 
 import type { ConfigShape, FieldMeta, Section } from "./types";
 import { getByPath } from "./pathUtils";
+import { embeddingFamilySummary } from "./fields/bedrockModelFormats";
+import { ADDON_FIELDS } from "./addon";
 
 export const SECTIONS: Section[] = [
     {
@@ -34,7 +36,7 @@ export const SECTIONS: Section[] = [
         id: "networking",
         label: "Networking (VPC)",
         description:
-            "VPC creation or import. Required by ALB, provisioned OpenSearch, a private OpenSearch Serverless collection, and the container pipelines.",
+            "VPC creation or import. Required by ALB, provisioned OpenSearch, a private OpenSearch Serverless collection, the container pipelines, and the add-ons that run in the VPC.",
         order: 3,
     },
     {
@@ -45,8 +47,9 @@ export const SECTIONS: Section[] = [
     },
     {
         id: "search",
-        label: "Search (OpenSearch)",
-        description: "Optional. Enable at most one of Serverless or Provisioned.",
+        label: "Search (OpenSearch & vector search)",
+        description:
+            "Optional. Enable at most one of OpenSearch Serverless or Provisioned; natural-language (vector) search is independent of both.",
         order: 5,
     },
     {
@@ -58,7 +61,7 @@ export const SECTIONS: Section[] = [
     {
         id: "pipelines-standard",
         label: "Pipelines — standard",
-        description: "3D conversion, previews, and metadata extraction.",
+        description: "3D conversion, previews, metadata extraction, and video analysis.",
         advanced: true,
         order: 7,
     },
@@ -66,7 +69,7 @@ export const SECTIONS: Section[] = [
         id: "pipelines-gpu",
         label: "Pipelines — NVIDIA / GPU & third-party",
         description:
-            "GPU-backed pipelines: Cosmos, Gr00t, Isaac Lab, Gaussian Splatting, RapidPipeline, ModelOps.",
+            "GPU-backed pipelines: Cosmos, Gr00t, Image to 3D, Isaac Lab, Gaussian Splatting, RapidPipeline, ModelOps.",
         advanced: true,
         order: 8,
     },
@@ -88,11 +91,21 @@ export const SECTIONS: Section[] = [
         advanced: true,
         order: 11,
     },
+    {
+        id: "compliance",
+        label: "Compliance",
+        description:
+            "Default compliance schema seeding and whether quarantine blocks downloads. Compliance itself always deploys.",
+        advanced: true,
+        order: 12,
+    },
 ];
 
 // --- Visibility predicates (shared) ---
 const albEnabled = (c: ConfigShape) => !!getByPath(c, "app.useAlb.enabled");
 const cfCustomDomain = (c: ConfigShape) => !!getByPath(c, "app.useCloudFront.customDomain.enabled");
+const apiCustomDomain = (c: ConfigShape) =>
+    !!getByPath(c, "app.api.apiGatewayRest.customDomain.enabled");
 const provisioned = (c: ConfigShape) => !!getByPath(c, "app.openSearch.useProvisioned.enabled");
 const serverless = (c: ConfigShape) => !!getByPath(c, "app.openSearch.useServerless.enabled");
 const oauthEnabled = (c: ConfigShape) =>
@@ -103,6 +116,9 @@ const externalVpc = (c: ConfigShape) => {
 };
 const garnet = (c: ConfigShape) => !!getByPath(c, "app.addons.useGarnetFramework.enabled");
 const physna = (c: ConfigShape) => !!getByPath(c, "app.addons.usePhysnaSync.enabled");
+const vectorSearch = (c: ConfigShape) => !!getByPath(c, "app.vectorSearch.enabled");
+const systemGenAi = (c: ConfigShape) =>
+    !!getByPath(c, "app.pipelines.useSystemGenAiMetadata.enabled");
 
 /**
  * Factory for a GPU model sub-tree (Cosmos / Gr00t). Each model has enabled,
@@ -163,6 +179,7 @@ function makeModelFields(
 const COSMOS = "app.pipelines.useNvidiaCosmos";
 const COSMOS3 = "app.pipelines.useNvidiaCosmos3";
 const GR00T = "app.pipelines.useNvidiaGr00t";
+const IMAGETO3D = "app.pipelines.useImageTo3d";
 
 const cosmosModelFields: FieldMeta[] = [
     ...makeModelFields(`${COSMOS}.modelsPredict.text2world2B_v2`, "Cosmos Text2World 2B", {
@@ -211,7 +228,61 @@ const cosmos3ModelFields: FieldMeta[] = [
     ),
 ];
 
-export const FIELDS: FieldMeta[] = [
+/**
+ * Image to 3D selects a model per run rather than provisioning per-model
+ * compute, so each model contributes a single enable toggle. The licence note
+ * mirrors the model's upstream terms.
+ */
+function makeImageTo3dModelField(modelKey: string, label: string, licence: string): FieldMeta {
+    return {
+        path: `${IMAGETO3D}.models.${modelKey}.enabled`,
+        label: `Image to 3D — ${label}`,
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: `${licence}. At least one model must be enabled.`,
+    };
+}
+
+const imageTo3dModelFields: FieldMeta[] = [
+    makeImageTo3dModelField("sam3d", "Meta SAM 3D Objects", "Meta SAM License"),
+    makeImageTo3dModelField("stable3dgen", "Stable-X Stable3DGen / Hi3DGen (geometry only)", "MIT"),
+    makeImageTo3dModelField("trellis2", "Microsoft TRELLIS.2 (4B)", "MIT"),
+    makeImageTo3dModelField("triposr", "VAST-AI TripoSR", "MIT"),
+    makeImageTo3dModelField("step1x3d", "StepFun Step1X-3D", "Apache-2.0"),
+    makeImageTo3dModelField(
+        "hunyuan3d",
+        "Tencent Hunyuan3D-2",
+        "Tencent Hunyuan 3D 2.0 Community License Agreement — no licence in the European Union, the United Kingdom or South Korea, and a separate Tencent licence above one million monthly active users"
+    ),
+    makeImageTo3dModelField(
+        "blenderagent",
+        "Blender agent (Codex CLI on Amazon Bedrock)",
+        "Blender GPL-2.0-or-later as tooling, Codex CLI Apache-2.0, LiteLLM MIT; the foundation model terms are Amazon Bedrock's. Needs Bedrock model access in the deployment account"
+    ),
+];
+
+/** The Bedrock model the Blender agent reasons with; per-partition and per-account like the labeling model. */
+const imageTo3dAgentModelField: FieldMeta = {
+    path: `${IMAGETO3D}.models.blenderagent.bedrockModelId`,
+    label: "Image to 3D — Blender agent Bedrock model id",
+    input: "text",
+    section: "pipelines-gpu",
+    advanced: true,
+    help: "Foundation model id or inference-profile id the agent reasons with (needs image input). Required when the agent is enabled; the commercial preset carries global.openai.gpt-6-astra and the restricted-partition presets leave it empty.",
+};
+
+/** Whether the agent may edit texture images with the Stability AI models on Amazon Bedrock. */
+const imageTo3dAgentImageEditingField: FieldMeta = {
+    path: `${IMAGETO3D}.models.blenderagent.useStabilityImageEditing`,
+    label: "Image to 3D — Blender agent Stability AI image editing",
+    input: "boolean",
+    section: "pipelines-gpu",
+    advanced: true,
+    help: "Lets the agent inpaint and restyle texture views with the Stability AI image models on Amazon Bedrock, through their us. inference profiles. Commercial partition, US Regions only; off elsewhere, where the agent textures from the photographs alone.",
+};
+
+const CORE_FIELDS: FieldMeta[] = [
     // ===== Deployment basics =====
     {
         path: "name",
@@ -282,6 +353,25 @@ export const FIELDS: FieldMeta[] = [
         help: "Register existing S3 buckets with VAMS. Required when not creating a new bucket.",
     },
     {
+        path: "app.assetBuckets.useS3TransferAcceleration",
+        label: "S3 Transfer Acceleration",
+        input: "boolean",
+        section: "essentials",
+        advanced: true,
+        help: "Serve presigned upload and download URLs for the VAMS-created asset bucket and the auxiliary bucket through S3 Transfer Acceleration. Commercial partition only; adds a per-GB transfer charge. Imported buckets set the same key on their entry and must have acceleration enabled by their owner before deployment.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.assetBuckets.createNewBucket") ||
+            getByPath(c, "app.assetBuckets.useS3TransferAcceleration") === true,
+    },
+    {
+        path: "app.assetBuckets.tagSyncedObjects",
+        label: "Tag synced objects",
+        input: "boolean",
+        section: "essentials",
+        advanced: true,
+        help: "Bucket sync writes the VAMS:databaseId and VAMS:assetId object tags on every file version it syncs from the VAMS-created bucket, keeping the object's own tags. The tags are a marker for your own tools; VAMS never reads them. Imported buckets set the same key on their entry. Default on.",
+    },
+    {
         path: "app.assetBuckets.presignedUrlNetworkRestrictions",
         label: "Presigned URL network restrictions",
         input: "presigned-url-restrictions",
@@ -320,6 +410,103 @@ export const FIELDS: FieldMeta[] = [
         section: "security",
         advanced: true,
         help: "Create a dedicated CloudWatch Logs group and CloudTrail trail for this stack. CloudTrail allows five trails per Region; turn this off in a Region that already has five.",
+    },
+    {
+        path: "app.auditLogging.recordReads",
+        label: "Record reads in the audit log",
+        input: "boolean",
+        section: "security",
+        advanced: true,
+        help: "Write an audit record for every read (gets, lists and searches): the request and the number of items returned, never the content. On by default, and when the setting is absent. Turning it off cuts audit log volume; writes, denials, failures, downloads and exports are recorded either way.",
+    },
+    {
+        path: "app.auditLogging.search.enabled",
+        label: "Audit Log Search",
+        input: "boolean",
+        section: "security",
+        advanced: true,
+        help: "Deploy Audit Log Search: the /audit API routes, their Lambda function, the search-handle table, and the web page, CLI commands and MCP tools. On by default, and when the setting is absent. Searches run on Amazon CloudWatch Logs Insights, billed per GB scanned only when someone searches. Turn it off to remove the feature and its cost; Amazon CloudWatch Logs Insights is not currently supported in the AWS European Sovereign Cloud, so audit log search is off there by default and enabling it is rejected. The recording of audit events is not affected.",
+    },
+    {
+        path: "app.auditLogging.search.maxQueryWindowDays",
+        label: "Audit search: longest window (days)",
+        input: "number",
+        section: "security",
+        advanced: true,
+        min: 1,
+        help: "Longest time range one audit log search may cover, in days. Default 31, at most 366.",
+    },
+    {
+        path: "app.auditLogging.search.maxRows",
+        label: "Audit search: rows per search",
+        input: "number",
+        section: "security",
+        advanced: true,
+        min: 1,
+        help: "Most rows one audit log search returns. Default 1000, at most 10000.",
+    },
+    {
+        path: "app.auditLogging.search.maxConcurrentQueries",
+        label: "Audit search: open searches, VAMS-wide",
+        input: "number",
+        section: "security",
+        advanced: true,
+        min: 1,
+        help: "Audit log searches that may run at the same time across VAMS. Default 5, at most 20.",
+    },
+    {
+        path: "app.auditLogging.search.maxConcurrentQueriesPerUser",
+        label: "Audit search: open searches per user",
+        input: "number",
+        section: "security",
+        advanced: true,
+        min: 1,
+        help: "Audit log searches one user may have open at once. Default 2, at most the VAMS-wide value.",
+    },
+    {
+        path: "app.auditLogging.search.queryDeadlineSeconds",
+        label: "Audit search: deadline (seconds)",
+        input: "number",
+        section: "security",
+        advanced: true,
+        min: 10,
+        help: "A search still running after this many seconds is stopped. Default 300, at most 900.",
+    },
+    {
+        path: "app.auditLogging.search.longPollWaitSeconds",
+        label: "Audit search: wait of one poll (seconds)",
+        input: "number",
+        section: "security",
+        advanced: true,
+        min: 0,
+        help: "How long one status request waits for the search to finish. Default 20, at most 25 and at most the API timeout minus 4.",
+    },
+    {
+        path: "app.auditLogging.search.maxContainsTermLength",
+        label: "Audit search: longest contains term",
+        input: "number",
+        section: "security",
+        advanced: true,
+        min: 3,
+        help: "Characters in one free-text term. Default 64, at most 128.",
+    },
+    {
+        path: "app.auditLogging.search.maxContainsTerms",
+        label: "Audit search: contains terms",
+        input: "number",
+        section: "security",
+        advanced: true,
+        min: 1,
+        help: "Free-text terms in one search, combined with AND. Default 3, at most 5.",
+    },
+    {
+        path: "app.auditLogging.search.handleRetentionMinutes",
+        label: "Audit search: handle retention (minutes)",
+        input: "number",
+        section: "security",
+        advanced: true,
+        min: 5,
+        help: "Minutes a search handle, with the free-text terms in it, is kept after its last use. Default 60, from 5 to 1440.",
     },
     {
         path: "app.useKmsCmkEncryption.enabled",
@@ -403,6 +590,15 @@ export const FIELDS: FieldMeta[] = [
         section: "networking",
         advanced: true,
         help: "Create all required VPC endpoints. Disable only if your imported VPC already has them.",
+        visibleWhen: (c) => !!getByPath(c, "app.useGlobalVpc.enabled"),
+    },
+    {
+        path: "app.useGlobalVpc.addCrossRegionS3Endpoints",
+        label: "Add cross-Region S3 endpoints",
+        input: "boolean",
+        section: "networking",
+        advanced: true,
+        help: "Create one Amazon S3 interface endpoint (private DNS) in the isolated subnets per Region that holds an external asset bucket outside the deployment Region. Commercial partition only. Disable to provide your own path to Amazon S3 in those Regions.",
         visibleWhen: (c) => !!getByPath(c, "app.useGlobalVpc.enabled"),
     },
     {
@@ -685,6 +881,32 @@ export const FIELDS: FieldMeta[] = [
         help: "Enable only for a second deploy after initial deploy/upgrade, then set back to false.",
     },
     {
+        path: "app.vectorSearch.enabled",
+        label: "Natural-language (vector) file search",
+        input: "boolean",
+        section: "search",
+        help: "Semantic search over files. The SYSTEM GenAI metadata pipeline produces the embeddings, indexed into an Amazon DynamoDB vector index; requires that pipeline with its upload trigger. Not available in the AWS European Sovereign Cloud.",
+    },
+    {
+        path: "app.vectorSearch.indexingConcurrency",
+        label: "Vector search — indexing concurrency",
+        input: "number",
+        section: "search",
+        advanced: true,
+        min: 2,
+        help: "Maximum concurrent system-workflow launches while a reindex runs (2–1000).",
+        visibleWhen: vectorSearch,
+    },
+    {
+        path: "app.vectorSearch.reindexOnCdkDeploy",
+        label: "Vector search — reindex on CDK deploy",
+        input: "boolean",
+        section: "search",
+        advanced: true,
+        help: "Clears the vector table and re-launches the SYSTEM GenAI metadata workflow for every latest live file during the deploy. Re-runs the analysis model on every file; enable for one deploy, then set back to false.",
+        visibleWhen: vectorSearch,
+    },
+    {
         path: "app.useLocationService.enabled",
         label: "Amazon Location Service",
         input: "boolean",
@@ -733,7 +955,8 @@ export const FIELDS: FieldMeta[] = [
         input: "number",
         section: "auth",
         advanced: true,
-        min: 1,
+        min: 300,
+        help: "Lifetime of Amazon Cognito ID and access tokens: a whole number of minutes, in seconds, from 300 to 86400 (default 3600 = 1h). Refresh tokens stay at 24h.",
         visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
     },
     {
@@ -743,6 +966,15 @@ export const FIELDS: FieldMeta[] = [
         section: "auth",
         advanced: true,
         help: "Keep true for an existing deployment, whose user pool already declares custom:groups (Amazon Cognito keeps a custom attribute for the life of the pool). Set false for a new deployment: Amazon Cognito rejects that attribute name when it creates a user pool. When the key is absent it resolves to true.",
+        visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
+    },
+    {
+        path: "app.authProvider.useCognito.additionalTokenAudiences",
+        label: "Additional accepted app clients",
+        input: "string-array",
+        section: "auth",
+        advanced: true,
+        help: "App client ids of other clients in the VAMS user pool (for example one registered for a remote MCP server) whose ID and access tokens the API accepts, alongside the web app client. Exact ids, at most 10, no wildcards. Empty accepts the web app client only.",
         visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
     },
     {
@@ -847,6 +1079,34 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: oauthEnabled,
     },
     {
+        path: "app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims",
+        label: "Lambda authorizer JWT audience claims",
+        input: "string-array",
+        section: "auth",
+        advanced: true,
+        help: 'Access-token claims compared with the JWT audience, in order; the first one present must name the JWT audience or one of the additional audiences below. "aud" (default) and/or "client_id" (an Amazon Cognito user pool access token carries client_id and no aud).',
+        visibleWhen: oauthEnabled,
+    },
+    {
+        path: "app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim",
+        label: "Lambda authorizer JWT user ID claim",
+        input: "text",
+        section: "auth",
+        advanced: true,
+        placeholder: "username",
+        help: "Access-token claim whose value is the VAMS user ID, for the API and the web application. Empty (default): cognito:username, then username, then sub.",
+        visibleWhen: oauthEnabled,
+    },
+    {
+        path: "app.authProvider.useExternalOAuthIdp.additionalTokenAudiences",
+        label: "Additional accepted JWT audiences",
+        input: "string-array",
+        section: "auth",
+        advanced: true,
+        help: "Other aud values (for example of a client registered with your IdP for a remote MCP server) the API accepts alongside the JWT audience above. Exact values, at most 10, no wildcards. Empty accepts that audience only.",
+        visibleWhen: oauthEnabled,
+    },
+    {
         path: "app.authProvider.presignedUrlTimeoutSeconds",
         label: "Presigned URL timeout (seconds)",
         input: "number",
@@ -861,7 +1121,7 @@ export const FIELDS: FieldMeta[] = [
         input: "ip-range-list",
         section: "auth",
         advanced: true,
-        help: "Restrict API access to IP ranges. Each is a [min, max] IPv4 pair. Empty allows all.",
+        help: "Restrict API access to IP ranges. Each is a [min, max] pair of IPv4 or IPv6 addresses, both of one family. Empty allows all. With ranges set, the authorizer runs on every API request (no cached decision).",
     },
     {
         path: "app.authProvider.authorizerOptions.defaultUserRoleName",
@@ -879,7 +1139,7 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
-        help: "Convert between STL, OBJ, PLY, GLTF, GLB, etc. No VPC required.",
+        help: "Convert between STL, OBJ, PLY, GLTF, GLB, USD, DAE, 3MF, OFF and FBX, with unit and up-axis options. No VPC required.",
     },
     {
         path: "app.pipelines.useConversion3dBasic.autoRegisterWithVAMS",
@@ -890,29 +1150,34 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
     },
     {
-        path: "app.pipelines.useConversionCadMeshMetadataExtraction.enabled",
-        label: "CAD/mesh metadata extraction",
+        path: "app.pipelines.useConversion3dBasic.enableStepInput",
+        label: "3D basic conversion — STEP input",
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
+        help: "Read STEP (.step, .stp) files. Adds cascadio (Open CASCADE, LGPL-2.1 with the OCCT exception) to the conversion image; off, a STEP run is refused before download.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
     },
     {
-        path: "app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS",
-        label: "CAD/mesh extraction — auto-register",
+        path: "app.pipelines.useConversion3dBasic.batchTier.enabled",
+        label: "3D basic conversion — AWS Batch tier",
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
-        visibleWhen: (c) =>
-            !!getByPath(c, "app.pipelines.useConversionCadMeshMetadataExtraction.enabled"),
+        help: "Continue a model the Lambda function cannot convert (too large, or out of memory or time) on an AWS Batch Fargate job of 4 vCPU / 30 GiB, 8 / 60 or 16 / 120, instead of refusing it. Requires the global VPC (app.useGlobalVpc.enabled). Off by default; the tier costs nothing while no model needs it.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
     },
     {
-        path: "app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterAutoTriggerOnFileUpload",
-        label: "CAD/mesh extraction — auto-trigger on upload",
-        input: "boolean",
+        path: "app.pipelines.useConversion3dBasic.batchTier.maxMemoryGiB",
+        label: "3D basic conversion — largest Batch job (GiB)",
+        input: "number",
         section: "pipelines-standard",
         advanced: true,
+        min: 30,
+        help: "Memory of the largest job the tier may start: 30, 60 or 120 GiB (default 120). A model above that size's limit fails before any job starts. Fargate bills the job's vCPU and memory by the second.",
         visibleWhen: (c) =>
-            !!getByPath(c, "app.pipelines.useConversionCadMeshMetadataExtraction.enabled"),
+            !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled") &&
+            !!getByPath(c, "app.pipelines.useConversion3dBasic.batchTier.enabled"),
     },
     {
         path: "app.pipelines.useConversionCoordinateTransform.enabled",
@@ -950,6 +1215,184 @@ export const FIELDS: FieldMeta[] = [
             !!getByPath(c, "app.pipelines.useConversionCoordinateTransform.enabled"),
     },
     {
+        path: "app.pipelines.useCogConversion.enabled",
+        label: "TIF to COG conversion",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Convert a georeferenced TIFF into a Cloud Optimized GeoTIFF in EPSG:3857 so the Search map can draw it. Requires VPC.",
+    },
+    {
+        path: "app.pipelines.useCogConversion.useCodeBuild",
+        label: "TIF to COG — build via CodeBuild",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useCogConversion.enabled"),
+    },
+    {
+        path: "app.pipelines.useCogConversion.autoRegisterWithVAMS",
+        label: "TIF to COG — auto-register",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useCogConversion.enabled"),
+    },
+    {
+        path: "app.pipelines.useCogConversion.autoRegisterAutoTriggerOnFileUpload",
+        label: "TIF to COG — auto-trigger on upload",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useCogConversion.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.enabled",
+        label: "GenAI CAD STEP agent",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Create or modify a CAD STEP file from a prompt with a Strands agent (Amazon Bedrock by default). Requires VPC.",
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.runtime",
+        label: "CAD STEP agent — runtime",
+        input: "select",
+        section: "pipelines-standard",
+        advanced: true,
+        options: [
+            { value: "agentcore", label: "Amazon Bedrock AgentCore Runtime (commercial only)" },
+            { value: "fargate", label: "AWS Batch on Fargate" },
+        ],
+        help: "AgentCore requires the commercial partition and CodeBuild; Fargate runs in the private pipeline subnets.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.useCodeBuild",
+        label: "CAD STEP agent — build via CodeBuild",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Required for the agentcore runtime (arm64 image in Amazon ECR).",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.autoRegisterWithVAMS",
+        label: "CAD STEP agent — auto-register",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.autoRegisterAutoTriggerOnFileUpload",
+        label: "CAD STEP agent — auto-trigger on upload",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.bedrockModelId",
+        label: "CAD STEP agent — Bedrock model ID",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Default model provider. Required when enabled (commercial default global.anthropic.claude-sonnet-5-5).",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.openAi.modelId",
+        label: "CAD STEP agent — OpenAI model ID",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: 'Optional. Enables the per-run "openai" provider together with the API key secret ARN.',
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.openAi.apiKeySecretArn",
+        label: "CAD STEP agent — OpenAI API key secret ARN",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "AWS Secrets Manager secret holding the OpenAI API key. Never put the key itself in config.json.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.allowInternetResearch",
+        label: "CAD STEP agent — allow internet research",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Deployment master switch for the agent's web search and page fetch tools. Off by default. When on, the agent sends search queries written from the run's design prompt to third-party web search engines (the ddgs metasearch library, not an AWS service) and fetches public web pages. Always off in GovCloud and EU Sovereign: synth refuses true there.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailId",
+        label: "CAD STEP agent — Bedrock guardrail id",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Id of an existing Amazon Bedrock guardrail (with a PROMPT_ATTACK input filter) that every model invocation and fetched page runs through. Leave empty with the version empty to have the deployment create one.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.bedrockGuardrail.guardrailVersion",
+        label: "CAD STEP agent — Bedrock guardrail version",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Numbered version (or DRAFT) of the guardrail named above; set together with the id.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.agentCore.warmSessionSlots",
+        label: "CAD STEP agent — AgentCore warm session slots",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0,
+        help: "0–20 fixed runtime session ids reused across runs so sessions stay warm; 0 uses a fresh session per run.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            getByPath(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore",
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.agentCore.idleRuntimeSessionTimeoutSeconds",
+        label: "CAD STEP agent — AgentCore idle session timeout (s)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 60,
+        help: "60–28800; cannot exceed the max lifetime.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            getByPath(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore",
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.agentCore.maxLifetimeSeconds",
+        label: "CAD STEP agent — AgentCore session max lifetime (s)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 60,
+        help: "60–28800.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled") &&
+            getByPath(c, "app.pipelines.useGenAiCadStepAgent.runtime") === "agentcore",
+    },
+    {
+        path: "app.pipelines.useGenAiCadStepAgent.maxRunSeconds",
+        label: "CAD STEP agent — max run seconds",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 300,
+        help: "300–6000 wall-clock bound for one agent run; the run must report before the workflow task's 6600 s wait ends.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
+    },
+    {
         path: "app.pipelines.usePreview3dThumbnail.enabled",
         label: "3D preview thumbnail",
         input: "boolean",
@@ -972,6 +1415,274 @@ export const FIELDS: FieldMeta[] = [
         section: "pipelines-standard",
         advanced: true,
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.enabled",
+        label: "SYSTEM GenAI metadata",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "File attributes and typed metadata extracted from every uploaded file (any type), Amazon Bedrock-generated descriptive metadata when the GenAI analysis is on, and the embeddings vector search indexes. Lambda-only by default (no VPC).",
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis",
+        label: "SYSTEM GenAI — GenAI analysis",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "On: the Bedrock analysis model describes and classifies each file (genai_* metadata). Off: attributes-only — extracted sys_*/ext_* attributes and the location, no Converse call, no analysis model needed; vector search still embeds the extracted text and attributes.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId",
+        label: "SYSTEM GenAI — Bedrock analysis model ID",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Vision-capable model id or inference profile (commercial default global.anthropic.claude-haiku-4-5-20251001-v1:0; GovCloud us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0). Required only with the GenAI analysis on. A model id or system-defined inference-profile id, not an ARN. Anthropic models require the one-time use-case form per organization.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.textModelId",
+        label: "SYSTEM GenAI — Bedrock text model ID",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Optional model id or inference profile for the text-only requests (no images). Empty: the analysis model answers them. Same id rules and partition prefixes as the analysis model.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelSupportsImages",
+        label: "SYSTEM GenAI — analysis model accepts images",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "On (default): rendered views are sent with the analysis prompt. Off, for a text-only analysis model: no views are rendered and the model receives the extracted attributes and text only.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId",
+        label: "SYSTEM GenAI — Bedrock embedding model ID",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "In-Region Amazon Bedrock embedding model id the vector index is built from, of a supported family (see the widths below). Required with vector search on. Embedding models have no cross-Region inference profiles.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions",
+        label: "SYSTEM GenAI — embedding dimensions",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: `Vector width the embedding model emits, by family: ${embeddingFamilySummary()}. Immutable per index: a different width is a new index and a reindex.`,
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.maxTokens",
+        label: "SYSTEM GenAI — analysis max output tokens",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 256,
+        help: "Output token limit of each analysis request (256–8192, default 2048).",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.temperature",
+        label: "SYSTEM GenAI — analysis temperature",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0,
+        help: "Sampling temperature of each analysis request (0–1, default 0.2). For a model that rejects the parameter, set it to null in config.json and no temperature is sent.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS",
+        label: "SYSTEM GenAI — auto-register",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload",
+        label: "SYSTEM GenAI — auto-trigger on upload",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Required together with auto-register while vector search is enabled: the upload trigger is what produces embeddings.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.useFargateRenderer",
+        label: "SYSTEM GenAI — Fargate renderer for oversized files",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Adds an AWS Batch (Fargate) render branch for files above the Lambda limits. The only option of this pipeline that requires a VPC.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxInputFileSizeMb",
+        label: "SYSTEM GenAI — max input file size (MB)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: "Files above this size are analysed from attributes only unless the Fargate renderer is enabled.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxPointCloudPoints",
+        label: "SYSTEM GenAI — max point cloud points",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: "Point clouds above this count (read from the file header) are analysed from attributes only unless the Fargate renderer is enabled.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled",
+        label: "SYSTEM GenAI — create the Bedrock guardrail",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Creates an Amazon Bedrock guardrail with a prompt-attack input filter and PII filters as part of the deployment and applies it to every analysis prompt. Turn off to bring your own guardrail (identifier and version below) or to run without one.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.promptAttackInputStrength",
+        label: "SYSTEM GenAI — created guardrail prompt-attack strength",
+        input: "select",
+        section: "pipelines-standard",
+        advanced: true,
+        options: [
+            { value: "LOW", label: "LOW" },
+            { value: "MEDIUM", label: "MEDIUM" },
+            { value: "HIGH", label: "HIGH" },
+        ],
+        help: "Input strength of the created guardrail's prompt-attack filter. Start at LOW and raise it if malicious prompts pass; a higher strength blocks more legitimate file content.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.piiFilter",
+        label: "SYSTEM GenAI — created guardrail PII filter",
+        input: "select",
+        section: "pipelines-standard",
+        advanced: true,
+        options: [
+            { value: "off", label: "off" },
+            { value: "anonymize", label: "anonymize" },
+            { value: "block", label: "block" },
+        ],
+        help: "How the created guardrail treats personal data and credentials it detects in a prompt: anonymize masks them before the model reads the prompt, block fails the analysis, off adds no PII filter.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier",
+        label: "SYSTEM GenAI — Bedrock guardrail identifier",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Identifier of an operator-owned Amazon Bedrock guardrail applied to every analysis prompt (prompt-attack input filter) instead of the created one. Set together with the version and turn off the created guardrail, or leave both empty.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion",
+        label: "SYSTEM GenAI — Bedrock guardrail version",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Version of the guardrail (a number or DRAFT). Set together with the identifier, or leave both empty.",
+        visibleWhen: systemGenAi,
+    },
+    {
+        path: "app.pipelines.usePreview3dThumbnail.computeTiers.standard.vcpu",
+        label: "3D thumbnail — standard tier vCPU",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0.25,
+        help: "AWS Fargate vCPU for inputs below the large-tier threshold: 0.25, 0.5, 1, 2, 4, 8 or 16.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") ||
+            !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
+    },
+    {
+        path: "app.pipelines.usePreview3dThumbnail.computeTiers.standard.memoryGiB",
+        label: "3D thumbnail — standard tier memory (GiB)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0.5,
+        help: "A memory size AWS Fargate supports for the standard tier's vCPU (4 vCPU: 8–30 GiB).",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") ||
+            !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
+    },
+    {
+        path: "app.pipelines.usePreview3dThumbnail.computeTiers.large.vcpu",
+        label: "3D thumbnail — large tier vCPU",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0.25,
+        help: "AWS Fargate vCPU for inputs at or above the large-tier threshold: 0.25, 0.5, 1, 2, 4, 8 or 16.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") ||
+            !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
+    },
+    {
+        path: "app.pipelines.usePreview3dThumbnail.computeTiers.large.memoryGiB",
+        label: "3D thumbnail — large tier memory (GiB)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0.5,
+        help: "A memory size AWS Fargate supports for the large tier's vCPU (16 vCPU: 32–120 GiB in 8 GiB steps).",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") ||
+            !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
+    },
+    {
+        path: "app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB",
+        label: "3D thumbnail — large-tier threshold (GiB)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Inputs at or above this size run on the large tier.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled") ||
+            !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
+    },
+    {
+        path: "app.pipelines.useMediaPreviews.enabled",
+        label: "Media previews",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Media Preview Thumbnail workflow: JPG previews for images 5 MiB or larger and for every TGA/TIFF, animated GIF previews for video. Shares the 3D thumbnail container, so it deploys that container (tier sizes below) even when the 3D thumbnail pipeline is off. Off by default (also when missing); requires the Global VPC (app.useGlobalVpc.enabled).",
+    },
+    {
+        path: "app.pipelines.useMediaPreviews.autoRegisterAutoTriggerOnFileUpload",
+        label: "Media previews — auto-trigger on upload",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
+    },
+    {
+        path: "app.pipelines.useMediaPreviews.downscaleSelfPreviewableImages",
+        label: "Media previews — downscale small images",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Also write a smaller JPEG for an image the web already shows as its own preview (a PNG, JPG, GIF, WebP or BMP under 5 MiB), when the JPEG is meaningfully smaller. Off by default.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useMediaPreviews.enabled"),
     },
     {
         path: "app.pipelines.usePreviewPcPotreeViewer.enabled",
@@ -998,37 +1709,57 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreviewPcPotreeViewer.enabled"),
     },
     {
-        path: "app.pipelines.useGenAiMetadata3dLabeling.enabled",
-        label: "GenAI metadata labeling",
+        path: "app.pipelines.useGenAiVideoSopBom.enabled",
+        label: "Video SOP/BOM Extraction",
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
-        help: "Use Amazon Bedrock to label GLB/FBX/OBJ files. Requires VPC.",
+        help: "Transcribe 1-4 narrated teardown videos with Amazon Transcribe and derive a SOP, an LCA bill of materials and a lab summary with Amazon Bedrock. Requires VPC. Commercial and GovCloud partitions only.",
     },
     {
-        path: "app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId",
-        label: "GenAI — Bedrock model ID",
+        path: "app.pipelines.useGenAiVideoSopBom.useCodeBuild",
+        label: "Video SOP/BOM — build via CodeBuild",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiVideoSopBom.autoRegisterWithVAMS",
+        label: "Video SOP/BOM — auto-register",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiVideoSopBom.bedrockModelId",
+        label: "Video SOP/BOM — Bedrock model ID",
         input: "text",
         section: "pipelines-standard",
         advanced: true,
-        help: "Required when enabled (commercial default global.anthropic.claude-sonnet-5-5).",
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
+        help: "Required when enabled; one model serves the text and vision calls (e.g. global.anthropic.claude-sonnet-5-5).",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
     },
     {
-        path: "app.pipelines.useGenAiMetadata3dLabeling.autoRegisterWithVAMS",
-        label: "GenAI — auto-register",
-        input: "boolean",
+        path: "app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles",
+        label: "Video SOP/BOM — max videos per run",
+        input: "number",
         section: "pipelines-standard",
         advanced: true,
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
+        min: 1,
+        help: "Integer from 1 to 4. A run selecting more files is refused before any job starts.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
     },
     {
-        path: "app.pipelines.useGenAiMetadata3dLabeling.autoRegisterAutoTriggerOnFileUpload",
-        label: "GenAI — auto-trigger on upload",
-        input: "boolean",
+        path: "app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes",
+        label: "Video SOP/BOM — max total video minutes per run",
+        input: "number",
         section: "pipelines-standard",
         advanced: true,
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
+        min: 1,
+        help: "Integer from 1 to 480 (Amazon Transcribe accepts at most 28,800 seconds of audio per job). Checked in the container after audio extraction.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
     },
 
     // ===== Pipelines — GPU / third-party =====
@@ -1098,6 +1829,15 @@ export const FIELDS: FieldMeta[] = [
         section: "pipelines-gpu",
         advanced: true,
         help: "Warning: incurs continuous compute cost even when idle.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useIsaacLabTraining.enabled"),
+    },
+    {
+        path: "app.pipelines.useIsaacLabTraining.instanceTypes",
+        label: "Isaac Lab — GPU instance types",
+        input: "string-array",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "EC2 instance types the Isaac Lab compute environment may launch. Each needs one NVIDIA GPU with RT cores and 16 GB or more of video memory (G5, G6, GR6 or G6e), at least 8 vCPUs and more than 32 GiB of registered memory. g5.2xlarge and g6.2xlarge are too small.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useIsaacLabTraining.enabled"),
     },
     // RapidPipeline ECS
@@ -1289,6 +2029,23 @@ export const FIELDS: FieldMeta[] = [
         advanced: true,
         help: "Workflow support for the DeadlineCloud pipeline execution type (OpenJD job submission to an operator-owned farm/queue). Available only in the commercial AWS partition — not available in GovCloud or EU Sovereign Cloud.",
     },
+    // Externally owned pipeline bridges
+    {
+        path: "app.pipelines.externalPipelineBridges",
+        label: "External pipeline bridges",
+        input: "external-bridges",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Accounts and role ARN patterns allowed to publish pipeline registration events onto the orchestration bus, plus the exact Lambda / SQS / EventBridge ARNs the workflow role may invoke there. Empty grants nothing.",
+    },
+    {
+        path: "app.pipelines.executionLogReadPrefixes",
+        label: "Execution log read allow-list",
+        input: "string-array",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "CloudWatch log-group names under /aws/ the execution logs API may read (trailing * = prefix). Used verbatim as IAM resource names; '*', '/' and anything outside /aws/ are rejected.",
+    },
     // NVIDIA Cosmos shared settings + models
     {
         path: `${COSMOS}.enabled`,
@@ -1435,6 +2192,92 @@ export const FIELDS: FieldMeta[] = [
         ...f,
         visibleWhen: (c: ConfigShape) => !!getByPath(c, `${COSMOS3}.enabled`),
     })),
+
+    // Image to 3D shared settings + models
+    {
+        path: `${IMAGETO3D}.enabled`,
+        label: "Image to 3D",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Single-photo to 3D mesh with optional print-readiness cleanup. Requires VPC + GPU + internet.",
+    },
+    {
+        path: `${IMAGETO3D}.huggingFaceToken`,
+        label: "Image to 3D — HuggingFace token",
+        input: "text",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Required when Image to 3D is enabled. Stored in Secrets Manager at deploy.",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.useCodeBuild`,
+        label: "Image to 3D — build with CodeBuild",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Build via AWS CodeBuild + ECR. Recommended for large GPU images.",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.autoRegisterWithVAMS`,
+        label: "Image to 3D — auto-register with VAMS",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.autoTriggerOnFileExtensionsUpload`,
+        label: "Image to 3D — auto-trigger file extensions",
+        input: "text",
+        section: "pipelines-gpu",
+        advanced: true,
+        placeholder: ".png,.jpg,.jpeg",
+        help: "Any non-empty value enables the file-upload trigger; the workflow input filters select the matching files.",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.instanceTypes`,
+        label: "Image to 3D — instance types",
+        input: "string-array",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Must be non-empty when Image to 3D is enabled (BEST_FIT_PROGRESSIVE order).",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.maxVCpus`,
+        label: "Image to 3D — max vCPUs",
+        input: "number",
+        section: "pipelines-gpu",
+        advanced: true,
+        min: 1,
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.modelCacheGeneration`,
+        label: "Image to 3D — model cache generation",
+        input: "number",
+        section: "pipelines-gpu",
+        advanced: true,
+        min: 0,
+        help: "Raise by one and deploy to start every model on an empty weight cache (new EFS directory and S3 prefix). Runs already in flight keep the old cache; remove it yourself afterwards.",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    ...imageTo3dModelFields.map((f) => ({
+        ...f,
+        visibleWhen: (c: ConfigShape) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    })),
+    {
+        ...imageTo3dAgentModelField,
+        visibleWhen: (c: ConfigShape) => !!getByPath(c, `${IMAGETO3D}.models.blenderagent.enabled`),
+    },
+    {
+        ...imageTo3dAgentImageEditingField,
+        visibleWhen: (c: ConfigShape) => !!getByPath(c, `${IMAGETO3D}.models.blenderagent.enabled`),
+    },
 
     // ===== Add-ons =====
     {
@@ -1605,6 +2448,42 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c) => getByPath(c, "app.api.apiGatewayRest.endpointType") === "PRIVATE",
     },
     {
+        path: "app.api.apiGatewayRest.customDomain.enabled",
+        label: "API custom domain",
+        input: "boolean",
+        section: "api-webui",
+        advanced: true,
+        help: "Serves the REST API at https://{domain host}/api/ through a Regional API Gateway custom domain name. The web app and a new VamsCLI setup use this URL. Commercial and GovCloud partitions only; not available with a PRIVATE endpoint.",
+    },
+    {
+        path: "app.api.apiGatewayRest.customDomain.domainHost",
+        label: "API domain host",
+        input: "text",
+        section: "api-webui",
+        advanced: true,
+        placeholder: "api.vams.example.com",
+        help: "Lowercase host name, no scheme or path.",
+        visibleWhen: apiCustomDomain,
+    },
+    {
+        path: "app.api.apiGatewayRest.customDomain.certificateArn",
+        label: "API certificate ARN (deployment Region)",
+        input: "text",
+        section: "api-webui",
+        advanced: true,
+        help: "ACM certificate ARN for the domain host, in the deployment Region.",
+        visibleWhen: apiCustomDomain,
+    },
+    {
+        path: "app.api.apiGatewayRest.customDomain.optionalHostedZoneId",
+        label: "API hosted zone ID (optional)",
+        input: "text",
+        section: "api-webui",
+        advanced: true,
+        help: "When set, VAMS creates Route 53 A and AAAA alias records for the domain host in this hosted zone.",
+        visibleWhen: apiCustomDomain,
+    },
+    {
         path: "app.webUi.optionalBannerHtmlMessage",
         label: "Web UI banner HTML message",
         input: "text",
@@ -1626,7 +2505,7 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "api-webui",
         advanced: true,
-        help: "Registers http://localhost:3001 as a Cognito callback and logout URL so a locally run web front can complete a federated sign-in. Read only when Cognito SAML or OIDC federation is enabled. Leave off for a deployment that serves real users.",
+        help: "Registers http://localhost:3001 as a Cognito callback and logout URL so a locally run web front can complete a federated sign-in. The callback URLs are read only when Cognito SAML or OIDC federation is enabled. In every authentication mode it also admits http://localhost:3001 as a referer for the Amazon Location Service map key. Leave off for a deployment that serves real users.",
     },
 
     // ===== Metadata schema auto-load =====
@@ -1658,7 +2537,90 @@ export const FIELDS: FieldMeta[] = [
         section: "metadata",
         advanced: true,
     },
+
+    // ===== Download as Zip (prepared archive downloads) =====
+    {
+        path: "app.pipelines.useZipDownloads.enabled",
+        label: "Download as Zip",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Lets users download files, folders or a whole asset as one zip, tar or tar.gz archive, built by the zipArchive system pipeline on AWS Batch Fargate. Requires the global VPC. The job table, the API routes and the archive expiry rule deploy either way. A zip download is kept for 7 days.",
+    },
+    {
+        path: "app.pipelines.useZipDownloads.maxFilesPerRequest",
+        label: "Download as Zip — maximum files per archive",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: "1 to 1,000,000, default 100,000.",
+    },
+    {
+        path: "app.pipelines.useZipDownloads.maxTotalBytesPerRequest",
+        label: "Download as Zip — maximum total size per archive (bytes)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: "Up to 5 TiB (5497558138880, the largest Amazon S3 object), which is the default.",
+    },
+    {
+        path: "app.pipelines.useZipDownloads.maxActiveRequestsPerUser",
+        label: "Download as Zip — active jobs per user",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: "Queued or running zip download jobs one user may have at once. 1 to 100, default 5.",
+    },
+    {
+        path: "app.pipelines.useZipDownloads.computeVcpu",
+        label: "Download as Zip — zipArchive job vCPU",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 4,
+        help: "AWS Fargate vCPU of the zipArchive job: 4, 8 or 16 (default 16).",
+    },
+    {
+        path: "app.pipelines.useZipDownloads.computeMemoryGiB",
+        label: "Download as Zip — zipArchive job memory (GiB)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 8,
+        help: "AWS Fargate memory for the vCPU size: 4 vCPU 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in 8 GiB steps. Default 32.",
+    },
+    {
+        path: "app.pipelines.useZipDownloads.useCodeBuild",
+        label: "Download as Zip — build via CodeBuild",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useZipDownloads.enabled"),
+        help: "Builds the zipArchive container image with AWS CodeBuild during deployment instead of local Docker. Default false.",
+    },
+    // ===== Compliance =====
+    {
+        path: "app.compliance.autoLoadDefaultSchema",
+        label: "Auto-load default compliance schema",
+        input: "boolean",
+        section: "compliance",
+        advanced: true,
+        help: "Seeds the GLOBAL default-compliance-schema (a warn-level metadata rule against the default asset metadata schema) at deploy. When unset, it follows app.metadataSchema.autoLoadDefaultAssetSchema.",
+    },
+    {
+        path: "app.compliance.quarantineBlocksDownload",
+        label: "Quarantine blocks download",
+        input: "boolean",
+        section: "compliance",
+        advanced: true,
+        help: "When on, a quarantined asset cannot be downloaded, its files cannot be copied to another asset and a user's workflow run cannot take them as input, unless it holds an active exception. When off, quarantine is informational only.",
+    },
 ];
+
+export const FIELDS: FieldMeta[] = [...CORE_FIELDS, ...ADDON_FIELDS];
 
 /** Fields belonging to a section, in declaration order. */
 export function fieldsForSection(sectionId: string): FieldMeta[] {

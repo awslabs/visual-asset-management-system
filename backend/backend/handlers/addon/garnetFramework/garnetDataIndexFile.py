@@ -23,6 +23,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from common.batchItemFailures import (
     all_batch_item_failures,
     batch_item_identifier,
@@ -41,13 +42,15 @@ from common.validators import validate
 from common.eventLogSummary import event_log_summary
 from common.dynamodb import query_all_items
 from common.s3MetadataKeys import (
-    ASSET_ID_METADATA_KEY,
-    DATABASE_ID_METADATA_KEY,
     SEARCHABLE_VAMS_METADATA_KEYS,
     is_system_metadata_key,
 )
-from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions
-from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS, join_asset_location_key
+from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
+from common.assetLocations import normalize_base_prefix, object_key_for
+from common.fileAttribution import AMBIGUOUS, attribute_object, binding_of, stored_location
+from common.bucketRegistrations import REGISTRATION_DUPLICATE_OF_FIELD
+from common.indexerEvents import carry_bucket_id_stamp, stamped_bucket_id
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 from models.common import VAMSGeneralErrorResponse
 
@@ -67,7 +70,7 @@ retry_config = Config(
 )
 
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-s3_client = boto3.client('s3', config=retry_config)
+s3_client = region_routing_s3_client()
 sqs = boto3.client('sqs', config=retry_config)
 logger = safeLogger(service_name="GarnetFileIndexer")
 
@@ -101,8 +104,14 @@ def _sync_action_for_s3_event(event_name: str) -> str:
 
 def _record_sync(object_type, action, success, database_id, asset_id=None,
                  file_path=None, s3_version_id=None, entity_id=None):
-    """Best-effort outbound sync tracking record. Success means the entity was
-    queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    """Best-effort outbound sync tracking record, and the audit record of this one entity. Success
+    means the entity was queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    ctx = current_audit_context()
+    if ctx is not None:
+        log_action(ctx.event, "garnetFileSync", outcome="success" if success else "failed",
+                   reason=None if success else "internal", database_id=database_id, asset_id=asset_id,
+                   file_path=file_path, details={"operation": action, "objectType": object_type,
+                                                 "entityId": entity_id})
     write_outbound_sync_record(
         object_type,
         database_id,
@@ -205,25 +214,22 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
             
         bucket = items[0]
         bucket_name = bucket.get('bucketName')
-        base_assets_prefix = bucket.get('baseAssetsPrefix', '/')
-        
+        base_assets_prefix = normalize_base_prefix(bucket.get('baseAssetsPrefix', '/'))
+
         if not bucket_name:
             logger.error(f"Bucket name missing for bucketId: {bucket_id}")
             return None
-        
-        # Ensure prefix ends with slash
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-        
-        # Remove leading slash
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
-        
-        return {
+
+        details = {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
+        # The registration this row duplicates, so the attribution check treats both as one.
+        if bucket.get(REGISTRATION_DUPLICATE_OF_FIELD):
+            details[REGISTRATION_DUPLICATE_OF_FIELD] = bucket[REGISTRATION_DUPLICATE_OF_FIELD]
+        return details
     except Exception as e:
         logger.exception(f"Error getting bucket details for {bucket_id}: {e}")
         return None
@@ -257,6 +263,19 @@ def get_asset_details_any_state(database_id: str, asset_id: str) -> Optional[Dic
     if asset_details or database_id.endswith('#deleted'):
         return asset_details
     return get_asset_details(f"{database_id}#deleted", asset_id)
+
+def _asset_row_for_attribution(database_id: str, asset_id: str, include_archived: bool):
+    """(row, archived) for `common.fileAttribution`: the live row, else (when asked) the archived one."""
+    live = get_asset_details(database_id, asset_id)
+    if live and live.get('status') != 'archived':
+        return live, False
+    if include_archived:
+        archived = get_asset_details(f"{database_id}#deleted", asset_id)
+        if archived:
+            return archived, True
+        if live:
+            return live, True
+    return None, False
 
 def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
@@ -508,9 +527,8 @@ def convert_file_to_ngsi_ld(
                 }
             
             # Calculate full S3 key
-            asset_location = asset_data.get('assetLocation', {})
-            asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-            s3_key = join_asset_location_key(asset_base_key, file_path)
+            s3_key = object_key_for(stored_location({**asset_data, 'assetId': asset_id}, bucket_details),
+                                    file_path) or ''
             
             ngsi_ld_entity["s3Key"] = {
                 "type": "Property",
@@ -732,38 +750,35 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
             logger.info(f"No version of {s3_key} remains; Garnet entity left unchanged")
             return True
 
-        s3_metadata = s3_response.get('Metadata', {})
-        asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
-        database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
-
-        if not asset_id or not database_id:
-            logger.warning(f"Missing asset/database ID in S3 metadata for {s3_key}")
+        # The asset (live or archived) whose stored location holds the key in this bucket: the
+        # record's binding, the location index, then before the index is ready the stamp and the
+        # first folder, each checked against the bucket and the location.
+        attribution = attribute_object(
+            bucket_name, s3_key,
+            asset_table=asset_storage_table,
+            buckets_table=s3_asset_buckets_table,
+            binding=binding_of(event_record),
+            include_archived=True,
+            read_stamp=lambda: s3_response.get('Metadata', {}),
+            asset_table_name=asset_storage_table_name,
+            get_row=_asset_row_for_attribution,
+            get_registration=lambda bucket_id: get_bucket_details(bucket_id),
+            registration_bucket_id=stamped_bucket_id(event_record),
+        )
+        if not attribution.attributed:
+            reason = 'claimed by several assets' if attribution.status == AMBIGUOUS else 'in no asset location'
+            logger.warning(f"S3 file {s3_key} is {reason}; skipping")
             return True  # Skip, not an error
+        database_id = attribution.database_id
+        asset_id = attribution.asset_id
+        asset_details = attribution.asset_row
+        relative_path = attribution.relative_path
 
-        # Get asset details from the live or the archived partition
-        asset_details = get_asset_details_any_state(database_id, asset_id)
-        if not asset_details:
-            logger.warning(f"Asset not found for S3 file: {database_id}/{asset_id}")
-            return True  # Skip, not an error
-        
         # Get bucket details
         bucket_details = get_bucket_details(asset_details.get('bucketId'))
         if not bucket_details:
             logger.warning(f"Bucket details not found for asset: {asset_id}")
             return True  # Skip, not an error
-        
-        # Calculate relative path
-        asset_location = asset_details.get('assetLocation', {})
-        asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-        
-        if s3_key.startswith(asset_base_key):
-            relative_path = s3_key[len(asset_base_key):]
-        else:
-            relative_path = s3_key
-        
-        # Ensure relative path starts with a slash
-        if not relative_path.startswith('/'):
-            relative_path = '/' + relative_path
         
         # Get file metadata and attributes
         file_metadata, file_attributes = get_file_metadata(database_id, asset_id, relative_path)
@@ -873,9 +888,10 @@ def handle_file_metadata_stream(event_record: Dict[str, Any]) -> bool:
         file_metadata, file_attributes = get_file_metadata(database_id, asset_id, file_path)
         
         # Get S3 file information
-        asset_location = asset_details.get('assetLocation', {})
-        asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-        s3_key = join_asset_location_key(asset_base_key, file_path)
+        s3_key = object_key_for(stored_location({**asset_details, 'assetId': asset_id}, bucket_details), file_path)
+        if not s3_key:
+            logger.warning(f"File path {file_path} names no single file of asset {database_id}/{asset_id}")
+            return True  # Skip, not an error
         
         s3_file_info = None
         is_archived = False
@@ -918,6 +934,8 @@ def handle_file_metadata_stream(event_record: Dict[str, Any]) -> bool:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
     """
     Lambda handler for Garnet Framework file indexing.
@@ -979,6 +997,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                         if asset_bucket_name:
                                             inner_record['ASSET_BUCKET_NAME'] = asset_bucket_name
                                             inner_record['ASSET_BUCKET_PREFIX'] = asset_bucket_prefix
+                                        carry_bucket_id_stamp(inner_record, sns_message, event)
                                         success = handle_s3_notification(inner_record)
                                         if success:
                                             successful_records += 1
@@ -1007,6 +1026,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                                             if nested_bucket_name:
                                                                 s3_record['ASSET_BUCKET_NAME'] = nested_bucket_name
                                                                 s3_record['ASSET_BUCKET_PREFIX'] = nested_bucket_prefix
+                                                            carry_bucket_id_stamp(s3_record, inner_sns_message, sns_message, event)
                                                             
                                                             success = handle_s3_notification(s3_record)
                                                             if success:

@@ -6,7 +6,7 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import CommentsTab from "./CommentsTab";
-import { createComment } from "../../../services/APIService";
+import { createComment, fetchAllComments } from "../../../services/APIService";
 
 const mockShowMessage = jest.fn();
 
@@ -53,7 +53,7 @@ describe("CommentsTab add-comment result handling", () => {
     it("reports a body the API rejects as an error", async () => {
         (createComment as jest.Mock).mockResolvedValue([
             false,
-            "commentBody must be lower than 16384 characters",
+            "commentBody must be at most 16384 characters",
         ]);
 
         const { container } = render(<CommentsTab assetId="a1" databaseId="db1" isActive={true} />);
@@ -63,7 +63,7 @@ describe("CommentsTab add-comment result handling", () => {
             expect(mockShowMessage).toHaveBeenCalledWith(
                 expect.objectContaining({
                     type: "error",
-                    message: expect.stringContaining("must be lower than 16384 characters"),
+                    message: expect.stringContaining("must be at most 16384 characters"),
                 })
             )
         );
@@ -86,6 +86,33 @@ describe("CommentsTab add-comment result handling", () => {
         expect(mockShowMessage).not.toHaveBeenCalledWith(
             expect.objectContaining({ type: "error" })
         );
+    });
+});
+
+describe("CommentsTab addresses the asset by its database and asset id", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    it("lists the asset's comments in its database", async () => {
+        render(<CommentsTab assetId="a1" databaseId="db1" isActive={true} />);
+        await waitFor(() => expect(fetchAllComments).toHaveBeenCalled());
+        expect((fetchAllComments as jest.Mock).mock.calls[0][0]).toMatchObject({
+            databaseId: "db1",
+            assetId: "a1",
+        });
+    });
+
+    it("creates a comment with the version in the body and no client-made comment id", async () => {
+        (createComment as jest.Mock).mockResolvedValue([true, "Succeeded"]);
+        const { container } = render(<CommentsTab assetId="a1" databaseId="db1" isActive={true} />);
+        await submitComment(container, "a new remark");
+        const request = (createComment as jest.Mock).mock.calls[0][0];
+        expect(request).toMatchObject({ databaseId: "db1", assetId: "a1" });
+        expect(request.body.commentBody).toBe("a new remark");
+        expect(typeof request.body.assetVersionId).toBe("string");
+        expect(request.body.assetVersionId).not.toBe("");
+        expect(request).not.toHaveProperty("assetVersionIdAndCommentId");
     });
 });
 

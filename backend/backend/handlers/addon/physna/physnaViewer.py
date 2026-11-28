@@ -46,6 +46,7 @@ from botocore.config import Config as BotoConfig
 
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, log_action
 from models.common import commonHeaders, validation_error_message
 
 from . import physnaCommon
@@ -76,7 +77,7 @@ def _CasbinEnforcer(claims_and_roles):  # noqa: N802 — mirrors import name
 
 
 def _parse_viewer_request(raw: Dict[str, Any]):
-    from models.physnaViewer import PhysnaViewerRequestModel  # noqa: WPS433
+    from models.addon.physnaViewer import PhysnaViewerRequestModel  # noqa: WPS433
 
     return PhysnaViewerRequestModel(**raw)
 
@@ -396,6 +397,7 @@ def _handle_get(event: Dict[str, Any]) -> APIGatewayProxyResponseV2:
     )
 
 
+@audited_handler
 def lambda_handler(
     event: Dict[str, Any], context: LambdaContext
 ) -> APIGatewayProxyResponseV2:
@@ -431,7 +433,13 @@ def lambda_handler(
                 http_status=405,
             )
 
-        return _handle_get(event)
+        response = _handle_get(event)
+        if response.get("statusCode") == 200:
+            query = event.get("queryStringParameters") or {}
+            log_action(event, "physnaViewerGet", database_id=query.get("databaseId"),
+                       asset_id=query.get("assetId"), file_path=query.get("relativePath"),
+                       request_parameters=dict(query))
+        return response
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")

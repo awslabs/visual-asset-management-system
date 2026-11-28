@@ -601,8 +601,13 @@ namespace VamsDatabaseExplorer.Services
                 "--file-key", fileKey, "--json-output"
             };
 
-            // A single-file download has no partial outcome to report, so a failure is left to throw
-            // as VamsTransferException — whose message names the file and the reported reason.
+            // A single-file download has no partial outcome to report, so a failure throws. It throws
+            // VamsTransferException, whose message names the file and the reported reason, only when
+            // the transfer ran and the CLI's transfer report names the file. A download the CLI
+            // refuses or cannot start (file not found, asset not distributable, no presigned URL,
+            // timeout) throws InvalidOperationException carrying the CLI's error type and message,
+            // for example "DownloadError: ...". VamsTransferException derives from
+            // InvalidOperationException, so catching the base type covers both.
             var output = await ExecuteCommandAsync(
                 "vamscli", arguments, timeout: TransferCommandTimeout);
             System.Diagnostics.Debug.WriteLine($"VamsCliService: Download output: {output}");
@@ -758,7 +763,9 @@ namespace VamsDatabaseExplorer.Services
                     // at 'vamscli setup' would name a command they do not have.
                     throw new VamsCliNotFoundException(
                         $"The VAMS CLI ('{command}') was not found on PATH.\n\n" +
-                        "Install it with:\n  pip install vamscli\n\n" +
+                        "Install it from the VAMS repository with:\n" +
+                        "  pip install -e <path-to-VAMS>/tools/VamsCLI\n" +
+                        "(VamsCLI is not published on PyPI)\n\n" +
                         "Then restart ArcGIS Pro so it picks up the updated PATH.", ex);
                 }
 

@@ -5,7 +5,7 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock
 
-from backend.backend.handlers.auth import request_to_claims
+from backend.backend.handlers.auth import request_to_claims, CLAIMS_CHECK_FAILED
 
 
 @pytest.fixture
@@ -139,7 +139,9 @@ def test_request_to_claims_with_vams_claims(mock_custom_override, event_with_vam
         "tokens": ["test-user-id"],
         "roles": ["admin", "user"],
         "externalAttributes": ["attr1", "attr2"],
-        "mfaEnabled": False
+        "mfaEnabled": False,
+        "authMethod": "jwt",
+        "apiKeyId": None
     }, event_with_vams_claims)
 
 
@@ -168,7 +170,9 @@ def test_request_to_claims_with_cognito_username(mock_custom_override, event_wit
         "tokens": ["test-user-id"],
         "roles": [],
         "externalAttributes": [],
-        "mfaEnabled": False
+        "mfaEnabled": False,
+        "authMethod": "jwt",
+        "apiKeyId": None
     }, event_with_cognito_username)
 
 
@@ -197,7 +201,9 @@ def test_request_to_claims_with_username(mock_custom_override, event_with_userna
         "tokens": ["test-user-id"],
         "roles": [],
         "externalAttributes": [],
-        "mfaEnabled": False
+        "mfaEnabled": False,
+        "authMethod": "jwt",
+        "apiKeyId": None
     }, event_with_username)
 
 
@@ -226,7 +232,9 @@ def test_request_to_claims_with_sub(mock_custom_override, event_with_sub):
         "tokens": ["test-user-id"],
         "roles": [],
         "externalAttributes": [],
-        "mfaEnabled": False
+        "mfaEnabled": False,
+        "authMethod": "jwt",
+        "apiKeyId": None
     }, event_with_sub)
 
 
@@ -255,7 +263,9 @@ def test_request_to_claims_with_upn(mock_custom_override, event_with_upn):
         "tokens": ["test-user-id"],
         "roles": [],
         "externalAttributes": [],
-        "mfaEnabled": False
+        "mfaEnabled": False,
+        "authMethod": "jwt",
+        "apiKeyId": None
     }, event_with_upn)
 
 
@@ -284,7 +294,9 @@ def test_request_to_claims_with_email(mock_custom_override, event_with_email):
         "tokens": ["test@example.com"],
         "roles": [],
         "externalAttributes": [],
-        "mfaEnabled": False
+        "mfaEnabled": False,
+        "authMethod": "jwt",
+        "apiKeyId": None
     }, event_with_email)
 
 
@@ -306,15 +318,17 @@ def test_request_to_claims_without_requestContext(mock_custom_override, event_wi
 
 @patch('backend.backend.handlers.auth.customAuthClaimsCheckOverride')
 def test_request_to_claims_with_custom_override_exception(mock_custom_override, event_with_vams_claims):
-    """A throwing custom claims override must fail closed: roles are dropped so a broken
-    claims-restriction hook cannot grant more access than intended."""
+    """A throwing custom claims override denies the request: the claims are marked
+    CLAIMS_CHECK_FAILED (which CasbinEnforcer refuses on every check) and roles are dropped;
+    the identity is kept so the denial is recorded against the caller."""
     # Setup mocks
     mock_custom_override.side_effect = Exception("Test exception")
 
     # Execute
     result = request_to_claims(event_with_vams_claims)
 
-    # Assert — tokens/attributes/mfa preserved, but roles cleared (fail closed)
+    # Assert — marked as failed, roles cleared, tokens/attributes/mfa preserved
+    assert result[CLAIMS_CHECK_FAILED] is True
     assert result["tokens"] == ["test-user-id"]
     assert result["roles"] == []
     assert result["externalAttributes"] == ["attr1", "attr2"]
@@ -322,3 +336,19 @@ def test_request_to_claims_with_custom_override_exception(mock_custom_override, 
 
     # Verify the correct methods were called
     mock_custom_override.assert_called_once()
+
+
+@patch('backend.backend.handlers.auth.customAuthClaimsCheckOverride')
+def test_request_to_claims_success_carries_no_failure_mark(mock_custom_override, event_with_vams_claims):
+    """Positive control: a hook that returns leaves the claims unmarked."""
+    mock_custom_override.side_effect = lambda claims, request: claims
+
+    result = request_to_claims(event_with_vams_claims)
+
+    assert CLAIMS_CHECK_FAILED not in result
+    assert result["roles"] == ["admin", "user"]
+
+
+def test_claims_check_failed_key_matches_the_test_stubs():
+    """tests/conftest.py and tests/handlers/authz/conftest.py stub handlers.auth with this value."""
+    assert CLAIMS_CHECK_FAILED == "claimsCheckFailed"

@@ -21,22 +21,19 @@ import {
     verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import {
-    Box,
-    SpaceBetween,
-    Button,
-    Icon,
-    Container,
-    Header,
-    Multiselect,
-    FormField,
-} from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Button from "@cloudscape-design/components/button";
+import Icon from "@cloudscape-design/components/icon";
+import Multiselect from "@cloudscape-design/components/multiselect";
 import { FIELD_MAPPINGS } from "../types";
+import { searchRunningReason } from "./searchRunning";
 
 interface DraggableColumnListProps {
     selectedColumns: string[];
     availableColumns: Array<{ label: string; value: string }>;
     onColumnsChange: (columns: string[]) => void;
+    /** True while a search runs: the controls keep focus and ignore input (see searchRunning). */
     disabled?: boolean;
 }
 
@@ -77,8 +74,10 @@ const SortableItem: React.FC<SortableItemProps> = ({ id, label, onRemove, disabl
             <Button
                 iconName="close"
                 variant="icon"
+                ariaLabel={`Remove column ${label}`}
                 onClick={() => onRemove()}
                 disabled={disabled}
+                disabledReason={searchRunningReason(!!disabled)}
             />
         </div>
     );
@@ -144,8 +143,9 @@ const DraggableColumnList: React.FC<DraggableColumnListProps> = ({
                 }}
                 options={unselectedColumns}
                 placeholder="Select columns to add"
-                disabled={disabled}
+                readOnly={disabled}
                 filteringType="auto"
+                filteringAriaLabel="Filter columns"
             />
 
             {/* Selected Columns - Draggable */}

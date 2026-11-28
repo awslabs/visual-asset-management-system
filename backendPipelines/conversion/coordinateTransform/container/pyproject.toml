@@ -1,0 +1,28 @@
+[project]
+name = "coordinate-transform-pipeline"
+version = "0.1.0"
+description = "Coordinate transform pipeline container image"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "boto3",
+    "botocore",
+    "pyproj>=3.6,<4",
+    "numpy>=1.26,<3",
+    "pye57>=0.4,<0.5",
+    "laspy[lazrs]>=2.5,<3",
+    "open3d>=0.18,<0.20",
+    # open3d's Linux wheels require ipywidgets but its macOS wheels do not, and a universal lock reads one
+    # wheel's metadata. Named here so the image keeps the Jupyter packages it has always carried.
+    "ipywidgets>=8.0.4; sys_platform == 'linux'",
+    "pyyaml>=6.0,<7",
+    "structlog>=24.0,<27",
+    "pydantic>=2.0,<3",
+]
+
+# The image installs the committed, hashed requirements.lock with `pip install --require-hashes
+# --only-binary :all:`. It is exported from uv.lock (`uv export`, command in its header); uv is a
+# development and CI tool only and is not part of the image.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"

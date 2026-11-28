@@ -18,7 +18,7 @@ a relative import (`from .batchFailures import ...`) raises
 `attempted relative import with no known parent package` under path loading, which is how the Garnet
 suites load these modules -- measured, after it broke 22 of them.
 
-Mirrors the semantics in `handlers/indexing/assetIndexer.py` rather than importing from it: that
+Mirrors the semantics in `handlers/osSemanticSearch/osAssetIndexer.py` rather than importing from it: that
 module builds its OpenSearch client and resolves its own resource names at import time, so importing
 it here would pull an unrelated dependency into every cold start.
 """
@@ -27,7 +27,10 @@ from typing import Dict, List
 
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="GarnetBatchFailures")
+# A child of the Lambda's logger, so these lines carry the same service name as the rest of the
+# handler's lines. A logger of its own would be the first one configured in any handler that imports
+# this module before creating its logger, and would then label every line that handler writes.
+logger = safeLogger(child=True)
 
 
 def batch_item_identifier(record) -> str:

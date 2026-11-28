@@ -30,11 +30,11 @@ vamscli setup <BASE_URL> [OPTIONS]
 
 ### What setup does
 
-1. Validates the base URL format (accepts any HTTP/HTTPS URL).
-2. If the base URL is a direct Amazon API Gateway `execute-api` endpoint with no path, appends the REST API stage segment (`/api`) so the bootstrap calls resolve. A front (Amazon CloudFront or ALB) absorbs the stage, so a fronted or custom-domain URL is used unchanged.
+1. Validates the base URL format: an HTTPS URL, or plain HTTP for `localhost` or a loopback address only.
+2. If the base URL is a direct Amazon API Gateway `execute-api` endpoint with no path, appends the REST API stage segment (`/api`) so the bootstrap calls resolve. A front (Amazon CloudFront or ALB) maps the bootstrap routes `/api/version` and `/api/amplify-config` onto the stage, so a fronted or custom-domain URL is used unchanged.
 3. Checks API version compatibility using the base URL.
 4. Fetches Amplify configuration from `<base-url>/api/amplify-config`.
-5. Extracts the Amazon API Gateway URL from the `api` field in the response (this value already includes the stage path).
+5. Extracts the Amazon API Gateway URL from the `api` field in the response (this value already includes the stage path), and refuses it under the same HTTPS rule as the base URL.
 6. Stores both the original base URL and extracted API Gateway URL locally.
 7. Sets the profile as active when configuration is saved.
 8. Clears existing authentication profiles (with `--force`).
@@ -55,6 +55,9 @@ vamscli setup https://my-alb-123456789.us-west-2.elb.amazonaws.com
 # (the CLI appends the REST API stage path automatically)
 vamscli setup https://abcdef1234.execute-api.us-west-2.amazonaws.com
 
+# Setup against the API custom domain (app.api.apiGatewayRest.customDomain), stage path included
+vamscli setup https://api.vams.mycompany.com/api
+
 # Setup specific profiles for different environments
 vamscli --profile production setup https://prod-vams.example.com
 vamscli --profile development setup https://dev-vams.example.com
@@ -71,11 +74,13 @@ Configuration is saved to `~/.config/vamscli/profiles/{profile_name}/`. Each pro
 :::
 
 :::note[Amazon API Gateway stage path]
-The VAMS backend is an Amazon API Gateway REST API served under the fixed stage path `/api`. When you point `setup` at a front (Amazon CloudFront, ALB, or a custom domain), the front maps `/api/*` onto the stage and you use the front's URL as-is. When you point `setup` directly at the `execute-api` endpoint, the CLI appends the stage segment automatically, so use the bare endpoint URL (for example `https://abcdef1234.execute-api.us-west-2.amazonaws.com`) — do not add `/api` yourself.
+The VAMS backend is an Amazon API Gateway REST API served under the fixed stage path `/api`. When you point `setup` at the web application URL (Amazon CloudFront, ALB, or the web application's custom domain), use that URL as-is: the front maps `/api/version` and `/api/amplify-config` onto the stage, and every later command calls the API base URL that `setup` stores from the `api` field of `/api/amplify-config`. When you point `setup` directly at the `execute-api` endpoint, the CLI appends the stage segment automatically, so use the bare endpoint URL (for example `https://abcdef1234.execute-api.us-west-2.amazonaws.com`) — do not add `/api` yourself. When you point `setup` at the API custom domain (`app.api.apiGatewayRest.customDomain`), include the stage path (for example `https://api.vams.mycompany.com/api`).
 :::
 
 :::warning[Re-run setup after a deployment endpoint change]
-A profile stores the Amazon API Gateway URL it was set up against. If the deployment's API Gateway identifier or invoke URL changes — which an update that replaces the API does — the stored URL stops resolving to a valid endpoint and every request from that profile fails. Re-run `vamscli setup <BASE_URL> --force` for the profile to pick up the current endpoint. A profile that targets an Amazon CloudFront, ALB, or custom-domain front is unaffected as long as the front's URL is unchanged.
+A profile stores the API base URL it was set up against: the URL in the `api` field of `/api/amplify-config`, which every command uses, whatever base URL `setup` was given. Without an API custom domain this is the `execute-api` invoke URL. If the deployment's API Gateway identifier or invoke URL changes — which an update that replaces the API does — the stored URL stops resolving to a valid endpoint and every request from that profile fails. Re-run `vamscli setup <BASE_URL> --force` for the profile to pick up the current endpoint. A profile set up through an Amazon CloudFront, ALB, or custom-domain front needs this too, even when the front's URL is unchanged.
+
+After the deployment enables the API custom domain, re-run `vamscli setup <BASE_URL> --force` so the profile stores the custom domain's base URL (`https://{api-domain}/api/`). The custom domain name stays the same when the API behind it is replaced, so a profile that stores it keeps its endpoint through such an update. A profile that still stores the `execute-api` invoke URL keeps working against it until then, because the `execute-api` endpoint stays enabled.
 :::
 
 ---
@@ -123,17 +128,13 @@ vamscli auth login -u john.doe@example.com --save-credentials
 cat password.txt | vamscli auth login -u john.doe@example.com --password-stdin
 printenv VAMS_PASSWORD | vamscli auth login -u john.doe@example.com --password-stdin --json-output
 
-# Discouraged: the password is visible in the OS process table
-vamscli auth login -u john.doe@example.com -p mypassword
+# -p/--password also works but puts the password in the OS process table; avoid it
 
 # First login when Amazon Cognito forces a password change: two lines on stdin,
 # the temporary password first, then the new one
 printf '%s
 %s
 ' "$TEMP_PASSWORD" "$NEW_PASSWORD" | vamscli auth login -u john.doe@example.com --password-stdin --new-password-stdin --json-output
-
-# Discouraged: both passwords are visible in the OS process table
-vamscli auth login -u john.doe@example.com -p temporary-password --new-password new-password
 ```
 
 Only a trailing carriage return and line feed are stripped from a piped credential, so a password ending in a space is preserved. The bytes are decoded as UTF-8.
@@ -149,9 +150,7 @@ Amazon Cognito can require a password change before the first successful sign-in
 echo "$VAMS_TOKEN" | vamscli auth login --user-id john.doe@example.com --token-override-stdin
 echo "$VAMS_TOKEN" | vamscli auth login --user-id john.doe@example.com --token-override-stdin --expires-at "+3600"
 
-# Discouraged: the token is visible in the OS process table
-vamscli auth login --user-id john.doe@example.com --token-override "eyJhbGciOiJIUzI1NiIs..."
-vamscli auth login --user-id john.doe@example.com --token-override "token123" --expires-at "2025-12-31T23:59:59Z"
+# --token-override <token> also works but puts the token in the OS process table; avoid it
 ```
 
 ### Token override expiration formats
@@ -172,10 +171,12 @@ Username/password sign-in works only for users that exist natively in the Amazon
 -   **Amazon Cognito federated to OIDC** (`useCognito.useOidc`) — same as SAML; the identity lives in the external provider.
 
 ```bash
-vamscli auth login --user-id user@example.com --token-override "your-token"
+echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin
 ```
 
 Obtain the token from the identity provider or from the VAMS web application after signing in through the federated login button. Token override validates the token against the VAMS API rather than against a specific issuer, so a token from any of these providers works. A user pool with federation enabled still accepts username/password for its **native** users (for example the initial administrator), so an administrator can keep using `--username`.
+
+With `useExternalOAuthIdp`, the API identifies the caller from the token, so `--user-id` must be the user ID the API resolves from it: the claim `lambdaAuthorizorJWTUserIdClaim` names, or, when that is not set, the first of `cognito:username`, `username` and `sub` (see [External OAuth IdP](../../deployment/configuration-reference.md#external-oauth-idp-appauthprovideruseexternaloauthidp)).
 :::
 
 ---
@@ -213,9 +214,7 @@ vamscli auth change-password -u john.doe@example.com
 printf '%s\n%s\n' "$OLD_PASSWORD" "$NEW_PASSWORD" | vamscli auth change-password -u john.doe@example.com --old-password-stdin --new-password-stdin --json-output
 echo "$NEW_PASSWORD" | vamscli auth change-password -u john.doe@example.com --new-password-stdin
 
-# Discouraged: the passwords are visible in the OS process table
-vamscli auth change-password -u john.doe@example.com --old-password old --new-password new
-vamscli auth change-password -u john.doe@example.com --old-password old --new-password new --json-output
+# --old-password and --new-password also work but put the passwords in the OS process table; avoid them
 ```
 
 :::warning[Passwords on the Command Line]
@@ -267,9 +266,6 @@ vamscli auth forgot-password -u john.doe@example.com
 
 # Step 2 (recommended): the password never reaches the process table
 echo "$NEW_PASSWORD" | vamscli auth forgot-password -u john.doe@example.com --code 123456 --new-password-stdin
-
-# Step 2, discouraged: the password is visible in the OS process table
-vamscli auth forgot-password -u john.doe@example.com --code 123456 --new-password new-password
 
 # JSON output (request a code only)
 vamscli auth forgot-password -u john.doe@example.com --json-output
@@ -340,9 +336,7 @@ Exactly one of `--token` or `--token-stdin` is required.
 echo "$VAMS_TOKEN" | vamscli auth set-override -u john.doe@example.com --token-stdin
 echo "$VAMS_TOKEN" | vamscli auth set-override -u john.doe@example.com --token-stdin --expires-at "+3600"
 
-# Discouraged: the token is visible in the OS process table
-vamscli auth set-override -u john.doe@example.com --token "eyJhbGciOiJIUzI1NiIs..."
-vamscli auth set-override -u john.doe@example.com --token "token123" --expires-at "+3600"
+# --token <token> also works but puts the token in the OS process table; avoid it
 ```
 
 :::warning[Tokens on the Command Line]
@@ -419,12 +413,16 @@ Output includes total count, list of enabled feature names, and last updated tim
 | `ALBDEPLOY`                     | Application Load Balancer deployment mode                                     |
 | `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode                                             |
 | `NOOPENSEARCH`                  | Disable Amazon OpenSearch Service functionality                               |
+| `VECTORSEARCH`                  | Natural-language (vector) search over files; enables `search nlp`             |
 | `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                        |
 | `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito user pool federated to a SAML identity provider                |
 | `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito user pool federated to an OIDC identity provider               |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                              |
-| `PHYSNA_ADDON`                  | Physna add-on frontend features                                               |
 | `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type                                    |
+| `ZIPDOWNLOADS`                  | Download as Zip (`vamscli zip-download` commands)                             |
+| `AUDITLOGSEARCH`                | Audit Log Search (`vamscli audit` commands)                                   |
+
+An enabled add-on adds feature switches of its own, which `vamscli features list` also shows and which are listed on the add-on's pages. See [Add-ons Overview](../../developer/addons-overview.md).
 
 ---
 
@@ -462,7 +460,7 @@ vamscli features example-govcloud --json-output
 ```
 
 :::note[Feature-Gated]
-If `GOVCLOUD` is not enabled for the environment, the command exits with an error such as `GovCloud features are not enabled for this environment.`
+If `GOVCLOUD` is not enabled for the environment, the command exits with an error such as `GovCloud features are not enabled for this environment.` If the CLI could not read the environment's feature switches when you signed in, for example because your user has no VAMS role, the error says so instead and suggests signing in again or asking an administrator for a role.
 :::
 
 ---
@@ -485,7 +483,7 @@ vamscli features example-location --json-output
 ```
 
 :::note[Feature-Gated]
-If `LOCATIONSERVICES` is not enabled for the environment, the command exits with an error such as `Location services are not enabled for this environment.`
+If `LOCATIONSERVICES` is not enabled for the environment, the command exits with an error such as `Location services are not enabled for this environment.` If the CLI could not read the environment's feature switches when you signed in, for example because your user has no VAMS role, the error says so instead and suggests signing in again or asking an administrator for a role.
 :::
 
 ---
@@ -590,7 +588,7 @@ vamscli profile switch production
 
 ```bash
 # Set override token
-vamscli auth login --user-id user@example.com --token-override "external_token" --expires-at "+7200"
+echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin --expires-at "+7200"
 
 # Use commands normally
 vamscli assets list -d my-database

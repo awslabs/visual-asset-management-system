@@ -10,9 +10,11 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 from common.apiRoutes import API_SECURE_CONFIG
 from common.resourceNames import get_table_name, ResourceKeys
+from common.deployTimeValues import DeployTimeKeys, resolve
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from models.common import (
     validation_error_message,
     APIGatewayProxyResponseV2, internal_error, success,
@@ -30,8 +32,14 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 geo_lookup_config = Config(connect_timeout=2, read_timeout=5,
                            retries={'max_attempts': 2, 'mode': 'adaptive'})
 
+# The Location Service key ARN and the web URL come from the resource names (common.deployTimeValues),
+# which the import-time table lookup already loaded and keeps for an hour, so the web app's start reads
+# no Parameter Store parameter of its own. While a deployment is still adding them, they are read from
+# the parameters that held them before, through common.ssmParameters (bounded, backing off after a
+# throttled read), and served from its cache for this long.
+SECURE_CONFIG_PARAMETER_TTL_SECONDS = 300
+
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
-ssm_client = boto3.client('ssm', config=retry_config)
 geo_client = boto3.client('location', config=geo_lookup_config)
 deserializer = TypeDeserializer()
 logger = safeLogger(service_name="ConfigService")
@@ -102,9 +110,10 @@ def get_enabled_features():
 def get_location_service_api_url():
     """Get the Location Service API URL with the resolved API key
 
-    Retrieves the Location Service API Key ARN from SSM Parameter Store, then the
-    key value from AWS Location Services, and substitutes it into the configured
-    URL format. Failures are non-fatal and return an empty string.
+    Resolves the Location Service API Key ARN (from the resource names, or the SSM
+    parameter that held it before), then the key value from AWS Location Services,
+    and substitutes it into the configured URL format. Failures are non-fatal and
+    return an empty string.
 
     Returns:
         The Location Service API URL or empty string if not configured/available
@@ -115,12 +124,8 @@ def get_location_service_api_url():
 
     try:
         logger.info(f"Attempting to retrieve Location Service API Key from SSM: {location_service_api_key_arn_ssm_param}")
-        ssm_response = ssm_client.get_parameter(
-            Name=location_service_api_key_arn_ssm_param,
-            WithDecryption=True
-        )
-
-        api_key_arn = ssm_response.get('Parameter', {}).get('Value')
+        api_key_arn = resolve(DeployTimeKeys.LOCATION_API_KEY_ARN, location_service_api_key_arn_ssm_param,
+                              legacy_ttl_seconds=SECURE_CONFIG_PARAMETER_TTL_SECONDS)
 
         if not api_key_arn:
             logger.warning("Location Service API Key ARN SSM parameter exists but has no value")
@@ -156,19 +161,16 @@ def get_location_service_api_url():
         except Exception as geo_ex:
             logger.warning(f"Unexpected error retrieving API key value from Location Services: {geo_ex}")
 
-    except ClientError as e:
-        error_code = e.response.get('Error', {}).get('Code', '')
-        if error_code == 'ParameterNotFound':
-            logger.info("Location Service API Key SSM parameter not found - Location Services may not be enabled")
-        else:
-            logger.warning(f"Error retrieving Location Service API Key from SSM: {e}")
+    except KeyError:
+        logger.info("Location Service API Key SSM parameter not found - Location Services may not be enabled")
     except Exception as e:
-        logger.warning(f"Unexpected error retrieving Location Service API Key from SSM: {e}")
+        logger.warning(f"Error retrieving Location Service API Key from SSM: {e}")
 
     return ""
 
 def get_web_deployed_url():
-    """Get the deployed web application URL from SSM Parameter Store
+    """Get the deployed web application URL, from the resource names or the SSM
+    parameter that held it before
 
     Failures are non-fatal and return an empty string.
 
@@ -176,17 +178,15 @@ def get_web_deployed_url():
         The web deployed URL or empty string if not configured/available
     """
     if not web_deployed_url_ssm_param:
+        # Unset when the deployment has no web distribution (neither CloudFront nor an ALB), which
+        # publishes no web URL: nothing to look up.
         logger.info("Web Deployed URL SSM parameter name not configured")
         return ""
 
     try:
         logger.info(f"Attempting to retrieve Web Deployed URL from SSM: {web_deployed_url_ssm_param}")
-        ssm_response = ssm_client.get_parameter(
-            Name=web_deployed_url_ssm_param,
-            WithDecryption=False
-        )
-
-        web_url = ssm_response.get('Parameter', {}).get('Value')
+        web_url = resolve(DeployTimeKeys.WEB_DEPLOYED_URL, web_deployed_url_ssm_param,
+                          legacy_ttl_seconds=SECURE_CONFIG_PARAMETER_TTL_SECONDS)
 
         if web_url and web_url.strip():
             logger.info("Successfully retrieved Web Deployed URL from SSM")
@@ -194,14 +194,10 @@ def get_web_deployed_url():
         else:
             logger.info("Web Deployed URL SSM parameter exists but has no value")
 
-    except ClientError as e:
-        error_code = e.response.get('Error', {}).get('Code', '')
-        if error_code == 'ParameterNotFound':
-            logger.info("Web Deployed URL SSM parameter not found - web deployment may not be configured")
-        else:
-            logger.warning(f"Error retrieving Web Deployed URL from SSM: {e}")
+    except KeyError:
+        logger.info("Web Deployed URL SSM parameter not found - web deployment may not be configured")
     except Exception as e:
-        logger.warning(f"Unexpected error retrieving Web Deployed URL from SSM: {e}")
+        logger.warning(f"Error retrieving Web Deployed URL from SSM: {e}")
 
     return ""
 
@@ -232,6 +228,8 @@ def handle_get_request(event):
         logger.exception(f"Error handling GET request: {e}")
         return internal_error(event=event)
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for config service APIs"""
     global claims_and_roles

@@ -11,6 +11,7 @@ import * as cdk from "aws-cdk-lib";
 import { Stack, NestedStack } from "aws-cdk-lib";
 import { GarnetFrameworkBuilderNestedStack } from "./garnetFramework/garnetFrameworkBuilder-nestedStack";
 import { PhysnaSyncBuilderNestedStack } from "./physna/physnaSyncBuilder-nestedStack";
+import { EdhWorkstationsBuilderNestedStack } from "./edhWorkstations/edhWorkstationsBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import { RouteRegistry } from "../apiLambda/apiRouteRegistry";
@@ -20,6 +21,8 @@ import { LAMBDA_NODE_RUNTIME } from "../../../config/config";
 import * as kms from "aws-cdk-lib/aws-kms";
 import { NagSuppressions } from "cdk-nag";
 import { suppressCdkNagLambda } from "../../helper/security";
+import { ADDON_APP_FEATURES } from "../../../common/addonAppFeatures";
+import { VAMS_APP_FEATURES } from "../../../common/vamsAppFeatures";
 
 export interface AddonBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -29,6 +32,7 @@ export interface AddonBuilderNestedStackProps extends cdk.StackProps {
     storageResources: storageResources;
     lambdaCommonBaseLayer: LayerVersion;
     registry: RouteRegistry;
+    apiKeyServiceFunction: lambda.IFunction;
 }
 
 /**
@@ -38,6 +42,13 @@ const defaultProps: Partial<AddonBuilderNestedStackProps> = {};
 
 export class AddonBuilderNestedStack extends NestedStack {
     public pipelineVamsLambdaFunctionNames: string[] = [];
+    /** Feature switches for the enabled add-ons, pushed by the core stack. */
+    public readonly enabledFeatures: string[] = [];
+    /**
+     * True when an enabled add-on invokes `apiKeyServiceFunction`, so the core stack deploys this
+     * stack after ApiBuilder. With no such add-on the stack keeps the dependencies it has without one.
+     */
+    public readonly usesApiKeyService: boolean = false;
 
     constructor(parent: Construct, name: string, props: AddonBuilderNestedStackProps) {
         super(parent, name);
@@ -74,6 +85,55 @@ export class AddonBuilderNestedStack extends NestedStack {
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
                     registry: props.registry,
                 }
+            );
+
+            // The Physna add-on frontend features (viewer today, more planned)
+            // are gated by a single feature flag so the web UI only surfaces
+            // them when the add-on is deployed.
+            this.enabledFeatures.push(ADDON_APP_FEATURES.PHYSNA_ADDON);
+        }
+
+        //EDH Workstations
+        if (props.config.app.addons.useEdhWorkstations.enabled) {
+            const edhWorkstationsBuilderNestedStack = new EdhWorkstationsBuilderNestedStack(
+                this,
+                "EdhWorkstationsBuilderNestedStack",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    privateSubnets: props.privateSubnets,
+                    isolatedSubnets: props.isolatedSubnets,
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    registry: props.registry,
+                    apiKeyServiceFunction: props.apiKeyServiceFunction,
+                }
+            );
+
+            // The add-on mints the desktop session keys through the API key service.
+            this.usesApiKeyService = true;
+
+            // The EDH Workstations add-on gates its web pages, CLI group and MCP tools on one flag,
+            // with a further flag for each of the optional container-job and AMI recipe surfaces.
+            this.enabledFeatures.push(ADDON_APP_FEATURES.EDH_WORKSTATIONS);
+            if (props.config.app.addons.useEdhWorkstations.containers.enabled) {
+                this.enabledFeatures.push(ADDON_APP_FEATURES.EDH_CONTAINERS);
+            }
+            if (props.config.app.addons.useEdhWorkstations.amiBuilds.enabled) {
+                this.enabledFeatures.push(ADDON_APP_FEATURES.EDH_AMI_RECIPES);
+            }
+        }
+
+        // Add-on switches are declared in ADDON_APP_FEATURES (common/addonAppFeatures.ts). A core
+        // switch is enabled by the core stack only; publishing one from here would tell the web
+        // that a core feature is deployed when it is not.
+        const coreFeatures = new Set<string>(Object.values(VAMS_APP_FEATURES));
+        const coreReturned = this.enabledFeatures.filter((feature) => coreFeatures.has(feature));
+        if (coreReturned.length > 0) {
+            throw new Error(
+                `AddonBuilder: add-on stacks enabled core VAMS_APP_FEATURES values; declare add-on ` +
+                    `switches in ADDON_APP_FEATURES: ${coreReturned.join(", ")}`
             );
         }
 

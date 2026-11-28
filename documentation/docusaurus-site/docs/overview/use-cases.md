@@ -12,12 +12,13 @@ Manufacturing organizations generate large volumes of CAD models, 3D scans, and 
 
 ### How VAMS Solves It
 
-VAMS centralizes manufacturing visual assets in Amazon S3 with metadata-rich organization across databases. Engineers can view CAD files (STEP, IGES, BREP) and 3D meshes (GLTF, GLB, OBJ, FBX, STL) directly in the browser through the Three.js viewer without installing desktop CAD software. The CAD/Mesh Metadata Extraction pipeline automatically extracts geometric properties on upload.
+VAMS centralizes manufacturing visual assets in Amazon S3 with metadata-rich organization across databases. Engineers can view CAD files (STEP, IGES, BREP) and 3D meshes (GLTF, GLB, OBJ, FBX, STL) directly in the browser through the Three.js viewer without installing desktop CAD software. The SYSTEM GenAI metadata pipeline extracts geometric attributes and generates descriptive metadata for every CAD and mesh file on upload.
 
 **Key features used:**
 
 -   Three.js viewer with CAD format support (STEP, IGES, BREP via WebAssembly)
--   CAD/Mesh Metadata Extraction pipeline for automated property extraction
+-   SYSTEM GenAI metadata pipeline for automated attribute extraction and metadata generation
+-   GenAI CAD STEP agent pipeline for creating or modifying a STEP part from a natural-language instruction, with a report of what it could not verify
 -   Asset versioning with alias naming for engineering revision tracking
 -   Metadata schemas for standardized part number and BOM (Bill of Materials) tracking
 -   Fine-grained access control to separate product lines and restrict access by team
@@ -95,16 +96,17 @@ Robotics and Physical AI teams need to manage simulation environments, training 
 
 ### How VAMS Solves It
 
-VAMS provides centralized management of simulation assets with the NVIDIA Isaac Lab Training pipeline for running reinforcement learning workloads directly from managed assets. USD scene files are viewable through the Needle Engine viewer, and Gaussian splat reconstructions are rendered via BabylonJS or PlayCanvas viewers. The workflow system chains multiple processing steps for end-to-end asset preparation.
+VAMS provides centralized management of simulation assets with the NVIDIA Isaac Lab Training pipeline for running reinforcement learning workloads directly from managed assets. USD scene files are viewable through the Three.js viewer (and the Needle Engine viewer where `allowUnsafeEvalFeatures` is enabled), and Gaussian splat reconstructions are rendered via BabylonJS or PlayCanvas viewers. The workflow system chains multiple processing steps for end-to-end asset preparation.
 
 **Key features used:**
 
 -   NVIDIA Isaac Lab Training pipeline for reinforcement learning training and evaluation
--   Needle USD Viewer for Universal Scene Description file visualization
+-   Three.js and Needle USD viewers for Universal Scene Description file visualization
 -   Gaussian Splat pipelines (BabylonJS and PlayCanvas viewers, 3D Reconstruction Toolkit pipeline)
 -   Workflow system for chaining asset processing steps
 -   API and CLI access for CI/CD integration with robotics development pipelines
 -   Metadata schemas for tracking simulation parameters and training configurations
+-   EDH Workstations add-on for GPU desktops with NVIDIA Isaac Sim and the VAMS Isaac Sim connector pre-installed, and for containerized simulation jobs
 
 ---
 
@@ -122,6 +124,7 @@ VAMS serves as the central asset repository for digital twin 3D models, with the
 
 -   Garnet Framework addon for NGSI-LD digital twin knowledge graph synchronization
 -   Physna Sync addon for VAMS->Physna data sync to support 3D/CAD AI geometric 3D searching in Physna
+-   EDH Workstations addon for launching Amazon DCV desktops next to the assets they work on, optionally with the user's VAMS CLI signed in on the desktop
 -   Asset versioning with alias naming for tracking as-built model revisions
 -   Cross-database asset linking for connecting related twin representations
 -   Multiple viewer plugins for visualizing different aspects of the digital twin
@@ -142,8 +145,9 @@ VAMS provides a unified library for all visual and media assets with dedicated v
 
 **Key features used:**
 
--   20 viewer plugins covering 3D, BIM/IFC, video, audio, image, document, and data formats
+-   25 viewer plugins covering 3D, BIM/IFC, video, audio, image, document, and data formats
 -   3D Preview Thumbnail pipeline for generating animated GIF previews of 3D assets
+-   Media Preview Thumbnail pipeline for previews of reference photos, TGA and TIFF textures and capture video (optional)
 -   Comment system with rich text for collaborative asset review
 -   Permission templates for external collaborator access (database-readonly, database-user)
 -   Asset versioning for tracking production iterations
@@ -168,6 +172,7 @@ VAMS provides automated 3D format conversion through the 3D Conversion Basic pip
 -   RapidPipeline integration for asset optimization (licensed)
 -   VNTANA ModelOps for advanced spatial data optimization (licensed)
 -   Gaussian Splat viewers and pipeline for photogrammetry-based environment capture
+-   Image to 3D pipeline for generating a starting mesh from a single reference photograph
 -   Workflow system for chaining conversion, optimization, and quality validation steps
 -   VamsCLI for automated asset ingestion from build pipelines
 
@@ -203,14 +208,14 @@ AI and ML teams working with spatial data need to manage, curate, and label larg
 
 ### How VAMS Solves It
 
-VAMS provides structured dataset management with metadata schemas, versioning, and automated labeling pipelines. The GenAI Metadata Labeling pipeline uses Amazon Bedrock and Amazon Rekognition to automatically generate descriptive metadata for 3D assets. The search system enables ML engineers to discover and curate training datasets by querying across metadata fields.
+VAMS provides structured dataset management with metadata schemas, versioning, and automated labeling pipelines. The SYSTEM GenAI metadata pipeline uses Amazon Bedrock to generate descriptive metadata for every uploaded file, and — with vector search enabled — embeds each file version so datasets can be searched by content. The search system enables ML engineers to discover and curate training datasets by querying across metadata fields.
 
 **Key features used:**
 
--   GenAI Metadata Labeling pipeline for automated asset tagging via Amazon Bedrock
+-   SYSTEM GenAI metadata pipeline for automated file tagging and description via Amazon Bedrock
 -   Metadata schemas with typed fields for structured dataset annotation
 -   Asset versioning for tracking dataset iterations
--   Amazon OpenSearch Service search for dataset discovery and curation
+-   Amazon OpenSearch Service keyword search and natural-language (vector) search for dataset discovery and curation
 -   VamsCLI for bulk dataset ingestion and metadata export
 -   REST API for integration with training pipelines
 
@@ -232,6 +237,7 @@ VAMS centralizes both design models and as-built scan data in a versioned, searc
 -   Asset versioning for tracking design iterations and as-built captures
 -   Metadata schemas for build compliance tracking
 -   3D Preview Thumbnail pipeline for visual overview of scans
+-   Media Preview Thumbnail pipeline for previews of survey imagery, GeoTIFF and capture video (optional)
 -   Cross-database asset linking for relating design models to as-built scans
 -   Tag-based organization for tracking construction phases and zones
 

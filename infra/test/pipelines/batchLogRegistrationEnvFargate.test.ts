@@ -20,9 +20,15 @@
 import * as path from "path";
 import { Template } from "aws-cdk-lib/assertions";
 import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct";
+import { Conversion3dBasicConstruct } from "../../lib/nestedStacks/pipelines/conversion/3dBasic/constructs/conversion3dBasic-construct";
 import { PcPotreeViewerConstruct } from "../../lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/pcPotreeViewer-construct";
-import { Metadata3dLabelingConstruct } from "../../lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/metadata3dLabeling-construct";
+import { CogConvertConstruct } from "../../lib/nestedStacks/pipelines/conversion/cogConvert/constructs/cogConvert-construct";
 import { CoordinateTransformConstruct } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
+import { SystemGenAiMetadataConstruct } from "../../lib/nestedStacks/pipelines/system/genAiMetadata/constructs/systemGenAiMetadata-construct";
+import { ZipArchiveConstruct } from "../../lib/nestedStacks/pipelines/utility/zipArchive/constructs/zipArchive-construct";
+import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import { VideoSopBomConstruct } from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct";
+import { CadStepAgentConstruct } from "../../lib/nestedStacks/pipelines/genAi/cadStepAgent/constructs/cadStepAgent-construct";
 import { makePipelineHarness } from "../support/pipelineConstructHarness";
 import {
     declaredStageNames,
@@ -98,6 +104,42 @@ export const expectDeclaredStagesInAsl = (template: Template, producerFile: stri
     }
 };
 
+/**
+ * The {state name: function logical id} map behind a producer's `{state: functionName}` environment
+ * value (a `Stack.toJsonString`), each value checked to be a function of this stack. The producer
+ * registers /aws/lambda/<function> for every key, under the key as the stage name, so a missing or
+ * misnamed key leaves that state's log out of the run's log view.
+ */
+const stateFunctionRefs = (template: Template, value: any): Record<string, string> => {
+    const parts: any[] =
+        typeof value === "string" ? [value] : (value["Fn::Join"] as [string, any[]])[1];
+    const tokens: any[] = [];
+    const text = parts
+        .map((p) => {
+            if (typeof p === "string") return p;
+            tokens.push(p);
+            return `__TOKEN_${tokens.length - 1}__`;
+        })
+        .join("");
+    const names: Record<string, string> = JSON.parse(text);
+    const functions = template.findResources("AWS::Lambda::Function");
+    return Object.fromEntries(
+        Object.entries(names).map(([state, placeholder]) => {
+            const match = /^__TOKEN_(\d+)__$/.exec(placeholder);
+            expect(match).not.toBeNull();
+            const ref = tokens[Number(match![1])].Ref;
+            expect(functions[ref]).toBeDefined();
+            return [state, ref];
+        })
+    );
+};
+
+/** The states of the single state machine that invoke a Lambda function. */
+const lambdaInvokeStates = (template: Template): string[] =>
+    Object.entries(parseAsl(singleStateMachine(template)).States)
+        .filter(([, s]: [string, any]) => s.Resource?.toString().includes("lambda:invoke"))
+        .map(([n]) => n);
+
 describe("preview/3dThumbnail openPipeline registration environment", () => {
     let template: Template;
 
@@ -139,6 +181,53 @@ describe("preview/3dThumbnail openPipeline registration environment", () => {
             path.join(PRODUCERS, "preview", "3dThumbnail", "lambda", "openPipeline.py")
         );
     });
+});
+
+// openPipeline registers the state machine and the converter Lambda; constructPipeline registers the
+// container, once the job size (and so the Batch state) is known.
+describe("conversion/3dBasic launcher registration environment (Batch tier)", () => {
+    let template: Template;
+
+    beforeAll(() => {
+        const h = makePipelineHarness("Conversion3dBasicEnvStack", (c) => {
+            c.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS = false;
+            c.app.pipelines.useConversion3dBasic.batchTier = { enabled: true, maxMemoryGiB: 120 };
+        });
+        const nested = new Conversion3dBasicConstruct(h.stack, "Conversion3dBasicPipeline", {
+            config: h.config,
+            storageResources: h.storage,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        template = Template.fromStack(nested);
+    });
+
+    test("constructPipeline registers the vended group its job definition writes to, under the job definition's own stream prefix", () => {
+        const env = registeringLambdaEnv(template, "constructPipeline.lambda_handler");
+        const jobDefinitionId = expectDerivedJobDefinitionName(
+            template,
+            env.BATCH_JOB_DEFINITION_NAME
+        );
+        expectVendedGroupRegistration(
+            template,
+            jobDefinitionId,
+            env.BATCH_JOB_LOG_GROUP_NAME,
+            env.BATCH_JOB_LOG_GROUP_ARN
+        );
+    });
+
+    test.each(["openPipeline.py", "constructPipeline.py"])(
+        "every stage name %s declares is a state of the machine",
+        (producer) => {
+            expectDeclaredStagesInAsl(
+                template,
+                path.join(PRODUCERS, "conversion", "3dBasic", "lambda", producer)
+            );
+        }
+    );
 });
 
 describe("preview/pcPotreeViewer openPipeline registration environment", () => {
@@ -195,15 +284,17 @@ describe("preview/pcPotreeViewer openPipeline registration environment", () => {
     });
 });
 
-describe("genAi/metadata3dLabeling openPipeline registration environment", () => {
+describe("system/genAiMetadata openPipeline registration environment", () => {
     let template: Template;
 
     beforeAll(() => {
-        const h = makePipelineHarness("Metadata3dLabelingEnvStack", (c) => {
-            c.app.pipelines.useGenAiMetadata3dLabeling.enabled = true;
-            c.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterWithVAMS = false;
+        const h = makePipelineHarness("SystemGenAiMetadataEnvStack", (c) => {
+            c.app.pipelines.useSystemGenAiMetadata.enabled = true;
+            c.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = false;
+            // The Batch branch, and with it the container log source, exists on this sub-flag only.
+            c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = true;
         });
-        const nested = new Metadata3dLabelingConstruct(h.stack, "Metadata3dLabelingPipeline", {
+        const nested = new SystemGenAiMetadataConstruct(h.stack, "SystemGenAiMetadataPipeline", {
             config: h.config,
             storageResources: h.storage,
             vpc: h.vpc,
@@ -215,7 +306,7 @@ describe("genAi/metadata3dLabeling openPipeline registration environment", () =>
         template = Template.fromStack(nested);
     });
 
-    test("registers the Blender job's vended group under the job definition's own stream prefix", () => {
+    test("registers the render job's vended group under the job definition's own stream prefix", () => {
         const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
         const jobDefinitionId = expectDerivedJobDefinitionName(
             template,
@@ -229,30 +320,140 @@ describe("genAi/metadata3dLabeling openPipeline registration environment", () =>
         );
     });
 
-    test("names the metadata-generation function's log group without a LogRetention resource", () => {
-        const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
-        const [metadataFunctionId] = Object.entries(
-            template.findResources("AWS::Lambda::Function")
-        ).find(
-            ([, fn]) =>
-                (fn as any).Properties.Handler === "metadataGenerationPipeline.lambda_handler"
-        )!;
-        // `/aws/lambda/<functionName>`, built from the function's name token.
-        const name = JSON.stringify(env.METADATA_GENERATION_LOG_GROUP_NAME);
-        expect(name).toContain("/aws/lambda/");
-        expect(name).toContain(`{"Ref":"${metadataFunctionId}"}`);
-        const arn = JSON.stringify(env.METADATA_GENERATION_LOG_GROUP_ARN);
-        expect(arn).toContain(`:log-group:/aws/lambda/`);
-        expect(arn).toContain(`{"Ref":"${metadataFunctionId}"}`);
-        // Reading `fn.logGroup` would have synthesized this resource plus its singleton lambda.
-        expect(template.findResources("Custom::LogRetention")).toEqual({});
-    });
-
-    test("both stage names the producer declares are states of the machine", () => {
+    test("the stage name the producer declares is a state of the machine", () => {
         expectDeclaredStagesInAsl(
             template,
-            path.join(PRODUCERS, "genAi", "metadata3dLabeling", "lambda", "openPipeline.py")
+            path.join(PRODUCERS, "system", "genAiMetadata", "lambda", "openPipeline.py")
         );
+    });
+
+    test("names each Lambda state's function under that state's name", () => {
+        // openPipeline registers /aws/lambda/<function> for every key of this map, under the key as the
+        // stage name, so the keys must be its declared Lambda state names and each value a function of
+        // this stack. A missing or misnamed key leaves that branch's log out of the run's log view.
+        const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
+        const names = stateFunctionRefs(template, env.ANALYSIS_FUNCTION_NAMES);
+        const producer = path.join(
+            PRODUCERS,
+            "system",
+            "genAiMetadata",
+            "lambda",
+            "openPipeline.py"
+        );
+        const lambdaStates = declaredStageNames(producer).filter((n) => n !== "FargateRenderJob");
+        expect(lambdaStates.length).toBe(8);
+        expect(Object.keys(names).sort()).toEqual([...lambdaStates].sort());
+        // The map covers every Lambda the state machine invokes, so no branch is left unregistered.
+        const invoked = lambdaInvokeStates(template);
+        expect(invoked.length).toBeGreaterThan(0);
+        for (const state of invoked) {
+            expect(Object.keys(names)).toContain(state);
+        }
+    });
+
+    test("without the Fargate renderer the registering lambda names no container group", () => {
+        const h = makePipelineHarness("SystemGenAiMetadataLambdaOnlyEnvStack", (c) => {
+            c.app.pipelines.useSystemGenAiMetadata.enabled = true;
+            c.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS = false;
+            c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = false;
+        });
+        const nested = new SystemGenAiMetadataConstruct(h.stack, "SystemGenAiMetadataPipeline", {
+            config: h.config,
+            storageResources: h.storage,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        const env = registeringLambdaEnv(Template.fromStack(nested), "openPipeline.lambda_handler");
+        expect(env.BATCH_JOB_LOG_GROUP_NAME).toBeUndefined();
+        expect(env.BATCH_JOB_LOG_GROUP_ARN).toBeUndefined();
+        expect(env.BATCH_JOB_DEFINITION_NAME).toBeUndefined();
+        // The producer's BATCH_STATE_NAME literal still names FargateRenderJob, which this ASL lacks;
+        // the absent env above is what keeps that container entry out of the registration.
+    });
+});
+
+describe("conversion/cogConvert registration environment and state machine logging", () => {
+    let template: Template;
+
+    beforeAll(() => {
+        const h = makePipelineHarness("CogConvertEnvStack", (c) => {
+            c.app.pipelines.useCogConversion.enabled = true;
+            // Sources the container image from an ECR repository instead of a local Docker build.
+            c.app.pipelines.useCogConversion.useCodeBuild = true;
+            c.app.pipelines.useCogConversion.autoRegisterWithVAMS = false;
+        });
+        new CogConvertConstruct(h.stack, "CogConvertPipeline", {
+            config: h.config,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            assetAuxiliaryBucket: h.assetAuxiliaryBucket,
+            storageResources: h.storage,
+            kmsKey: h.kmsKey,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        template = Template.fromStack(h.stack);
+    });
+
+    test("the job-submitting lambda registers the vended group beside its job definition name", () => {
+        const env = registeringLambdaEnv(template, "executeBatchJob.lambda_handler");
+        const jobDefinitionId = expectDerivedJobDefinitionName(template, env.BATCH_JOB_DEFINITION);
+        expectVendedGroupRegistration(
+            template,
+            jobDefinitionId,
+            env.BATCH_JOB_LOG_GROUP_NAME,
+            env.BATCH_JOB_LOG_GROUP_ARN
+        );
+    });
+
+    test("the stage the producer declares is a state of the machine", () => {
+        expectDeclaredStagesInAsl(
+            template,
+            path.join(PRODUCERS, "conversion", "cogConvert", "lambda", "executeBatchJob.py")
+        );
+    });
+
+    test("openPipeline names the function of each Lambda state, and every Lambda state is named", () => {
+        const producer = path.join(
+            PRODUCERS,
+            "conversion",
+            "cogConvert",
+            "lambda",
+            "openPipeline.py"
+        );
+        expectDeclaredStagesInAsl(template, producer);
+        const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
+        const refs = stateFunctionRefs(template, env.STATE_FUNCTION_NAMES);
+        expect(Object.keys(refs)).toEqual(declaredStageNames(producer));
+        expect(lambdaInvokeStates(template).sort()).toEqual(Object.keys(refs).sort());
+        // Each state's group is that state's own function.
+        const functions = template.findResources("AWS::Lambda::Function");
+        const handlers = Object.fromEntries(
+            Object.entries(refs).map(([state, ref]) => [state, functions[ref].Properties.Handler])
+        );
+        expect(handlers).toEqual({
+            ConstructPipelineTask: "constructPipeline.lambda_handler",
+            CogConvertBatchJob: "executeBatchJob.lambda_handler",
+            PipelineEndTask: "pipelineEnd.lambda_handler",
+        });
+    });
+
+    test("the batch task hands its Lambda both of the run's ids", () => {
+        const states = parseAsl(singleStateMachine(template)).States;
+        expect(states.CogConvertBatchJob.Parameters.Payload).toMatchObject({
+            "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
+            "workflowExecutionId.$": "$.workflowExecutionId",
+        });
+    });
+
+    test("the state machine logs errors only, without execution data (the input carries the task token)", () => {
+        const configuration = singleStateMachine(template).LoggingConfiguration;
+        expect(configuration.Level).toBe("ERROR");
+        expect(configuration.IncludeExecutionData).toBe(false);
     });
 });
 
@@ -302,5 +503,154 @@ describe("conversion/coordinateTransform executeBatchJob registration environmen
                 "executeBatchJob.py"
             )
         );
+    });
+});
+
+describe("utility/zipArchive executeBatchJob registration environment", () => {
+    let template: Template;
+
+    beforeAll(() => {
+        const h = makePipelineHarness("ZipArchiveEnvStack", (c) => {
+            c.app.pipelines.useZipDownloads.enabled = true;
+        });
+        // The zipArchive job writes its status to the zip job table and reads asset file versions.
+        (h.storage as any).dynamo = {
+            zipDownloadRequestsStorageTable: new dynamodb.Table(h.stack, "ZipTable", {
+                partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
+            }),
+            assetFileVersionsStorageTable: new dynamodb.Table(h.stack, "FileVersionsTable", {
+                partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
+            }),
+        };
+        new ZipArchiveConstruct(h.stack, "ZipArchivePipeline", {
+            config: h.config,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            assetAuxiliaryBucket: h.assetAuxiliaryBucket,
+            storageResources: h.storage,
+            kmsKey: h.kmsKey,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        template = Template.fromStack(h.stack);
+    });
+
+    test("the job-submitting lambda registers the vended group beside its job definition name", () => {
+        const env = registeringLambdaEnv(template, "executeBatchJob.lambda_handler");
+        const jobDefinitionId = expectDerivedJobDefinitionName(template, env.BATCH_JOB_DEFINITION);
+        expectVendedGroupRegistration(
+            template,
+            jobDefinitionId,
+            env.BATCH_JOB_LOG_GROUP_NAME,
+            env.BATCH_JOB_LOG_GROUP_ARN
+        );
+    });
+
+    test("the stage the producer declares is a state of the machine", () => {
+        expectDeclaredStagesInAsl(
+            template,
+            path.join(PRODUCERS, "utility", "zipArchive", "lambda", "executeBatchJob.py")
+        );
+    });
+});
+
+describe("genAi/videoSopBom openPipeline registration environment", () => {
+    let template: Template;
+
+    beforeAll(() => {
+        const h = makePipelineHarness("VideoSopBomEnvStack", (c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = true;
+            // Sources the container image from an ECR repository instead of a local Docker build.
+            c.app.pipelines.useGenAiVideoSopBom.useCodeBuild = true;
+            c.app.pipelines.useGenAiVideoSopBom.autoRegisterWithVAMS = false;
+        });
+        new VideoSopBomConstruct(h.stack, "VideoSopBomPipeline", {
+            config: h.config,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            assetAuxiliaryBucket: h.assetAuxiliaryBucket,
+            storageResources: h.storage,
+            kmsKey: h.kmsKey,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        template = Template.fromStack(h.stack);
+    });
+
+    test("registers the vended group its job definition writes to, under the job definition's own stream prefix", () => {
+        const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
+        const jobDefinitionId = expectDerivedJobDefinitionName(
+            template,
+            env.BATCH_JOB_DEFINITION_NAME
+        );
+        expectVendedGroupRegistration(
+            template,
+            jobDefinitionId,
+            env.BATCH_JOB_LOG_GROUP_NAME,
+            env.BATCH_JOB_LOG_GROUP_ARN
+        );
+    });
+
+    test("the stage the producer declares is a state of the machine", () => {
+        expectDeclaredStagesInAsl(
+            template,
+            path.join(PRODUCERS, "genAi", "videoSopBom", "lambda", "openPipeline.py")
+        );
+    });
+});
+
+describe("genAi/cadStepAgent (fargate runtime) executeBatchJob registration environment", () => {
+    let template: Template;
+
+    beforeAll(() => {
+        const h = makePipelineHarness("CadStepAgentEnvStack", (c) => {
+            c.app.pipelines.useGenAiCadStepAgent.enabled = true;
+            c.app.pipelines.useGenAiCadStepAgent.runtime = "fargate";
+            // Sources the container image from an ECR repository instead of a local Docker build.
+            c.app.pipelines.useGenAiCadStepAgent.useCodeBuild = true;
+            c.app.pipelines.useGenAiCadStepAgent.autoRegisterWithVAMS = false;
+        });
+        new CadStepAgentConstruct(h.stack, "CadStepAgentPipeline", {
+            config: h.config,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            assetAuxiliaryBucket: h.assetAuxiliaryBucket,
+            storageResources: h.storage,
+            kmsKey: h.kmsKey,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        template = Template.fromStack(h.stack);
+    });
+
+    test("the job-submitting lambda registers the vended group beside its job definition name", () => {
+        const env = registeringLambdaEnv(template, "executeBatchJob.lambda_handler");
+        const jobDefinitionId = expectDerivedJobDefinitionName(template, env.BATCH_JOB_DEFINITION);
+        expectVendedGroupRegistration(
+            template,
+            jobDefinitionId,
+            env.BATCH_JOB_LOG_GROUP_NAME,
+            env.BATCH_JOB_LOG_GROUP_ARN
+        );
+    });
+
+    test("the stage the producer declares is a state of the machine", () => {
+        // The template holds two state machines: the pipeline's and the image-build Provider's
+        // isComplete waiter. The declared stage belongs to the pipeline's.
+        const machines = Object.entries(template.findResources("AWS::StepFunctions::StateMachine"));
+        expect(machines.map(([id]) => id).some((id) => /waiterstatemachine/i.test(id))).toBe(true);
+        const pipelineMachines = machines.filter(([id]) => !/waiterstatemachine/i.test(id));
+        expect(pipelineMachines).toHaveLength(1);
+        const declared = declaredStageNames(
+            path.join(PRODUCERS, "genAi", "cadStepAgent", "lambda", "executeBatchJob.py")
+        );
+        expect(declared.length).toBeGreaterThan(0);
+        const states = Object.keys(parseAsl((pipelineMachines[0][1] as any).Properties).States);
+        for (const name of declared) {
+            expect(states).toContain(name);
+        }
     });
 });

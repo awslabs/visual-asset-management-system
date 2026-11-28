@@ -23,7 +23,9 @@ web/src/visualizerPlugin/
 │   ├── PluginRegistry.ts         # Generic plugin registry (no modifications needed)
 │   └── types.ts                  # TypeScript interfaces
 ├── config/
-│   └── viewerConfig.json         # Complete plugin configuration
+│   ├── viewerConfig.json         # Core plugin configuration
+│   ├── addonViewerConfig.json    # Add-on viewers (Physna; licensed VNTANA, VEERUM)
+│   └── customViewerConfig.json   # Fork extension point (shipped empty)
 ├── components/                    # UI components
 │   ├── DynamicViewer.tsx         # Main viewer component
 │   ├── ViewerSelector.tsx        # Viewer selection UI
@@ -103,14 +105,22 @@ All plugin behavior is defined in `viewerConfig.json`:
 ### 1. ImageViewerPlugin
 
 -   **ID**: `image-viewer`
--   **Extensions**: `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`
+-   **Extensions**: `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, `.bmp`
 -   **Features**: Image display fitted to the viewer panel
 -   **Multi-file**: No
 -   **Dependencies**: None
 
+### 1b. RasterImageViewerPlugin
+
+-   **ID**: `tiff-tga-viewer`
+-   **Extensions**: `.tga`, `.tif`, `.tiff`
+-   **Features**: Decodes in the browser with `utif2` (TIFF) and `tga-js` (TGA), pure JavaScript drawn to a canvas, so no CSP change and no `ALLOWUNSAFEEVAL`. Multi-page TIFF page picker; 16-bit, floating-point and CMYK data converted for display. `customParameters.maxDecodeBytes` (default 268435456) and `maxDecodePixels` (default 100000000) are checked from the file size and the header before decoding; above a cap or on a decode failure the file's generated preview (`fileInfo.previewFile`) is shown with a notice, else a message. Decoding runs in a same-origin module worker (`rasterWorker.ts`; the base `worker-src 'self'` covers it, so no CSP change) behind `rasterSession.ts`, which decodes on the page with the same engine and caps when the worker cannot be created, its script cannot be loaded or it does not start in 15 s (module workers: Chrome/Edge 80, Firefox 114, Safari 15). The TIFF Orientation tag is applied. BigTIFF, separate-colour-plane TIFF and old-style JPEG TIFF are not decoded
+-   **Multi-file**: No
+-   **Dependencies**: `utif2`, `tga-js`, `pako` (loaded inside the worker; `RasterImageDependencyManager` loads them on the page for the fallback). Receives the single selected file as `fileInfo`
+
 ### 2. Online3dViewerPlugin
 
--   **ID**: `online3d-viewer`
+-   **ID**: `online3d-viewer` (`.amf`, `.bim`, `.off`, `.wrl`) and `online3d-viewer-rhino` (`.3dm`, offered only with `ALLOWUNSAFEEVAL` because rhino3dm compiles with `eval`)
 -   **Extensions**: `.3dm`, `.amf`, `.bim`, `.off`, `.wrl`
 -   **Features**: 3D model viewing with Online3DViewer
 -   **Multi-file**: Yes (can load multiple models simultaneously)
@@ -186,8 +196,8 @@ All plugin behavior is defined in `viewerConfig.json`:
 ### 10. TextViewerPlugin
 
 -   **ID**: `text-viewer`
--   **Extensions**: `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`, `.inf`, `.cfg`, `.md`, `.sh`, `.csv`, `.py`, `.log`, `.js`, `.ts`, `.sql`, `.ps1`
--   **Features**: View and syntax highlight text-based files with advanced formatting options
+-   **Extensions**: `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`, `.inf`, `.cfg`, `.md`, `.sh`, `.csv`, `.py`, `.log`, `.js`, `.ts`, `.sql`, `.ps1`, `.mdl` (NVIDIA MDL material files), and files with no extension (`(none)`: `README`, `LICENSE`, `.gitignore`)
+-   **Features**: View and syntax highlight text-based files with advanced formatting options. Reads the first 8 KiB through `core/textContent.ts` and shows a notice instead of binary content or an unsupported encoding; decodes UTF-16 with a byte-order mark
 -   **Multi-file**: No
 -   **Dependencies**: `react-syntax-highlighter`
 -   **Priority**: 1
@@ -233,7 +243,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Priority**: 2
 -   **Category**: 3d
 -   **Enabled**: false (disabled by default)
--   **Note**: ⚠️ **VNTANA is a paid commercial viewer service**. This viewer is disabled by default and requires your organization to purchase a VNTANA license. To enable this viewer and obtain licensing information, visit [https://www.vntana.com](https://www.vntana.com). After obtaining a license, you can enable this viewer by setting `"enabled": true` in the viewer configuration.
+-   **Note**: ⚠️ **VNTANA is a paid commercial viewer service**. This viewer is disabled by default and requires your organization to purchase a VNTANA license. To enable this viewer and obtain licensing information, visit [https://www.vntana.com](https://www.vntana.com). After obtaining a license, you can enable this viewer by setting `"enabled": true` on its entry in the add-on viewer configuration (`config/addonViewerConfig.json`).
 
 ### 14. VeerumViewerPlugin
 
@@ -245,7 +255,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Priority**: 2
 -   **Category**: 3d
 -   **Enabled**: false (disabled by default)
--   **Note**: ⚠️ **VEERUM is a paid commercial viewer service**. This viewer is disabled by default and requires your organization to purchase a VEERUM license. To obtain licensing information, visit [https://veerum.com](https://veerum.com). After obtaining a license, you can enable this viewer by setting `"enabled": true` in the viewer configuration. See `web/customInstalls/veerum/README.md` for detailed installation instructions. **VEERUM requires Potree Pipeline to be enabled to view point cloud files**
+-   **Note**: ⚠️ **VEERUM is a paid commercial viewer service**. This viewer is disabled by default and requires your organization to purchase a VEERUM license. To obtain licensing information, visit [https://veerum.com](https://veerum.com). After obtaining a license, you can enable this viewer by setting `"enabled": true` on its entry in the add-on viewer configuration (`config/addonViewerConfig.json`). See `web/customInstalls/veerum/README.md` for detailed installation instructions. **VEERUM requires Potree Pipeline to be enabled to view point cloud files**
 
 ### 15. PreviewViewerPlugin
 
@@ -285,7 +295,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 ### 18. SuperSplatViewerPlugin
 
 -   **ID**: `supersplat-viewer`
--   **Extensions**: `.lcc`, `.ply`, `.sog`, `.splat`
+-   **Extensions**: `.ksplat`, `.lcc`, `.ply`, `.sog`, `.splat`, `.spz`
 -   **Features**: The PlayCanvas SuperSplat Gaussian splat editor, embedded in an iframe: scene panel, transform and selection tools, camera animation, and export menus. Edits and exports stay in the browser and are not saved back to VAMS.
 -   **Multi-file**: No
 -   **Dependencies**: A from-source SuperSplat build that `customInstalls/supersplat` places under `public/viewers/supersplat/`
@@ -311,14 +321,42 @@ All plugin behavior is defined in `viewerConfig.json`:
 ### 20. ThreeJSViewerPlugin
 
 -   **ID**: `threejs-viewer`
--   **Extensions**: `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`, `.stp`, `.step`, `.iges`, `.igs`, `.brep`
--   **Features**: Mesh and CAD viewing with Three.js: scene graph, material editing, and transform controls. Loads a glTF file's external dependencies and renders one selected file at a time.
+-   **Extensions**: `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`, `.usd`, `.usda`, `.usdc`, `.usdz`, `.stp`, `.step`, `.iges`, `.igs`, `.brep`
+-   **Features**: Mesh, USD and CAD viewing with Three.js: scene graph, material editing, and transform controls. Loads the files a model references from the same asset (glTF buffers and images, OBJ material libraries and textures, COLLADA/3DS/FBX textures, USD references, payloads and textures; USD is packaged in memory as a `.usdz`), lists any it did not load in a notice, and renders one selected file at a time. USD needs no `ALLOWUNSAFEEVAL`.
 -   **Multi-file**: No
 -   **Dependencies**: `three` (bundled by `customInstalls/threejs`); the CAD formats also need its optional OCCT (`occt-import-js`) build
 -   **Priority**: 1
 -   **Category**: 3d
 -   **Feature restriction**: none
 -   **Note**: The mesh formats are always offered. The CAD formats (`.stp`, `.step`, `.iges`, `.igs`, `.brep`) need a Three.js bundle built with OCCT (`occt-import-js`, LGPL, off by default; see `web/customInstalls/threejs/README.md`) and `SharedArrayBuffer` (cross-origin isolation headers). When either is missing, `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports it on the file instead of hiding the viewer.
+
+### 21. RoboticsDataViewerPlugin
+
+-   **ID**: `robotics-data-viewer`
+-   **Extensions**: `.mcap`, `.bag`, `.db3`, `.ulg`, `.ulog`
+-   **Features**: The Lichtblick robotics visualization web app, embedded in an iframe: plots, 3D scene, images, raw messages and logs on one shared timeline. `.mcap` and ROS 1 `.bag` files are read with HTTP Range requests against their presigned URLs; ROS 2 `.db3` and PX4 `.ulg`/`.ulog` files are downloaded whole first.
+-   **Multi-file**: Yes, for several `.mcap` files (one timeline) and the `.db3` files of one ROS 2 split bag. A `.bag` or `.ulg` opens one file at a time, and a selection mixing formats is refused before any file is requested. Each file is presigned under its own asset, and a file that cannot be read is listed with its state while the others open.
+-   **Dependencies**: A from-source Lichtblick build that `customInstalls/robotics` places under `public/viewers/robotics/`
+-   **Priority**: 1
+-   **Category**: data
+-   **Feature restriction**: `ALLOWUNSAFEEVAL` (set `app.webUi.allowUnsafeEvalFeatures` to `true`)
+-   **Custom Parameters**:
+    -   `basePath`: Path of the hosted app page (default: `/viewers/robotics/index.html`)
+    -   `maxWholeFileBytes`: Size limit for the files downloaded whole (`.db3`, `.ulg`, `.ulog`), applied to the selection's total (default: `1073741824`, 1 GiB)
+-   **Note**: The presigned URLs reach the app only in the iframe's URL fragment (`roboticsDeepLink.ts`), the reference for `CLAUDE.md` → "A Framed Viewer Must Not Receive a Signed URL in the Query String".
+
+### 22. CogMapViewerPlugin (GeoTIFF Map Viewer)
+
+-   **ID**: `geotiff-map-viewer`
+-   **Extensions**: `.tif`, `.tiff`
+-   **Features**: Georeferenced rasters on the Location Service basemap. A Cloud Optimized GeoTIFF in EPSG:3857 streams as map tiles (`@geomatico/maplibre-cog-protocol`, ranged reads of a presigned URL); a small file in another bundled coordinate system is placed approximately on four corners (geotiff.js, proj4). Layer list with opacity, order, zoom and remove, shared with the Search map's **Show raster** action (`src/common/cogRaster/`).
+-   **Multi-file**: Yes, up to 8 rasters at once, each under its own asset
+-   **Dependencies**: `@geomatico/maplibre-cog-protocol`, `geotiff`, `proj4` (lazy chunks)
+-   **Priority**: 2
+-   **Category**: data
+-   **Feature restriction**: `LOCATIONSERVICES`
+-   **Limits**: placed path up to 128 MiB, 100 km across, 100 Mpx / 256 MiB decoded (`rasterEligibility.ts`)
+-   **Note**: Only EPSG:3857 COGs take the tile path; the tile library does not reproject. See `CLAUDE.md` for the eligibility rules.
 
 ## 🚀 Usage
 
@@ -481,6 +519,8 @@ Update `web/src/visualizerPlugin/config/viewerConfig.json`:
     ]
 }
 ```
+
+`supportedExtensions` holds lowercase extensions, `"*"` for any file, or `"(none)"` for files with no extension. The extension is read from the last part of the file name; a leading dot does not start one (`.gitignore` has none, `.eslintrc.json` has `.json`) and a trailing dot leaves none. See "Files Without an Extension and the Binary Guard" in `CLAUDE.md`.
 
 ### That's It! No Core Code Changes Needed!
 
@@ -721,7 +761,7 @@ export const featuresEnabled = {
 }
 ```
 
-**Use Case**: Requires `ALLOWUNSAFEEVAL` because the viewer's USD WebAssembly loader needs the `unsafe-eval` Content Security Policy directive. The SuperSplat Editor and the ThatOpen IFC BIM Viewer carry the same restriction.
+**Use Case**: Requires `ALLOWUNSAFEEVAL` because the viewer's USD WebAssembly loader needs the `unsafe-eval` Content Security Policy directive. The SuperSplat Editor, the ThatOpen IFC BIM Viewer and the Robotics Data Viewer carry the same restriction.
 
 #### Example 3: Multiple Requirements
 
@@ -910,6 +950,9 @@ const MyViewerComponent: React.FC<ViewerPluginProps> = (props) => {
 | `requiresPreprocessing`      | boolean           | ❌       | Needs preprocessing              |
 | `isPreviewViewer`            | boolean           | ❌       | Is preview viewer                |
 | `featuresEnabledRestriction` | string[]          | ❌       | Required feature flags           |
+| `customParameters`           | object            | ❌       | Passed to the viewer as a prop   |
+| `enabled`                    | boolean           | ❌       | `false` removes the viewer       |
+| `compareMode`                | object            | ❌       | Compare-mode capability (below)  |
 
 ### ViewerPluginProps Interface
 
@@ -920,15 +963,20 @@ interface ViewerPluginProps {
     assetKey?: string; // Single file key
     multiFileKeys?: string[]; // Multiple file keys
     multiFiles?: FileInfo[]; // Owning asset and database of each file in multiFileKeys
+    fileInfo?: FileInfo; // The one file of a single-file selection: size and generated preview key
     versionId?: string; // File version
     assetVersionId?: string; // Asset version to read files from
     viewerMode: string; // Display mode ("collapse", "wide", "fullscreen")
     onViewerModeChange: (mode: string) => void;
     onDeletePreview?: () => void;
-    isPreviewFile?: boolean; // Is this a preview file
+    isPreviewFile?: boolean; // Is this a preview file (its entry carries no versionId: a preview is its own S3 object)
     customParameters?: Record<string, any>; // The entry's customParameters from viewerConfig.json
+    compareMode?: boolean; // Rendered in compare mode: read compareFiles instead of the single-file props
+    compareFiles?: FileInfo[]; // Compare mode only: ordered entries, index 0 is the base ("left") side
 }
 ```
+
+`compareMode` in the plugin configuration (`CompareModeConfig` in `core/types.ts`) offers the viewer in compare mode: `enabled`, `minFiles` and `maxFiles` (the number of entries it compares), `allowSameFileDifferentVersions`, `allowDifferentFiles`, `allowCrossAsset` (entries from different assets, each fetched and authorized under its own asset) and `compareOnly` (never offered for visualizing). A viewer without the block is never offered in compare mode. See `documentation/docusaurus-site/docs/developer/viewer-plugins.md` for the full contract.
 
 ## 🔄 Migration from Old System
 

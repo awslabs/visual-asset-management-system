@@ -40,9 +40,10 @@ class TestPipelineRecords:
         sc = pr.build_pipeline_system_config()
         assert sc["inputFileArity"] == "one"
         assert sc["assetScope"]["singleAssetOnly"] is True
+        # The four metadata types default on; the two opt-in envelope sections default off.
         assert sc["metadataInputs"] == {
             "assetMetadata": True, "fileMetadata": True, "fileAttributes": True,
-            "databaseMetadata": True}
+            "databaseMetadata": True, "assetFileMetadata": False, "metadataSchema": False}
         assert sc["requireTemplate"] is False
         assert sc["inputFileFilters"] == {"allow": [], "exclude": []}
         # allowNoTemplate is fully removed — only requireTemplate remains
@@ -300,15 +301,17 @@ class TestDefaultBucketResolver:
         out = db.resolve_default_bucket(table)
         assert out == {"bucketId": "b1", "bucketName": "vams-bucket", "baseAssetsPrefix": "/"}
 
-    def test_prefers_root_prefix_row(self):
+    def test_two_flagged_registrations_of_one_bucket_raise(self):
+        """Registrations are counted by bucketId: two flagged rows of one bucket under two prefixes
+        are two registrations, and picking either would put run I/O where the other expects it."""
         table = self._table_with([
             {"bucketId": "b1", "bucketName": "vams-bucket", "baseAssetsPrefix": "sub/",
              "isDefault": True},
-            {"bucketId": "b1", "bucketName": "vams-bucket", "baseAssetsPrefix": "/",
+            {"bucketId": "b2", "bucketName": "vams-bucket", "baseAssetsPrefix": "/",
              "isDefault": True},
         ])
-        out = db.resolve_default_bucket(table)
-        assert out["baseAssetsPrefix"] == "/"
+        with pytest.raises(db.DefaultBucketAmbiguousError):
+            db.resolve_default_bucket(table)
 
     def test_raises_when_no_default(self):
         table = self._table_with([])

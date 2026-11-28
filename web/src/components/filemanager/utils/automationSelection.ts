@@ -4,6 +4,7 @@
  */
 
 import type { ExecuteInputFile } from "../../../features/orchestration/types";
+import { assetFilePath } from "../../../utils/assetFilePath";
 
 /**
  * Maps a file-manager selection onto workflow input files for the Automation group.
@@ -35,12 +36,15 @@ export interface AutomationSelectionInput {
      * what makes the launch read the bytes on screen. A folder or whole-asset selection carries no
      * version and is expanded at launch against the live state, so it cannot stand for the version
      * being browsed at all.
+     *
+     * In the live view a file entry carries its current `versionId`, which nobody chose, so it is not
+     * sent: the launch reads the current version, and a re-run takes the file's current version then.
      */
     assetVersionId?: string;
 }
 
-/** Asset-relative key with exactly one leading slash. */
-const toKey = (path?: string): string => `/${(path || "").replace(/^\/+/, "")}`;
+/** Asset-relative key with a leading slash; "//x" (an empty segment after the location) is kept (#1977). */
+const toKey = (path?: string): string => assetFilePath(path);
 
 /** A folder key keeps its trailing slash; the asset root is a bare '/'. */
 const toFolderKey = (path?: string): string => {
@@ -55,12 +59,16 @@ export function deriveAutomationInputFiles(input: AutomationSelectionInput): Exe
     const { databaseId, assetId, isMultiSelect, selectedItems, selectedItem, isFolder } = input;
     if (!databaseId || !assetId) return [];
 
+    // Only a version the user chose (an earlier asset version being browsed) is sent.
+    const chosenVersion = (item: SelectionItem): string | undefined =>
+        input.assetVersionId ? item.versionId || undefined : undefined;
+
     if (isMultiSelect) {
         return (selectedItems || []).filter(isUsable).map((item) => ({
             databaseId,
             assetId,
             relativeFileKey: toKey(item.relativePath),
-            versionId: item.versionId || undefined,
+            versionId: chosenVersion(item),
         }));
     }
 
@@ -79,7 +87,7 @@ export function deriveAutomationInputFiles(input: AutomationSelectionInput): Exe
             databaseId,
             assetId,
             relativeFileKey: toKey(selectedItem.relativePath),
-            versionId: selectedItem.versionId || undefined,
+            versionId: chosenVersion(selectedItem),
         },
     ];
 }

@@ -6,16 +6,25 @@ import boto3
 from botocore.config import Config
 import json
 from boto3.dynamodb.conditions import Key
-from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
+from boto3.dynamodb.types import TypeSerializer
 from common.resourceNames import get_table_name, ResourceKeys
-from common.validators import validate
+from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
 from common.constants import STANDARD_JSON_RESPONSE
-from common.dynamodb import get_asset_object_from_id
+from common.dynamodb import get_asset_object_from_id, asset_authorization_object
+from common.commentSubscriptionKeys import (
+    COMMENT_PARTITION_KEY,
+    COMMENT_SORT_KEY,
+    COMMENT_VERSION_INDEX,
+    comment_partition,
+    comment_response,
+)
 from models.common import VAMSGeneralErrorResponse
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
+from customLogging.auditLogging import audited_handler, log_action
 from common.dynamodb import (
     validate_pagination_info,
     MAX_PAGINATION_MAX_ITEMS,
@@ -39,161 +48,86 @@ except Exception as e:
     main_rest_response["body"]["message"] = "Failed resolving comment table name"
 
 
-def get_all_comments(queryParams: dict, showDeleted=False) -> dict:
-    """
-    Gets all of the comments from the database
-    NOTE: This is not currently used, but could be helpful to populate the comments section when the page first loads and no asset is selected
-    :param queryParams: pagination information
-    :param showDeleted: boolean storing if deleted comments should be returned
-    :returns: all comments in the database
-    """
-    deserializer = TypeDeserializer()
-
-    paginator = dynamodb_client.get_paginator("scan")
-    operator = "NOT_CONTAINS"
-    if showDeleted:
-        operator = "CONTAINS"
-    filter = {
-        "assetId": {
-            "AttributeValueList": [{"S": "#deleted"}],
-            "ComparisonOperator": f"{operator}",
-        }
-    }
-
-    # Handle empty string for startingToken
-    # build_full_result() accumulates pages until MaxItems is reached, so the budget is bounded at
-    # the shared ceiling here as well as by the caller's validation -- a caller reaching this
-    # function with raw query parameters must not be able to walk the table in one invocation.
-    pagination_config = {
-        "MaxItems": min(int(queryParams["maxItems"]), MAX_PAGINATION_MAX_ITEMS),
-        "PageSize": min(int(queryParams["pageSize"]), MAX_PAGINATION_PAGE_SIZE),
-    }
-    if queryParams["startingToken"] and queryParams["startingToken"] != "":
-        pagination_config["StartingToken"] = queryParams["startingToken"]
-
-    try:
-        pageIterator = paginator.paginate(
-            TableName=comment_database,
-            ScanFilter=filter,
-            PaginationConfig=pagination_config,
-        ).build_full_result()
-
-        logger.info("Fetching results")
-        result = {}
-        items = []
-        for item in pageIterator["Items"]:
-            deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
-            items.append(deserialized_document)
-        result["Items"] = items
-        if "NextToken" in pageIterator:
-            result["NextToken"] = pageIterator["NextToken"]
-        return result
-    except Exception as e:
-        logger.exception(f"Error in get_all_comments: {str(e)}")
-        # Return empty result on error
-        return {"Items": []}
-
-
-def get_comments(assetId: str, queryParams: dict, showDeleted=False) -> dict:
-    """
-    Gets all of the comments associated with a specific asset (using assetId)
-    :param assetId: id of the asset to get comments for
-    :param queryParams: pagination information
-    :param showDeleted: boolean storing if deleted comments should be returned
-    :returns: dictionary with all comments for specific asset
-    """
-    paginator = dynamodb.meta.client.get_paginator('query')
-
-    # Handle empty string for startingToken
-    # Bounded at the shared ceiling: build_full_result() pages until MaxItems is reached.
+def _pagination_config(queryParams: dict) -> dict:
+    # build_full_result() accumulates pages until MaxItems is reached, so the budget is bounded at the
+    # shared ceiling here as well as by the caller's validation.
     pagination_config = {
         'MaxItems': min(int(queryParams['maxItems']), MAX_PAGINATION_MAX_ITEMS),
         'PageSize': min(int(queryParams['pageSize']), MAX_PAGINATION_PAGE_SIZE),
     }
     if queryParams['startingToken'] and queryParams['startingToken'] != "":
         pagination_config['StartingToken'] = queryParams['startingToken']
+    return pagination_config
+
+
+def get_comments(databaseId: str, assetId: str, queryParams: dict, assetVersionId: str = None) -> list:
+    """
+    Gets the comments of one asset, newest first, optionally only those on one asset version
+    :param databaseId: database of the asset
+    :param assetId: id of the asset to get comments for
+    :param queryParams: pagination information
+    :param assetVersionId: when set, only the comments on this asset version (a query of the version index)
+    :returns: the comments, without the table's composite key attribute
+    """
+    paginator = dynamodb.meta.client.get_paginator('query')
+    key_condition = Key(COMMENT_PARTITION_KEY).eq(comment_partition(databaseId, assetId))
+    query_kwargs = {}
+    if assetVersionId is not None:
+        key_condition = key_condition & Key("assetVersionId").eq(assetVersionId)
+        query_kwargs["IndexName"] = COMMENT_VERSION_INDEX
 
     try:
         response = paginator.paginate(
             TableName=comment_database,
-            KeyConditionExpression=Key("assetId").eq(assetId),
-            ScanIndexForward=False,
-            PaginationConfig=pagination_config
+            KeyConditionExpression=key_condition,
+            PaginationConfig=_pagination_config(queryParams),
+            **query_kwargs,
         ).build_full_result()
-
-        return response["Items"]
     except Exception as e:
         logger.exception(f"Error in get_comments: {str(e)}")
         # A failed read reaches the handler's 500 path rather than reading as no comments
         raise
 
+    items = [comment_response(item) for item in response["Items"]]
+    # The sort key is a random comment id, so the order is the creation time's
+    items.sort(key=lambda item: str(item.get("dateCreated") or ""), reverse=True)
+    return items
 
-def get_comments_version(assetId: str, assetVersionId: str, queryParams: dict, showDeleted=False) -> dict:
+
+def get_single_comment(databaseId: str, assetId: str, commentId: str) -> dict:
     """
-    Gets all of the comments for a specific assetId versionId pair (all comments for a specific version of an asset)
-    :param assetId: id of the asset to get comments for
-    :param assetVersionId: id of the version to get comments for
-    :param queryParams: pagination information
-    :param showDeleted: boolean storing if deleted comments should be returned
-    :returns: dictionary with all comments for a specific version of an asset
-    """
-    paginator = dynamodb.meta.client.get_paginator('query')
-
-    # Handle empty string for startingToken
-    # Bounded at the shared ceiling: build_full_result() pages until MaxItems is reached.
-    pagination_config = {
-        'MaxItems': min(int(queryParams['maxItems']), MAX_PAGINATION_MAX_ITEMS),
-        'PageSize': min(int(queryParams['pageSize']), MAX_PAGINATION_PAGE_SIZE),
-    }
-    if queryParams['startingToken'] and queryParams['startingToken'] != "":
-        pagination_config['StartingToken'] = queryParams['startingToken']
-
-    try:
-        # Queries partition key (assetId) and queries sort keys that begin_with the desired asset version
-        response = paginator.paginate(
-            TableName=comment_database,
-            KeyConditionExpression=Key("assetId").eq(assetId) & Key("assetVersionId:commentId").begins_with(assetVersionId),
-            ScanIndexForward=False,
-            PaginationConfig=pagination_config
-        ).build_full_result()
-
-        return response["Items"]
-    except Exception as e:
-        logger.exception(f"Error in get_comments_version: {str(e)}")
-        # A failed read reaches the handler's 500 path rather than reading as no comments
-        raise
-
-
-def get_single_comment(assetId: str, assetVersionIdAndCommentId: str, showDeleted=False) -> dict:
-    """
-    Gets a specific comment from the assetId and the assetVersionId:commentId
-    :param assetId: id of the asset to get comments for
-    :param assetVersionIdAndCommentId: id of the version to get comments for and the unique comment Id
-    :param showDeleted: boolean storing if deleted comments should be returned
-    :returns: dictionary with the specific comment
+    Gets one stored comment row of an asset
+    :param databaseId: database of the asset
+    :param assetId: id of the asset the comment is attached to
+    :param commentId: the comment's id
+    :returns: the stored row, or {} when the asset has no such comment
     """
     logger.info("Getting single comment")
     table = dynamodb.Table(comment_database)
 
-    response = table.get_item(Key={"assetId": assetId, "assetVersionId:commentId": assetVersionIdAndCommentId})
+    response = table.get_item(Key={
+        COMMENT_PARTITION_KEY: comment_partition(databaseId, assetId),
+        COMMENT_SORT_KEY: commentId,
+    })
     return response.get("Item", {})
 
 
-def delete_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, event: dict) -> dict:
+def delete_comment(databaseId: str, assetId: str, commentId: str, userId: str) -> dict:
     """
-    Deletes a specific comment from the database (actually just adds #deleted tag)
+    Soft-deletes a comment: moves it to the asset's "#deleted" partition
+    :param databaseId: database of the asset
     :param assetId: id of the asset the comment is attached to
-    :param assetVersionIdAndCommmentId: id of the version the comment is attached to and unique identifier for the comment
-    :returns: Http response object (statusCode, headers, body)
+    :param commentId: the comment's id
+    :param userId: the caller, who must be the comment's creator
+    :returns: dictionary with status code, message and the deleted comment's asset version id
     """
     response = {"statusCode": 404, "message": "Record not found"}
-    table = dynamodb.Table(comment_database)
-    if "#deleted" in assetId:
-        return response
-    item = get_single_comment(assetId, assetVersionIdAndCommentId)
+    item = get_single_comment(databaseId, assetId, commentId)
     if item:
-        logger.info(f"Got comment:")
-        logger.info(item)
+        logger.info(
+            f"Comment to delete: assetId={assetId}, commentId={commentId}, "
+            f"commentBody={len(item.get('commentBody') or '')} char(s)"
+        )
 
         logger.info("Verifying user")
         comment_user_id = item["commentOwnerID"]
@@ -204,15 +138,14 @@ def delete_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, e
             return response
 
         logger.info("Deleting comment")
-        item["assetId"] = assetId + "#deleted"
+        deleted_item = dict(item)
+        deleted_item[COMMENT_PARTITION_KEY] = comment_partition(databaseId, assetId, deleted=True)
 
-        # Soft-delete atomically: write the #deleted copy and remove the original in
-        # a single TransactWriteItems so a partial failure cannot lose the comment
-        # (previously a delete-then-put could delete the record and then fail the put,
-        # leaving no recoverable copy).
+        # Soft-delete atomically: write the #deleted copy and remove the original in a single
+        # TransactWriteItems so a partial failure cannot lose the comment.
         try:
             serializer = TypeSerializer()
-            serialized_item = {k: serializer.serialize(v) for k, v in item.items()}
+            serialized_item = {k: serializer.serialize(v) for k, v in deleted_item.items()}
             dynamodb_client.transact_write_items(
                 TransactItems=[
                     {
@@ -225,10 +158,8 @@ def delete_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, e
                         "Delete": {
                             "TableName": comment_database,
                             "Key": {
-                                "assetId": {"S": assetId},
-                                "assetVersionId:commentId": {
-                                    "S": assetVersionIdAndCommentId
-                                },
+                                COMMENT_PARTITION_KEY: {"S": comment_partition(databaseId, assetId)},
+                                COMMENT_SORT_KEY: {"S": commentId},
                             },
                         }
                     },
@@ -242,219 +173,158 @@ def delete_comment(assetId: str, assetVersionIdAndCommentId: str, userId: str, e
 
         response["statusCode"] = 200
         response["message"] = "Comment deleted"
+        response["assetVersionId"] = item.get("assetVersionId")
     return response
+
+
+def _validate_path(pathParameters: dict, response: dict, require_comment: bool):
+    """Validate the database, asset and comment ids of the path. Returns an error response or None."""
+    required_field_names = ['databaseId', 'assetId'] + (['commentId'] if require_comment else [])
+    missing_field_names = [name for name in required_field_names if not pathParameters.get(name)]
+    if missing_field_names:
+        response['body'] = json.dumps(
+            {"message": 'Missing path parameter(s) (%s) in API call' % (', '.join(missing_field_names))})
+        response['statusCode'] = 400
+        return response
+
+    values = {
+        "databaseId": {"value": pathParameters["databaseId"], "validator": "ID"},
+        "assetId": {"value": pathParameters["assetId"], "validator": "ASSET_ID"},
+    }
+    if "commentId" in pathParameters:
+        values["commentId"] = {"value": pathParameters["commentId"], "validator": "ID"}
+    (valid, message) = validate(values)
+    if not valid:
+        logger.warning(message)
+        response["body"] = json.dumps({"message": message})
+        response["statusCode"] = 400
+        return response
+    return None
+
+
+def _authorize_asset(databaseId: str, assetId: str, action: str, include_archived: bool = False):
+    """Tier 2 on the asset of the named database, decided before its existence is revealed.
+
+    Returns (allowed, asset): asset is the stored record or None. A refused caller gets the same
+    answer whether or not the asset exists; the read includes the archived row only when asked.
+    """
+    asset_object = get_asset_object_from_id(databaseId, assetId, include_archived=include_archived)
+    authorization_object = asset_authorization_object(
+        asset_object, databaseId, assetId, include_archived=include_archived)
+    if len(claims_and_roles["tokens"]) == 0:
+        return False, asset_object
+    return CasbinEnforcer(claims_and_roles).enforce(authorization_object, action), asset_object
 
 
 def get_handler(response: dict, pathParameters: dict, queryParameters: dict) -> dict:
     """
     Function to handle the get request and route it to the right function
     :param response: dictionary holding information about the response
-    :param pathParameters: dictionary holding information about the path (like versionId and/or assetId)
-    :param queryParameters: dictionary holding pagination information
+    :param pathParameters: the database, asset and (for one comment) comment ids
+    :param queryParameters: pagination information, showArchived and the optional assetVersionId filter
     :returns: Http response object (statusCode, headers, body) with comments stored in the body (if successful)
     """
-    showDeleted = False
+    show_archived = parse_show_archived(queryParameters)
+    if show_archived is None:
+        response["statusCode"] = 400
+        response["body"] = json.dumps({"message": SHOW_ARCHIVED_INVALID_MESSAGE})
+        return response
 
-    if "showDeleted" in queryParameters:
-        showDeleted = queryParameters["showDeleted"]
+    error = _validate_path(pathParameters, response, require_comment=False)
+    if error:
+        return error
 
-    method_allowed_on_api = False
+    asset_version_id = queryParameters.get("assetVersionId")
+    if asset_version_id is not None:
+        (valid, message) = validate({"assetVersionId": {"value": asset_version_id, "validator": "STRING_256"}})
+        if not valid or not str(asset_version_id).strip():
+            response["statusCode"] = 400
+            response["body"] = json.dumps({"message": message or "assetVersionId must not be empty"})
+            return response
 
-    asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
+    databaseId = pathParameters["databaseId"]
+    assetId = pathParameters["assetId"]
+
+    # showArchived also resolves an archived asset; its comments stay keyed by the original
+    # database id. Authorization is decided before existence.
+    allowed, asset_object = _authorize_asset(databaseId, assetId, "GET", include_archived=show_archived)
+    if not allowed:
+        response["statusCode"] = 403
+        response["body"] = json.dumps({"message": "Action not allowed"})
+        return response
     if asset_object is None:
         response["statusCode"] = 404
         response["body"] = json.dumps({"message": "Asset not found"})
         return response
 
-    asset_object.update({"object__type": "asset"})
-
-    # Add Casbin Enforcer to check if the current user has permissions to GET the Comment
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if casbin_enforcer.enforce(asset_object, "GET"):
-            method_allowed_on_api = True
-
-    if method_allowed_on_api:
-        if "assetVersionId:commentId" not in pathParameters:
-            # if we have an assetVersionId and assetId, call get_comments_version
-            if "assetVersionId" in pathParameters and "assetId" in pathParameters:
-                logger.info("Validating parameters")
-                (valid, message) = validate({"assetId": {"value": pathParameters["assetId"], "validator": "ASSET_ID"}})
-                if not valid:
-                    logger.warning(message)
-                    response["body"] = json.dumps({"message": message})
-                    response["statusCode"] = 400
-                    return response
-
-                logger.info(
-                    f"Listing comments for asset: {pathParameters['assetId']} and version {pathParameters['assetVersionId']}",
-                )
-                response["body"] = json.dumps(
-                    {
-                        "message": get_comments_version(
-                            pathParameters["assetId"],
-                            pathParameters["assetVersionId"],
-                            queryParameters,
-                            showDeleted,
-                        )
-                    }
-                )
-                response["statusCode"] = 200
-                return response
-
-            # if we just have assetId, call get_comments
-            if "assetId" in pathParameters:
-                logger.info("Validating parameters")
-                (valid, message) = validate({"assetId": {"value": pathParameters["assetId"], "validator": "ASSET_ID"}})
-                if not valid:
-                    logger.warning(message)
-                    response["body"] = json.dumps({"message": message})
-                    response["statusCode"] = 400
-                    return response
-
-                logger.info(f"Listing comments for asset: {pathParameters['assetId']}")
-                response["body"] = json.dumps({"message": get_comments(pathParameters["assetId"], queryParameters, showDeleted)})
-                response["statusCode"] = 200
-                return response
-            else:
-                # if we have nothing, call get_all_comments
-                logger.info("Listing All Comments")
-                response["body"] = json.dumps({"message": get_all_comments(queryParameters, showDeleted)})
-                response["statusCode"] = 200
-                return response
-        else:
-            # error, no assetId in call
-            if "assetId" not in pathParameters:
-                message = "No asset ID in API Call"
-                response["body"] = json.dumps({"message": message})
-                response["statusCode"] = 400
-                return response
-
-            logger.info("Validating parameters")
-
-            split_arr = pathParameters["assetVersionId:commentId"].split(":")
-            logger.info("Validating parameters")
-            (valid, message) = validate(
-                {
-                    "assetId": {"value": pathParameters["assetId"], "validator": "ASSET_ID"},
-                    "commentId": {"value": split_arr[1], "validator": "ID"},
-                }
-            )
-
-            if not valid:
-                logger.warning(message)
-                response["body"] = json.dumps({"message": message})
-                response["statusCode"] = 400
-                return response
-
-            logger.info(
-                f"Getting comment with assetId {pathParameters['assetId']} and assetVersionId:commentId {pathParameters['assetVersionId:commentId']}"
-            )
-            response["body"] = json.dumps(
-                {
-                    "message": get_single_comment(
-                        pathParameters["assetId"],
-                        pathParameters["assetVersionId:commentId"],
-                        showDeleted,
-                    )
-                }
-            )
-            response["statusCode"] = 200
-            return response
-    else:
-        response["statusCode"] = 403
-        response["body"] = json.dumps({"message": "Action not allowed"})
+    if pathParameters.get("commentId"):
+        logger.info(f"Getting comment {pathParameters['commentId']} of asset {assetId}")
+        response["body"] = json.dumps(
+            {"message": comment_response(get_single_comment(databaseId, assetId, pathParameters["commentId"]))})
+        response["statusCode"] = 200
         return response
+
+    logger.info(f"Listing comments for asset: {assetId}")
+    response["body"] = json.dumps(
+        {"message": get_comments(databaseId, assetId, queryParameters, asset_version_id)})
+    response["statusCode"] = 200
+    return response
 
 
 def delete_handler(response: dict, pathParameters: dict, event: dict) -> dict:
     """
-    Function to handle the delete request and route it to the right function
+    Function to handle the delete request
     :param response: dictionary holding information about the response
-    :param pathParameters: dictionary holding information about the path (like versionId and/or assetId)
+    :param pathParameters: the database, asset and comment ids
     :param event: Lambda event dictionary
     :returns: Http response object (statusCode, headers, body)
     """
-    # Check for missing fields - TODO:  keep these synchronized
-    #
-    required_field_names = ['assetId', 'assetVersionId:commentId']
-    missing_field_names = list(set(required_field_names).difference(pathParameters))
-    if missing_field_names:
-        message = 'Missing path parameter(s) (%s) in API call' % (', '.join(missing_field_names))
-        response['body'] = json.dumps({"message": message})
-        response['statusCode'] = 400
-        logger.error(response)
+    error = _validate_path(pathParameters, response, require_comment=True)
+    if error:
+        return error
+
+    databaseId = pathParameters["databaseId"]
+    assetId = pathParameters["assetId"]
+    commentId = pathParameters["commentId"]
+
+    allowed, asset_object = _authorize_asset(databaseId, assetId, "DELETE")
+    if not allowed:
+        response["statusCode"] = 403
+        response["body"] = json.dumps({"message": "Action not allowed"})
         return response
-
-    logger.info("Validating parameters")
-    split_arr = pathParameters["assetVersionId:commentId"].split(":")
-
-    #if split_arr length is not 2, generate a validation error
-    if len(split_arr) != 2:
-        message = "Invalid assetVersionId:commentId format"
-        response["body"] = json.dumps({"message": message})
-        response["statusCode"] = 400
-        return response
-
-    (valid, message) = validate(
-        {
-            "assetId": 
-            {
-                "value": pathParameters["assetId"], 
-                "validator": "ASSET_ID"
-            },
-            "commentId": 
-            {
-                "value": split_arr[1], 
-                "validator": "ID"
-                },
-        }
-    )
-
-    if not valid:
-        logger.warning(message)
-        response["body"] = json.dumps({"message": message})
-        response["statusCode"] = 400
-        return response
-
-    global claims_and_roles
-    claims_and_roles = request_to_claims(event)
-    method_allowed_on_api = False
-
-    asset_object = get_asset_object_from_id(None, pathParameters["assetId"])
     if asset_object is None:
         response["statusCode"] = 404
         response["body"] = json.dumps({"message": "Asset not found"})
         return response
 
-    asset_object.update({"object__type": "asset"})
+    # Get user ID of person making request
+    userId = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
-    # Add Casbin Enforcer to check if the current user has permissions to DELETE the Comment
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if casbin_enforcer.enforce(asset_object, "DELETE"):
-            method_allowed_on_api = True
+    logger.info(f"Deleting comment {commentId} of asset {assetId}")
+    result = delete_comment(databaseId, assetId, commentId, userId)
+    if result["statusCode"] == 200:
+        log_action(event, "commentDelete", database_id=databaseId, asset_id=assetId,
+                   assetVersionId=result.get("assetVersionId"), commentId=commentId)
 
-    if method_allowed_on_api:
+    response["body"] = json.dumps({"message": result["message"]})
+    response["statusCode"] = result["statusCode"]
+    return response
 
-        #Get user ID of person making request
-        userId = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
 
-        logger.info(
-            f"Deleting comment for assetId: {pathParameters['assetId']} and versionId:commentId: {pathParameters['assetVersionId:commentId']}",
-        )
-
-        result = delete_comment(pathParameters["assetId"], pathParameters["assetVersionId:commentId"], userId, event)
-        
-        response["body"] = json.dumps({"message": result["message"]})
-        response["statusCode"] = result["statusCode"]
-        return response
+def _log_comment_read(event, path_parameters, query_parameters):
+    request_parameters = dict(query_parameters or {})
+    if path_parameters.get("commentId"):
+        log_action(event, "commentGet", database_id=path_parameters.get("databaseId"),
+                   asset_id=path_parameters.get("assetId"), commentId=path_parameters["commentId"],
+                   request_parameters=request_parameters)
     else:
-        response["statusCode"] = 403
-        response["body"] = json.dumps({"message": "Action not allowed"})
-        return response
+        log_action(event, "commentList", database_id=path_parameters.get("databaseId"),
+                   asset_id=path_parameters.get("assetId"),
+                   assetVersionId=request_parameters.get("assetVersionId"),
+                   request_parameters=request_parameters)
 
 
+@audited_handler
 def lambda_handler(event: dict, context: dict) -> dict:
     """
     Lambda handler for the API calls directed to commentService
@@ -464,7 +334,7 @@ def lambda_handler(event: dict, context: dict) -> dict:
     """
     normalize_event(event)
     response = copy.deepcopy(STANDARD_JSON_RESPONSE)
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
     pathParameters = event.get("pathParameters", {})
     queryParameters = event.get("queryStringParameters", {})
 
@@ -480,20 +350,26 @@ def lambda_handler(event: dict, context: dict) -> dict:
 
         method_allowed_on_api = False
 
-        # Add Casbin Enforcer to check if the current user has permissions to GET the Comment
+        # Tier 1: may the caller call this route at all
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-        
 
-        if httpMethod == "GET" and method_allowed_on_api:
+        if not method_allowed_on_api:
+            response["statusCode"] = 403
+            response["body"] = json.dumps({"message": "Action not allowed"})
+            return response
+
+        if httpMethod == "GET":
             result = get_handler(response, pathParameters, queryParameters)
+            if result.get("statusCode") == 200:
+                _log_comment_read(event, pathParameters, queryParameters)
             return result
-        if httpMethod == "DELETE" and method_allowed_on_api:
+        if httpMethod == "DELETE":
             result = delete_handler(response, pathParameters, event)
             return result
-        
+
         # If we get here, we didn't handle the request
         logger.error("No handler matched")
         response["statusCode"] = 405
@@ -501,10 +377,8 @@ def lambda_handler(event: dict, context: dict) -> dict:
         return response
 
     except VAMSGeneralErrorResponse as v:
-        # Raised by the asset lookup in get_handler / delete_handler when the assetId cannot
-        # be resolved to a single live asset (e.g. the same assetId exists in more than one
-        # database). The message names no caller-supplied value, so it is returned as the
-        # client-facing reason.
+        # Raised by the asset lookup when an id is empty or the read fails. The message names no
+        # caller-supplied value, so it is returned as the client-facing reason.
         logger.exception(v)
         response["statusCode"] = 400
         response["body"] = json.dumps({"message": str(v)})

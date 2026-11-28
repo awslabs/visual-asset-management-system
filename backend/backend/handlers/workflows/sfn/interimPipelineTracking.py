@@ -33,17 +33,21 @@ from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
+from common.eventLogSummary import event_log_summary
+from customLogging.auditLogging import audited_handler
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
 from common.workflows import executionValidation as ev
 from common.workflows import templateRender as tr
+from common.fileAttribution import folder_input_exclude_locations
+from common.s3 import region_routing_s3_client
 from models.common import VAMSGeneralErrorResponse
 
 logger = safeLogger(service="InterimPipelineTracking")
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
-s3c = boto3.client('s3', config=retry_config)
+s3c = region_routing_s3_client()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 
 # The declared arity of a step that consumes no input files (models/pipelines.py inputFileArity).
@@ -60,6 +64,9 @@ try:
     workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
     pipeline_execution_input_configuration_table = get_table_name(
         ResourceKeys.PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE)
+    # The asset table, read for the locations of assets nested in a folder input. Resolved here with
+    # the others: a lookup inside the handler could be refused after step 1 has written its records.
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     # Auxiliary bucket name, written into each next pipeline's manifest.auxBucket. Resolved here
     # (not threaded through the SFN input) so the aux bucket lives in one place per its purpose.
     bucket_name_assetAuxiliary = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
@@ -90,12 +97,35 @@ def _relative_to_asset(full_file_key, base_key):
     """Strip the asset's base location key from a stored (full, asset-ID-prefixed) input file
     key to get the asset-relative path used for shadow matching. Both keys may carry a leading
     slash (the stored inputAssetFileKey is normalize_file_key'd); compare without leading slashes.
-    Returns the asset-relative path with a single leading slash."""
+    Returns the asset-relative path with a leading slash. In a folder location the path is "/" + the key
+    after the folder, as the file list gives it (common.assetLocations.relative_path_in), so a key with an
+    empty segment right after the folder keeps it: `{folder}/x` is `//x`, not the path of `{folder}x`
+    (#1977)."""
     fk = (full_file_key or "").lstrip('/')
     base = (base_key or "").lstrip('/')
     if base and fk.startswith(base):
         fk = fk[len(base):]
+        if base.endswith('/'):
+            return "/" + fk
     return er.normalize_file_key(fk)
+
+
+def _asset_table():
+    """The asset table and its name (resolved at import): only a folder input reads it, for the
+    locations of the assets nested in it."""
+    return dynamodb.Table(asset_storage_table_name), asset_storage_table_name
+
+
+def _exclude_locations(file_bucket, asset_root_s3_key, file_key):
+    """The `excludeLocations` of an original input for a later step: the stored locations of assets nested
+    in the input asset's location under a folder input, by the rule step 1's manifest used
+    (`fileAttribution.folder_input_exclude_locations`), from the row's asset bucket, asset root and input
+    key. A file input names none and reads nothing."""
+    key = (file_key or "").lstrip('/')
+    if key and not key.endswith('/'):
+        return []
+    table, name = _asset_table()
+    return folder_input_exclude_locations(table, file_bucket, asset_root_s3_key, key, asset_table_name=name)
 
 
 def _get_original_input_entries(workflow_execution_id):
@@ -122,7 +152,7 @@ def _get_original_input_entries(workflow_execution_id):
             database_id = row.get('databaseId', '')
             asset_id = row.get('assetId', '')
             relative_path = _relative_to_asset(file_key, asset_root_s3_key)
-            entries.append({
+            entry = {
                 "relativePath": relative_path,
                 "databaseId": database_id,
                 "assetId": asset_id,
@@ -135,7 +165,12 @@ def _get_original_input_entries(workflow_execution_id):
                 # The concrete version the run resolved at launch, so a later step reads the same
                 # object bytes step 1 read rather than whatever is latest now.
                 "versionId": row.get('versionId', '') or "",
-            })
+            }
+            # A folder input leaves out the files of assets nested in it at every step, as at step 1
+            exclude_locations = _exclude_locations(file_bucket, asset_root_s3_key, file_key)
+            if exclude_locations:
+                entry["excludeLocations"] = exclude_locations
+            entries.append(entry)
         if 'LastEvaluatedKey' not in resp:
             break
         kwargs['ExclusiveStartKey'] = resp['LastEvaluatedKey']
@@ -295,6 +330,7 @@ def prepare_next_pipeline(body, current_output_files=None):
         "inputMetadataS3Location": next_metadata_location,
         "outputs": er.build_manifest_outputs(
             bucket=wf_exec_bucket,
+            bucket_region=os.environ["AWS_REGION"],
             files=er.run_bucket_key(base_prefix, body.get('outputFilesPrefixRelative', '')),
             previews=er.run_bucket_key(base_prefix, body.get('outputPreviewsPrefixRelative', '')),
             metadata=er.run_bucket_key(base_prefix, body.get('outputMetadataPrefixRelative', '')),
@@ -421,7 +457,8 @@ def _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key
         "pipelineExecutionId": body.get('nextPipelineExecutionId', ''),
         "pipelineId": body.get('nextPipelineId', ''),
         "pipelineDatabaseId": body.get('nextPipelineDatabaseId', ''),
-        "jobName": body.get('nextPipelineJobName', ''),
+        "jobName": er.run_job_name(body.get('nextPipelineJobName', ''),
+                                   body.get('nextPipelineExecutionId', '')),
         "executingUserName": body.get('executingUserName', ''),
         "inputConfigurationS3Location": next_config_location,
     }
@@ -463,12 +500,13 @@ def _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key
                    Body=rendered.encode("utf-8"), ContentType="application/json")
 
 
+@audited_handler
 def lambda_handler(event, context):
     """SFN-invoked interim tracking between pipeline N and N+1.
 
     Returns the next-pipeline input locations as the state result. Never finalizes the
     overall execution (that is the end-state processWorkflowExecutionOutput lambda)."""
-    logger.info(event)
+    logger.info(f"Event: {event_log_summary(event)}")
     body = event.get('body', event)
     if isinstance(body, str):
         try:

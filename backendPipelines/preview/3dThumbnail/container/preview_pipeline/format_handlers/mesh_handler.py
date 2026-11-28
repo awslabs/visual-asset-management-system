@@ -3,26 +3,128 @@
 
 """
 Mesh format handler for .ply, .stl, .obj, .glb, .fbx, .drc files.
-Loads mesh geometry using trimesh and converts to PyVista for rendering.
+Loads mesh geometry using trimesh (FBX with Open3D, DRC with DracoPy) and converts to PyVista for
+rendering.
 """
 
 import os
+import re
 import numpy as np
 import trimesh
 import pyvista as pv
+from .. import scene_parts
 from ..utils.logging import get_logger
+from . import fbx_scene
 from .pointcloud_handler import finite_points
+from .scene_limits import VERTICES_PER_TRIANGLE, SceneLimit
 
 logger = get_logger()
 
-SUPPORTED_EXTENSIONS = {".ply", ".stl", ".obj", ".glb", ".gltf", ".fbx", ".drc"}
+SUPPORTED_EXTENSIONS = {".ply", ".stl", ".obj", ".glb", ".gltf", ".fbx", ".drc", ".off"}
 
 
 def can_handle(extension: str) -> bool:
     return extension.lower() in SUPPORTED_EXTENSIONS
 
 
-def load(file_path: str) -> pv.PolyData:
+# FBX GlobalSettings: UpAxis 0 = X, 1 = Y, 2 = Z. ASCII: P: "UpAxis", "int", "Integer", "",2 ;
+# binary: the property record's strings followed by an 'I' int32.
+_FBX_UP_AXIS_ASCII = re.compile(rb'"UpAxis"\s*,\s*"int"\s*,\s*"Integer"\s*,\s*"[^"]*"\s*,\s*(-?\d+)')
+_FBX_UP_AXIS_BINARY = re.compile(rb"UpAxisS\x03\x00\x00\x00intS\x07\x00\x00\x00IntegerS\x00\x00\x00\x00I(.{4})",
+                                 re.DOTALL)
+_FBX_HEADER_SCAN = 64 * 1024 ** 2
+
+
+def fbx_up_axis(file_path: str):
+    """'X', 'Y' or 'Z' from an FBX file's GlobalSettings ``UpAxis``, or None when it is not found."""
+    try:
+        with open(file_path, "rb") as handle:
+            data = handle.read(_FBX_HEADER_SCAN)
+    except OSError:
+        return None
+    match = _FBX_UP_AXIS_ASCII.search(data)
+    value = int(match.group(1)) if match else None
+    if value is None:
+        match = _FBX_UP_AXIS_BINARY.search(data)
+        value = int.from_bytes(match.group(1), "little", signed=True) if match else None
+    return {0: "X", 1: "Y", 2: "Z"}.get(value)
+
+
+def load(file_path: str, max_triangles: int = None, asset_root: str = None) -> pv.PolyData:
+    """Load a mesh file; an FBX carries the up axis its GlobalSettings declare. ``max_triangles``
+    bounds how far an FBX scene's instances may expand (``_load_fbx_open3d``). ``asset_root`` is the
+    local directory the input's referenced files were fetched into: a glTF or OBJ reads the files it
+    names from anywhere inside it (``asset_resolver``)."""
+    data = _load(file_path, max_triangles, asset_root)
+    if os.path.splitext(file_path)[1].lower() == ".fbx":
+        axis = fbx_up_axis(file_path)
+        if axis:
+            logger.info(f"FBX UpAxis: {axis}")
+            data._preview_up_axis = axis
+    return data
+
+
+# Formats whose referenced files (buffers, images, materials, texture maps) the loader reads through a
+# trimesh resolver.
+RESOLVED_EXTENSIONS = {".gltf", ".obj"}
+
+
+def asset_resolver(file_path: str, asset_root: str):
+    """A trimesh resolver for the files ``file_path`` names, confined to ``asset_root``.
+
+    A name resolves against the input file's folder, as trimesh's own ``FilePathResolver`` does, but
+    may lead anywhere inside the asset root rather than only below that folder: the referenced-file
+    fetch accepts a ``../textures/x.png`` that stays inside the asset and fetches it there, so the
+    loader must read it from there too. An OBJ's material library names its texture maps relative to
+    its own folder (as the fetch reads them), so once a ``.mtl`` is read its folder is searched too. A
+    name that resolves outside the asset root is refused, as the fetch refuses it.
+    """
+    from pathlib import Path
+
+    from trimesh.resolvers import FilePathResolver
+
+    class AssetResolver(FilePathResolver):
+        def __init__(self, source, root):
+            super().__init__(source)
+            self.root = Path(root).resolve()
+            self.folders = [Path(self.parent).resolve()]
+
+        def _confined(self, folder, name):
+            path = (folder / name).resolve()
+            return path if path.is_relative_to(self.root) else None
+
+        def absolute(self, name):
+            path = self._confined(self.folders[0], name.strip())
+            if path is None:
+                raise ValueError(f"'{name}' is outside the asset")
+            return path
+
+        def get(self, name):
+            # Backslashes read as separators, as the fetch reads them (files written on Windows).
+            stripped = name.strip().replace("\\", "/")
+            candidates = (stripped, stripped.lstrip("/"), os.path.split(stripped)[-1])
+            refused = True
+            for folder in list(self.folders):
+                for candidate in candidates:
+                    path = self._confined(folder, candidate) if candidate else None
+                    if path is None:
+                        continue
+                    refused = False
+                    if path.is_file():
+                        if path.suffix.lower() == ".mtl" and path.parent not in self.folders:
+                            self.folders.append(path.parent)
+                        return path.read_bytes()
+            if refused:
+                raise ValueError(f"'{name}' is outside the asset")
+            raise FileNotFoundError(name)
+
+        def namespaced(self, namespace):
+            return AssetResolver(os.path.join(self.parent, namespace), self.root)
+
+    return AssetResolver(file_path, asset_root)
+
+
+def _load(file_path: str, max_triangles: int = None, asset_root: str = None) -> pv.PolyData:
     """
     Load a mesh file and return a PyVista PolyData object for rendering.
     Supports: .ply, .stl, .obj, .glb, .gltf, .fbx, .drc
@@ -34,13 +136,16 @@ def load(file_path: str) -> pv.PolyData:
         return _load_draco(file_path)
 
     # Use trimesh for all other mesh formats
+    resolver = None
+    if asset_root and ext in RESOLVED_EXTENSIONS:
+        resolver = asset_resolver(file_path, asset_root)
     try:
-        scene_or_mesh = trimesh.load(file_path, force=None)
+        scene_or_mesh = trimesh.load(file_path, force=None, resolver=resolver)
     except (NotImplementedError, Exception) as e:
         # trimesh doesn't support FBX natively; fall back to Open3D
         if ext == ".fbx":
             logger.warning(f"trimesh does not support FBX, falling back to Open3D: {e}")
-            return _load_fbx_open3d(file_path)
+            return _load_fbx_open3d(file_path, max_triangles)
         logger.error(f"Failed to load mesh with trimesh: {e}")
         raise
 
@@ -49,17 +154,30 @@ def load(file_path: str) -> pv.PolyData:
         # Use scene.dump() to get transformed meshes (applies scene graph
         # transforms so sub-meshes are positioned correctly relative to each other).
         trimeshes = []
+        # Each point cloud as its (points, colours) without the non-finite points, before the
+        # backdrop check and the framing see them; a cloud with no valid point is left out.
+        clouds = []
         empty_cloud = None
         for geom in scene_or_mesh.dump():
             if isinstance(geom, trimesh.Trimesh):
                 trimeshes.append(geom)
             elif isinstance(geom, trimesh.PointCloud):
                 try:
-                    return _pointcloud_to_pyvista(geom)
+                    clouds.append(_finite_cloud(geom))
                 except ValueError as e:
-                    # A point geometry with no valid point: render the rest of the scene instead
-                    logger.warning(f"Skipping a scene point cloud: {e}")
+                    logger.warning(f"Leaving out a scene point cloud: {e}")
                     empty_cloud = e
+        # A backdrop (a ground or environment plane) is dropped before any texture is baked or any
+        # part merged, so the parts kept load as a file holding them alone would.
+        keep = scene_parts.backdrop_keep([geom.vertices for geom in trimeshes]
+                                         + [points for points, _ in clouds])
+        if keep is not None:
+            n_meshes = len(trimeshes)
+            trimeshes = [geom for geom, kept in zip(trimeshes, keep[:n_meshes]) if kept]
+            clouds = [cloud for cloud, kept in zip(clouds, keep[n_meshes:]) if kept]
+        if clouds:
+            # A scene holding point clouds renders every one of its parts, meshes included.
+            return _scene_parts_to_pyvista(trimeshes, clouds)
         if not trimeshes:
             if empty_cloud is not None:
                 raise empty_cloud
@@ -85,7 +203,8 @@ def load(file_path: str) -> pv.PolyData:
                     pass
             baked.append(b)
         merged = trimesh.util.concatenate(baked)
-        return _trimesh_to_pyvista(merged)
+        return scene_parts.record_parts(_trimesh_to_pyvista(merged), [len(m.vertices) for m in baked],
+                                        backdrops_dropped=True)
 
     elif isinstance(scene_or_mesh, trimesh.Trimesh):
         return _trimesh_to_pyvista_textured(scene_or_mesh)
@@ -136,10 +255,10 @@ def _trimesh_to_pyvista_textured(mesh: trimesh.Trimesh) -> pv.PolyData:
             if tex_image is not None:
                 # Set UV coordinates on mesh
                 pv_mesh.active_texture_coordinates = np.array(mesh.visual.uv)
-                # Create PyVista texture from the base color image
-                pv_mesh._preview_texture = pv.Texture(np.array(tex_image))
+                # Create PyVista texture from the base color image, as RGB
+                pv_mesh._preview_texture = pv.Texture(texture_rgb_array(tex_image))
                 logger.info(f"Loaded textured mesh: {len(vertices)} vertices, {n_faces} faces, "
-                            f"texture={tex_image.size}")
+                            f"texture={tex_image.size}, mode={getattr(tex_image, 'mode', None)}")
                 return pv_mesh
             else:
                 logger.info("No texture image found on material, falling back to vertex color baking")
@@ -176,6 +295,30 @@ def _trimesh_to_pyvista_textured(mesh: trimesh.Trimesh) -> pv.PolyData:
 
     logger.info(f"Loaded mesh: {len(vertices)} vertices, {n_faces} faces")
     return pv_mesh
+
+
+def texture_rgb_array(image) -> np.ndarray:
+    """A texture image as a contiguous HxWx3 uint8 RGB array.
+
+    PIL keeps an image in its stored mode, and ``np.array`` of it keeps that layout: a palette PNG
+    (mode ``P``) becomes a 2-D array of palette indices, a greyscale one a single channel and a 16-bit
+    one values up to 65535. VTK reads a 2-D array as intensity, so a palette texture rendered as its
+    small index values, nearly black (#476: the Khronos Duck's ``DuckCM.png`` holds indices 0..53).
+    Every mode is converted to RGB here; alpha is dropped, as the USD loader does.
+    """
+    from PIL import Image
+
+    if not isinstance(image, Image.Image):
+        array = np.asarray(image)
+        if array.dtype != np.uint8:
+            peak = 65535.0 if array.max(initial=0) > 255 else 255.0
+            array = np.clip(array.astype(np.float64) / peak * 255.0 + 0.5, 0, 255).astype(np.uint8)
+        image = Image.fromarray(array)
+    if image.mode.startswith("I"):  # 16- or 32-bit integer greyscale
+        values = np.asarray(image, dtype=np.float64)
+        peak = 65535.0 if values.max(initial=0) > 255 else 255.0
+        image = Image.fromarray(np.clip(values / peak * 255.0 + 0.5, 0, 255).astype(np.uint8), "L")
+    return np.ascontiguousarray(np.asarray(image.convert("RGB"), dtype=np.uint8))
 
 
 def _bake_texture_to_vertex_colors(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
@@ -313,21 +456,69 @@ def _trimesh_to_pyvista(mesh: trimesh.Trimesh) -> pv.PolyData:
     return pv_mesh
 
 
-def _pointcloud_to_pyvista(pc: trimesh.PointCloud) -> pv.PolyData:
-    """
-    Convert a trimesh PointCloud to PyVista PolyData.
-
-    Points with a NaN or infinite coordinate are dropped with their colours, as in the point-cloud
-    handler, so they cannot turn the camera's framing into NaN; a cloud with no valid point fails.
-    """
+def _finite_cloud(pc: trimesh.PointCloud):
+    """A trimesh PointCloud's (points, colours) without the points that have a NaN or infinite
+    coordinate, as the point-cloud handler drops them, so they cannot turn the framing into NaN.
+    Raises ValueError when no point is left."""
     colors = None
     if pc.colors is not None and len(pc.colors) > 0:
         colors = np.array(pc.colors)
-    points, colors = finite_points(np.array(pc.vertices), colors)
+    return finite_points(np.array(pc.vertices), colors)
+
+
+def _points_to_pyvista(points, colors) -> pv.PolyData:
+    """PyVista PolyData of a point cloud's points, with its colours when it has them."""
     pv_cloud = pv.PolyData(points)
     if colors is not None and colors.shape[1] >= 3:
         pv_cloud.point_data["RGB"] = colors[:, :3]
     return pv_cloud
+
+
+def _pointcloud_to_pyvista(pc: trimesh.PointCloud) -> pv.PolyData:
+    """
+    Convert a trimesh PointCloud to PyVista PolyData, without its non-finite points.
+    """
+    return _points_to_pyvista(*_finite_cloud(pc))
+
+
+# Colours for the parts of a mixed scene that carry none: the renderer's uncoloured-mesh colour, and a
+# neutral grey for points.
+_MIXED_SCENE_MESH_RGB = (173, 216, 230)
+_MIXED_SCENE_POINT_RGB = (200, 200, 200)
+
+
+def _with_rgb(pv_data: pv.PolyData, default_rgb) -> pv.PolyData:
+    """The data with a uint8 per-point RGB array, filled with default_rgb when it has none."""
+    rgb = pv_data.point_data.get("RGB") if "RGB" in pv_data.point_data else None
+    if rgb is None or len(rgb) != pv_data.n_points:
+        rgb = np.tile(np.asarray(default_rgb, dtype=np.uint8), (pv_data.n_points, 1))
+    pv_data.point_data["RGB"] = np.asarray(rgb)[:, :3].astype(np.uint8)
+    return pv_data
+
+
+def _scene_parts_to_pyvista(trimeshes: list, clouds: list) -> pv.PolyData:
+    """One PolyData holding every mesh and point cloud of a scene.
+
+    Each mesh's texture is baked to vertex colours (one PolyData carries one texture), and every part
+    gets a per-point RGB array so the colours survive the append; a point cloud keeps its vertex
+    cells, so the renderer draws its points beside the meshes' faces.
+    """
+    parts = []
+    for mesh in trimeshes:
+        baked = _bake_texture_to_vertex_colors(mesh)
+        if getattr(getattr(baked, "visual", None), "kind", None) == "texture":
+            try:
+                baked.visual = baked.visual.to_color()
+            except Exception:
+                pass
+        parts.append(_with_rgb(_trimesh_to_pyvista(baked), _MIXED_SCENE_MESH_RGB))
+    for points, colors in clouds:
+        parts.append(_with_rgb(_points_to_pyvista(points, colors), _MIXED_SCENE_POINT_RGB))
+    merged = parts[0] if len(parts) == 1 else parts[0].append_polydata(*parts[1:])
+    scene_parts.record_parts(merged, [part.n_points for part in parts], backdrops_dropped=True)
+    logger.info(f"Loaded scene with {len(trimeshes)} meshes and {len(clouds)} point clouds: "
+                f"{merged.n_points} points, {merged.n_cells} cells")
+    return merged
 
 
 def _load_draco(file_path: str) -> pv.PolyData:
@@ -346,48 +537,118 @@ def _load_draco(file_path: str) -> pv.PolyData:
     mesh = DracoPy.decode(data)
 
     vertices = np.array(mesh.points).reshape(-1, 3)
+    colours = getattr(mesh, "colors", None)
 
-    if mesh.faces is not None and len(mesh.faces) > 0:
-        faces = np.array(mesh.faces).reshape(-1, 3)
+    # DracoPy returns a DracoPointCloud for faceless files, which has no faces attribute
+    faces = getattr(mesh, "faces", None)
+    if faces is not None and len(faces) > 0:
+        faces = np.array(faces).reshape(-1, 3)
         n_faces = len(faces)
         pv_faces = np.column_stack([np.full(n_faces, 3), faces]).ravel()
         pv_mesh = pv.PolyData(vertices, pv_faces)
     else:
-        # No faces: a Draco point cloud, so drop its non-finite points like any other cloud
-        vertices, _ = finite_points(vertices)
+        # No faces: a Draco point cloud, so its non-finite points are dropped with their colours
+        vertices, colours = finite_points(vertices, None if colours is None else np.asarray(colours))
         pv_mesh = pv.PolyData(vertices)
+
+    if colours is not None:
+        colours = np.asarray(colours)
+        if colours.ndim == 2 and colours.shape[0] == len(vertices) and colours.shape[1] >= 3:
+            if colours.dtype.kind == "f":
+                scale = 255.0 if colours.max(initial=0) <= 1.0 else 1.0
+                colours = np.clip(colours[:, :3] * scale + 0.5, 0, 255)
+            pv_mesh.point_data["RGB"] = colours[:, :3].astype(np.uint8)
+            logger.info("Draco mesh carries vertex colours")
 
     logger.info(f"Loaded Draco mesh: {len(vertices)} vertices")
     return pv_mesh
 
 
-def _load_fbx_open3d(file_path: str) -> pv.PolyData:
+def _load_fbx_open3d(file_path: str, max_triangles: int = None) -> pv.PolyData:
     """
-    Load FBX file using Open3D as a fallback for trimesh.
-    FBX is a proprietary Autodesk format not supported by trimesh.
+    Load an FBX file with Open3D's ``read_triangle_model`` (Assimp), which triangulates quads and
+    n-gons and applies every node's transform, and merge its meshes into one PolyData.
+
+    A mesh keeps its vertex colours; one without takes its material's base colour. A scene in which
+    no mesh has either (every mesh on Assimp's default material) carries no colours, so the renderer
+    draws its default mesh colour; textures are not sampled.
+
+    The scene's size is counted from the file first (``fbx_scene.scene_size``), since Assimp expands
+    every model placement and copies the geometry of every instance before it returns: a scene that
+    places more models than the ``SceneLimit`` node bound, or whose instances place more triangles
+    (or vertices) than the triangle budget allows beyond what the file stores once, is refused before
+    it is read.
     """
     try:
         import open3d as o3d
     except ImportError:
         raise ImportError("Open3D is required for .fbx file support")
 
-    logger.info(f"Loading FBX file via Open3D: {file_path}")
-    mesh = o3d.io.read_triangle_mesh(file_path)
+    limit = SceneLimit("FBX scene", max_triangles)
+    size = fbx_scene.scene_size(file_path, limit.max_nodes)
+    if not limit.expect(size.models):
+        raise ValueError(f"FBX scene places more than {limit.max_nodes:,} models")
+    allowed_triangles = max(limit.max_triangles, size.stored_triangles)
+    if size.triangles > allowed_triangles:
+        raise ValueError(f"FBX scene places more than {allowed_triangles:,} triangles")
+    allowed_vertices = max(VERTICES_PER_TRIANGLE * limit.max_triangles, size.stored_vertices)
+    if size.vertices > allowed_vertices:
+        raise ValueError(f"FBX scene places more than {allowed_vertices:,} vertices")
 
-    if mesh.is_empty():
-        raise ValueError(f"Open3D could not load FBX file or file is empty: {file_path}")
+    logger.info(f"Loading FBX file via Open3D: {file_path} ({size.models:,} models place "
+                f"{size.triangles:,} triangles)")
+    model = o3d.io.read_triangle_model(file_path)
 
-    vertices = np.asarray(mesh.vertices, dtype=np.float64)
-    triangles = np.asarray(mesh.triangles, dtype=np.int64)
+    parts = []
+    for part in model.meshes:
+        mesh = part.mesh
+        vertices = np.asarray(mesh.vertices, dtype=np.float64)
+        triangles = np.asarray(mesh.triangles, dtype=np.int64)
+        if not len(vertices) or not len(triangles):
+            continue
+        rgb = None
+        if mesh.has_vertex_colors():
+            rgb = (np.clip(np.asarray(mesh.vertex_colors), 0.0, 1.0) * 255).astype(np.uint8)
+        else:
+            colour = _fbx_material_rgb(model.materials, part.material_idx)
+            if colour is not None:
+                rgb = np.tile(colour, (len(vertices), 1))
+        parts.append((vertices, triangles, rgb))
 
-    n_faces = len(triangles)
-    pv_faces = np.column_stack([np.full(n_faces, 3), triangles]).ravel()
-    pv_mesh = pv.PolyData(vertices, pv_faces)
+    if not parts:
+        raise ValueError("No triangle geometry read from the FBX file: it is empty, not an FBX 2011 "
+                         "(7.1) or later file, or holds no meshes")
+    keep = scene_parts.backdrop_keep([vertices for vertices, _, _ in parts])
+    if keep is not None:
+        parts = [part for part, kept in zip(parts, keep) if kept]
 
-    # Transfer vertex colors if available
-    if mesh.has_vertex_colors():
-        colors = (np.asarray(mesh.vertex_colors) * 255).astype(np.uint8)
-        pv_mesh.point_data["RGB"] = colors
+    offsets = np.cumsum([0] + [len(vertices) for vertices, _, _ in parts[:-1]])
+    points = np.concatenate([vertices for vertices, _, _ in parts])
+    triangles = np.concatenate([tris + offset for (_, tris, _), offset in zip(parts, offsets)])
+    pv_mesh = pv.PolyData(points, np.column_stack([np.full(len(triangles), 3), triangles]).ravel())
+    if any(rgb is not None for _, _, rgb in parts):
+        default = np.asarray(_MIXED_SCENE_MESH_RGB, dtype=np.uint8)
+        pv_mesh.point_data["RGB"] = np.concatenate(
+            [rgb if rgb is not None else np.tile(default, (len(vertices), 1)) for vertices, _, rgb in parts])
+    scene_parts.record_parts(pv_mesh, [len(vertices) for vertices, _, _ in parts], backdrops_dropped=True)
 
-    logger.info(f"Loaded FBX mesh via Open3D: {len(vertices)} vertices, {n_faces} faces")
+    logger.info(f"Loaded FBX scene via Open3D: {len(parts)} meshes, {len(points)} vertices, "
+                f"{len(triangles)} faces")
     return pv_mesh
+
+
+# Assimp's FBX converter gives a mesh without a material this diffuse colour (FBXConverter
+# GetDefaultMaterial), which Open3D reports as the base colour.
+_ASSIMP_DEFAULT_BASE_COLOR = (0.8, 0.8, 0.8, 1.0)
+
+
+def _fbx_material_rgb(materials, index):
+    """The uint8 RGB of material ``index``'s base colour, or None for a missing material or Assimp's
+    default one."""
+    if not 0 <= index < len(materials):
+        return None
+    material = materials[index]
+    base = np.asarray(material.base_color, dtype=np.float64)
+    if material.albedo_img is None and np.allclose(base, _ASSIMP_DEFAULT_BASE_COLOR, atol=1e-6):
+        return None
+    return (np.clip(base[:3], 0.0, 1.0) * 255 + 0.5).astype(np.uint8)

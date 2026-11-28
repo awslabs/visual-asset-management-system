@@ -9,12 +9,16 @@ import QuickView from "../components/QuickView";
 import StatusBadge from "../components/StatusBadge";
 import InfoTooltip from "../components/InfoTooltip";
 import { OUTPUTS_SCOPE_HELP } from "./outputsHelp";
+import OutputIngestionProgress, { IngestedBadge } from "./OutputIngestionProgress";
 import { useExecutionDetails } from "../api/queries";
+import type { ReturnFocusTo } from "../components/useReturnFocus";
 
 interface ExecutionQuickViewProps {
     open: boolean;
     onClose: () => void;
     executionId: string;
+    /** Where focus returns when the opener cannot take it back (a row menu's item). */
+    returnFocusTo?: ReturnFocusTo;
 }
 
 /** Bordered group used throughout the quick-view panel so data reads as cards, not a text block. */
@@ -60,7 +64,12 @@ const MoreNote: React.FC<{ count?: number }> = ({ count }) => (
     </div>
 );
 
-const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, executionId }) => {
+const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({
+    open,
+    onClose,
+    executionId,
+    returnFocusTo,
+}) => {
     const { data: details, isLoading, error } = useExecutionDetails(executionId);
     const navigate = useNavigate();
 
@@ -103,7 +112,12 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
     const outputTotal = outputFiles.length + outputMetadata.length + outputResults.length;
 
     return (
-        <QuickView open={open} onClose={onClose} title="Execution Details">
+        <QuickView
+            open={open}
+            onClose={onClose}
+            title="Execution Details"
+            returnFocusTo={returnFocusTo}
+        >
             {isLoading && <div className="text-text-secondary">Loading...</div>}
             {error && <div className="text-vams-error">Failed to load execution details</div>}
             {details && (
@@ -113,6 +127,11 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                         <div className="flex items-center gap-2 mb-2">
                             <StatusBadge status={details.executionStatus} />
                         </div>
+                        <OutputIngestionProgress
+                            executionPhase={details.executionPhase}
+                            outputIngestion={details.outputIngestion}
+                            compact
+                        />
                         {/* The panel is also opened from a file's provenance link, where nothing
                             else on screen names the run. */}
                         <Row
@@ -176,8 +195,20 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                                         <li
                                             key={idx}
                                             className="font-mono text-sm break-all text-text-primary"
+                                            title={
+                                                f?.versionId
+                                                    ? `S3 version ${f.versionId}`
+                                                    : undefined
+                                            }
                                         >
-                                            {inputPath(f)}
+                                            <span>{inputPath(f)}</span>
+                                            {/* A run can read one file at two versions; the short
+                                                version id keeps the two rows distinguishable. */}
+                                            {f?.versionId && (
+                                                <span className="text-text-secondary">
+                                                    {` · ${String(f.versionId).slice(0, 8)}`}
+                                                </span>
+                                            )}
                                         </li>
                                     ))}
                             </ul>
@@ -238,6 +269,7 @@ const ExecutionQuickView: React.FC<ExecutionQuickViewProps> = ({ open, onClose, 
                                             {f.assetFileVersionId
                                                 ? ` (v ${f.assetFileVersionId})`
                                                 : ""}
+                                            <IngestedBadge ingestionStatus={f.ingestionStatus} />
                                         </li>
                                     ))}
                                 {outputMetadata

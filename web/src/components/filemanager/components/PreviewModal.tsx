@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Box, Button, Modal, Spinner } from "@cloudscape-design/components";
 import { downloadAsset } from "../../../services/APIService";
+import { downloadRefusalReason } from "../../../visualizerPlugin/core/streamFailure";
 import Synonyms from "../../../synonyms";
 
 interface PreviewModalProps {
@@ -28,6 +29,8 @@ const PreviewModal: React.FC<PreviewModalProps> = ({
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
     const [error, setError] = useState<boolean>(false);
+    // The API's own reason when it refused the file (D166), shown in place of the fixed text.
+    const [refusal, setRefusal] = useState<string | null>(null);
 
     useEffect(() => {
         // Reset states when props change
@@ -37,6 +40,7 @@ const PreviewModal: React.FC<PreviewModalProps> = ({
                 setPreviewUrl(preloadedUrl);
                 setLoading(false);
                 setError(false);
+                setRefusal(null);
                 return;
             }
 
@@ -44,6 +48,7 @@ const PreviewModal: React.FC<PreviewModalProps> = ({
             setPreviewUrl(null);
             setLoading(true);
             setError(false);
+            setRefusal(null);
 
             if (!previewKey) {
                 console.log("No preview key provided to PreviewModal");
@@ -70,6 +75,7 @@ const PreviewModal: React.FC<PreviewModalProps> = ({
                         if (response[0] === false) {
                             console.error("Error downloading full preview:", response[1]);
                             setError(true);
+                            setRefusal(downloadRefusalReason(response));
                         } else {
                             console.log("Full preview URL set:", response[1]);
                             setPreviewUrl(response[1]);
@@ -112,7 +118,7 @@ const PreviewModal: React.FC<PreviewModalProps> = ({
 
                 {!loading && error && (
                     <div style={{ padding: "40px" }}>
-                        <div>Preview not available</div>
+                        <div>{refusal ?? "Preview not available"}</div>
                     </div>
                 )}
 

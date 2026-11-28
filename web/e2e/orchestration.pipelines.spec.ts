@@ -3,14 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, Page } from "@playwright/test";
 import {
+    allowedApiRoutes,
+    AllowedApiRoute,
     collectPageErrors,
     expectNoPageOverflowX,
     facet,
     firstCardId,
+    firstCardName,
     gotoOrchestration,
     openCardMenu,
+    routeAllowed,
     searchBox,
     VIEWPORTS,
 } from "./support/fixtures";
@@ -19,7 +23,30 @@ import {
  * Pipelines page — permanent smoke coverage. Environment-agnostic: asserts the page's controls and
  * behavior against whatever pipelines the environment happens to contain, and skips (rather than
  * fails) when a precondition is genuinely absent. Safe against an empty or a seeded sandbox.
+ *
+ * Role-aware and system-record-aware (#1634, D130): a card's menu lists only the actions the signed-in
+ * role may call, so the expected items come from the API's allowed routes (the list the app's own
+ * check reads); and a system record (the SYSTEM GenAI, preview and Zip Archive pipelines, registered
+ * by default) offers View instead of Edit and keeps Archive disabled, so a case about Edit or Archive
+ * picks an ordinary card.
  */
+
+/** The API route behind each pipeline card action (PipelinesPage's `can()` checks). */
+const PIPELINE_ACTION_ROUTES: Record<"edit" | "templates" | "archive", [string, string]> = {
+    edit: ["PUT", "/database/{databaseId}/pipelines/{pipelineId}"],
+    templates: ["GET", "/database/{databaseId}/pipelines/{pipelineId}/templates"],
+    archive: ["DELETE", "/database/{databaseId}/pipelines/{pipelineId}"],
+};
+
+function mayUse(routes: AllowedApiRoute[], action: keyof typeof PIPELINE_ACTION_ROUTES): boolean {
+    const [method, path] = PIPELINE_ACTION_ROUTES[action];
+    return routeAllowed(routes, method, path);
+}
+
+/** A menu item of the open card menu by its exact accessible name ("View" is not "View Executions"). */
+function menuItem(page: Page, name: string) {
+    return page.getByRole("menuitem", { name, exact: true });
+}
 
 test.describe("Pipelines page", () => {
     test.beforeEach(async ({ page }) => {
@@ -70,18 +97,82 @@ test.describe("Pipelines page", () => {
     });
 
     test("a pipeline card's actions menu offers Edit / Templates / Archive", async ({ page }) => {
-        const id = await firstCardId(page);
-        test.skip(!id, "No pipelines in this environment");
-        const items = await openCardMenu(page, id!);
-        await expect(items.filter({ hasText: "Templates" })).toBeVisible();
-        await expect(items.filter({ hasText: "Edit" })).toBeVisible();
-        await expect(items.filter({ hasText: "Archive" })).toBeVisible();
+        const name = await firstCardName(page, { system: false });
+        test.skip(!name, "No pipeline other than the system records in this environment");
+        const routes = await allowedApiRoutes(page);
+        test.skip(!routes, "The role's allowed API routes could not be read (no API context)");
+        const may = {
+            edit: mayUse(routes!, "edit"),
+            templates: mayUse(routes!, "templates"),
+            archive: mayUse(routes!, "archive"),
+        };
+        test.skip(
+            !may.edit && !may.templates && !may.archive,
+            "This role may use none of a pipeline card's actions, so its menu is empty"
+        );
+        await openCardMenu(page, name!);
+        // Each action exactly when the API allows it to this role; the admin role sees all three.
+        for (const [action, label] of [
+            ["edit", "Edit"],
+            ["templates", "Templates"],
+            ["archive", "Archive"],
+        ] as const) {
+            if (may[action]) {
+                await expect(menuItem(page, label), `${label} for this role`).toBeVisible();
+            } else {
+                await expect(menuItem(page, label), `${label} hidden from this role`).toHaveCount(
+                    0
+                );
+            }
+        }
+        // An ordinary pipeline's Archive is usable; asserted only where the role is offered it, since
+        // an attribute check waits for an element a role without the route never sees (D134).
+        if (may.archive) {
+            await expect(menuItem(page, "Archive")).not.toHaveAttribute("aria-disabled", "true");
+        }
+        // View replaces Edit on a system record only.
+        await expect(menuItem(page, "View")).toHaveCount(0);
+        await page.keyboard.press("Escape");
+    });
+
+    test("a system pipeline card offers View, not Edit, and keeps Archive disabled (D130)", async ({
+        page,
+    }) => {
+        const name = await firstCardName(page, { system: true });
+        test.skip(!name, "No system pipeline in this environment");
+        const routes = await allowedApiRoutes(page);
+        test.skip(!routes, "The role's allowed API routes could not be read (no API context)");
+        await openCardMenu(page, name!);
+        await expect(menuItem(page, "View")).toBeVisible();
+        await expect(menuItem(page, "Edit")).toHaveCount(0);
+        if (mayUse(routes!, "templates")) {
+            await expect(menuItem(page, "Templates")).toBeVisible();
+        } else {
+            await expect(menuItem(page, "Templates")).toHaveCount(0);
+        }
+        if (mayUse(routes!, "archive")) {
+            // Listed, so the role learns why, but not usable: the deployment owns the record.
+            const archive = menuItem(page, "Archive");
+            await expect(archive).toHaveAttribute("aria-disabled", "true");
+            // ContextMenu reads a disabled item's reason out through aria-description.
+            await expect(archive).toHaveAttribute(
+                "aria-description",
+                /managed by the deployment and cannot be archived/
+            );
+        } else {
+            await expect(menuItem(page, "Archive")).toHaveCount(0);
+        }
         await page.keyboard.press("Escape");
     });
 
     test("the Templates action opens the template editor", async ({ page }) => {
         const id = await firstCardId(page);
         test.skip(!id, "No pipelines in this environment");
+        const routes = await allowedApiRoutes(page);
+        test.skip(
+            !!routes && !mayUse(routes, "templates"),
+            "This role may not list a pipeline's templates"
+        );
         const items = await openCardMenu(page, id!);
         await items.filter({ hasText: "Templates" }).click();
         await expect(page.getByRole("heading", { name: "Templates", level: 1 })).toBeVisible({
@@ -92,15 +183,16 @@ test.describe("Pipelines page", () => {
     test("Edit on a stored pipeline opens a populated form whose save is reachable", async ({
         page,
     }) => {
-        const id = await firstCardId(page);
-        test.skip(!id, "No pipelines in this environment");
+        // A system record has no Edit (View opens it read-only), so the subject is an ordinary card.
+        const id = await firstCardName(page, { system: false });
+        test.skip(!id, "No pipeline other than the system records in this environment");
         const items = await openCardMenu(page, id!);
         const edit = items.filter({ hasText: "Edit" });
         // A DeadlineCloud pipeline in a deployment with that feature off is read-only and offers no
         // Edit action, so there is nothing to assert about the form here.
         if ((await edit.count()) === 0) {
             await page.keyboard.press("Escape");
-            test.skip(true, "The first pipeline offers no Edit action in this deployment");
+            test.skip(true, "This pipeline offers no Edit action to this role in this deployment");
         }
         await edit.first().click();
 
@@ -143,8 +235,8 @@ test.describe("Pipelines page", () => {
     test("a pipeline that fails to load shows an error, not a blank Edit form", async ({
         page,
     }) => {
-        const id = await firstCardId(page);
-        test.skip(!id, "No pipelines in this environment");
+        const id = await firstCardName(page, { system: false });
+        test.skip(!id, "No pipeline other than the system records in this environment");
 
         // Fails the single-pipeline read only: the list route ends at "/pipelines" with no id
         // segment, and the templates route continues past the id, so neither matches.
@@ -164,7 +256,7 @@ test.describe("Pipelines page", () => {
         const edit = items.filter({ hasText: "Edit" });
         if ((await edit.count()) === 0) {
             await page.keyboard.press("Escape");
-            test.skip(true, "The first pipeline offers no Edit action in this deployment");
+            test.skip(true, "This pipeline offers no Edit action to this role in this deployment");
         }
         await edit.first().click();
 
@@ -195,8 +287,9 @@ test.describe("Pipeline and template wizards — fit a phone viewport", () => {
 
     test("the template create wizard does not scroll sideways", async ({ page }) => {
         await gotoOrchestration(page, "pipelines", "Pipelines");
-        const id = await firstCardId(page);
-        test.skip(!id, "No pipelines in this environment");
+        // Templates cannot be added to a system record, so the subject is an ordinary card.
+        const id = await firstCardName(page, { system: false });
+        test.skip(!id, "No pipeline other than the system records in this environment");
         const items = await openCardMenu(page, id!);
         await items.filter({ hasText: "Templates" }).click();
         await expect(page.getByRole("heading", { name: "Templates", level: 1 })).toBeVisible({

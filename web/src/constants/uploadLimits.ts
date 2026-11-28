@@ -10,6 +10,8 @@
  * this app's own batch sizes and stay within those caps.
  */
 
+import { PREVIEW_FILE_SIZE_LIMIT_BYTES } from "../common/constants/fileFormats";
+
 // Maximum number of concurrent uploads
 export const MAX_CONCURRENT_UPLOADS = 6;
 
@@ -32,7 +34,8 @@ export const MAX_SEQUENCE_SIZE = 3 * 1024 * 1024 * 1024; // 3GB soft limit for g
 export const MAX_RETRY_ATTEMPTS = 3;
 
 // Preview file limits
-export const MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+// The shared preview size limit (5 MiB); an uploaded preview of exactly that size is accepted.
+export const MAX_PREVIEW_FILE_SIZE = PREVIEW_FILE_SIZE_LIMIT_BYTES;
 
 // Allowed preview extensions are defined once in common/constants/fileFormats.ts
 export { previewFileFormats as ALLOWED_PREVIEW_EXTENSIONS } from "../common/constants/fileFormats";

@@ -94,7 +94,7 @@ The database is configured with `restrictFileUploadsToExtensions`, which limits 
     ```
 
 :::note
-Asset preview uploads (`--asset-preview`) and preview auxiliary files (those containing `.previewFile.` in the name) skip the database's restriction list, but are validated against the allowed preview image extensions (`.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`) instead. For a `.previewFile.` name the extension is everything after the marker, so `model.gltf.previewFile.p.png` is read as `.p.png` and refused. A database with no restriction configured accepts all other file types.
+Asset preview uploads (`--asset-preview`) and preview auxiliary files (those containing `.previewFile.` in the name) skip the database's restriction list, but are validated against the allowed preview image extensions (`.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, `.bmp`) instead. For a `.previewFile.` name the extension is everything after the marker, so `model.gltf.previewFile.p.png` is read as `.p.png` and refused. A database with no restriction configured accepts all other file types.
 :::
 
 ### Preview File Rejected
@@ -108,7 +108,7 @@ An `--asset-preview` upload fails validation.
 
 **Cause:**
 
-Asset preview images must be no larger than 5 MB and must use one of the supported extensions: `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`.
+Asset preview images must be no larger than 5 MiB (5,242,880 bytes; a file of exactly that size is accepted) and must use one of the supported extensions: `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, `.bmp`. A `.tga`, `.tif` or `.tiff` file is refused as an uploaded preview. To get a preview for such an image, enable the media preview pipeline, which writes a JPEG preview for it.
 
 **Resolution:**
 
@@ -260,6 +260,23 @@ vamscli file delete -d my-database -a my-asset -p "/folder/" --prefix --confirm
 :::warning
 Permanent deletion cannot be undone. To remove a file recoverably, use `vamscli file archive` instead.
 :::
+
+### Delete Refused Because Amazon S3 Kept Files
+
+`vamscli assets delete` or `vamscli file delete` exits `1`, and the asset or file is still there.
+
+**Symptoms:**
+
+-   `✗ Delete Refused:` (`assets delete`) or `✗ File Deletion Error:` (`file delete`), followed by the API's message. With `--json-output`, one JSON object whose `error_type` is `InvalidAssetDataError`.
+-   `vamscli sync file push --allow-delete --permanent-delete` lists the file under `deletes.failed` (on a `✗` line without `--json-output`), goes on with the other files and exits `1`.
+
+**Cause:**
+
+Amazon S3 did not delete every version of the files, for example because a bucket policy denies the delete or the objects are locked. The API refuses the delete with `400` and keeps the asset, and the files Amazon S3 kept keep their records.
+
+**Resolution:**
+
+Remove the cause in Amazon S3 (the bucket policy statement or the object lock), then run the same command again. `vamscli assets get -d my-database my-asset --show-archived` shows the asset that was kept.
 
 ---
 
@@ -486,6 +503,54 @@ A flattened download reports duplicate filenames.
 **Resolution:**
 
 Omit `--flatten-download-tree` to preserve the folder hierarchy. In interactive (non-JSON) mode the CLI prompts to skip, overwrite, or rename conflicting files; in `--json-output` mode the download aborts so it can be re-run interactively.
+
+### File Not Downloaded Because Its Path Leaves the Download Directory
+
+A download reports a file as failed without transferring it.
+
+**Symptoms:**
+
+-   `Not downloaded: the file path does not stay inside the download directory` in `failed_downloads`, and the command exits `1`
+
+**Cause:**
+
+`assets download` and `assets export` write each file at its asset-relative path under the directory you name. A file whose path would place it outside that directory, including through a symbolic link inside the directory, is not written.
+
+**Resolution:**
+
+Ask an administrator to rename or move the file in the asset. To fetch it anyway, use `--flatten-download-tree` (`assets download`) or `--flatten-downloads` (`assets export --download-files`), which writes each file under its name alone, or remove the symbolic link from the download directory.
+
+### File Not Downloaded Because Another File Takes Its Local Path
+
+A download reports a file as failed without transferring it, and names another file of the asset.
+
+**Symptoms:**
+
+-   `Not downloaded: another file of this download is saved at the same local path (/cloud.las)` in `failed_downloads`, and the command exits `1`
+
+**Cause:**
+
+Two files of one download would be saved at one local path, and the CLI never lets one replace the other. A file whose key has an empty segment right after the asset's folder (`A1//cloud.las`, listed at `//cloud.las`) maps to the local path of `/cloud.las`, because a local folder cannot have an empty name; the file without the empty segment is saved. With `assets export --download-files --flatten-downloads` or `--organize-by-asset`, two files of one name in different folders also share a local path; the first listed is saved. Paths that differ only in letter case count as one on a file system that ignores case.
+
+**Resolution:**
+
+Download the reported file on its own into another directory: `vamscli assets download <other-dir> -d <db> -a <asset> --file-key //cloud.las`. Or ask an administrator to rename or move one of the files in the asset.
+
+### Downloaded File Is Compressed and Does Not Open
+
+A downloaded file is reported as complete, but the application that opens it reports a corrupt or unknown file. The web app opens or saves the same file normally.
+
+**Symptoms:**
+
+-   `file <path>` reports `gzip compressed data` (or the file starts with the bytes `1f 8b`) for a file named, for example, `model.glb`
+
+**Cause:**
+
+The file is stored with a `Content-Encoding`, such as `gzip`, typically because it was written straight to the asset bucket by a tool that compressed it. `assets download`, `assets export --download-files` and `sync file pull` save each file byte for byte as it is stored, as `aws s3 cp` does, so the saved file is the compressed object. A browser decodes the encoding when it fetches the file, which is why the web app shows the model.
+
+**Resolution:**
+
+Decompress the saved file before opening it (for gzip: `gunzip -c model.glb > model-decoded.glb`). To keep the file uncompressed in VAMS, upload the decoded file as a new version.
 
 ---
 

@@ -235,3 +235,14 @@ class TestResponseShapeOnEveryPath:
         assert json.loads(response["body"])["message"] == "Internal Server Error"
         assert sns.calls, 'no publish was attempted'
         assert len(sns.calls) <= 1, 'the failing path published more than once'
+
+
+@pytest.mark.unit
+class TestMessageBodyText:
+    def test_message_body_spells_occurred(self, monkeypatch):
+        response, sns, _dynamo = _invoke(monkeypatch, [_asset_row("Turbine Blade")])
+
+        assert response["statusCode"] == 200
+        message = sns.calls[0]["Message"]
+        assert "version of Turbine Blade has occurred." in message
+        assert "occured" not in message

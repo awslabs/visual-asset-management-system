@@ -20,8 +20,10 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.assetLocations import normalize_base_prefix
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from common.batchItemFailures import (
     all_batch_item_failures,
     batch_item_identifier,
@@ -75,8 +77,14 @@ def live_database_id(database_id: str) -> str:
 
 def _record_sync(object_type, action, success, database_id, asset_id=None,
                  file_path=None, s3_version_id=None, entity_id=None):
-    """Best-effort outbound sync tracking record. Success means the entity was
-    queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    """Best-effort outbound sync tracking record, and the audit record of this one entity. Success
+    means the entity was queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    ctx = current_audit_context()
+    if ctx is not None:
+        log_action(ctx.event, "garnetAssetSync", outcome="success" if success else "failed",
+                   reason=None if success else "internal", database_id=database_id, asset_id=asset_id,
+                   file_path=file_path, details={"operation": action, "objectType": object_type,
+                                                 "entityId": entity_id})
     write_outbound_sync_record(
         object_type,
         database_id,
@@ -691,20 +699,12 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
             
         bucket = items[0]
         bucket_name = bucket.get('bucketName')
-        base_assets_prefix = bucket.get('baseAssetsPrefix', '/')
-        
+        base_assets_prefix = normalize_base_prefix(bucket.get('baseAssetsPrefix', '/'))
+
         if not bucket_name:
             logger.error(f"Bucket name missing for bucketId: {bucket_id}")
             return None
-        
-        # Ensure prefix ends with slash
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-        
-        # Remove leading slash
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
-        
+
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
@@ -1124,38 +1124,29 @@ def handle_asset_links_stream(event_record: Dict[str, Any]) -> List[bool]:
     Handle DynamoDB asset links table stream for Garnet indexing.
     Uses same pattern as OpenSearch assetIndexer.py handle_asset_links_stream().
     
-    Creates asset link entity AND updates both connected assets.
+    Creates or updates the asset link entity (not for a removed link) AND updates both connected
+    assets.
     
     Args:
         event_record: DynamoDB stream record
         
     Returns:
-        List of success booleans (one for link, two for assets)
+        List of success booleans (one for the link unless it was removed, one per asset found)
     """
     try:
         event_name = event_record.get('eventName', '')
         dynamodb_data = event_record.get('dynamodb', {})
         
-        # Extract asset link information
-        asset_link_id = None
-        from_asset_key = None
-        to_asset_key = None
-        
-        if event_name == 'REMOVE':
-            # For REMOVE events, use Keys
-            keys = dynamodb_data.get('Keys', {})
-            asset_link_id = keys.get('assetLinkId', {}).get('S')
-            from_asset_key = keys.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
-            to_asset_key = keys.get('toAssetDatabaseId:toAssetId', {}).get('S')
-        else:
-            # For INSERT/MODIFY events, use NewImage
-            record_data = dynamodb_data.get('NewImage', {})
-            asset_link_id = record_data.get('assetLinkId', {}).get('S')
-            from_asset_key = record_data.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
-            to_asset_key = record_data.get('toAssetDatabaseId:toAssetId', {}).get('S')
+        # The table is keyed on assetLinkId alone, so a REMOVE record's Keys do not name the
+        # two assets; its OldImage (the deleted row) does.
+        record_data = dynamodb_data.get('OldImage' if event_name == 'REMOVE' else 'NewImage', {})
+        asset_link_id = record_data.get('assetLinkId', {}).get('S')
+        from_asset_key = record_data.get('fromAssetDatabaseId:fromAssetId', {}).get('S')
+        to_asset_key = record_data.get('toAssetDatabaseId:toAssetId', {}).get('S')
         
         if not asset_link_id or not from_asset_key or not to_asset_key:
-            logger.warning("Missing asset link information in stream")
+            logged_link_id = asset_link_id or dynamodb_data.get('Keys', {}).get('assetLinkId', {}).get('S')
+            logger.warning(f"Missing asset link information in {event_name} stream record for asset link {logged_link_id}")
             return [True]  # Skip, not an error
         
         # Parse asset keys
@@ -1166,16 +1157,10 @@ def handle_asset_links_stream(event_record: Dict[str, Any]) -> List[bool]:
         
         results = []
         
-        # Handle the asset link entity itself
-        if event_name == 'REMOVE':
-            # Delete the asset link entity
-            ngsi_ld_entity = {
-                "id": f"urn:vams:assetlink:{asset_link_id}",
-                "type": "VAMSAssetLink"
-            }
-            success = send_to_garnet_ingestion_queue(ngsi_ld_entity)
-            results.append(success)
-        else:
+        # A removed link sends nothing for the link entity: the ingestion queue upserts with
+        # options=update and cannot remove an entity, so a send would only create a bare link entity
+        # for a link Garnet never held. Both assets are refreshed below either way.
+        if event_name != 'REMOVE':
             # Create/update the asset link entity
             asset_link_details = get_asset_link_details(asset_link_id)
             if asset_link_details:
@@ -1269,6 +1254,8 @@ def handle_asset_link_metadata_stream(event_record: Dict[str, Any]) -> bool:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
     """
     Lambda handler for Garnet Framework asset indexing.

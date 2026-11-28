@@ -13,7 +13,8 @@ The other half of the gap was directional. `test_write_tools_gated_off_by_defaul
 `test_destructive_tools_gated_off_by_default` assert only ABSENCE, so a write tool accidentally placed
 under `if CONFIG.enable_destructive:` — or a misspelled env var — left the tool unreachable with
 writes on, and nothing failed. `test_every_gated_tool_is_registered_with_both_gates_on` below is the
-positive control that catches misplacement in that direction.
+positive control for a tool that no gate registers, and
+`test_writes_alone_register_every_write_tool_and_no_destructive_tool` for one under the other gate.
 
 The reload is the only way in: the gate decision happens at import, before any fixture runs. The
 fixture manages `os.environ` directly rather than through `monkeypatch`, because monkeypatch's undo
@@ -37,8 +38,18 @@ WRITE_TOOLS = (
     "create_asset",
     "update_asset",
     "set_asset_metadata",
+    "set_file_metadata",
+    "set_primary_file",
+    "revert_file_version",
     "create_folder",
     "create_asset_version",
+    "move_file",
+    "copy_file",
+    "create_asset_link",
+    "create_tag",
+    "update_tag",
+    "create_tag_type",
+    "update_tag_type",
     "create_pipeline",
     "update_pipeline",
     "create_pipeline_template",
@@ -60,6 +71,20 @@ WRITE_TOOLS = (
     "create_user_api_key",
     "update_api_key",
     "update_user_api_key",
+    "create_zip_download",
+    "get_zip_download_url",
+    "create_compliance_schema",
+    "update_compliance_schema",
+    "bind_compliance_schema",
+    "unbind_compliance_schema",
+    "evaluate_asset_compliance",
+    "sweep_compliance_schema",
+    "evaluate_database_compliance",
+    "release_quarantine",
+    "grant_quarantine_exception",
+    "create_compliance_cascade",
+    "approve_compliance_cascade",
+    "reject_compliance_cascade",
 )
 
 DESTRUCTIVE_TOOLS = (
@@ -67,6 +92,13 @@ DESTRUCTIVE_TOOLS = (
     "unarchive_asset",
     "delete_asset",
     "delete_database",
+    "archive_file",
+    "unarchive_file",
+    "delete_file",
+    "delete_asset_link",
+    "delete_asset_metadata",
+    "delete_tag",
+    "delete_tag_type",
     "archive_pipeline",
     "unarchive_pipeline",
     "archive_workflow",
@@ -80,6 +112,9 @@ DESTRUCTIVE_TOOLS = (
     "delete_metadata_schema",
     "delete_api_key",
     "delete_user_api_key",
+    "cancel_zip_download",
+    "delete_zip_download",
+    "delete_compliance_schema",
 )
 
 GATE_VARS = ("VAMS_ENABLE_WRITES", "VAMS_ENABLE_DESTRUCTIVE")
@@ -122,13 +157,32 @@ def gated(enabled_server, monkeypatch):
 async def test_every_gated_tool_is_registered_with_both_gates_on(enabled_server):
     """The direction the gate-off tests cannot see.
 
-    A write tool that drifted one block down into the destructive section, or a `def` that landed
-    after the `if __name__` entrypoint, keeps all four registration tests in test_server_tools.py
-    green while making the tool unreachable with writes on.
+    A `def` that landed after the `if __name__` entrypoint keeps all four registration tests in
+    test_server_tools.py green while making the tool unreachable. A write tool that drifted one block
+    down into the destructive section is still registered here; the next test catches it.
     """
     names = {tool.name for tool in await enabled_server.mcp.list_tools()}
     missing = sorted(set(WRITE_TOOLS + DESTRUCTIVE_TOOLS) - names)
     assert not missing, f"tools are not registered with both gates on: {missing}"
+
+
+@pytest.mark.asyncio
+async def test_writes_alone_register_every_write_tool_and_no_destructive_tool():
+    """The split between the two tuples: a write tool filed under the destructive gate is absent here,
+    and a destructive tool filed under the writes gate is present."""
+    os.environ["VAMS_ENABLE_WRITES"] = "true"
+    importlib.reload(server_module)
+    try:
+        assert server_module.CONFIG.enable_writes is True
+        assert server_module.CONFIG.enable_destructive is False
+        names = {tool.name for tool in await server_module.mcp.list_tools()}
+    finally:
+        os.environ.pop("VAMS_ENABLE_WRITES", None)
+        importlib.reload(server_module)
+    missing = sorted(set(WRITE_TOOLS) - names)
+    leaked = sorted(set(DESTRUCTIVE_TOOLS) & names)
+    assert not missing, f"write tools not registered with writes alone on: {missing}"
+    assert not leaked, f"destructive tools registered with writes alone on: {leaked}"
 
 
 @pytest.mark.asyncio
@@ -250,6 +304,44 @@ def test_abort_execution_aborts_a_single_run(gated):
     client.api.abort_execution.assert_called_once_with("e1", group_id=None)
 
 
+def test_abort_execution_relays_the_not_running_message_of_a_finished_run(gated):
+    """Issue #344: the handler says a finished run was not aborted. The tool returns that sentence
+    unchanged, with its siblings, and adds no "aborted" claim of its own."""
+    server, client = gated
+    not_running = "Execution was not running (status SUCCEEDED), so it was not aborted."
+    client.api.abort_execution.return_value = {"message": not_running, "warnings": ["w1"]}
+    result = server.abort_execution("e1")
+    assert result == {"message": not_running, "warnings": ["w1"]}
+
+
+def test_abort_execution_forwards_warnings_and_not_abortable(gated):
+    """D5 (Pattern 7). An abort that left a sub-process running answers `message` with two sibling
+    arrays, `warnings` and `notAbortable`. A string `message` is not an envelope, so plain unwrapping
+    returns the whole dict — and the agent sees what was left running. Pinned so a later switch to a
+    projection that keeps only `message` cannot silently re-open the gap the CLI had."""
+    server, client = gated
+    not_abortable = [{"resourceType": "slurmJob", "label": "Mock Slurm job",
+                      "stageName": "MockTrain", "locator": "slurm-00001"}]
+    client.api.abort_execution.return_value = {
+        "message": "Execution aborted",
+        "warnings": ["Sub-process of type 'slurmJob' (slurm-00001) could not be aborted"],
+        "notAbortable": not_abortable,
+    }
+    result = server.abort_execution("e1")
+    assert result["message"] == "Execution aborted"
+    assert result["notAbortable"] == not_abortable
+    assert result["warnings"] == ["Sub-process of type 'slurmJob' (slurm-00001) could not be aborted"]
+
+
+def test_abort_execution_docstring_tells_the_agent_what_not_abortable_means(gated):
+    """Rule 8: the tool description is the only place an agent learns not to trust the ABORTED
+    status when `notAbortable` is non-empty."""
+    server, _client = gated
+    doc = server.abort_execution.__doc__ or ""
+    assert "notAbortable" in doc
+    assert "still running" in doc
+
+
 def test_abort_execution_forwards_the_group_id_by_keyword(gated):
     """The group form fans out across every active run in the group. `APIClient.abort_execution`
     takes `group_id` as a keyword; passing it positionally would land in the wrong parameter."""
@@ -269,6 +361,31 @@ def test_abort_execution_forwards_group_warnings(gated):
         "groupId": "grp-7", "results": [{"executionId": "e1", "status": "aborted"}],
         "warnings": ["e1: Sub-process may still be running"],
     }
+
+
+def test_abort_execution_forwards_group_warnings_and_not_abortable(gated):
+    """A group abort nests its results under `message` and reports BOTH arrays beside it, each
+    attributed to its member; unwrapping must keep both or the agent reads a clean group abort."""
+    server, client = gated
+    not_abortable = [{"executionId": "e2", "resourceType": "slurmJob", "label": "Mock Slurm job",
+                      "stageName": "MockTrain", "locator": "slurm-00001"}]
+    results = [{"executionId": "e1", "status": "aborted"}, {"executionId": "e2", "status": "aborted"}]
+    client.api.abort_execution.return_value = {
+        "message": {"groupId": "grp-7", "results": results},
+        "warnings": ["e1: Sub-process may still be running"],
+        "notAbortable": not_abortable,
+    }
+    assert server.abort_execution("e1", group_id="grp-7") == {
+        "groupId": "grp-7", "results": results,
+        "warnings": ["e1: Sub-process may still be running"],
+        "notAbortable": not_abortable,
+    }
+
+
+def test_abort_execution_docstring_describes_the_group_arrays(gated):
+    server, _client = gated
+    doc = server.abort_execution.__doc__ or ""
+    assert "group abort" in doc and "`executionId`" in doc
 
 
 def test_rerun_execution_forwards_the_group_id_by_keyword(gated):
@@ -354,64 +471,58 @@ def test_delete_database_forwards_the_id(gated):
 # --- Comment writes ---------------------------------------------------------
 
 
-def test_add_comment_generates_a_uuid4_and_returns_the_SAME_id(gated):
-    """The endpoint's acknowledgement is the literal string "Succeeded" and names no id, so the id
-    the tool reports is the only record of what was written. A generated-but-unreported id — or a
-    reported id that differs from the one sent — leaves a comment the agent cannot address again."""
-    import uuid
-
+def test_add_comment_returns_the_id_the_api_generated(gated):
+    """The API generates the comment id and returns it; the tool reports that id, so the comment can
+    be addressed again, and sends none of its own."""
     server, client = gated
-    client.api.add_comment.return_value = {"message": "Succeeded"}
+    client.api.add_comment.return_value = {"message": "Succeeded", "commentId": "c-from-api"}
 
-    result = server.add_comment("a1", "v1", "some text")
+    result = server.add_comment("db1", "a1", "v1", "some text")
 
-    sent_id = client.api.add_comment.call_args.args[2]
-    assert uuid.UUID(sent_id).version == 4, sent_id
-    assert result["commentId"] == sent_id
-    # The acknowledgement is merged in rather than replaced, so a caller still sees the API's answer.
+    assert client.api.add_comment.call_args.args == ("db1", "a1", "v1", "some text")
+    assert result["commentId"] == "c-from-api"
     assert result["message"] == "Succeeded"
 
 
-def test_add_comment_uses_a_caller_supplied_id_verbatim(gated):
+def test_add_comment_wraps_a_non_dict_acknowledgement(gated):
     server, client = gated
-    client.api.add_comment.return_value = {"message": "Succeeded"}
-    result = server.add_comment("a1", "v1", "some text", comment_id="mine-1")
-    assert client.api.add_comment.call_args.args == ("a1", "v1", "mine-1", "some text")
-    assert result["commentId"] == "mine-1"
+    client.api.add_comment.return_value = "Succeeded"
+    assert server.add_comment("db1", "a1", "v1", "some text") == {"response": "Succeeded"}
 
 
 def test_add_comment_argument_order_puts_the_body_last(gated):
-    """The tool takes comment_body BEFORE the optional comment_id while the APIClient takes the id
-    third and the body fourth. Transposing two strings raises nothing and stores the body as the id."""
+    """Four strings in a row: a transposition raises nothing and stores the body as the version."""
     server, client = gated
-    client.api.add_comment.return_value = {"message": "Succeeded"}
-    server.add_comment("a1", "v1", "the body", comment_id="c1")
+    client.api.add_comment.return_value = {"message": "Succeeded", "commentId": "c1"}
+    server.add_comment("db1", "a1", "v1", "the body")
     args = client.api.add_comment.call_args.args
-    assert args[2] == "c1" and args[3] == "the body"
+    assert args[2] == "v1" and args[3] == "the body"
 
 
 def test_update_comment_forwards_all_four_values_in_order(gated):
     server, client = gated
     client.api.update_comment.return_value = {"message": "Succeeded"}
-    server.update_comment("a1", "v1", "c1", "new text")
-    assert client.api.update_comment.call_args.args == ("a1", "v1", "c1", "new text")
+    server.update_comment("db1", "a1", "c1", "new text")
+    assert client.api.update_comment.call_args.args == ("db1", "a1", "c1", "new text")
 
 
 # --- Subscription writes ----------------------------------------------------
 #
-# Every subscription method takes (event_name, entity_name, entity_id, subscribers) while the tools
-# take entity_id first so the two defaults can sit at the end. All four are strings or a list of
-# them, so a transposition is accepted by the client, sent to the API, and rejected — or worse,
-# accepted against the wrong entity. The positional assertions below are the whole guard.
+# Every subscription method takes (event_name, entity_name, database_id, entity_id, subscribers)
+# while the tools take database_id and entity_id first so the two defaults can sit at the end. All
+# five are strings or a list of them, so a transposition is accepted by the client, sent to the API,
+# and rejected — or worse, accepted against the wrong entity. The positional assertions below are
+# the whole guard.
 
 
 def test_create_subscription_defaults_to_asset_version_change_on_asset(gated):
     server, client = gated
     client.api.create_subscription.return_value = {"message": "success"}
-    server.create_subscription("asset-1", ["user-a", "user-b"])
+    server.create_subscription("db-1", "asset-1", ["user-a", "user-b"])
     assert client.api.create_subscription.call_args.args == (
         "Asset Version Change",
         "Asset",
+        "db-1",
         "asset-1",
         ["user-a", "user-b"],
     )
@@ -420,11 +531,14 @@ def test_create_subscription_defaults_to_asset_version_change_on_asset(gated):
 def test_create_subscription_forwards_an_explicit_event_and_entity(gated):
     server, client = gated
     client.api.create_subscription.return_value = {"message": "success"}
-    server.create_subscription("db-1", ["user-a"], event_name="Some Event", entity_name="Database")
+    server.create_subscription(
+        "db-1", "asset-1", ["user-a"], event_name="Some Event", entity_name="Other"
+    )
     assert client.api.create_subscription.call_args.args == (
         "Some Event",
-        "Database",
+        "Other",
         "db-1",
+        "asset-1",
         ["user-a"],
     )
 
@@ -434,10 +548,11 @@ def test_update_subscription_sends_the_list_as_given(gated):
     assembled from a stale read silently unsubscribes whoever joined in between."""
     server, client = gated
     client.api.update_subscription.return_value = {"message": "success"}
-    server.update_subscription("asset-1", ["only-user"])
+    server.update_subscription("db-1", "asset-1", ["only-user"])
     assert client.api.update_subscription.call_args.args == (
         "Asset Version Change",
         "Asset",
+        "db-1",
         "asset-1",
         ["only-user"],
     )
@@ -479,11 +594,11 @@ def test_update_metadata_schema_passes_the_id_beside_the_body_not_inside_it(gate
 # --- Comment / subscription / metadata-schema deletes -----------------------
 
 
-def test_delete_comment_forwards_all_three_key_parts(gated):
+def test_delete_comment_forwards_the_database_asset_and_comment(gated):
     server, client = gated
     client.api.delete_comment.return_value = {"message": "Comment deleted"}
-    server.delete_comment("a1", "v1", "c1")
-    assert client.api.delete_comment.call_args.args == ("a1", "v1", "c1")
+    server.delete_comment("db1", "a1", "c1")
+    assert client.api.delete_comment.call_args.args == ("db1", "a1", "c1")
 
 
 def test_delete_subscription_removes_the_record_not_the_listed_users(gated):
@@ -491,10 +606,11 @@ def test_delete_subscription_removes_the_record_not_the_listed_users(gated):
     tool reaches the /subscriptions DELETE — the whole-record route — and not /unsubscribe."""
     server, client = gated
     client.api.delete_subscription.return_value = {"message": "success"}
-    server.delete_subscription("asset-1", ["user-a"])
+    server.delete_subscription("db-1", "asset-1", ["user-a"])
     assert client.api.delete_subscription.call_args.args == (
         "Asset Version Change",
         "Asset",
+        "db-1",
         "asset-1",
         ["user-a"],
     )
@@ -507,10 +623,11 @@ def test_unsubscribe_is_a_different_route_and_takes_one_subscriber(gated):
     entry from the topic, which is why this passes a single value rather than a list."""
     server, client = gated
     client.api.unsubscribe.return_value = {"message": "success"}
-    server.unsubscribe("asset-1", "user-a")
+    server.unsubscribe("db-1", "asset-1", "user-a")
     assert client.api.unsubscribe.call_args.args == (
         "Asset Version Change",
         "Asset",
+        "db-1",
         "asset-1",
         "user-a",
     )

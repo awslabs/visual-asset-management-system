@@ -1,0 +1,37 @@
+{
+  "name": "ldap_users_list",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "GET",
+    "path": "/api/ldap/users",
+    "absolutePath": "/api/ldap/users",
+    "query": {},
+    "headers": {},
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": {
+        "vspikeaaaaaaaaaa": "uid=vspikeaaaaaaaaaa,ou=people,dc=soca,dc=local",
+        "vspikebbbbbbbbbb": "uid=vspikebbbbbbbbbb,ou=people,dc=soca,dc=local"
+      }
+    }
+  },
+  "expect": {
+    "presentUid": "vspikeaaaaaaaaaa",
+    "absentUid": "vspikecccccccccc"
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/ldap/users.py"
+    ]
+  }
+}

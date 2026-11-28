@@ -20,8 +20,10 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.assetLocations import normalize_base_prefix
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from common.batchItemFailures import (
     all_batch_item_failures,
     batch_item_identifier,
@@ -74,8 +76,14 @@ def live_database_id(database_id: str) -> str:
 
 def _record_sync(object_type, action, success, database_id, asset_id=None,
                  file_path=None, s3_version_id=None, entity_id=None):
-    """Best-effort outbound sync tracking record. Success means the entity was
-    queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    """Best-effort outbound sync tracking record, and the audit record of this one entity. Success
+    means the entity was queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    ctx = current_audit_context()
+    if ctx is not None:
+        log_action(ctx.event, "garnetDatabaseSync", outcome="success" if success else "failed",
+                   reason=None if success else "internal", database_id=database_id, asset_id=asset_id,
+                   file_path=file_path, details={"operation": action, "objectType": object_type,
+                                                 "entityId": entity_id})
     write_outbound_sync_record(
         object_type,
         database_id,
@@ -404,13 +412,7 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
             logger.error(f"Bucket name missing for bucketId: {bucket_id}")
             return None
         
-        # Ensure prefix ends with slash
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-        
-        # Remove leading slash
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
         
         logger.info(f"Bucket details (processed) - baseAssetsPrefix: {base_assets_prefix}")
         
@@ -635,6 +637,8 @@ def handle_database_metadata_stream(event_record: Dict[str, Any]) -> bool:
 # Lambda Handler
 #######################
 
+
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
     """
     Lambda handler for Garnet Framework database indexing.

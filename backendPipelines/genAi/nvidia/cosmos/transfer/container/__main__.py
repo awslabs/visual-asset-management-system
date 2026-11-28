@@ -18,6 +18,8 @@ or non-zero on failure.
 import json
 import logging
 import os
+import posixpath
+import re
 import subprocess
 import sys
 import time
@@ -134,7 +136,24 @@ def parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
     return bucket, key
 
 
-def download_from_s3(s3_uri: str, local_path: Path) -> None:
+# The error text the AWS CLI prints when the requested version no longer exists: NoSuchVersion on a
+# GET, 404/405 for a deleted key or a delete marker. Any other failure (a 400 such as a wrong Region
+# or a 403) is reported with the CLI's own message.
+_MISSING_VERSION_MARKERS = ("NoSuchVersion", "NoSuchKey", "(404)", "(405)", "MethodNotAllowed")
+
+
+def input_download_command(s3_uri: str, local_path: Path, version_id: str = "") -> list:
+    """The AWS CLI command that downloads the input file. With a version it reads that exact version
+    (`aws s3 cp` cannot take one); without one it is the plain copy of the current object. The key is
+    everything after the bucket, exactly as `aws s3 cp` reads it."""
+    if not version_id:
+        return ["aws", "s3", "cp", s3_uri, str(local_path), *manifest_io.s3_region_args(s3_uri)]
+    bucket, _, key = s3_uri[len("s3://"):].partition("/")
+    return ["aws", "s3api", "get-object", "--bucket", bucket, "--key", key, "--version-id", version_id,
+            str(local_path), *manifest_io.s3_region_args(s3_uri)]
+
+
+def download_from_s3(s3_uri: str, local_path: Path, version_id: str = "") -> None:
     """
     Download file from S3 using AWS CLI.
 
@@ -146,10 +165,14 @@ def download_from_s3(s3_uri: str, local_path: Path) -> None:
 
     logger.info(f"Downloading from S3: {s3_uri} -> {local_path}")
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "cp", s3_uri, str(local_path)],
+        input_download_command(s3_uri, local_path, version_id),
         capture_output=True, text=True
     )  # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
+        if version_id and any(marker in (result.stderr or "") for marker in _MISSING_VERSION_MARKERS):
+            raise RuntimeError(
+                f"The input file {s3_uri} at version {version_id} no longer exists; it was deleted "
+                f"after the run started.")
         raise RuntimeError(f"S3 download failed: {result.stderr}")
     logger.info(f"Downloaded {local_path.stat().st_size} bytes from S3")
 
@@ -164,7 +187,7 @@ def upload_to_s3(local_path: Path, s3_uri: str) -> None:
     """
     logger.info(f"Uploading to S3: {local_path} -> {s3_uri}")
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "cp", str(local_path), s3_uri],
+        ["aws", "s3", "cp", str(local_path), s3_uri, *manifest_io.s3_region_args(s3_uri)],
         capture_output=True, text=True
     )  # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
@@ -172,11 +195,66 @@ def upload_to_s3(local_path: Path, s3_uri: str) -> None:
     logger.info(f"Uploaded {local_path.stat().st_size} bytes to S3")
 
 
-def compute_relative_subdir(input_s3_path: str, asset_id: str) -> str:
+# The control input is a file of the run's asset, named relative to the asset root.
+MAX_CONTROL_PATH_LENGTH = 1024
+_CONTROL_PATH_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+_CONTROL_PATH_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
+CONTROL_PATH_RULE = (
+    "The control path must name a file in the asset, relative to the asset root: no URI scheme, "
+    f"backslash, control character, or '.', '..' or empty path segment, at most {MAX_CONTROL_PATH_LENGTH} "
+    "characters")
+
+
+def normalize_control_path(value) -> str:
+    """The control input path as a file path relative to the asset root (a leading ``/`` names the
+    asset root), or ``""`` when the definition names none. Any other value raises ``ValueError``."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(CONTROL_PATH_RULE)
+    path = value.strip()
+    if (len(path) > MAX_CONTROL_PATH_LENGTH or _CONTROL_PATH_CONTROL_CHARACTERS.search(path)
+            or "\\" in path or _CONTROL_PATH_SCHEME.match(path)):
+        raise ValueError(CONTROL_PATH_RULE)
+    segments = path.lstrip("/").split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        raise ValueError(CONTROL_PATH_RULE)
+    return "/".join(segments)
+
+
+def control_input_s3_uri(control_path: str, definition: Dict, input_s3_path: str, asset_id: str) -> str:
+    """The ``s3://`` URI of the control input: ``control_path`` under the asset root.
+
+    The asset root is the manifest's ``inputAssetRootS3Key`` in ``inputAssetRootBucket`` (the input's
+    bucket when the definition names no root bucket). A definition that names no asset root (a launch
+    without a manifest entry) takes the input key up to its asset ID segment, and fails when the key
+    has none. A path that is not a file within that root raises ``ValueError``."""
+    relative = normalize_control_path(control_path)
+    if not relative:
+        raise ValueError(CONTROL_PATH_RULE)
+    input_bucket, input_key = parse_s3_uri(input_s3_path)
+    root = (definition.get("inputAssetRootS3Key") or "").lstrip("/")
+    bucket = definition.get("inputAssetRootBucket") or input_bucket
+    if not root:
+        parts = input_key.split("/")
+        if not asset_id or asset_id not in parts[:-1]:
+            raise ValueError("The control input cannot be located: the run names no asset root")
+        root = "/".join(parts[:parts.index(asset_id) + 1])
+    root = root if root.endswith("/") else root + "/"
+    key = posixpath.normpath(root + relative)
+    if not key.startswith(root) or key == root.rstrip("/"):
+        raise ValueError(CONTROL_PATH_RULE)
+    return f"s3://{bucket}/{key}"
+
+
+def compute_relative_subdir(input_s3_path: str, asset_id: str, relative_path: str = "") -> str:
     """
-    Extract relative path between assetId and filename in S3 key.
+    The input's subdirectory within its asset: the folder of its manifest ``relativePath`` when the
+    definition names one, else the key segments between the asset ID and the filename.
 
     Example:
+        relative_path: /test/pump.mp4 -> "test/"
+    Example (no relative_path):
         input_s3_path: s3://bucket/xd130a6d6.../test/pump.mp4
         asset_id: xd130a6d6...
         -> "test/"
@@ -184,10 +262,14 @@ def compute_relative_subdir(input_s3_path: str, asset_id: str) -> str:
     Args:
         input_s3_path: Full S3 URI of input file
         asset_id: Asset ID
+        relative_path: The input's manifest relativePath ("" when the definition names none)
 
     Returns:
         Relative subdirectory path (with trailing slash, or empty string)
     """
+    relative = (relative_path or "").strip("/")
+    if relative:
+        return relative.rsplit("/", 1)[0] + "/" if "/" in relative else ""
     _, key = parse_s3_uri(input_s3_path)
     parts = key.split("/")
 
@@ -266,6 +348,8 @@ def main():
         logger.info("=" * 80)
 
         definition = load_pipeline_definition()
+        # Each asset bucket's Region, so every S3 command below addresses the bucket where it is.
+        manifest_io.register_bucket_regions(definition.get("bucketRegions"))
         logger.info(f"Pipeline definition loaded: {describe_definition(definition)}")
 
         # Extract required fields
@@ -273,6 +357,8 @@ def main():
         cosmos_prompt = definition.get("cosmosPrompt", "")
         input_parameters_prompt = definition.get("inputParametersPrompt")
         input_s3_asset_file_path = definition.get("inputS3AssetFilePath")
+        # The S3 version the input file is read at, recorded at launch; "" reads the current object.
+        input_version_id = definition.get("inputVersionId") or ""
         output_s3_asset_files_path = definition.get("outputS3AssetFilesPath")
         asset_id = definition.get("assetId")
         control_type = definition.get("controlType", "edge")
@@ -322,6 +408,11 @@ def main():
         if not input_s3_asset_file_path:
             raise ValueError("inputS3AssetFilePath is required for transfer pipeline")
 
+        # A control input the run names is located, and its path checked, before any model or file
+        # is fetched.
+        control_s3_uri = (control_input_s3_uri(control_path, definition, input_s3_asset_file_path, asset_id)
+                          if normalize_control_path(control_path) else "")
+
         # Determine prompt (cosmosPrompt takes precedence)
         prompt = cosmos_prompt if cosmos_prompt else (input_parameters_prompt or "Transform the video")
 
@@ -339,10 +430,15 @@ def main():
         logger.info("Step 1: Ensuring models are cached")
         logger.info("=" * 80)
 
+        # The repository this run needs, so the cache check can tell a warm cache for THIS variant
+        # from a warm cache for another one. Serving several variants from a single cache directory,
+        # a check that only asks whether any weights are present reports a hit on the wrong variant,
+        # skips the restore from S3, and downloads the right weights during inference instead.
         ensure_models_cached(
             hf_home=hf_home,
             s3_bucket=s3_model_bucket,
-            invalidate=False
+            invalidate=False,
+            repos=("nvidia/Cosmos-Transfer2.5-2B",)
         )
 
         # Step 2: Download source video
@@ -352,19 +448,17 @@ def main():
 
         input_filename = Path(parse_s3_uri(input_s3_asset_file_path)[1]).name
         source_video_path = INPUT_DIR / "source.mp4"
-        download_from_s3(input_s3_asset_file_path, source_video_path)
+        download_from_s3(input_s3_asset_file_path, source_video_path, input_version_id)
 
         # Step 3: Download control signal (optional)
         control_video_path = None
-        if control_path:
+        if control_s3_uri:
             logger.info("=" * 80)
             logger.info("Step 3: Downloading control signal video")
             logger.info("=" * 80)
 
-            # control_path is a relative path within the asset in the same bucket
-            # Construct full S3 URI from the input file's bucket and asset ID
-            input_bucket, _ = parse_s3_uri(input_s3_asset_file_path)
-            control_s3_uri = f"s3://{input_bucket}/{asset_id}/{control_path}"
+            # control_path names a file of the run's asset, relative to the asset root the manifest
+            # recorded (assetRootS3Key, in the bucket assetRootBucket)
             control_video_path = INPUT_DIR / "control.mp4"
             download_from_s3(control_s3_uri, control_video_path)
         else:
@@ -413,7 +507,8 @@ def main():
         output_base = output_base.rstrip("/") + "/"
 
         # Preserve relative path and input filename from the input file
-        relative_subdir = compute_relative_subdir(input_s3_asset_file_path, asset_id)
+        relative_subdir = compute_relative_subdir(input_s3_asset_file_path, asset_id,
+                                                  definition.get("inputRelativePath") or "")
         input_filename_stem = Path(parse_s3_uri(input_s3_asset_file_path)[1]).stem
 
         output_filename = f"{input_filename_stem}_CosmosTransfer_{control_type}_{timestamp}.mp4"
@@ -441,7 +536,8 @@ def main():
         logger.info("=" * 80)
         try:
             from model_manager import backup_cache_to_s3
-            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket)
+            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket,
+                               repos=("nvidia/Cosmos-Transfer2.5-2B",))
         except Exception as backup_err:
             logger.warning(f"Failed to backup HF cache to S3 (non-fatal): {backup_err}")
 

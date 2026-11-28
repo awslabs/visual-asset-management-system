@@ -31,15 +31,18 @@ import * as fs from "fs";
 import * as path from "path";
 import { SynthResult, synthTemplate } from "../support/templateSynth";
 
-/** Enable the four pipelines that build Fargate Batch jobs. */
+/** Enable the six pipelines that build Fargate Batch jobs (the CAD STEP agent on its Fargate runtime). */
 function fargatePipelines(c: any) {
     c.app.useGlobalVpc.enabled = true;
     c.app.useGlobalVpc.addVpcEndpoints = true;
     for (const flag of [
         "useConversionCoordinateTransform",
-        "useGenAiMetadata3dLabeling",
+        "useCogConversion",
+        "useSystemGenAiMetadata",
         "usePreview3dThumbnail",
         "usePreviewPcPotreeViewer",
+        "useGenAiVideoSopBom",
+        "useGenAiCadStepAgent",
     ]) {
         if (c.app.pipelines[flag]) {
             c.app.pipelines[flag].enabled = true;
@@ -48,6 +51,12 @@ function fargatePipelines(c: any) {
             }
         }
     }
+    // The system GenAI metadata pipeline builds its Fargate render job on the sub-flag only, and its
+    // vector search dependant requires the registration the loop just disarmed.
+    c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = true;
+    c.app.vectorSearch.enabled = false;
+    // Its AgentCore runtime runs no Batch job, so the default runtime would add nothing here.
+    c.app.pipelines.useGenAiCadStepAgent.runtime = "fargate";
 }
 
 /** Fargate job definitions, identified by the platform capability Batch receives. */
@@ -69,10 +78,11 @@ describe("Fargate Batch job attempt duration", () => {
     });
 
     test("[control] Fargate job definitions ARE emitted in this synth", () => {
-        // All four pipelines ship disabled, so every assertion below is otherwise vacuous. Five job
-        // definitions are expected: one each for coordinate transform, metadata labeling and the 3D
-        // thumbnail, plus PDAL and Potree from the point-cloud viewer.
-        expect(fargateJobDefinitions(synth).length).toBeGreaterThanOrEqual(5);
+        // All six pipelines ship disabled, so every assertion below is otherwise vacuous. Seven job
+        // definitions are expected: one each for coordinate transform, metadata labeling, the 3D
+        // thumbnail, the video SOP/BOM job and the CAD STEP agent, plus PDAL and Potree from the
+        // point-cloud viewer.
+        expect(fargateJobDefinitions(synth).length).toBeGreaterThanOrEqual(7);
     });
 
     test("every Fargate job definition declares an attempt duration", () => {

@@ -8,7 +8,7 @@ from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="AuthRoutesModels")
+logger = safeLogger()
 
 # Maximum number of web routes accepted in a single check request.
 MAX_WEB_ROUTES_PER_REQUEST = 500
@@ -70,7 +70,9 @@ class AllowedWebRouteModel(BaseModel, extra='ignore'):
 class CheckWebRoutesResponseModel(BaseModel, extra='ignore'):
     """Response model for POST /auth/routes"""
     allowedRoutes: List[AllowedWebRouteModel]
+    # The caller's user id. Deprecated: carries the same value as userId and is kept for older clients.
     email: str
+    userId: str
 
 
 class ApiRouteModel(BaseModel, extra='ignore'):

@@ -41,7 +41,11 @@ VAMS supports three approaches to external identity providers:
 -   **Cognito SAML federation** (`app.authProvider.useCognito.useSaml`, configured in `infra/config/saml-config.ts`): External SAML 2.0 provider authenticates users, Amazon Cognito issues session tokens. Same coexistence model as OIDC federation.
 -   **External OAuth** (`app.authProvider.useExternalOAuthIdp`): Bypasses Amazon Cognito entirely. All users authenticate via the external provider. Cannot be combined with Cognito.
 
-Choose Cognito federation (OIDC or SAML) when you need to support both corporate SSO and native username/password accounts. Choose external OAuth when you want to completely replace Cognito with an enterprise identity provider.
+Choose Cognito federation (OIDC or SAML) when you need corporate SSO and also native username/password accounts in the user pool. With federation on, the web application's login page offers only the federated sign-in button, so native accounts authenticate with their Amazon Cognito credentials outside the web application, for example with `vamscli auth login -u <username>`. Choose external OAuth when you want to completely replace Cognito with an enterprise identity provider.
+:::
+
+:::info[Tokens issued to other clients]
+By default the authorizer accepts only tokens issued to the VAMS web application: a Cognito ID token whose `aud`, or access token whose `client_id`, is the web app client, or an external IdP token whose audience (`aud`, or `client_id` when `lambdaAuthorizorJWTAudienceClaims` lists it) is `lambdaAuthorizorJWTAudience`. A deployment can accept tokens issued to further clients, such as a remotely hosted MCP server, by listing their app client ids (Cognito) or audiences (external IdP) in `additionalTokenAudiences`. Signature, issuer, expiry and token-use checks are unchanged, and the user's roles decide each request as usual. A listed client must be a user sign-in client (for example the authorization code grant), not a machine-to-machine client (the client credentials grant). For tokens accepted only through an additional audience, the authorizer rejects with `401`: with Amazon Cognito, an access token without a `username` claim; with an external OAuth IdP, a token with no user identity (the `lambdaAuthorizorJWTUserIdClaim` claim when it is set, otherwise `cognito:username`, `username` or `sub`), a token whose identity equals its own `client_id`, `azp` or `cid`, and a token carrying an app-only marker (`gty` = `client-credentials` (Auth0), `idtyp` = `app` (Microsoft Entra ID), or `preferred_username` starting with `service-account-` (Keycloak)). Tokens issued to the web app's own client or audience are not subject to these checks. Other identity providers' machine tokens may carry none of these markers, so list only audiences of clients that sign in users. See [Additional token audiences](../deployment/configuration-reference.md#additional-token-audiences).
 :::
 
 ### API Key
@@ -53,8 +57,19 @@ Authorization: vams_ak_abc123...
 ```
 
 :::info[Token Refresh]
-When using Cognito or external OAuth, tokens expire after a configured period. The frontend client automatically refreshes tokens using the refresh token grant. API key tokens do not expire but can be revoked through the API key management endpoints.
+When using Cognito or external OAuth, tokens expire after a configured period. The frontend client automatically refreshes tokens using the refresh token grant. API keys do not refresh: a key can carry an optional expiration date, and can be disabled or revoked through the API key management endpoints.
 :::
+
+### When a Credential Is Not Accepted: 401 and 403
+
+The custom Lambda authorizer answers a request it refuses with one of two status codes. The response body is always API Gateway's generic message; the reason is recorded in the authorization audit log, never returned.
+
+| Status | Body                                                                                  | Meaning                                                                                                                                                                                                                                                                                                     | What a client does                                                                                                       |
+| ------ | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `401`  | `{"message": "Unauthorized"}`                                                         | The credential did not authenticate: the `Authorization` header is missing or malformed, the token is expired, badly signed, issued for another audience or issuer, or names no user, or the API key is unknown, disabled or expired, or its stored record has an unreadable expiration date or no user ID. | Refresh the token (or sign in again) and resend once. Use a new API key.                                                 |
+| `403`  | `{"message": "User is not authorized to access this resource with an explicit deny"}` | The credential was accepted and the request refused: the source IP address is outside the deployment's allowed ranges, or an API key's user has no roles. The authorizer also answers `403` when it cannot verify tokens at the moment, or the API key store cannot be read.                                | Do not refresh. Contact the administrator, or retry later if the identity provider or the API key store was unavailable. |
+
+A `403` can also come from the two-tier authorization below or from AWS WAF (see [Error Codes](overview.md#error-codes)); signing in again does not change any of them.
 
 ---
 
@@ -90,30 +105,30 @@ None.
 ```json
 {
     "region": "us-east-1",
-    "api": "https://abc123.execute-api.us-east-1.amazonaws.com/api",
+    "api": "https://abc123.execute-api.us-east-1.amazonaws.com/api/",
     "cognitoUserPoolId": "us-east-1_AbCdEfGhI",
     "cognitoAppClientId": "1a2b3c4d5e6f7g8h9i0j",
     "cognitoIdentityPoolId": "us-east-1:12345678-abcd-efgh-ijkl-123456789012",
     "cognitoUserPoolEndpoint": "https://cognito-idp.us-east-1.amazonaws.com",
-    "contentSecurityPolicy": "default-src 'self' ...",
+    "contentSecurityPolicy": "",
     "bannerHtmlMessage": ""
 }
 ```
 
 **Response Fields:**
 
-| Field                     | Type   | Description                                                                                                                                     |
-| ------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `region`                  | string | Deployment Region.                                                                                                                              |
-| `api`                     | string | API base URL, including the stage path.                                                                                                         |
-| `cognitoUserPoolId`       | string | Amazon Cognito user pool identifier; `"undefined"` when Cognito is not the authentication provider.                                             |
-| `cognitoAppClientId`      | string | Amazon Cognito app client identifier; `"undefined"` when Cognito is not the authentication provider.                                            |
-| `cognitoIdentityPoolId`   | string | Amazon Cognito identity pool identifier; `"undefined"` when Cognito is not the authentication provider.                                         |
-| `cognitoUserPoolEndpoint` | string | Partition-aware Amazon Cognito user pool (IDP) endpoint URL; `"undefined"` when Cognito is not the authentication provider. See the note below. |
-| `contentSecurityPolicy`   | string | Content Security Policy header value applied by the web application.                                                                            |
-| `bannerHtmlMessage`       | string | Optional banner HTML rendered by the web application; empty when not configured.                                                                |
+| Field                     | Type   | Description                                                                                                                                                                                                                                            |
+| ------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `region`                  | string | Deployment Region.                                                                                                                                                                                                                                     |
+| `api`                     | string | Stage-inclusive API Gateway invoke URL with a trailing slash; every other path is relative to it. With the API custom domain enabled (`app.api.apiGatewayRest.customDomain`), it is `https://{api-domain}/api/`. See [Base URL](overview.md#base-url). |
+| `cognitoUserPoolId`       | string | Amazon Cognito user pool identifier; `"undefined"` when Cognito is not the authentication provider.                                                                                                                                                    |
+| `cognitoAppClientId`      | string | Amazon Cognito app client identifier; `"undefined"` when Cognito is not the authentication provider.                                                                                                                                                   |
+| `cognitoIdentityPoolId`   | string | Amazon Cognito identity pool identifier; `"undefined"` when Cognito is not the authentication provider.                                                                                                                                                |
+| `cognitoUserPoolEndpoint` | string | Partition-aware Amazon Cognito user pool (IDP) endpoint URL; `"undefined"` when Cognito is not the authentication provider. See the note below.                                                                                                        |
+| `contentSecurityPolicy`   | string | Always empty. The Content Security Policy is set by the Amazon CloudFront response headers or the ALB listener, not by the web application.                                                                                                            |
+| `bannerHtmlMessage`       | string | Optional banner HTML rendered by the web application; empty when not configured.                                                                                                                                                                       |
 
-When an external OAuth identity provider is the authentication provider, the response instead carries `externalOAuthIdpURL`, `externalOAuthIdpClientId`, `externalOAuthIdpScope`, `externalOAuthIdpScopeMfa`, `externalOAuthIdpTokenEndpoint`, `externalOAuthIdpAuthorizationEndpoint`, and `externalOAuthIdpDiscoveryEndpoint`.
+When an external OAuth identity provider is the authentication provider, the response instead carries `externalOAuthIdpURL`, `externalOAuthIdpClientId`, `externalOAuthIdpScope`, `externalOAuthIdpScopeMfa`, `externalOAuthIdpTokenEndpoint`, `externalOAuthIdpAuthorizationEndpoint`, `externalOAuthIdpDiscoveryEndpoint`, `externalOAuthIdpDisplayName`, `externalOAuthIdpUserIdClaim`, and `externalOAuthIdpAudienceClaims`. `externalOAuthIdpAudienceClaims` is a comma-separated list of claim names (`aud`, `client_id`), in order, that the API authorizer reads the audience from (`lambdaAuthorizorJWTAudienceClaims`); it never carries audience values, is `"undefined"` for any other authentication provider, and is absent from a deployment that predates it (clients then assume `aud`). `externalOAuthIdpUserIdClaim` names the access-token claim whose value is the VAMS user id (`app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim`); it is `"undefined"` when not configured, in which case the web application uses the first of `cognito:username`, `username` and `sub`, as the API authorizer does.
 
 :::note[Partition-aware Cognito endpoint]
 `cognitoUserPoolEndpoint` is supplied because the AWS Amplify JavaScript library resolves only the `aws` and `aws-cn` partitions and would otherwise build a `.amazonaws.com` host in every Region. In the AWS European Sovereign Cloud the correct DNS suffix is `.amazonaws.eu`, so the web application uses this value rather than deriving the host itself. In the commercial and AWS GovCloud partitions it resolves to the usual `.amazonaws.com` host, so behavior there is unchanged.
@@ -177,7 +192,7 @@ None.
 }
 ```
 
-`featuresEnabled` is a comma-separated string of the enabled feature flags. `locationServiceApiUrl` and `webDeployedUrl` are empty strings when Amazon Location Service or the web deployment URL is not configured.
+`featuresEnabled` is a comma-separated string of the enabled feature flags. `locationServiceApiUrl` is an empty string when Amazon Location Service is not deployed, and `webDeployedUrl` is an empty string when the deployment has no web distribution (neither Amazon CloudFront nor an Application Load Balancer).
 
 **Error Responses:**
 
@@ -215,7 +230,7 @@ Each entry in `routes` is an object carrying the HTTP method and the web route p
 
 **Response:**
 
-`allowedRoutes` contains only the submitted routes the user may access; `email` is the requesting user's identity.
+`allowedRoutes` contains only the submitted routes the user may access; `userId` is the requesting user's id. `email` is deprecated: it carries the same user id, which need not be an email address, and is kept for older clients.
 
 ```json
 {
@@ -223,16 +238,18 @@ Each entry in `routes` is an object carrying the HTTP method and the web route p
         { "method": "GET", "route__path": "/databases", "object__type": "web" },
         { "method": "GET", "route__path": "/assets", "object__type": "web" }
     ],
-    "email": "user@example.com"
+    "email": "jdoe",
+    "userId": "jdoe"
 }
 ```
 
 **Error Responses:**
 
-| Status | Description                 |
-| ------ | --------------------------- |
-| `400`  | Invalid request parameters. |
-| `500`  | Internal server error.      |
+| Status | Description                                             |
+| ------ | ------------------------------------------------------- |
+| `400`  | Invalid request parameters.                             |
+| `403`  | No user identity could be resolved from the credential. |
+| `500`  | Internal server error.                                  |
 
 ---
 

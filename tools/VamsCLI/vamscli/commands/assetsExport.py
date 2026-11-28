@@ -25,7 +25,7 @@ from ..utils.exceptions import (
 )
 from ..utils.download_manager import (
     DownloadManager, DownloadFileInfo, DownloadProgress, format_file_size, format_duration,
-    parse_remote_timestamp
+    parse_remote_timestamp, confined_local_paths,
 )
 
 
@@ -260,7 +260,12 @@ async def download_export_files(
     """
     # Extract download info from export result
     download_files = []
+    # Files whose path would put them outside local_path, or at the local path of another file of this
+    # download: reported as failed, never written.
+    refused_files = []
     skipped_unauthorized = 0
+    # (asset id, file, path under local_path) of every file with a download URL, in export order
+    candidates = []
     
     for asset in export_result.get('assets', []):
         # Skip unauthorized assets (they don't have file data)
@@ -281,23 +286,36 @@ async def download_export_files(
             
             # Determine local path based on organization strategy
             if flatten_downloads:
-                file_local_path = local_path / Path(file['fileName'])
+                relative_target = file['fileName']
             elif organize_by_asset:
-                file_local_path = local_path / asset_id / Path(file['fileName'])
+                relative_target = f"{asset_id}/{file['fileName']}"
             else:
                 # Preserve full structure
-                relative_path = file['relativePath'].lstrip('/')
-                file_local_path = local_path / asset_id / relative_path
-            
-            download_files.append(DownloadFileInfo(
-                relative_key=f"{asset_id}/{file['relativePath']}",
-                local_path=file_local_path,
-                download_url=presigned_url,
-                file_size=file.get('size'),
-                last_modified=parse_remote_timestamp(file.get('dateCreatedCurrentVersion'))
-            ))
+                relative_target = f"{asset_id}/{file['relativePath'].lstrip('/')}"
+            candidates.append((asset_id, file, relative_target))
+
+    # No two files share a local path (confined_local_paths): '/x' and '//x' of one asset, or two files of
+    # one name in a flattened or per-asset download, never replace each other on disk.
+    placements = confined_local_paths(
+        local_path, [(file['relativePath'], target) for _, file, target in candidates])
+    for (asset_id, file, _), (file_local_path, refusal) in zip(candidates, placements):
+        if file_local_path is None:
+            refused_files.append({
+                "relative_key": f"{asset_id}/{file['relativePath']}",
+                "local_path": "",
+                "error": refusal,
+            })
+            continue
+
+        download_files.append(DownloadFileInfo(
+            relative_key=f"{asset_id}/{file['relativePath']}",
+            local_path=file_local_path,
+            download_url=file.get('presignedFileDownloadUrl'),
+            file_size=file.get('size'),
+            last_modified=parse_remote_timestamp(file.get('dateCreatedCurrentVersion'))
+        ))
     
-    if not download_files:
+    if not download_files and not refused_files:
         message = 'No files to download'
         if skipped_unauthorized > 0:
             message += f' ({skipped_unauthorized} unauthorized asset(s) skipped)'
@@ -325,12 +343,18 @@ async def download_export_files(
         progress_callback=progress_callback
     ) as manager:
         result = await manager.download_files(download_files)
-        
-        # Add unauthorized asset count to result
-        if skipped_unauthorized > 0:
-            result['skipped_unauthorized_assets'] = skipped_unauthorized
-        
-        return result
+
+    if refused_files:
+        result['failed_downloads'] = [*(result.get('failed_downloads') or []), *refused_files]
+        result['failed_files'] = result.get('failed_files', 0) + len(refused_files)
+        result['total_files'] = result.get('total_files', 0) + len(refused_files)
+        result['overall_success'] = False
+
+    # Add unauthorized asset count to result
+    if skipped_unauthorized > 0:
+        result['skipped_unauthorized_assets'] = skipped_unauthorized
+
+    return result
 
 
 def combine_download_results(download_results: List[Dict[str, Any]]) -> Dict[str, Any]:

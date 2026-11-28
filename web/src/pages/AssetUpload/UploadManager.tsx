@@ -18,6 +18,7 @@ import {
 } from "@cloudscape-design/components";
 import { FileUploadTableItem, FileUploadTable } from "./FileUploadTable";
 import { CompleteUploadResponse } from "../../services/AssetUploadService";
+import AsyncUploadOutcome from "./AsyncUploadOutcome";
 import { Metadata } from "../../components/single/Metadata";
 import { AssetDetail } from "./AssetUpload";
 import {
@@ -33,10 +34,27 @@ import {
 } from "./hooks/useMultiSequenceUpload";
 import { useFilePartsUpload } from "./hooks/useFilePartsUpload";
 import { useAssetOperations } from "./hooks/useAssetOperations";
-import { formatRetryMessage } from "./uploadRetry";
+import {
+    MANUAL_PART_RETRY_LIMIT,
+    formatRetryMessage,
+    partsEligibleForManualRetry,
+    partsExhaustedManualRetries,
+} from "./uploadRetry";
 import { storedNoFile, UploadOutcome } from "./uploadOutcome";
 import { PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
 import Synonyms from "../../synonyms";
+
+/**
+ * The sequences with no part to upload: every file in them is zero bytes. The part upload reports a
+ * sequence finished only when its last part lands, so these must be completed directly (#787).
+ */
+function sequenceIdsWithoutParts(
+    sequences: { sequenceId: number }[],
+    parts: { sequenceId: number }[]
+): number[] {
+    const withParts = new Set(parts.map((p) => p.sequenceId));
+    return sequences.map((s) => s.sequenceId).filter((id) => !withParts.has(id));
+}
 
 interface UploadManagerProps {
     assetDetail: AssetDetail;
@@ -112,6 +130,10 @@ export default function UploadManager({
     });
 
     const [fileUploadItems, setFileUploadItems] = useState<FileUploadTableItem[]>(fileItems);
+    // Uploads whose completion accepted files over 1 GiB for asynchronous processing.
+    const [asyncUploadIds, setAsyncUploadIds] = useState<string[]>([]);
+    // Set once every large file processed after the upload is in the asset.
+    const [asyncFilesLanded, setAsyncFilesLanded] = useState(false);
     const [isMultiSequence, setIsMultiSequence] = useState(false);
     const [totalSequences, setTotalSequences] = useState(0);
     const [completedInitSequences, setCompletedInitSequences] = useState(0);
@@ -255,6 +277,12 @@ export default function UploadManager({
                                 ...prev,
                                 largeFileAsynchronousHandling: true,
                             }));
+                            const asyncUploadId = (result as any).uploadId || uploadId;
+                            setAsyncUploadIds((prev) =>
+                                prev.includes(asyncUploadId) ? prev : [...prev, asyncUploadId]
+                            );
+                            // A new large-file upload has files still to land.
+                            setAsyncFilesLanded(false);
                         }
                     }
                 }
@@ -609,6 +637,15 @@ export default function UploadManager({
                     // Wait a tick to ensure state is updated
                     await new Promise((resolve) => setTimeout(resolve, 100));
 
+                    // Complete the sequences of zero-byte files, which the part upload below never
+                    // reports. Read from this run's `sequences`: the `uploadSequences` state this
+                    // effect closed over on mount is still the empty initial list (#787).
+                    if (handleSequenceCompletionRef.current) {
+                        sequenceIdsWithoutParts(sequences, allParts).forEach((sequenceId) =>
+                            handleSequenceCompletionRef.current!(sequenceId)
+                        );
+                    }
+
                     // Step 4: Upload File Parts with sequence completion callback
                     if (allParts.length > 0) {
                         console.log(`Starting upload of ${allParts.length} parts`);
@@ -668,17 +705,12 @@ export default function UploadManager({
                     } else {
                         // No parts to upload (all zero-byte files)
                         console.log(`No parts to upload (all zero-byte files)`);
+                        // Every sequence was completed above.
                         setUploadState((prev) => ({
                             ...prev,
                             uploadStatus: "completed",
                             completionStatus: "in-progress",
                         }));
-                        // Trigger completion for all sequences
-                        if (handleSequenceCompletionRef.current) {
-                            uploadSequences.forEach((seq) =>
-                                handleSequenceCompletionRef.current!(seq.sequenceId)
-                            );
-                        }
                     }
                 } else if (fileItems.length === 0) {
                     // No files to upload
@@ -862,9 +894,13 @@ export default function UploadManager({
     const handleRetry = useCallback(async () => {
         // Get the updated parts synchronously by using functional state update
         let updatedParts: any[] = [];
+        let eligibleCount = 0;
+        let exhaustedCount = 0;
         setFileParts((prev) => {
+            eligibleCount = partsEligibleForManualRetry(prev).length;
+            exhaustedCount = partsExhaustedManualRetries(prev).length;
             updatedParts = prev.map((part) => {
-                if (part.status === "failed" && part.retryCount < 5) {
+                if (part.status === "failed" && part.retryCount < MANUAL_PART_RETRY_LIMIT) {
                     return {
                         ...part,
                         status: "pending",
@@ -875,6 +911,24 @@ export default function UploadManager({
             });
             return updatedParts;
         });
+
+        // No parts left to re-queue: empty uploadFileParts queues report success and leave the
+        // page stuck on In Progress with no Retry/Skip path (see #812).
+        if (eligibleCount === 0) {
+            const message =
+                exhaustedCount > 0
+                    ? `${exhaustedCount} file part(s) failed after ${MANUAL_PART_RETRY_LIMIT} retries. Skip the failed parts or go back to review.`
+                    : "No failed file parts are available to retry.";
+            setUploadState((prev) => ({
+                ...prev,
+                uploadStatus: "failed",
+                errors: [
+                    ...prev.errors.filter((e) => e.step !== "File Upload"),
+                    { step: "File Upload", message },
+                ],
+            }));
+            return;
+        }
 
         // Calculate current progress based on completed parts only
         const completedPartsCount = updatedParts.filter((p) => p.status === "completed").length;
@@ -956,12 +1010,16 @@ export default function UploadManager({
 
             // Get the updated parts synchronously for this specific file
             let updatedParts: any[] = [];
+            let eligibleCount = 0;
+            let exhaustedCount = 0;
             setFileParts((prev) => {
+                eligibleCount = partsEligibleForManualRetry(prev, fileIndex).length;
+                exhaustedCount = partsExhaustedManualRetries(prev, fileIndex).length;
                 updatedParts = prev.map((part) => {
                     if (
                         part.status === "failed" &&
                         part.fileIndex === fileIndex &&
-                        part.retryCount < 5
+                        part.retryCount < MANUAL_PART_RETRY_LIMIT
                     ) {
                         return {
                             ...part,
@@ -973,6 +1031,22 @@ export default function UploadManager({
                 });
                 return updatedParts;
             });
+
+            if (eligibleCount === 0) {
+                const message =
+                    exhaustedCount > 0
+                        ? `File part(s) for this file failed after ${MANUAL_PART_RETRY_LIMIT} retries. Skip the failed parts or go back to review.`
+                        : "No failed file parts are available to retry for this file.";
+                setUploadState((prev) => ({
+                    ...prev,
+                    uploadStatus: "failed",
+                    errors: [
+                        ...prev.errors.filter((e) => e.step !== "File Upload"),
+                        { step: "File Upload", message },
+                    ],
+                }));
+                return;
+            }
 
             // Calculate current progress based on completed parts only
             const completedPartsCount = updatedParts.filter((p) => p.status === "completed").length;
@@ -1174,6 +1248,14 @@ export default function UploadManager({
 
             await new Promise((resolve) => setTimeout(resolve, 100));
 
+            // As in the main upload: complete the sequences of zero-byte files from this run's
+            // `sequences`; the `uploadSequences` this callback closed over is not this run's (#787).
+            if (handleSequenceCompletionRef.current) {
+                sequenceIdsWithoutParts(sequences, allParts).forEach((sequenceId) =>
+                    handleSequenceCompletionRef.current!(sequenceId)
+                );
+            }
+
             if (allParts.length > 0) {
                 console.log(`Starting upload of ${allParts.length} parts`);
                 setUploadState((prev) => ({
@@ -1216,16 +1298,12 @@ export default function UploadManager({
                     }));
                 }
             } else {
+                // Every sequence was completed above.
                 setUploadState((prev) => ({
                     ...prev,
                     uploadStatus: "completed",
                     completionStatus: "in-progress",
                 }));
-                if (handleSequenceCompletionRef.current) {
-                    uploadSequences.forEach((seq) =>
-                        handleSequenceCompletionRef.current!(seq.sequenceId)
-                    );
-                }
             }
         } else if (fileItems.length === 0) {
             const mockResponse: CompleteUploadResponse = {
@@ -1602,7 +1680,7 @@ export default function UploadManager({
                     </Alert>
                 )}
 
-                {(uploadState.largeFileAsynchronousHandling ||
+                {((uploadState.largeFileAsynchronousHandling && !asyncFilesLanded) ||
                     uploadState.hasUnverifiedCompletions) && (
                     <Alert type="warning" header="Extended Processing Time">
                         The service returned some responses indicating longer processing times. Your
@@ -1610,6 +1688,16 @@ export default function UploadManager({
                         process. Please check the asset's file manager shortly to verify your files.
                     </Alert>
                 )}
+
+                {asyncUploadIds.length > 0 &&
+                    (uploadState.createdAssetId || assetDetail.assetId) && (
+                        <AsyncUploadOutcome
+                            uploadIds={asyncUploadIds}
+                            assetId={(uploadState.createdAssetId || assetDetail.assetId) as string}
+                            databaseId={assetDetail.databaseId || ""}
+                            onAllLanded={() => setAsyncFilesLanded(true)}
+                        />
+                    )}
 
                 {isMultiSequence && totalSequences > 1 && (
                     <Alert type="info" header="Multi-Sequence Upload">

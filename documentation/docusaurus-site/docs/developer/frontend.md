@@ -24,16 +24,20 @@ The app mounts with `createRoot` from `react-dom/client`, so React 18 APIs such 
 
 ```
 web/src/
-  App.tsx                 # Root shell, HashRouter, TopNavigation
-  routes.tsx              # Centralized route table with lazyWithRetry
+  App.tsx                 # Root shell, HashRouter, TopNavigation (Settings menu, profile menu)
+  routes.tsx              # Centralized route table with lazyWithRetry (core + add-on + custom)
   config.ts               # Static config (APP_TITLE, APP_TITLE_PREFIX, DEV_API_ENDPOINT)
   synonyms.tsx            # Customizable display names (Asset, Database, Comment)
   index.tsx               # Entry point (createRoot)
 
   FedAuth/Auth.tsx        # Dual-mode authentication orchestrator
 
+  addons/                 # Add-on web routes and navigation (addonRoutes.tsx, addonNavigation.ts)
+  custom/                 # FORK EXTENSION POINT: a fork's routes, navigation, pages and services
+
   services/               # API and data services (ONLY place to import apiClient)
     APIService.ts         # Main API service (~40+ exports)
+    addons/               # Add-on API calls (physnaAPIService.ts)
     apiClient.ts          # Custom fetch wrapper (internal only)
     appCache.ts           # localStorage cache (replaces Amplify Cache)
     AssetUploadService.ts
@@ -50,7 +54,9 @@ web/src/
   pages/                  # Thin page wrappers (lazy-loaded)
   components/             # Domain/feature components
   visualizerPlugin/       # 3D/media viewer plugin system (viewers)
-  layout/Navigation.tsx   # Left sidebar navigation
+  layout/navigationRegistry.ts  # The one navigation registry: core + add-on + custom entries, placements
+  layout/Navigation.tsx   # Left sidebar navigation (side entries)
+  layout/useProfileMenuItems.ts # Top-bar profile menu items (profile entries, current page checked, then Sign out)
   styles/theme.css        # CSS custom properties for dark/light theme
   utils/authTokenUtils.ts # Dual-mode token utilities
 
@@ -58,7 +64,6 @@ web/src/
     fileFormats.ts        # Preview file formats and .previewFile. pattern
     featuresEnabled.ts    # Feature flag name constants
     actions.ts            # Action name constants
-    permissionConstraintTypes.ts  # Permission constraint type constants
   constants/
     uploadLimits.ts       # Upload limits (part sizes, file counts, preview size)
 ```
@@ -95,6 +100,8 @@ The following service files are the only files that may import `apiClient`:
 ### Rule 2: Cloudscape Individual Imports
 
 Always import Cloudscape components from their individual subpaths. Barrel imports cause the entire library to be bundled.
+
+This applies to new imports. A new file, or a Cloudscape component newly imported into an existing file, uses a subpath import, even in a file that already imports from the barrel. Existing barrel imports stay as they are; do not convert them.
 
 ```typescript
 // CORRECT -- tree-shakeable individual imports
@@ -533,9 +540,11 @@ The preview file pattern and allowed preview extensions are mirrored in the back
     },
     ```
 
-3. Add a navigation item in `src/layout/Navigation.tsx` if needed.
+3. Add a navigation entry in `src/layout/navigationRegistry.ts` if needed. An entry renders in the side navigation by default; `placement: "profile"` puts a page that belongs to the signed-in user (such as API Key Management) in the top-bar profile menu instead.
 
 The route is automatically permission-filtered via the `webRoutes()` API call. The backend must also allow the route in the Casbin policy.
+
+The route table and the navigation are composed in the order core, add-on, custom: `routes.tsx` appends `addonRouteTable` (`src/addons/addonRoutes.tsx`) and then `customRouteTable` (`src/custom/customRoutes.tsx`) to its core routes. `layout/navigationRegistry.ts` places the two add-on lists from `src/addons/addonNavigation.ts` among its core entries, `addonNavMainSections` in the main menu after **Orchestrate & Automate** and `addonNavAdminSections` in the admin area after the core **Admin - ...** sections, and `customNavSections` (`src/custom/customNavigation.ts`) after everything. Each placement keeps that order: the side navigation renders the `side` entries (the default) and the top-bar profile menu the `profile` entries, both filtered by the same batched `web`-route check. A link may also set `requiresApiRoute: { method, path }`, which shows it only when the API's allowed-routes listing allows that route; the link is hidden while the listing is unknown, and the API still enforces every call. See [Navigation placement](customizing-vams.md#navigation-placement). The custom lane ships empty. An add-on page is declared in the add-on files, and a fork's in the custom files ([Extending VAMS in a Fork](customizing-vams.md)), so neither edits the core files. Their routes and links pass through the same `web`-constraint filter as core ones, and a path that repeats an earlier route's path never replaces the core page, because the earlier route matches first. A route or navigation entry can carry `featuresEnabledRestriction`, the feature switches that must all be enabled for it to exist: `routeTableFor()` in `routes.tsx` keeps only the routes whose switches the deployment meets; `AppRoutes` mounts those, sends them to the web-route check, runs the check again when the switches arrive after sign-in or on Retry, and uses only the latest check's answer. The navigation registry drops entries the same way, and the side navigation and profile menu check again when the switches arrive. `useFeaturesEnabled()` (`src/context/RuntimeConfigContext.ts`) gives a component the deployment's switches and updates when they change.
 
 ### Component Template
 
@@ -596,6 +605,10 @@ Browsers ignore `'unsafe-inline'` whenever a hash source is also present, so the
 
 Controls whether `'unsafe-eval'` is added to `script-src`. Some viewer plugins depend on WebAssembly runtimes that compile JavaScript at runtime and require this relaxation — notably the Needle USD WASM viewer, the SuperSplat Editor, the ThatOpen IFC BIM viewer, and the Three.js CAD viewer for STEP/IGES/BREP files. When this flag is `false` (the default), those viewers will not initialize. Enable only if your security posture allows it.
 
+### `worker-src` and viewer web workers
+
+The base policy sets `worker-src 'self' blob: data:`. A viewer that decodes in a web worker ships the worker as a content-hashed file under the web app's own `assets/` path and creates it with `new Worker(new URL("./worker.ts", import.meta.url), { type: "module" })`, which `'self'` permits. The TIFF/TGA Image Viewer does this and needs no `cspAdditionalConfig.json` entry, no `blob:` script and no `allowUnsafeEvalFeatures`. See [Viewer Plugin Development](viewer-plugins.md#decoding-in-a-web-worker-optional).
+
 ### Add-on origins
 
 When add-ons that embed external content are enabled, CSP is extended dynamically. For example, with the Physna add-on enabled the configured `apiBaseEndpoint` origin is added to both `frame-src` (so the Physna hosted viewer can be loaded in an iframe) and `connect-src` (so any auxiliary fetches to Physna succeed). See `generateContentSecurityPolicy()` in `infra/lib/helper/security.ts` for the full set of conditional rules.
@@ -619,3 +632,4 @@ When add-ons that embed external content are enabled, CSP is extended dynamicall
 -   [Viewer Plugin Development](viewer-plugins.md) -- Building custom file viewers
 -   [Backend Development](backend.md) -- API handler patterns
 -   [CDK Infrastructure](cdk.md) -- Frontend deployment configuration
+-   [Extending VAMS in a Fork](customizing-vams.md) -- Adding pages, routes and navigation in fork-owned files that upstream does not edit

@@ -1,0 +1,28 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""A workflow-record fixture whose recorded deployment matches its pipelines.
+
+The execute handler starts a run only on a published state machine version whose stored per-pipeline
+fingerprints equal the pipelines' current ones, and redeploys (or refuses) otherwise. A test that is
+not about that check needs its workflow fixture to look like a workflow deployed from the pipelines
+it serves, which is what `with_current_deployment` produces. The fingerprints come from the real
+`workflowAsl` functions, so a fixture cannot agree with the handler by accident.
+"""
+
+from backend.backend.common.workflows import workflowAsl
+
+TEST_VERSION_SUFFIX = ":1"
+
+
+def with_current_deployment(workflow, pipelines, version_arn=None):
+    """A copy of `workflow` carrying a published version ARN, the fingerprints of `pipelines`, the
+    current ASL schema version and the maximum output-ingestion wait (a definition generated with an
+    older schema or another wait is redeployed at launch)."""
+    stamped = dict(workflow)
+    base_arn = stamped.get("workflow_arn") or "arn:aws:states:us-east-1:1:stateMachine:vams-test"
+    stamped["workflowVersionArn"] = version_arn or base_arn + TEST_VERSION_SUFFIX
+    stamped["pipelineFingerprints"] = workflowAsl.workflow_pipeline_fingerprints(pipelines)
+    stamped["aslSchemaVersion"] = str(workflowAsl.ASL_SCHEMA_VERSION)
+    stamped["outputIngestionWaitHours"] = str(workflowAsl.MAX_OUTPUT_INGESTION_WAIT_HOURS)
+    return stamped

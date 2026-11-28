@@ -60,6 +60,21 @@ os.environ['WORKFLOW_TRIGGERS_STORAGE_TABLE_NAME'] = 'workflowTriggersStorageTab
 # default only when unset so workflowService can resolve it at import without overriding those.
 os.environ.setdefault('WORKFLOW_EXECUTION_STORAGE_TABLE_V2_NAME', 'workflowExecutionsStorageTableV2')
 os.environ['S3_ASSET_BUCKETS_STORAGE_TABLE_NAME'] = 's3AssetBucketsStorageTable'
+# The workflow launch, end-state, error and execution-service handlers resolve the lock table at
+# import; setdefault so a test module that pins its own name keeps it.
+os.environ.setdefault('WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME', 'workflowExecutionLocksStorageTable')
+
+# Compliance tables (break-glass env overrides so the compliance handlers and the evaluation store
+# resolve test names without an SSM call at import). The other tables the evaluation store resolves
+# (database, asset file metadata, metadata schema V2, pipeline executions, output results) are NOT
+# seeded here: the handler suites for those domains setdefault their own values at import and assert
+# on them, so a root default would pre-empt theirs. The compliance test conftest seeds them.
+os.environ['COMPLIANCE_SCHEMA_STORAGE_TABLE_NAME'] = 'complianceSchemaStorageTable'
+os.environ['COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME'] = 'complianceAssetStateStorageTable'
+os.environ['COMPLIANCE_EVALUATION_STORAGE_TABLE_NAME'] = 'complianceEvaluationStorageTable'
+os.environ['COMPLIANCE_CASCADE_STORAGE_TABLE_NAME'] = 'complianceCascadeStorageTable'
+os.environ['COMPLIANCE_AUDIT_STORAGE_TABLE_NAME'] = 'complianceAuditStorageTable'
+os.environ['AUDIT_LOG_QUERIES_STORAGE_TABLE_NAME'] = 'auditLogQueriesStorageTable'
 
 # AWS credentials for testing
 os.environ['AWS_ACCESS_KEY_ID'] = 'test-access-key'
@@ -122,6 +137,14 @@ common_sync_tracking_early = import_module_from_path_early(
 )
 sys.modules['common.syncTracking'] = common_sync_tracking_early
 
+# fileClassIntent is pure stdlib; models/vectorsearch reads its class ids at module level, and the model
+# test modules import that model at collection time.
+common_file_class_intent_early = import_module_from_path_early(
+    'common.vectorsearch.fileClassIntent',
+    os.path.join(os.path.dirname(__file__), 'backend', 'common', 'vectorsearch', 'fileClassIntent.py')
+)
+sys.modules['common.vectorsearch.fileClassIntent'] = common_file_class_intent_early
+
 # logRedaction is pure regex logic; load early since executionService imports it at module level.
 common_log_redaction_early = import_module_from_path_early(
     'common.logRedaction',
@@ -169,7 +192,12 @@ def setup_mock_imports():
     sys.modules['common.validators'] = validators_module
     
     # constants is pure data with no AWS dependencies, so load the real module
-    # (single source of truth) rather than a duplicate mock copy.
+    # (single source of truth) rather than a duplicate mock copy. The add-on constants lane it
+    # merges in loads first; `common` is a mock module here, so the import cannot find it by path.
+    sys.modules['common.addonConstants'] = import_module_from_path(
+        'common.addonConstants',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'addonConstants.py')
+    )
     constants_module = import_module_from_path(
         'common.constants',
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'constants.py')
@@ -205,6 +233,12 @@ def setup_mock_imports():
 
     # apiRoutes is pure constants with no AWS dependencies, so load the
     # real module (single source of truth) rather than a duplicate mock copy.
+    # The route type module and the add-on route list it imports load first.
+    for api_routes_dep in ('apiRouteTypes', 'addonApiRoutes'):
+        sys.modules[f'common.{api_routes_dep}'] = import_module_from_path(
+            f'common.{api_routes_dep}',
+            os.path.join(os.path.dirname(__file__), 'backend', 'common', f'{api_routes_dep}.py')
+        )
     api_routes_module = import_module_from_path(
         'common.apiRoutes',
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'apiRoutes.py')
@@ -225,6 +259,23 @@ def setup_mock_imports():
         os.path.join(os.path.dirname(__file__), 'backend', 'common', 'resourceNames.py')
     )
     sys.modules['common.resourceNames'] = resource_names_module
+
+    # ssmParameters (the bounded, cached single-parameter lookup) is a real module too, loaded fresh
+    # for every test like resourceNames, so a handler a test loads gets an empty cache, no open
+    # back-off window and no client built under another test's patch.
+    ssm_parameters_module = import_module_from_path(
+        'common.ssmParameters',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'ssmParameters.py')
+    )
+    sys.modules['common.ssmParameters'] = ssm_parameters_module
+
+    # deployTimeValues (the OpenSearch, web URL and map key values, from the resource names or the
+    # parameters that held them before) is loaded fresh after both, so it binds this test's copies.
+    deploy_time_values_module = import_module_from_path(
+        'common.deployTimeValues',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'deployTimeValues.py')
+    )
+    sys.modules['common.deployTimeValues'] = deploy_time_values_module
 
     # assetHistory is a real module (asset lifecycle history writer); load it
     asset_history_module = import_module_from_path(
@@ -276,6 +327,54 @@ def setup_mock_imports():
 
     geolocation_module = import_module_from_path('common.indexing.geoLocation', os.path.join(mocks_base_path, 'common', 'indexing', 'geoLocation.py'))
     sys.modules['common.indexing.geoLocation'] = geolocation_module
+
+    # documentIds is pure (hashlib + typing) and is the single definition of the OpenSearch _id and
+    # the vector sort key, so load the REAL module by path rather than a mock copy.
+    document_ids_module = import_module_from_path(
+        'common.indexing.documentIds',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'indexing', 'documentIds.py')
+    )
+    sys.modules['common.indexing.documentIds'] = document_ids_module
+    indexing_pkg_module.documentIds = document_ids_module
+
+    # fileEnumeration composes the pure key helpers with the injected S3/DynamoDB clients its callers
+    # pass in; it creates no client of its own, so load the REAL module by path.
+    file_enumeration_module = import_module_from_path(
+        'common.indexing.fileEnumeration',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'indexing', 'fileEnumeration.py')
+    )
+    sys.modules['common.indexing.fileEnumeration'] = file_enumeration_module
+    indexing_pkg_module.fileEnumeration = file_enumeration_module
+
+    # databaseAccess is the search routes' database pre-filter. The real module builds DynamoDB
+    # clients and binds CasbinEnforcer at import, so the default here is the mock stand-in; tests of
+    # the pre-filter load the real module by path.
+    database_access_module = import_module_from_path(
+        'common.databaseAccess', os.path.join(mocks_base_path, 'common', 'databaseAccess.py')
+    )
+    sys.modules['common.databaseAccess'] = database_access_module
+    common_module.databaseAccess = database_access_module
+
+    # vectorsearch: embeddings is self-contained (stdlib + boto3, no client at import) and vectorStore
+    # is a store over an injected low-level client, so load the REAL package and modules by path.
+    vectorsearch_pkg_module = import_module_from_path(
+        'common.vectorsearch',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'vectorsearch', '__init__.py')
+    )
+    sys.modules['common.vectorsearch'] = vectorsearch_pkg_module
+    common_module.vectorsearch = vectorsearch_pkg_module
+    embeddings_module = import_module_from_path(
+        'common.vectorsearch.embeddings',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'vectorsearch', 'embeddings.py')
+    )
+    sys.modules['common.vectorsearch.embeddings'] = embeddings_module
+    vectorsearch_pkg_module.embeddings = embeddings_module
+    vector_store_module = import_module_from_path(
+        'common.vectorsearch.vectorStore',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'vectorsearch', 'vectorStore.py')
+    )
+    sys.modules['common.vectorsearch.vectorStore'] = vector_store_module
+    vectorsearch_pkg_module.vectorStore = vector_store_module
     
     # Import customLogging modules
     customLogging_module = import_module_from_path('customLogging', os.path.join(mocks_base_path, 'customLogging', '__init__.py'))
@@ -350,7 +449,6 @@ def setup_mock_imports():
         os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'indexing'),
         os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'metadata'),
         os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'metadataschema'),
-        os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'search'),
         os.path.join(os.path.dirname(__file__), 'backend', 'handlers', 'pipelines'),
         os.path.join(os.path.dirname(__file__), 'backend', 'models', 'assets'),
     ]
@@ -604,9 +702,9 @@ def setup_mock_imports():
         )
     
     # Add mock modules for search
-    if 'backend.handlers.search' not in sys.modules:
-        sys.modules['backend.handlers.search'] = MockModule()
-    if 'backend.handlers.search.search' not in sys.modules:
+    if 'backend.handlers.osSemanticSearch' not in sys.modules:
+        sys.modules['backend.handlers.osSemanticSearch'] = MockModule()
+    if 'backend.handlers.osSemanticSearch.search' not in sys.modules:
         def property_token_filter_to_opensearch_query(body):
             result = {
                 "query": {
@@ -675,7 +773,7 @@ def setup_mock_imports():
             def lambda_handler(self, event, context):
                 return {"statusCode": 200, "body": "{}"}
                 
-        sys.modules['backend.handlers.search.search'] = MockModule(
+        sys.modules['backend.handlers.osSemanticSearch.search'] = MockModule(
             SearchHandler=SearchHandler,
             property_token_filter_to_opensearch_query=property_token_filter_to_opensearch_query
         )

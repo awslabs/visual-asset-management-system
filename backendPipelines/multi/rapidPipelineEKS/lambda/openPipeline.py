@@ -9,6 +9,7 @@ import time
 import uuid
 from customLogging.logger import safeLogger
 import manifestHelper
+from taskFailureBounds import bounded_task_failure
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -93,14 +94,16 @@ def abort_external_workflow(error, task_token, context_info=None):
             if context_info:
                 cause_message += f' Context: {context_info}'
 
+            failure_error, failure_cause = bounded_task_failure(error_message, cause_message)
+
             # Add retry logic for task failure notification
             max_retries = 3
             for attempt in range(max_retries):
                 try:
                     sfn.send_task_failure(
                         taskToken=task_token,
-                        error=error_message,
-                        cause=cause_message
+                        error=failure_error,
+                        cause=failure_cause
                     )
                     logger.info(f"Successfully sent task failure notification on attempt {attempt + 1}")
                     break
@@ -244,6 +247,10 @@ def lambda_handler(event, context):
             input_configuration_s3_location = event.get('inputConfigurationS3Location', '')
             orchestration_event_prefix = event.get('orchestrationEventPrefix', '')
             asset_id = event.get('assetId', '')
+            # The S3 version the run reads its input at; "" reads the current object.
+            input_version_id = event.get('inputVersionId', '')
+            # The input's asset-relative path (manifest relativePath); "" from an older Lambda.
+            input_relative_path = event.get('inputRelativePath', '')
             external_sfn_task_token = event.get('sfnExternalTaskToken', '')
 
             # Get required parameters
@@ -405,6 +412,8 @@ def lambda_handler(event, context):
                 "inputMetadataS3Location": input_metadata_s3_location,
                 "inputConfigurationS3Location": input_configuration_s3_location,
                 "assetId": asset_id,
+                "inputVersionId": input_version_id,
+                "inputRelativePath": input_relative_path,
                 "externalSfnTaskToken": external_sfn_task_token,
                 "outputFileType": output_file_type
             }

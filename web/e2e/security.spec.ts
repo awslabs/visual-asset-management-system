@@ -43,10 +43,14 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
+import { featureSwitches } from "./support/fixtures";
 
 type Violation = { directive: string; blockedURI: string };
 
-/** Collect CSP violations the browser reports, plus console errors that name one. */
+/**
+ * Collect CSP violations the browser reports, plus console errors that name one. Kept beside the
+ * harness's `watchCspViolations`, which records the events only: this spec asserts on both.
+ */
 async function watchForCspViolations(page: Page): Promise<{
     violations: Violation[];
     consoleErrors: string[];
@@ -82,40 +86,6 @@ async function watchForCspViolations(page: Page): Promise<{
     return { violations, consoleErrors };
 }
 
-/** The deployment's feature list, read from the page's own cached config.
- *
- * NOT via `page.request.get("/api/secure-config")`: that endpoint requires the Bearer token the app
- * attaches in-page from its auth session, and `page.request` does not carry it. The call returns 401,
- * `!response.ok()` yields an empty list, and every feature then reads as DISABLED — which silently
- * inverted the Physna branch of this spec's reporting. Reading the app's own `appCache` entry
- * (localStorage `vams_cache_config`) sees exactly what the running application sees.
- */
-async function featuresEnabled(page: Page): Promise<string[]> {
-    // The cache entry is written after the app boots and fetches its config, which is LATER than
-    // `page.goto` resolving. Reading once immediately after a navigation therefore saw an empty list
-    // and reported every feature as disabled. Poll to a short deadline instead.
-    if (!page.url().startsWith("http")) {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-    }
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-        const features = await page.evaluate(() => {
-            try {
-                const raw = localStorage.getItem("vams_cache_config");
-                if (!raw) return null;
-                const parsed = JSON.parse(raw);
-                const config = parsed?.value ?? parsed ?? {};
-                return (config.featuresEnabled ?? null) as string[] | null;
-            } catch {
-                return null;
-            }
-        });
-        if (features && features.length) return features;
-        if (Date.now() > deadline) return features ?? [];
-        await page.waitForTimeout(1000);
-    }
-}
-
 test.describe("Content-Security-Policy", () => {
     test("the response carries a policy with a script-src directive", async ({ page }) => {
         const response = await page.goto("/");
@@ -132,7 +102,7 @@ test.describe("Content-Security-Policy", () => {
         const response = await page.goto("/");
         const csp = response!.headers()["content-security-policy"] ?? "";
         const scriptSrc = csp.split(";").find((d) => d.trim().startsWith("script-src")) ?? "";
-        const features = await featuresEnabled(page);
+        const features = await featureSwitches(page);
 
         const hasHash = scriptSrc.includes("sha256-");
         const hasUnsafeInline = scriptSrc.includes("'unsafe-inline'");
@@ -262,4 +232,86 @@ test.describe("published bundle hygiene", () => {
             "the main bundle itself is not readable, so the map assertion above is meaningless"
         ).toBe(200);
     });
+});
+
+/**
+ * The API authorizer's answer to a credential it does not accept (#1212).
+ *
+ * From 2.7.0 an expired, invalid or missing token is a 401, which tells a client to sign in again,
+ * while a 403 means the credential was accepted and refused. The fetches run inside the page, from
+ * the web origin, so they also prove the 401 carries the CORS headers the browser needs to read it
+ * (the API's DEFAULT_4XX gateway response); a missing header would make the fetch reject instead.
+ *
+ * `apiBase` is kept beside the harness's `apiContext`: these cases need only the API base the app
+ * stores (`api_path`), not a Cognito ID token, so they also run on an external OAuth deployment.
+ */
+async function apiBase(page: Page): Promise<string> {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    const deadline = Date.now() + 60_000;
+    for (;;) {
+        const base = await page.evaluate(() => localStorage.getItem("api_path"));
+        if (base) return base.endsWith("/") ? base : `${base}/`;
+        if (Date.now() > deadline) throw new Error("the app never stored its API base (api_path)");
+        await page.waitForTimeout(1000);
+    }
+}
+
+async function fetchFromPage(
+    page: Page,
+    url: string,
+    authorization?: string
+): Promise<{ status: number; body: string } | { error: string }> {
+    return page.evaluate(
+        async ([target, auth]) => {
+            try {
+                const headers: Record<string, string> = {};
+                if (auth) headers.Authorization = auth;
+                const response = await fetch(target, { headers });
+                return { status: response.status, body: await response.text() };
+            } catch (e) {
+                return { error: String(e) };
+            }
+        },
+        [url, authorization] as const
+    );
+}
+
+const encodeTokenPart = (part: object) => Buffer.from(JSON.stringify(part)).toString("base64url");
+// An RS256 token whose signature cannot verify. It is assembled at runtime so the source holds no
+// token literal for secret scanners to flag.
+const tamperedToken = [
+    encodeTokenPart({ alg: "RS256" }),
+    encodeTokenPart({ sub: "x" }),
+    "invalid-signature",
+].join(".");
+
+test.describe("API authorizer status codes (#1212)", () => {
+    test("an anonymous route answers from the web origin (control)", async ({ page }) => {
+        const base = await apiBase(page);
+        const result = await fetchFromPage(page, `${base}api/version`);
+        expect(result, `the version route could not be read: ${JSON.stringify(result)}`).toEqual(
+            expect.objectContaining({ status: 200 })
+        );
+    });
+
+    for (const [name, authorization] of [
+        ["a tampered bearer token", `Bearer ${tamperedToken}`],
+        ["a value that is not a token", "Bearer not-a-token"],
+        ["an unknown API key", "vams_e2e_unknown_key_0000000000000000"],
+    ] as const) {
+        test(`${name} is a 401 the browser can read`, async ({ page }) => {
+            const base = await apiBase(page);
+            const result = await fetchFromPage(page, `${base}database`, authorization);
+            expect(
+                "error" in result ? null : result.status,
+                `expected 401 for ${name}; got ${JSON.stringify(
+                    result
+                )}. A fetch error means the ` +
+                    `response carried no CORS headers; a 403 means the deployment predates #1212`
+            ).toBe(401);
+            // Generic body only: nothing about why the credential was refused.
+            const body = "body" in result ? result.body : "";
+            expect(body).not.toMatch(/expired|signature|disabled|kid|issuer|audience/i);
+        });
+    }
 });

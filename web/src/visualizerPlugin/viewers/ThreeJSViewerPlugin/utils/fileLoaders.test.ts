@@ -8,18 +8,26 @@
  * default Content Security Policy, which has `'wasm-unsafe-eval'` but not `'unsafe-eval'`, the
  * browser refuses that and the load fails with its own CSP violation text. These tests pin that
  * the viewer names the deployment setting instead, and that every other failure is still wrapped.
+ *
+ * The USD tests pin how the four USD extensions reach three.js's USDLoader, that a .usdz is
+ * size-checked before parsing, and that the loader's manager never lets an external URL through.
  */
 
 import {
+    convertFloat64Attributes,
     isCadSupportError,
+    isSupportedThreeFormat,
     loadFile,
     loadPLY,
     PLY_DEFAULT_COLOR,
     PLY_POINT_SIZE_FRACTION,
+    USD_FORMATS,
 } from "./fileLoaders";
-import { loadOCCTFile } from "./occtLoader";
+import { ZIP_LIMITS } from "./usdDependencies";
+import { isOcctNoGeometryError, loadOCCTFile, occtNoGeometryMessage } from "./occtLoader";
 
 jest.mock("./occtLoader", () => ({
+    ...jest.requireActual("./occtLoader"),
     loadOCCTFile: jest.fn(),
 }));
 
@@ -99,6 +107,15 @@ describe("loadFile OCCT error messages", () => {
         expect(message).not.toContain(SETTING);
     });
 
+    it("passes the no-geometry message through unwrapped so the viewer recognizes it (#1734)", async () => {
+        mockedLoadOCCTFile.mockRejectedValue(new Error(occtNoGeometryMessage("STEP")));
+
+        const message = await failureMessage();
+
+        expect(message).toBe(occtNoGeometryMessage("STEP"));
+        expect(isOcctNoGeometryError(message)).toBe(true);
+    });
+
     it("revokes the blob URL when the loader fails", async () => {
         mockedLoadOCCTFile.mockRejectedValue(new EvalError("blocked"));
 
@@ -146,6 +163,197 @@ describe("isCadSupportError", () => {
     });
 });
 
+describe("loadFile USD", () => {
+    class FakeLoadingManager {
+        modifier: ((url: string) => string) | null = null;
+        setURLModifier(modifier: (url: string) => string) {
+            this.modifier = modifier;
+            return this;
+        }
+    }
+
+    let parse: jest.Mock;
+    let constructed: any[];
+
+    beforeEach(() => {
+        constructed = [];
+        parse = jest.fn((_buffer, _path, onLoad) => onLoad({ name: "usd", animations: ["clip"] }));
+        class FakeUSDLoader {
+            parse = parse;
+            constructor(manager: any) {
+                constructed.push(manager);
+            }
+        }
+        (window as any).THREEBundle = {
+            THREE: { LoadingManager: FakeLoadingManager },
+            USDLoader: FakeUSDLoader,
+            fflate: { unzipSync: jest.fn(() => ({})) },
+        };
+    });
+
+    afterEach(() => {
+        delete (window as any).THREEBundle;
+    });
+
+    it.each(USD_FORMATS)("routes .%s to USDLoader.parse with an empty base path", async (ext) => {
+        const buffer = new ArrayBuffer(16);
+
+        const result = await loadFile(buffer, ext, `scene.${ext}`);
+
+        expect(parse).toHaveBeenCalledWith(buffer, "", expect.any(Function), expect.any(Function));
+        expect(result.object.name).toBe("usd");
+        expect(result.animations).toEqual(["clip"]);
+    });
+
+    it("gives USDLoader a manager that never lets an external URL through", async () => {
+        await loadFile(new ArrayBuffer(4), "usda", "a.usda");
+
+        const manager = constructed[0];
+        expect(manager.modifier("textures/a.png")).toMatch(/^data:image\/png;base64,/);
+        expect(manager.modifier("blob:x")).toBe("blob:x");
+    });
+
+    it("wraps a loader error", async () => {
+        parse.mockImplementation((_b, _p, _onLoad, onError) => onError(new Error("bad layer")));
+
+        await expect(loadFile(new ArrayBuffer(4), "usdc", "a.usdc")).rejects.toThrow(
+            "Failed to load USD: bad layer"
+        );
+    });
+
+    it("wraps a synchronous parse failure", async () => {
+        parse.mockImplementation(() => {
+            throw new Error("Invalid USDZ package");
+        });
+
+        await expect(loadFile(new ArrayBuffer(4), "usdz", "a.usdz")).rejects.toThrow(
+            "Failed to load USD: Invalid USDZ package"
+        );
+    });
+
+    it("rejects an oversize .usdz before parsing it", async () => {
+        (window as any).THREEBundle.fflate.unzipSync = jest.fn((_bytes: any, opts: any) => {
+            opts.filter({ name: "x.usdc", originalSize: 4 * 1024 * 1024 * 1024 });
+            return {};
+        });
+        const usdz = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]).buffer;
+
+        await expect(loadFile(usdz, "usdz", "bomb.usdz")).rejects.toThrow(/expands to/);
+        expect(parse).not.toHaveBeenCalled();
+    });
+});
+
+describe("loadFile 3MF", () => {
+    let parse: jest.Mock;
+    const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]).buffer;
+
+    beforeEach(() => {
+        parse = jest.fn(() => ({ name: "3mf" }));
+        class FakeThreeMFLoader {
+            parse = parse;
+        }
+        (window as any).THREEBundle = {
+            THREE: {
+                LoadingManager: class {
+                    setURLModifier() {
+                        return this;
+                    }
+                },
+            },
+            ThreeMFLoader: FakeThreeMFLoader,
+            fflate: { unzipSync: jest.fn(() => ({})) },
+        };
+    });
+
+    afterEach(() => {
+        delete (window as any).THREEBundle;
+    });
+
+    it("checks a .3mf package's declared size before parsing it", async () => {
+        (window as any).THREEBundle.fflate.unzipSync = jest.fn((_bytes: any, opts: any) => {
+            opts.filter({ name: "3D/model.model", originalSize: 4 * 1024 * 1024 * 1024 });
+            return {};
+        });
+
+        await expect(loadFile(zip, "3mf", "part.3mf")).rejects.toThrow(
+            /The 3MF package expands to/
+        );
+        expect(parse).not.toHaveBeenCalled();
+    });
+
+    it("checks a .3mf package's entry count before parsing it", async () => {
+        (window as any).THREEBundle.fflate.unzipSync = jest.fn((_bytes: any, opts: any) => {
+            for (let i = 0; i <= ZIP_LIMITS.maxEntries; i++) {
+                opts.filter({ name: `f${i}`, originalSize: 0 });
+            }
+            return {};
+        });
+
+        await expect(loadFile(zip, "3mf", "part.3mf")).rejects.toThrow(/The 3MF package has/);
+        expect(parse).not.toHaveBeenCalled();
+    });
+
+    it("[control] parses a package within the limits", async () => {
+        const result = await loadFile(zip, "3mf", "part.3mf");
+
+        expect(parse).toHaveBeenCalledTimes(1);
+        expect(result.object.name).toBe("3mf");
+    });
+
+    // A zip reader finds the entries from the end of the file, so the check reads every package.
+    it("checks a .3mf package that does not start with a zip entry header", async () => {
+        const prefixed = new Uint8Array([0, 0, 0, 0, 0x50, 0x4b, 0x03, 0x04]).buffer;
+        (window as any).THREEBundle.fflate.unzipSync = jest.fn((_bytes: any, opts: any) => {
+            opts.filter({ name: "3D/model.model", originalSize: 4 * 1024 * 1024 * 1024 });
+            return {};
+        });
+
+        await expect(loadFile(prefixed, "3mf", "part.3mf")).rejects.toThrow(
+            /The 3MF package expands to/
+        );
+        expect(parse).not.toHaveBeenCalled();
+    });
+
+    it("does not parse a .3mf package when the bundle has no zip reader to check it", async () => {
+        delete (window as any).THREEBundle.fflate;
+
+        await expect(loadFile(zip, "3mf", "part.3mf")).rejects.toThrow(
+            /cannot check the 3MF package's size/
+        );
+        expect(parse).not.toHaveBeenCalled();
+    });
+});
+
+describe("format helpers", () => {
+    it("recognizes USD and mesh formats", () => {
+        expect(isSupportedThreeFormat("a/b/scene.USDZ")).toBe(true);
+        expect(isSupportedThreeFormat("scene.usda")).toBe(true);
+        expect(isSupportedThreeFormat("model.glb")).toBe(true);
+        expect(isSupportedThreeFormat("doc.pdf")).toBe(false);
+    });
+
+    it("converts Float64 PLY attributes to Float32", () => {
+        class BufferAttribute {
+            constructor(public array: any, public itemSize: number, public normalized: boolean) {}
+        }
+        const position = { array: new Float64Array([1.5, 2, 3]), itemSize: 3, normalized: false };
+        const color = { array: new Float32Array([1, 0, 0]), itemSize: 3, normalized: false };
+        const geometry = {
+            attributes: { position, color } as Record<string, any>,
+            setAttribute(name: string, attribute: any) {
+                this.attributes[name] = attribute;
+            },
+        };
+
+        convertFloat64Attributes(geometry, { BufferAttribute });
+
+        expect(geometry.attributes.position.array).toBeInstanceOf(Float32Array);
+        expect(Array.from(geometry.attributes.position.array)).toEqual([1.5, 2, 3]);
+        expect(geometry.attributes.position.itemSize).toBe(3);
+        expect(geometry.attributes.color).toBe(color);
+    });
+});
+
 /**
  * #1257: a PLY with no faces is a point cloud and must be drawn as points, and a PLY with
  * red/green/blue vertex properties must be drawn in those colours. These tests drive loadPLY
@@ -188,6 +396,9 @@ describe("loadPLY (#1257)", () => {
             attributes,
             index: options.faces ? new BufferAttribute(new Uint32Array([0, 1, 2]), 1) : null,
             computeVertexNormals: jest.fn(),
+            setAttribute(name: string, attribute: any) {
+                this.attributes[name] = attribute;
+            },
         };
     }
 
@@ -240,5 +451,16 @@ describe("loadPLY (#1257)", () => {
         expect(object.material.params.vertexColors).toBe(false);
         expect(object.material.params.color).toBe(PLY_DEFAULT_COLOR);
         expect(geometry.computeVertexNormals).toHaveBeenCalledTimes(1);
+    });
+
+    it("still converts Float64 positions before building the points", async () => {
+        const geometry = plyGeometry({ colors: true });
+        geometry.attributes.position = new BufferAttribute(
+            new Float64Array([0, 0, 0, 3, 4, 12]),
+            3
+        );
+        const object = await load(geometry);
+
+        expect(object.geometry.attributes.position.array).toBeInstanceOf(Float32Array);
     });
 });

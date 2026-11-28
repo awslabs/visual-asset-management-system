@@ -1,0 +1,4 @@
+{
+    "statusCode": 400,
+    "body": { "message": "Asset is quarantined and cannot be downloaded" }
+}

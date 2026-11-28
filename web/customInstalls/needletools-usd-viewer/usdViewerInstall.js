@@ -47,7 +47,9 @@ const gitActions = async () => {
 // Note: The USD viewer repo includes pre-built WASM files, so we don't need to build
 const npmBuild = () => {
     try {
-        execSync("npm install", { cwd: gitRepoSourceDestDir }); //Install dependencies
+        // The clone has its own package.json, so web/.npmrc does not reach this install: pass the
+        // 7-day release-age floor explicitly (#334).
+        execSync("npm install --min-release-age=7", { cwd: gitRepoSourceDestDir }); //Install dependencies
         console.log("NeedleTools-USDViewer Build NPM install complete");
         // Note: npm run build is not needed as the repo includes pre-built files
         console.log("NeedleTools-USDViewer: Using pre-built WASM files from repository");
@@ -78,7 +80,8 @@ const bundleWithWebpack = async () => {
 
         // Install dependencies
         console.log("NeedleTools-USDViewer: Installing webpack and Three.js...");
-        execSync("npm install", { cwd: bundleDir, stdio: "inherit" });
+        // The generated bundle project sits inside the clone, outside web/.npmrc's reach (#334).
+        execSync("npm install --min-release-age=7", { cwd: bundleDir, stdio: "inherit" });
 
         // Copy ThreeJsRenderDelegate to bundle directory for easier import
         const renderDelegateSource =

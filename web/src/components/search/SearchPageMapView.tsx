@@ -16,23 +16,58 @@ import Map, {
 import "maplibre-gl/dist/maplibre-gl.css";
 import "../../common/utils/maplibreWorker";
 import { SearchPageViewProps } from "./SearchPageTypes";
-import {
-    Box,
-    Button,
-    Link,
-    Pagination,
-    SpaceBetween,
-    Popover,
-    Icon,
-} from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import Link from "@cloudscape-design/components/link";
+import Toggle from "@cloudscape-design/components/toggle";
+import Pagination from "@cloudscape-design/components/pagination";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Popover from "@cloudscape-design/components/popover";
+import Icon from "@cloudscape-design/components/icon";
 import { appCache } from "../../services/appCache";
-import type { LngLatBoundsLike } from "maplibre-gl";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
-import { SearchExplanation, getTotalResultCount, getPageCount } from "./types";
+import {
+    SearchExplanation,
+    formatTotalResultCount,
+    getPageCount,
+    getPagedResultCount,
+    getTotalResultCount,
+    isTotalLowerBound,
+} from "./types";
 import { extractLocationData } from "./utils/locationUtils";
-import { isFileHitSource } from "./utils/recordType";
+import { hasLocationOnlyMetadata, isFileHitSource } from "./utils/recordType";
 import { colorForKey } from "./utils/polygonColor";
+import { FIT_BOUNDS_OPTIONS, locationDataBounds } from "./utils/mapBounds";
+import { footprintFallbackAnchor, pickFootprint } from "./utils/mapPick";
+import {
+    MAP_MARKER_SIZE_PX,
+    MAP_PIN_PATH,
+    MAP_PIN_VIEW_BOX,
+    POPUP_PADDING,
+    popupOffsetsFor,
+} from "./utils/mapPopupPlacement";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
+import { shownRasterKey } from "./SearchRasterLayers.keys";
+import type { SearchRasterRequest } from "./SearchRasterLayers";
+
+// Loaded on the first "Show raster", so the COG reader is not part of the Search page bundle.
+const SearchRasterLayers = React.lazy(() => import("./SearchRasterLayers"));
+
+/** A file hit can be shown as a raster when it is a TIFF (a converted .cog.tif included) with a footprint. */
+export function canShowRaster(item: {
+    rectype: string;
+    type: string;
+    fileKey?: string;
+    geoJson?: any;
+}): boolean {
+    return (
+        item.rectype === "file" &&
+        item.type === "geojson" &&
+        !!item.geoJson &&
+        !!item.fileKey &&
+        /\.tiff?$/i.test(item.fileKey)
+    );
+}
 
 interface LocationDataWithDetails {
     id: string;
@@ -236,15 +271,17 @@ const extractMetadata = (
 
 function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     const [selectedItem, setSelectedItem] = useState<LocationDataWithDetails | null>(null);
+    // Where the user clicked on a footprint, which is where its popup opens.
+    const [clickAnchor, setClickAnchor] = useState<[number, number] | null>(null);
     const mapRef = useRef<MapRef>(null);
     const config = appCache.getItem("config");
     const navigate = useNavigate();
 
-    // Get pagination info from state
+    // Get pagination info from state. The pages cover the records the result can page through: a
+    // natural-language answer counts every match but holds at most 100, so it pages over those.
     const pageSize = state.tablePreferences?.pageSize || 50;
     const currentPage = 1 + Math.floor((state.pagination?.from || 0) / pageSize);
-    const totalResults = getTotalResultCount(state?.result);
-    const pageCount = getPageCount(totalResults, pageSize);
+    const pageCount = getPageCount(getPagedResultCount(state?.result), pageSize);
 
     // The "Files" / "Assets" toggle on the search page is driven by the
     // `_rectype` filter on search state, not by a per-document field. Read
@@ -254,7 +291,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     const isFileSearchMode = state.filters?._rectype?.value === "file";
 
     // Extract location data from search results
-    const locationData: LocationDataWithDetails[] = React.useMemo(() => {
+    const allLocationData: LocationDataWithDetails[] = React.useMemo(() => {
         if (!state.result?.hits?.hits) return [];
 
         const validData: LocationDataWithDetails[] = [];
@@ -265,7 +302,14 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
 
             const location = extractLocationData(source);
             if (location && location.type) {
-                const { metadata, attributes } = extractMetadata(source);
+                // A natural-language asset hit's MD_ is its asset's location only, not its metadata.
+                const { metadata, attributes } = hasLocationOnlyMetadata(
+                    source,
+                    hit._vector,
+                    isFileSearchMode
+                )
+                    ? { metadata: [], attributes: [] }
+                    : extractMetadata(source);
                 // Authoritative source: the search-state `_rectype` filter.
                 // Fall back to the document's own record type only if the
                 // filter is unset (e.g., a future "all" mode).
@@ -303,41 +347,33 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
         return validData;
     }, [state.result, isFileSearchMode]);
 
+    // The "Show raster files" view filter: ON each visit, never stored. Off takes the hits that can be
+    // shown as a raster (their footprints, pins and popups) and every drawn raster off the map; the
+    // API still decides each download.
+    const [showRasterFiles, setShowRasterFiles] = useState(true);
+    const rasterHitCount = React.useMemo(
+        () => allLocationData.filter((item) => canShowRaster(item)).length,
+        [allLocationData]
+    );
+    const locationData: LocationDataWithDetails[] = React.useMemo(
+        () =>
+            showRasterFiles
+                ? allLocationData
+                : allLocationData.filter((item) => !canShowRaster(item)),
+        [allLocationData, showRasterFiles]
+    );
+
     // Reset selected items when location data changes (page change or new search)
     useEffect(() => {
         setSelectedItem(null);
+        setClickAnchor(null);
     }, [locationData]);
 
-    // Compute the popup anchor (lon, lat) for a GeoJSON-shaped result. Uses
-    // the centroid of the bounding box of all coordinates in the geometry —
-    // simple and robust across Polygon, MultiPolygon, LineString and
-    // GeometryCollection without pulling in a turf-style dependency.
+    // The popup anchor (lon, lat) for a GeoJSON-shaped result: where the user clicked on its footprint, or,
+    // when it was opened some other way, the centre of the box of its largest part (utils/mapPick.ts).
     const computeGeoJsonPopupAnchor = (item: LocationDataWithDetails): [number, number] | null => {
         if (item.type !== "geojson" || !item.geoJson) return null;
-        const lons: number[] = [];
-        const lats: number[] = [];
-        const collect = (coords: any) => {
-            if (!Array.isArray(coords)) return;
-            if (typeof coords[0] === "number" && typeof coords[1] === "number") {
-                lons.push(coords[0]);
-                lats.push(coords[1]);
-                return;
-            }
-            for (const c of coords) collect(c);
-        };
-        const geom = item.geoJson?.type === "Feature" ? item.geoJson.geometry : item.geoJson;
-        if (geom?.coordinates) collect(geom.coordinates);
-        if (geom?.geometries) {
-            for (const sub of geom.geometries) {
-                if (sub?.coordinates) collect(sub.coordinates);
-            }
-        }
-        if (lons.length === 0) return null;
-        const minLon = Math.min(...lons);
-        const maxLon = Math.max(...lons);
-        const minLat = Math.min(...lats);
-        const maxLat = Math.max(...lats);
-        return [(minLon + maxLon) / 2, (minLat + maxLat) / 2];
+        return clickAnchor ?? footprintFallbackAnchor(item.geoJson);
     };
 
     // Build the list of fill-layer IDs we want to be click-interactive so
@@ -358,18 +394,15 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     // layer handlers, which react-map-gl/maplibre doesn't expose for Layer)
     // keeps polygon hit-testing consistent with native MapLibre events.
     const handleMapClick = (event: any) => {
-        const features = event?.features as Array<any> | undefined;
-        if (!features || features.length === 0) return;
-        for (const feature of features) {
-            const layerId: string | undefined = feature?.layer?.id;
-            if (!layerId || !layerId.startsWith("geojson-fill-")) continue;
-            const itemId = layerId.replace("geojson-fill-", "");
-            const item = locationData.find((it) => it.id === itemId);
-            if (item) {
-                setSelectedItem(item);
-                return;
-            }
-        }
+        // Of the footprints under the click, the smallest is opened (the topmost when equal), and its
+        // popup opens at the click.
+        const item = pickFootprint(event?.features, locationData);
+        if (!item) return;
+        setSelectedItem(item);
+        const at = event?.lngLat;
+        setClickAnchor(
+            at && Number.isFinite(at.lng) && Number.isFinite(at.lat) ? [at.lng, at.lat] : null
+        );
     };
 
     // Pointer-cursor affordance over polygon fills so users discover the
@@ -384,72 +417,44 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
         if (map) map.getCanvas().style.cursor = "";
     };
 
-    // Calculate bounds and fit map when location data changes. Considers BOTH
-    // point markers and polygon/line shapes so a results page that contains only
-    // GeoJSON shapes (no points) still gets framed correctly. Previously this
-    // only inspected points, leaving the map stuck on a default San Francisco
-    // viewport whenever every result was polygon-based.
+    // Frame every plotted result whenever the results change and once the map has loaded. The map's
+    // instance, which mapRef exposes, exists only after the map library has loaded, so an effect that ran
+    // before then had nothing to move: a view that opens with its results already in hand (a
+    // natural-language answer, reused rather than fetched again) stayed on the first point. Waiting for
+    // onLoad, and running again on it, frames those results too. Points and GeoJSON shapes both count,
+    // so a page of shapes alone is framed as well (locationDataBounds).
+    const [mapLoaded, setMapLoaded] = useState(false);
+    const [rasterRequests, setRasterRequests] = useState<SearchRasterRequest[]>([]);
+    // The hits whose raster is on the map, reported by the raster layers (a layer removed from the
+    // list turns its popup button back to "Show raster").
+    const [shownRasters, setShownRasters] = useState<Set<string>>(new Set());
+    const rasterKeyOf = (item: LocationDataWithDetails) =>
+        item.fileKey
+            ? shownRasterKey({
+                  databaseId: item.databaseId,
+                  assetId: item.assetId,
+                  key: item.fileKey,
+              })
+            : "";
+    const requestRaster = (item: LocationDataWithDetails, action: "show" | "hide") => {
+        const key = item.fileKey;
+        if (!key) return;
+        setRasterRequests((current) => [
+            ...current,
+            {
+                seq: (current[current.length - 1]?.seq ?? 0) + 1,
+                action,
+                file: { databaseId: item.databaseId, assetId: item.assetId, key },
+                sizeBytes: item.fileSize,
+            },
+        ]);
+    };
     useEffect(() => {
-        if (!mapRef.current || locationData.length === 0) return;
-
-        const allLats: number[] = [];
-        const allLons: number[] = [];
-
-        // Walk arbitrary nested coordinate arrays from a GeoJSON geometry.
-        const collectCoords = (coords: any) => {
-            if (!Array.isArray(coords)) return;
-            if (typeof coords[0] === "number" && typeof coords[1] === "number") {
-                allLons.push(coords[0]);
-                allLats.push(coords[1]);
-                return;
-            }
-            for (const c of coords) collectCoords(c);
-        };
-
-        locationData.forEach((item) => {
-            if (
-                item.type === "point" &&
-                item.latitude !== undefined &&
-                item.longitude !== undefined
-            ) {
-                allLats.push(item.latitude);
-                allLons.push(item.longitude);
-                return;
-            }
-            if (item.type === "geojson" && item.geoJson) {
-                const geom =
-                    item.geoJson?.type === "Feature" ? item.geoJson.geometry : item.geoJson;
-                if (geom?.coordinates) collectCoords(geom.coordinates);
-                if (geom?.geometries) {
-                    // GeometryCollection
-                    for (const sub of geom.geometries) {
-                        if (sub?.coordinates) collectCoords(sub.coordinates);
-                    }
-                }
-            }
-        });
-
-        if (allLats.length === 0) return;
-
-        const minLat = Math.min(...allLats);
-        const maxLat = Math.max(...allLats);
-        const minLon = Math.min(...allLons);
-        const maxLon = Math.max(...allLons);
-
-        const padding = 0.01;
-        const bounds: LngLatBoundsLike = [
-            [minLon - padding, minLat - padding],
-            [maxLon + padding, maxLat + padding],
-        ];
-
-        mapRef.current.fitBounds(bounds, {
-            padding: 40,
-            duration: 1000,
-            // For a single point, fitBounds collapses to a tiny bbox; cap the zoom
-            // so we don't slam to street-level on a single result.
-            maxZoom: 14,
-        });
-    }, [locationData]);
+        if (!mapLoaded || !mapRef.current) return;
+        const bounds = locationDataBounds(locationData);
+        if (!bounds) return;
+        mapRef.current.fitBounds(bounds, FIT_BOUNDS_OPTIONS);
+    }, [locationData, mapLoaded]);
 
     // Handle pagination
     const handlePageChange = (pageIndex: number) => {
@@ -479,7 +484,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
 
     // Calculate initial view state from the first piece of location data we can
     // anchor to -- a point if available, otherwise the first vertex of the first
-    // GeoJSON shape. fitBounds (above) immediately reframes once the data loads,
+    // GeoJSON shape. fitBounds (above) reframes once the map has loaded,
     // but this seeds the initial render so we're already in roughly the right
     // region. Falls back to a neutral world view if nothing has coordinates.
     const initialViewState = (() => {
@@ -522,17 +527,82 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     return (
         <SpaceBetween direction="vertical" size="m">
             {/* Header with result count */}
-            {state?.result?.hits?.total?.value ? (
-                <Box variant="h2">
-                    {locationData.length} of {state.result.hits.total.value} result
-                    {state.result.hits.total.value !== 1 ? "s" : ""} with location data
-                </Box>
-            ) : (
-                <Box variant="h2">No search results with location data</Box>
-            )}
+            <div
+                data-testid="map-results-title-row"
+                style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "8px 16px",
+                }}
+            >
+                {getTotalResultCount(state?.result) ? (
+                    <Box variant="h2">
+                        {locationData.length} of {formatTotalResultCount(state.result)} result
+                        {getTotalResultCount(state.result) !== 1 || isTotalLowerBound(state.result)
+                            ? "s"
+                            : ""}{" "}
+                        with location data
+                        {!showRasterFiles && rasterHitCount > 0 && (
+                            <>
+                                {" "}
+                                <Box
+                                    variant="span"
+                                    color="text-body-secondary"
+                                    fontWeight="normal"
+                                    data-testid="map-raster-hidden-count"
+                                >
+                                    ({rasterHitCount} raster file{rasterHitCount !== 1 ? "s" : ""}{" "}
+                                    hidden)
+                                </Box>
+                            </>
+                        )}
+                    </Box>
+                ) : (
+                    <Box variant="h2">No search results with location data</Box>
+                )}
+                {allLocationData.length > 0 && (
+                    <div
+                        data-testid="map-raster-filter"
+                        style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                    >
+                        <Popover
+                            triggerType="custom"
+                            size="large"
+                            position="bottom"
+                            header="Raster files and location data"
+                            dismissButton
+                            content={
+                                <Box data-testid="map-raster-info">
+                                    Footprint boxes and pins come from the <code>location</code> or
+                                    latitude / longitude metadata. GeoTIFF and COG rasters are
+                                    loaded separately: <strong>Show raster</strong> draws the raster
+                                    itself from the file&apos;s own georeferencing tags, not from
+                                    any metadata field.
+                                </Box>
+                            }
+                        >
+                            <Button
+                                variant="inline-icon"
+                                iconName="status-info"
+                                ariaLabel="About raster files on the map"
+                                data-testid="map-raster-info-button"
+                            />
+                        </Popover>
+                        <Toggle
+                            checked={showRasterFiles}
+                            onChange={({ detail }) => setShowRasterFiles(detail.checked)}
+                            data-testid="map-raster-toggle"
+                        >
+                            Show raster files
+                        </Toggle>
+                    </div>
+                )}
+            </div>
 
             {/* Warning when no location data */}
-            {locationData.length === 0 && state?.result?.hits?.total?.value > 0 && (
+            {allLocationData.length === 0 && state?.result?.hits?.total?.value > 0 && (
                 <Box variant="p" color="text-status-warning">
                     No results have valid location data. The map view recognizes the following
                     metadata field types:
@@ -548,6 +618,19 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                             Or individual <strong>latitude</strong>, <strong>longitude</strong>, and
                             optional <strong>altitude</strong> metadata fields (numeric or string
                             values).
+                        </li>
+                        <li data-testid="map-note-raster">
+                            A <strong>GeoTIFF or COG</strong> file whose header carries
+                            georeferencing. With the extraction location option (
+                            <code>EXTRACT_GEO_LOCATION</code>) on, the metadata pipeline writes its
+                            footprint box, reprojected to WGS 84, as its <code>location</code>{" "}
+                            metadata, unless the file already has a location, which is kept. There
+                            is no box for a file with no georeferencing, a user-defined or
+                            unrecognised coordinate system, or an extent that covers a pole, for a
+                            converted <code>&lt;file&gt;.cog.tif</code> whose source sits beside it
+                            (the source&apos;s box stands for both), or with the option off.{" "}
+                            <strong>Show raster</strong> on a result draws the raster from the
+                            file&apos;s own georeferencing tags, not from metadata.
                         </li>
                     </ul>
                 </Box>
@@ -572,6 +655,9 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
             {/* Map */}
             <Map
                 ref={mapRef}
+                // Flat map: the basemap style selects the globe, whose fit-to-bounds frames the wrong
+                // place for results spread over the world or either side of longitude 180.
+                projection="mercator"
                 initialViewState={initialViewState}
                 style={{ height: "70vh", width: "100%" }}
                 mapStyle={mapStyleUrl}
@@ -580,6 +666,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                 onClick={handleMapClick}
                 onMouseEnter={handleMapMouseEnter}
                 onMouseLeave={handleMapMouseLeave}
+                onLoad={() => setMapLoaded(true)}
             >
                 <NavigationControl position="bottom-right" showZoom showCompass={false} />
 
@@ -632,31 +719,36 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                             anchor="bottom"
                             onClick={(e) => {
                                 e.originalEvent.stopPropagation();
+                                setClickAnchor(null);
                                 setSelectedItem(item);
                             }}
                         >
+                            {/* No transform: anchor="bottom" already puts the bottom centre
+                                of this element, the icon's tip, on the point (#1306) */}
                             <div
                                 style={{
-                                    width: "30px",
-                                    height: "30px",
+                                    width: `${MAP_MARKER_SIZE_PX}px`,
+                                    height: `${MAP_MARKER_SIZE_PX}px`,
                                     cursor: "pointer",
-                                    transform: "translate(-50%, -100%)",
                                 }}
                             >
                                 <svg
-                                    viewBox="0 0 24 24"
+                                    viewBox={MAP_PIN_VIEW_BOX}
+                                    width={MAP_MARKER_SIZE_PX}
+                                    height={MAP_MARKER_SIZE_PX}
+                                    style={{ display: "block" }}
                                     fill={selectedItem?.id === item.id ? "#0972d3" : "#d91515"}
                                     xmlns="http://www.w3.org/2000/svg"
                                 >
-                                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />
+                                    <path d={MAP_PIN_PATH} />
                                 </svg>
                             </div>
                         </Marker>
                     ))}
 
                 {/* Popup for the selected item — shown for both point markers and
-                    polygon (GeoJSON) results. Polygon clicks anchor the popup at
-                    the centroid of the shape's bounding box. */}
+                    polygon (GeoJSON) results. A polygon click anchors the popup at
+                    the click. */}
                 {selectedItem &&
                     (() => {
                         let popupLat: number | undefined;
@@ -674,11 +766,18 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                         if (popupLat === undefined || popupLon === undefined) return null;
 
                         return (
+                            // No fixed anchor: maplibre opens the popup on the side of the point
+                            // where it fits inside the map, and moves it on every pan and zoom
+                            // (utils/mapPopupPlacement.ts, #1303)
                             <Popup
                                 latitude={popupLat}
                                 longitude={popupLon}
-                                anchor="top"
-                                onClose={() => setSelectedItem(null)}
+                                padding={POPUP_PADDING}
+                                offset={popupOffsetsFor(selectedItem.type)}
+                                onClose={() => {
+                                    setSelectedItem(null);
+                                    setClickAnchor(null);
+                                }}
                                 closeButton={true}
                                 closeOnClick={false}
                                 maxWidth="400px"
@@ -847,6 +946,28 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                             is what right-click → "Open in new tab" copies, so it
                                             must carry the path so a fresh page load lands on the
                                             correct file inside the file manager. */}
+                                        {/* Overlay the file's raster on this map (GeoTIFF / COG). Access is
+                                            decided by the download route when the raster is requested. */}
+                                        {canShowRaster(selectedItem) && (
+                                            <Button
+                                                iconName="location-pin"
+                                                fullWidth
+                                                onClick={() =>
+                                                    requestRaster(
+                                                        selectedItem,
+                                                        shownRasters.has(rasterKeyOf(selectedItem))
+                                                            ? "hide"
+                                                            : "show"
+                                                    )
+                                                }
+                                                data-testid="search-map-show-raster"
+                                            >
+                                                {shownRasters.has(rasterKeyOf(selectedItem))
+                                                    ? "Hide raster"
+                                                    : "Show raster"}
+                                            </Button>
+                                        )}
+
                                         {selectedItem.rectype === "file" ? (
                                             (() => {
                                                 const filePathQuery = selectedItem.fileKey
@@ -903,6 +1024,17 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                         );
                     })()}
             </Map>
+
+            {rasterRequests.length > 0 && (
+                <React.Suspense fallback={null}>
+                    <SearchRasterLayers
+                        map={mapLoaded ? (mapRef.current?.getMap() as any) ?? null : null}
+                        requests={rasterRequests}
+                        onShownChange={setShownRasters}
+                        hidden={!showRasterFiles}
+                    />
+                </React.Suspense>
+            )}
 
             {/* Informational note about location requirements */}
             <Box variant="p" color="text-body-secondary">

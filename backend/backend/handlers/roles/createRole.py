@@ -2,7 +2,7 @@
 
 import boto3
 import uuid
-from datetime import datetime
+from common.timestamps import utc_now
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -12,7 +12,7 @@ from common.resourceNames import get_table_name, ResourceKeys
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from customLogging.auditLogging import log_auth_changes
+from customLogging.auditLogging import log_auth_changes, audited_handler
 from models.common import (
     validation_error_message,
     APIGatewayProxyResponseV2,
@@ -98,7 +98,7 @@ def create_role(role_data, claims_and_roles):
             'id': str(uuid.uuid4()),
             'roleName': role_data['roleName'],
             'description': role_data['description'],
-            'createdOn': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
+            'createdOn': utc_now().strftime("%Y-%m-%dT%H:%M:%S"),
             'source': role_data.get('source'),
             'sourceIdentifier': role_data.get('sourceIdentifier'),
             'mfaRequired': role_data.get('mfaRequired', False)
@@ -111,7 +111,7 @@ def create_role(role_data, claims_and_roles):
         )
         
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return RoleOperationResponseModel(
             success=True,
             message=f"Role {role_data['roleName']} created successfully",
@@ -184,7 +184,7 @@ def update_role(role_data, claims_and_roles):
         )
 
         # Return success response
-        now = datetime.utcnow().isoformat()
+        now = utc_now().isoformat()
         return RoleOperationResponseModel(
             success=True,
             message=f"Role {role_data['roleName']} updated successfully",
@@ -259,7 +259,7 @@ def handle_post_request(event):
             "operation": "create",
             "description": request_model.description,
             "mfaRequired": request_model.mfaRequired
-        })
+        }, changes=request_model.dict(exclude_unset=True))
         
         # Return success response
         return success(body=result.dict())
@@ -334,7 +334,7 @@ def handle_put_request(event):
             audit_details["description"] = update_data['description']
         if 'mfaRequired' in update_data:
             audit_details["mfaRequired"] = update_data['mfaRequired']
-        log_auth_changes(event, "roleUpdate", audit_details)
+        log_auth_changes(event, "roleUpdate", audit_details, changes=update_data)
 
         # Return success response
         return success(body=result.dict())
@@ -352,6 +352,7 @@ def handle_put_request(event):
         return internal_error(event=event)
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for create/update role APIs"""
     global claims_and_roles

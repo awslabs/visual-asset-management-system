@@ -1,0 +1,82 @@
+name: vams-desktop-no-screen-lock
+description: Turns off the GNOME screen lock and idle blanking on VAMS Linux desktops, whose users sign in through Amazon DCV and hold no local password to unlock a locked screen.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: WriteDconfDefaults
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    # The desktop itself is installed by EDH at first boot, so dconf may be missing at build time.
+                    - |
+                        if ! command -v dconf >/dev/null 2>&1; then
+                            if command -v apt-get >/dev/null 2>&1; then
+                                DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends dconf-cli
+                            else
+                                dnf install -y dconf
+                            fi
+                        fi
+                    # EDH creates the desktop user with a random local password that nobody holds, and Amazon
+                    # DCV authenticates the connection. A GNOME screen lock would ask for that password after
+                    # the idle delay, which locks the user out of their own desktop. The system dconf database
+                    # sets the lock and blanking off for every user, and the locks file keeps a user session
+                    # from turning them back on, so the setting holds on every boot and for every account EDH
+                    # creates later. With disable-lock-screen set, GNOME Shell also refuses a lock from the
+                    # keyboard shortcut, the system menu or a logind lock request.
+                    - mkdir -p /etc/dconf/profile /etc/dconf/db/local.d/locks
+                    - |
+                        if [ ! -s /etc/dconf/profile/user ]; then
+                            printf 'user-db:user\nsystem-db:local\n' > /etc/dconf/profile/user
+                        elif ! grep -qx 'system-db:local' /etc/dconf/profile/user; then
+                            printf 'system-db:local\n' >> /etc/dconf/profile/user
+                        fi
+                    - |
+                        cat > /etc/dconf/db/local.d/00-vams-no-screen-lock <<'DCONF'
+                        [org/gnome/desktop/screensaver]
+                        lock-enabled=false
+                        idle-activation-enabled=false
+                        lock-delay=uint32 0
+
+                        [org/gnome/desktop/session]
+                        idle-delay=uint32 0
+
+                        [org/gnome/desktop/lockdown]
+                        disable-lock-screen=true
+
+                        [org/gnome/settings-daemon/plugins/power]
+                        idle-dim=false
+                        sleep-inactive-ac-type='nothing'
+                        sleep-inactive-battery-type='nothing'
+                        DCONF
+                    - |
+                        cat > /etc/dconf/db/local.d/locks/00-vams-no-screen-lock <<'LOCKS'
+                        /org/gnome/desktop/screensaver/lock-enabled
+                        /org/gnome/desktop/screensaver/idle-activation-enabled
+                        /org/gnome/desktop/session/idle-delay
+                        /org/gnome/desktop/lockdown/disable-lock-screen
+                        LOCKS
+                    - dconf update
+    - name: validate
+      steps:
+          - name: DconfDefaultsPresent
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - grep -qx 'system-db:local' /etc/dconf/profile/user
+                    - grep -qx 'lock-enabled=false' /etc/dconf/db/local.d/00-vams-no-screen-lock
+                    - grep -qx 'disable-lock-screen=true' /etc/dconf/db/local.d/00-vams-no-screen-lock
+                    - grep -qx '/org/gnome/desktop/screensaver/lock-enabled' /etc/dconf/db/local.d/locks/00-vams-no-screen-lock
+                    - grep -qx '/org/gnome/desktop/lockdown/disable-lock-screen' /etc/dconf/db/local.d/locks/00-vams-no-screen-lock
+                    - test -s /etc/dconf/db/local
+                    - |
+                        # Read the compiled local database on its own, which proves dconf update compiled it.
+                        probe="$(mktemp)"
+                        printf 'system-db:local\n' > "${probe}"
+                        lock="$(DCONF_PROFILE="${probe}" dconf read /org/gnome/desktop/screensaver/lock-enabled)"
+                        lockdown="$(DCONF_PROFILE="${probe}" dconf read /org/gnome/desktop/lockdown/disable-lock-screen)"
+                        rm -f "${probe}"
+                        test "${lock}" = false
+                        test "${lockdown}" = true

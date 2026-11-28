@@ -30,9 +30,10 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.apiRoutes import API_AUTH_ROUTES, API_AUTH_ROUTES_API, API_AUTH_ROUTES_API_ALLOWED, get_public_api_routes
 from common.resourceNames import ResourceKeys, get_log_group_name
 from customLogging import auditLogging
-from handlers.auth import request_to_claims
+from handlers.auth import request_to_claims, CLAIMS_CHECK_FAILED
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
+from customLogging.auditLogging import audited_handler
 from models.common import (
     validation_error_message,
     APIGatewayProxyResponseV2, internal_error, success,
@@ -60,6 +61,12 @@ API_ROUTE_PROBE_SEGMENT = "vams:any"
 AUDIT_BATCH_MAX_EVENTS = 10000
 AUDIT_BATCH_MAX_BYTES = 1048576
 AUDIT_EVENT_OVERHEAD_BYTES = 26
+
+# The endpoints whose bulk checks _DenialAuditBatch records. Each denial record carries its
+# endpoint as a fixed '[probe: ...]' segment straight after the record prefix; the server sets
+# it and no request field can set or clear it.
+PROBE_ENDPOINT_WEB_ROUTES = "POST /auth/routes"
+PROBE_ENDPOINT_ALLOWED_API_ROUTES = "GET /auth/routes/api/allowed"
 
 
 def _use_local_mocks() -> bool:
@@ -104,14 +111,15 @@ class _DenialAuditBatch:
     every route/method pair costs one synchronous write per denied pair. Checks run here
     against the enforcer's service object and each denial is kept; :meth:`flush` writes them
     through ``_write_batch_to_cloudwatch`` -- the same records, in the same authorization log
-    group, one event per denial.
+    group, one event per denial, each marked with the probe endpoint that made the check.
     """
 
-    def __init__(self, claims, casbin_enforcer):
+    def __init__(self, claims, casbin_enforcer, probe_endpoint):
         tokens = claims.get("tokens") or []
         self._claims = claims
         self._user = tokens[0] if tokens else "UNKNOWN"
         self._casbin_enforcer = casbin_enforcer
+        self._probe_endpoint = probe_endpoint
         self._denials = []
 
     def enforce(self, obj, act):
@@ -121,23 +129,33 @@ class _DenialAuditBatch:
             self._denials.append((dict(obj), act))
         return allowed
 
+    def add_denial(self, obj, act):
+        """Keep one denial found by a check made elsewhere (a summary of several denied checks)."""
+        self._denials.append((dict(obj), act))
+
     def _denial_record(self, obj, act):
-        """One denial record, in the format ``log_authorization`` writes."""
-        return " ".join([
-            "[AUTHORIZATION][authorized: False]",
-            f"[user: {self._user}]",
-            f"[roles: {json.dumps(self._claims.get('roles', []))}]",
-            f"[mfaEnabled: {self._claims.get('mfaEnabled', False)}]",
-            json.dumps({"action": act, "obj": obj}),
-        ])
+        """One denial record, in the format ``log_authorization`` writes plus the probe marker."""
+        return auditLogging.format_authorization_denial_record(
+            self._claims, self._probe_endpoint, {"action": act, "obj": obj})
 
     def flush(self):
         """Write every kept denial, chunked to stay inside the PutLogEvents batch limits."""
         denials, self._denials = self._denials, []
         if not denials:
             return
+        # Records not yet handed to the writer; the writer reports the ones it cannot deliver.
+        pending = [None] * len(denials)
         try:
-            log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+            pending = [self._denial_record(obj, act) for obj, act in denials]
+            try:
+                log_group_name = get_log_group_name(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+            except Exception as e:
+                logger.error(f"AUDIT_LOG_AUTHORIZATION resource name not resolved: {e}")
+                log_group_name = None
+            if not log_group_name:
+                auditLogging.report_undelivered_audit_records(
+                    ResourceKeys.AUDIT_LOG_AUTHORIZATION, "logGroupUnresolved", pending)
+                return
             audit_event = {
                 'requestContext': {'authorizer': {'jwt': {'claims': {'sub': self._user}}}}
             }
@@ -146,22 +164,27 @@ class _DenialAuditBatch:
             event_overhead = AUDIT_EVENT_OVERHEAD_BYTES + len(
                 f" --- [event: {json.dumps(audit_event)}]".encode('utf-8')
             )
+            batches = []
             batch = []
             batch_bytes = 0
-            for obj, act in denials:
-                record = self._denial_record(obj, act)
+            for record in pending:
                 record_bytes = len(record.encode('utf-8')) + event_overhead
                 if batch and (len(batch) >= AUDIT_BATCH_MAX_EVENTS
                               or batch_bytes + record_bytes > AUDIT_BATCH_MAX_BYTES):
-                    auditLogging._write_batch_to_cloudwatch(log_group_name, batch, audit_event)
+                    batches.append(batch)
                     batch = []
                     batch_bytes = 0
                 batch.append(record)
                 batch_bytes += record_bytes
             if batch:
+                batches.append(batch)
+            for batch in batches:
                 auditLogging._write_batch_to_cloudwatch(log_group_name, batch, audit_event)
+                pending = pending[len(batch):]
         except Exception as e:
             logger.exception(f"Failed to write authorization denial audit records: {e}")
+            auditLogging.report_undelivered_audit_records(
+                ResourceKeys.AUDIT_LOG_AUTHORIZATION, "unexpectedError", pending)
 
 
 def check_web_routes(event):
@@ -184,7 +207,9 @@ def check_web_routes(event):
     use_local_mocks = _use_local_mocks()
     denial_audit = None
     if not use_local_mocks and len(claims_and_roles["tokens"]) > 0:
-        denial_audit = _DenialAuditBatch(claims_and_roles, CasbinEnforcer(claims_and_roles))
+        denial_audit = _DenialAuditBatch(
+            claims_and_roles, CasbinEnforcer(claims_and_roles), PROBE_ENDPOINT_WEB_ROUTES
+        )
 
     try:
         for route in request_model.routes:
@@ -201,9 +226,11 @@ def check_web_routes(event):
         if denial_audit is not None:
             denial_audit.flush()
 
+    user_id = claims_and_roles["tokens"][0] if claims_and_roles["tokens"] else ""
     response_model = CheckWebRoutesResponseModel(
         allowedRoutes=allowed_routes,
-        email=claims_and_roles["tokens"][0] if claims_and_roles["tokens"] else "",
+        email=user_id,
+        userId=user_id,
     )
     return success(body=response_model.dict())
 
@@ -233,7 +260,9 @@ def get_allowed_api_routes(event):
     authorizer (``unauthenticated=True``) are always included. Routes with no
     allowed methods are omitted. The ``path`` returned is the route template.
     """
-    denial_audit = _DenialAuditBatch(claims_and_roles, CasbinEnforcer(claims_and_roles))
+    denial_audit = _DenialAuditBatch(
+        claims_and_roles, CasbinEnforcer(claims_and_roles), PROBE_ENDPOINT_ALLOWED_API_ROUTES
+    )
     allowed_routes = []
 
     try:
@@ -267,6 +296,7 @@ def get_allowed_api_routes(event):
     return success(body=response_model.dict())
 
 
+@audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for auth routes APIs"""
     global claims_and_roles
@@ -276,7 +306,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         path = event['requestContext']['http']['path']
         method = event['requestContext']['http']['method']
 
-        if len(claims_and_roles["tokens"]) == 0 and not _use_local_mocks():
+        # No identity, or a failed custom claims check (request_to_claims), is refused here: POST
+        # /auth/routes has no Tier-1 check of its own to refuse it.
+        if (len(claims_and_roles["tokens"]) == 0 or claims_and_roles.get(CLAIMS_CHECK_FAILED)) \
+                and not _use_local_mocks():
             return authorization_error()
 
         # POST /auth/routes intentionally has no Tier-1 API Casbin check on

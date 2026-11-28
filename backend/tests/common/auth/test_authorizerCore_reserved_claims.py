@@ -7,12 +7,13 @@ A verified token's claims are copied into the authorizer context that API Gatewa
 except for keys under the reserved ``vams:`` prefix (matched without regard to case). Those are the
 authorizer's own output: ``vams:tokens`` names the same username the authorizer resolved the roles and
 the MFA state for (``cognito:username``, then ``username``, then ``sub``), ``vams:externalAttributes`` is
-empty, and a verified token that names no username is denied.
+empty, and a verified token that names no username is unauthenticated (401).
 
 These tests run the real REST authorizer handler, ``authenticate_request`` and ``verify_external_jwt``
 (real RS256 verification; only the key-set fetch, the role read and the MFA hook are replaced), then
 hand the policy context, as API Gateway delivers it, to the real ``request_to_claims``. The Casbin
-decisions for the same tokens are covered in ``tests/handlers/auth/test_authorizer_identity_decisions.py``.
+decisions and the audit actor for the same tokens are covered in
+``tests/handlers/auth/test_authorizer_identity_decisions.py``.
 
 They also pin what does not change: Amazon Cognito ID and access tokens (pre-token-generation trigger
 v1 and v2 shapes, federated user names included) keep the identity the trigger wrote, an API-key
@@ -110,7 +111,7 @@ def external_idp(monkeypatch, role_lookups):
     monkeypatch.setattr(core, "AUTH_MODE", "external")
     monkeypatch.setattr(core, "JWT_ISSUER_URL", ISSUER)
     monkeypatch.setattr(core, "JWT_AUDIENCE", AUDIENCE)
-    monkeypatch.setattr(core, "JWT_ADDITIONAL_AUDIENCES", [], raising=False)
+    monkeypatch.setattr(core, "JWT_ADDITIONAL_AUDIENCES", [])
     monkeypatch.setattr(core, "get_external_keys", lambda *args, **kwargs: [JWK])
     return role_lookups
 
@@ -148,7 +149,9 @@ class TestExternalTokenReservedClaims:
 
         assert "vams:authMethod" not in policy["context"]
         assert "vams:apiKeyId" not in policy["context"]
-        assert request_to_claims(_handler_event(policy))["tokens"] == [CALLER]
+        claims_and_roles = request_to_claims(_handler_event(policy))
+        assert claims_and_roles["authMethod"] == "jwt"
+        assert claims_and_roles["apiKeyId"] is None
 
     def test_external_attributes_are_set_by_the_authorizer(self, external_idp):
         policy = _authorize(_external_token(**{"vams:externalAttributes": json.dumps(["attribute:value"])}))
@@ -176,15 +179,15 @@ class TestExternalTokenReservedClaims:
         ({"sub": "   ", "vams:tokens": json.dumps([OTHER_USER])}, ()),
         ({"upn": "a@example.com"}, ("sub",)),
     ], ids=["no-sub-with-vams-tokens", "blank-sub", "upn-only"])
-    def test_a_token_naming_no_username_is_denied(self, external_idp, claims, drop):
+    def test_a_token_naming_no_username_is_unauthenticated(self, external_idp, claims, drop):
         token = _external_token(drop=drop, **claims)
 
         result = core.authenticate_request(_authorizer_event(token), fronted="none")
         assert result["authorized"] is False
+        assert result["failure"] == core.FAILURE_UNAUTHENTICATED
         assert result["context"] is None
-        policy = rest.lambda_handler(_authorizer_event(token), None)
-        assert _effect(policy) == "Deny"
-        assert "context" not in policy
+        with pytest.raises(Exception, match="Unauthorized"):
+            rest.lambda_handler(_authorizer_event(token), None)
         assert external_idp == []
 
     def test_a_token_without_reserved_claims_keeps_its_claims_and_identity(self, external_idp):
@@ -199,6 +202,7 @@ class TestExternalTokenReservedClaims:
         assert policy["principalId"] == CALLER
         claims_and_roles = request_to_claims(_handler_event(policy))
         assert claims_and_roles["tokens"] == [CALLER]
+        assert claims_and_roles["authMethod"] == "jwt"
 
     def test_a_username_claim_takes_precedence_over_sub(self, external_idp):
         policy = _authorize(_external_token(username="alice", **{"vams:tokens": json.dumps([OTHER_USER])}))
@@ -258,6 +262,7 @@ class TestCognitoTokensKeepTheirIdentity:
         claims_and_roles = request_to_claims(_handler_event(policy))
         assert claims_and_roles["tokens"] == [user_name]
         assert claims_and_roles["externalAttributes"] == []
+        assert claims_and_roles["authMethod"] == "jwt"
 
 
 @pytest.mark.unit
@@ -284,3 +289,5 @@ class TestApiKeyContextIsUnchanged:
         assert context["vams:authMethod"] == "apiKey"
         claims_and_roles = request_to_claims(_handler_event({"context": context, "principalId": "service-user"}))
         assert claims_and_roles["tokens"] == ["service-user"]
+        assert claims_and_roles["authMethod"] == "apiKey"
+        assert claims_and_roles["apiKeyId"] == "key-1"

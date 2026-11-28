@@ -1,0 +1,44 @@
+{
+  "name": "eks_job_submit",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "POST",
+    "path": "/api/containers/eks/job",
+    "absolutePath": "/api/containers/eks/job",
+    "query": {},
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "image_uri": "123456789012.dkr.ecr.us-east-1.amazonaws.com/vams-spike-edh-probe:latest",
+      "eks_cluster": "vams-spike-eks",
+      "job_name": "vams-spike-eks-job",
+      "cpu": "1",
+      "memory": "2",
+      "namespace": "default"
+    }
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": "Job vams-spike-eks-job submitted successfully."
+    }
+  },
+  "expect": {
+    "jobName": "vams-spike-eks-job",
+    "eksCluster": "vams-spike-eks",
+    "namespace": "default"
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/containers/eks/job.py"
+    ]
+  }
+}

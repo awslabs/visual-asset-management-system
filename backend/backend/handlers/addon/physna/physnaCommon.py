@@ -923,9 +923,11 @@ def delete_folder_if_empty(
 
 from boto3.dynamodb.conditions import Key
 from common.resourceNames import get_table_name, ResourceKeys
+from common.s3 import region_routing_s3_client, bucket_region_fields
+from common.assetLocations import normalize_base_prefix
 
 _dynamodb = boto3.resource("dynamodb", config=_retry_config)
-_s3_client = boto3.client("s3", config=_retry_config)
+_s3_client = region_routing_s3_client()
 
 try:
     _ASSET_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
@@ -1056,126 +1058,10 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
     if not items:
         return None
     bucket = items[0]
-    base_prefix = bucket.get("baseAssetsPrefix", "/")
-    if not base_prefix.endswith("/"):
-        base_prefix += "/"
-    if base_prefix.startswith("/"):
-        base_prefix = base_prefix[1:]
+    base_prefix = normalize_base_prefix(bucket.get("baseAssetsPrefix", "/"))
     return {
         "bucketId": bucket_id,
         "bucketName": bucket.get("bucketName"),
         "baseAssetsPrefix": base_prefix,
+        **bucket_region_fields(bucket),
     }
-
-
-def get_bucket_details_by_name(bucket_name: str) -> Optional[Dict[str, Any]]:
-    """Reverse-lookup bucket registry by bucketName.
-
-    S3 ObjectRemoved events deliver the bucket name (not bucketId), and by
-    the time we handle them we can no longer head_object the deleted key
-    to read VAMS S3 user-metadata (databaseId/assetId). This helper reads
-    the bucket registry via the ``bucketNameGSI`` so the metadata-free
-    delete-resolver can still reconstruct the asset path.
-    """
-    if not bucket_name:
-        return None
-    response = s3_asset_buckets_table.query(
-        IndexName="bucketNameGSI",
-        KeyConditionExpression=Key("bucketName").eq(bucket_name),
-        Limit=1,
-    )
-    items = response.get("Items", [])
-    if not items:
-        return None
-    bucket = items[0]
-    base_prefix = bucket.get("baseAssetsPrefix", "/")
-    if not base_prefix.endswith("/"):
-        base_prefix += "/"
-    if base_prefix.startswith("/"):
-        base_prefix = base_prefix[1:]
-    return {
-        "bucketId": bucket.get("bucketId"),
-        "bucketName": bucket.get("bucketName") or bucket_name,
-        "baseAssetsPrefix": base_prefix,
-    }
-
-
-def get_database_id_for_asset_id(
-    asset_id: str,
-    bucket_name: Optional[str] = None,
-    base_assets_prefix: Optional[str] = None,
-) -> Optional[str]:
-    """Return the databaseId for a VAMS assetId via the ``assetIdGSI``.
-
-    Used by the delete-resolver path: an S3 ObjectRemoved event gives us
-    an assetId (extracted from the key) but no databaseId, and reading the
-    deleted object's S3 user-metadata is no longer possible.
-
-    An assetId appears in more than one database when the same ID has been
-    assigned in two separate databases, because the tables are not
-    cross-database-unique. Passing ``bucket_name`` and ``base_assets_prefix``
-    filters to the match whose asset record points at the same physical
-    bucket+prefix the event came from — including when the GSI returns a
-    single item, which on its own says nothing about which database the
-    event's object sat in. If disambiguation leaves zero or multiple
-    matches, we return ``None`` — guessing would risk deleting the wrong
-    Physna asset. This mirrors the approach in
-    ``fileIndexer.lookup_database_id_for_permanent_delete``.
-    """
-    if not asset_id:
-        return None
-
-    response = asset_storage_table.query(
-        IndexName="assetIdGSI",
-        KeyConditionExpression=Key("assetId").eq(asset_id),
-    )
-    items = response.get("Items", [])
-    if not items:
-        return None
-
-    # Narrow by bucket. Without bucket context we must refuse to pick arbitrarily.
-    if not bucket_name:
-        logger.warning(
-            f"assetIdGSI returned {len(items)} matches for assetId={asset_id} "
-            f"but no bucket context to disambiguate; refusing to guess."
-        )
-        return None
-
-    def _normalize_prefix(prefix: Optional[str]) -> str:
-        prefix = prefix or ""
-        if prefix and not prefix.endswith("/"):
-            prefix += "/"
-        if prefix.startswith("/"):
-            prefix = prefix[1:]
-        return prefix
-
-    event_prefix = _normalize_prefix(base_assets_prefix)
-
-    matches: list = []
-    for item in items:
-        bucket_id = item.get("bucketId")
-        if not bucket_id:
-            continue
-        bucket_details = get_bucket_details(bucket_id)
-        if not bucket_details:
-            continue
-        item_bucket = bucket_details.get("bucketName")
-        item_prefix = _normalize_prefix(bucket_details.get("baseAssetsPrefix"))
-        if item_bucket == bucket_name and item_prefix == event_prefix:
-            matches.append(item)
-
-    if len(matches) == 1:
-        db = matches[0].get("databaseId")
-        return str(db) if db else None
-    if not matches:
-        logger.warning(
-            f"No assetId matches found for bucket={bucket_name} "
-            f"prefix={event_prefix!r} (assetId={asset_id})."
-        )
-    else:
-        logger.warning(
-            f"{len(matches)} assetId matches remain after bucket filter for "
-            f"assetId={asset_id} bucket={bucket_name} prefix={event_prefix!r}; "
-            f"cannot determine unique databaseId."
-        )
-    return None

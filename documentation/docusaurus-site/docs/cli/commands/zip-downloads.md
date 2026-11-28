@@ -1,0 +1,155 @@
+---
+sidebar_label: Zip Downloads
+title: Zip Download Commands
+---
+
+# Zip Download Commands
+
+Package files, folders, or a whole asset into one zip, tar, or tar.gz archive built in the background, then download it. Each zip download is a job owned by the user who created it. The commands create, cancel and delete only your own jobs; `list --all-users` lists every user's jobs for an asset, and `download` fetches another user's finished archive when you may download files from the asset. See [Zip Downloads](../../user-guide/zip-downloads.md) for the rules that apply to every job.
+
+The `zip-download` commands require a deployment with Download as Zip enabled (`app.pipelines.useZipDownloads.enabled`). On a deployment without it, every command fails with `Zip downloads are not available for this deployment`. The CLI reads this from the profile's feature switches first (`vamscli features list`), and from the API's answer otherwise.
+
+---
+
+## zip-download create
+
+Create a zip download job for files, folders, or the whole asset.
+
+```bash
+vamscli zip-download create -d my-db -a my-asset --whole-asset
+vamscli zip-download create -d my-db -a my-asset --file /models/building.ifc --folder /textures/
+vamscli zip-download create -d my-db -a my-asset --file /models/building.ifc@abc123
+vamscli zip-download create -d my-db -a my-asset --whole-asset --asset-version-alias release-1 --format tar.gz
+vamscli zip-download create -d my-db -a my-asset --folder /scans/ --wait --download-to ./downloads/
+```
+
+| Option                    | Description                                                                                                                             |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `-d, --database-id`       | Database ID (required)                                                                                                                  |
+| `-a, --asset-id`          | Asset ID (required)                                                                                                                     |
+| `--file PATH[@VERSIONID]` | Add a file by its asset-relative path; append `@<versionId>` to pin that file version. Repeatable                                       |
+| `--folder PATH`           | Add every current file under a folder. Repeatable                                                                                       |
+| `--whole-asset`           | Archive the whole asset. Cannot be combined with `--file` or `--folder`                                                                 |
+| `--asset-version-id`      | Archive the file versions recorded in this asset version. Cannot be combined with `--asset-version-alias` or a `@VERSIONID` on `--file` |
+| `--asset-version-alias`   | Asset version alias, resolved as for `--asset-version-id`                                                                               |
+| `--format`                | `zip` (default), `tar`, or `tar.gz`                                                                                                     |
+| `--compression`           | `store` (default) or `deflate`; `deflate` applies to `zip` only                                                                         |
+| `--name`                  | Archive file name; the extension for the format is added                                                                                |
+| `--wait`                  | Wait until the job reaches a terminal status, showing progress                                                                          |
+| `--timeout`               | Seconds to wait with `--wait` or `--download-to` (default 3600)                                                                         |
+| `--download-to PATH`      | Wait, then download the archive into this file or directory once the job succeeds                                                       |
+| `--overwrite`             | Replace an existing local file with `--download-to`                                                                                     |
+
+A selection holds at most 1,000 entries; select a folder rather than its files one by one to stay within it. The whole job is refused when a selected file is archived, a deleted version, in an archive storage class, or has a blocked file type, and when the selection exceeds the deployment's limits. `--json-output` prints the created job.
+
+With `--download-to`, the destination is checked before the job is created: a directory must be writable, and a file path must not exist (without `--overwrite`) and must name an existing directory. The archive's own name is known only once the job has run, so a file of that name in the directory is reported after the job succeeds. When a step after the job was created fails (the wait, the URL request, or the transfer), the error names the job's `requestId` (also under `--json-output`); download it with `zip-download download -r <requestId>` instead of creating another job.
+
+---
+
+## zip-download list
+
+List your zip downloads, newest first: for one asset with `-d` and `-a`, or across every asset without them. With `--all-users` (and `-d`, `-a`), list every user's jobs for the asset, when your role allows that list and reading the asset.
+
+```bash
+vamscli zip-download list
+vamscli zip-download list -d my-db -a my-asset
+vamscli zip-download list -d my-db -a my-asset --all-users
+vamscli zip-download list --page-size 50 --starting-token <token> --json-output
+```
+
+| Option              | Description                                                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------------- |
+| `-d, --database-id` | Database ID (with `-a`, list one asset's jobs)                                                 |
+| `-a, --asset-id`    | Asset ID (with `-d`)                                                                           |
+| `--max-items`       | Maximum jobs returned (1 to 1,000, default 100)                                                |
+| `--page-size`       | Jobs read per page (1 to 1,000, default 100)                                                   |
+| `--starting-token`  | `NextToken` from a previous page                                                               |
+| `--all-users`       | Every user's jobs for the asset (needs `-d` and `-a`); each row adds `requestedBy` and `isOwn` |
+
+Jobs older than 7 days and jobs on assets you can no longer read are not listed. `--json-output` prints `{"Items": [...], "NextToken": ...}`; every job carries the API's `canDownload` and `canRemove` decisions for you.
+
+---
+
+## zip-download get
+
+Show one job with its status, progress, and any failure reason.
+
+```bash
+vamscli zip-download get -d my-db -a my-asset -r 0mh3k2q9x-4f1c8a7e2b9d4c6e8f0a1b2c3d4e5f60
+```
+
+| Option              | Description            |
+| ------------------- | ---------------------- |
+| `-d, --database-id` | Database ID (required) |
+| `-a, --asset-id`    | Asset ID (required)    |
+| `-r, --request-id`  | Job ID (required)      |
+
+---
+
+## zip-download download
+
+Download a finished archive to a local file. The command requests a short-lived URL and streams the archive with progress; the URL itself is never printed, and `--verbose` shows it with its `X-Amz-Signature` and `X-Amz-Security-Token` values masked.
+
+```bash
+vamscli zip-download download -d my-db -a my-asset -r <requestId> -o ./building.zip
+vamscli zip-download download -d my-db -a my-asset -r <requestId> --wait --timeout 3600 -o ./downloads/
+```
+
+| Option              | Description                                                        |
+| ------------------- | ------------------------------------------------------------------ |
+| `-d, --database-id` | Database ID (required)                                             |
+| `-a, --asset-id`    | Asset ID (required)                                                |
+| `-r, --request-id`  | Job ID (required)                                                  |
+| `-o, --output PATH` | File, or an existing directory to save the archive into (required) |
+| `--wait`            | Wait for a queued or running job to finish before downloading      |
+| `--timeout`         | Seconds to wait with `--wait` (default 3600)                       |
+| `--overwrite`       | Replace an existing local file                                     |
+
+A job that has not succeeded fails with `The archive is not ready for download`. A job whose archive holds a file that has since been archived, deleted, or blocked fails with `A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.`, for your own job and another user's alike. When the archive's files cannot all be checked in time, which can happen for a very large archive, the command fails with `API Error` and `Failed to issue the zip download URL: The files in this archive could not be checked right now. Try again in a moment.`; nothing is wrong with the archive, so run the command again. A job past its `expiresAt` fails with `Zip download not found`; `This zip download has expired` means the job's archive was removed before the job expired.
+
+Another user's finished job, listed by `zip-download list --all-users` with `canDownload: true`, downloads with the same command. `--wait` follows only your own jobs: for another user's job the command requests the archive directly, which is refused with `The archive is not ready for download` until that job has succeeded.
+
+---
+
+## zip-download cancel
+
+Cancel a queued or running job. Its Zip Archive run is stopped and its partial archive is discarded; the job stays listed as `CANCELLED` until it expires or is deleted.
+
+```bash
+vamscli zip-download cancel -d my-db -a my-asset -r <requestId> --confirm
+```
+
+| Option              | Description                   |
+| ------------------- | ----------------------------- |
+| `-d, --database-id` | Database ID (required)        |
+| `-a, --asset-id`    | Asset ID (required)           |
+| `-r, --request-id`  | Job ID (required)             |
+| `--confirm`         | Confirm the cancel (required) |
+
+A job that has already finished is refused; delete it instead. A cancel never deletes a job: the command sends the cancel intent (`intent=cancel`), so if the job finishes between that check and the cancel, it is kept with its outcome. The command then warns that the job finished and, with `--json-output`, returns `"action": "ended"` with the job's final `status` (`SUCCEEDED` or `FAILED`). The MCP `cancel_zip_download` tool behaves the same way.
+
+---
+
+## zip-download delete
+
+Delete a finished job (succeeded, failed, or cancelled) together with its archive.
+
+```bash
+vamscli zip-download delete -d my-db -a my-asset -r <requestId> --confirm
+```
+
+| Option              | Description                   |
+| ------------------- | ----------------------------- |
+| `-d, --database-id` | Database ID (required)        |
+| `-a, --asset-id`    | Asset ID (required)           |
+| `-r, --request-id`  | Job ID (required)             |
+| `--confirm`         | Confirm the delete (required) |
+
+A queued or running job is refused; cancel it first.
+
+---
+
+## Related
+
+-   [Zip Downloads API](../../api/zip-downloads.md)
+-   [Asset Commands](assets.md) -- `assets download` for individual files

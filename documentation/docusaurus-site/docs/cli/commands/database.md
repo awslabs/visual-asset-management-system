@@ -94,7 +94,7 @@ When `--default-bucket-id` is omitted, the CLI lists available buckets and promp
 ### Configuration fields
 
 -   **Metadata restriction** — when `--restrict-metadata-outside-schemas` is set, only metadata fields defined in the database schema can be added to assets.
--   **File extension restriction** — `--restrict-file-uploads-to-extensions` accepts a comma-separated list of extensions with leading dots (e.g., `.pdf,.docx,.jpg`). The special value `.all` bypasses the restriction; an empty or omitted value applies no restriction.
+-   **File extension restriction** — `--restrict-file-uploads-to-extensions` accepts a comma-separated list of extensions with leading dots (e.g., `.pdf,.docx,.jpg`). An extension can contain letters, digits, `_` and further dots (`.x_t`, `.tar.gz`), and a file matches when its name ends with it, case-insensitively. The special value `.all` bypasses the restriction; an empty or omitted value applies no restriction.
 
 ### JSON input format
 
@@ -199,11 +199,22 @@ vamscli database list-buckets [OPTIONS]
 | `--auto-paginate`  | Flag    | No       | Automatically fetch all items                                              |
 | `--json-output`    | Flag    | No       | Output raw JSON response                                                   |
 
-Output includes bucket ID, bucket name, base assets prefix, and whether the bucket is the VAMS default. Use a returned bucket ID with `database create --default-bucket-id` or `database update --default-bucket-id`.
+Output includes bucket ID, bucket name, base assets prefix, Region, account (for another account's bucket), whether S3 Transfer Acceleration is on (`Accelerated: Yes` or `No`; `--json-output` carries it as `isAccelerated`, and a response without the field reads as `No`), whether the bucket is the VAMS default, its source (`static` for a bucket from the deployment configuration) and its status (`active`). Only the buckets your role may read through a `bucket` permission constraint are listed; a role without one gets `No bucket configurations found.` Use a returned bucket ID with `database create --default-bucket-id` or `database update --default-bucket-id`.
 
 :::note[The VAMS default bucket]
 Exactly one bucket in a deployment is the VAMS default (`isDefault: true`). It houses all VAMS-managed pipeline data — configuration template offload and execution-time run I/O under the `pipelines/` prefix — independently of which bucket a database stores its assets in.
 :::
+
+```text
+ID: bucket-uuid-1
+Name: my-asset-bucket
+Base Assets Prefix: /
+Region: us-west-2
+Accelerated: Yes
+VAMS Default Bucket: Yes
+Source: static
+Status: active
+```
 
 ```bash
 vamscli database list-buckets

@@ -10,7 +10,7 @@ export const RETRY_CONFIG = {
     MAX_RETRIES: 3,
     RATE_LIMIT_BACKOFF_MS: 60000, // 1 minute for 429 errors
     STANDARD_BACKOFF_MS: 5000, // 5 seconds for other retryable errors
-    RETRYABLE_STATUS_CODES: [400, 404, 429],
+    RETRYABLE_STATUS_CODES: [429, 500, 502, 503, 504],
 };
 
 /**
@@ -82,22 +82,12 @@ export function extractErrorMessage(error: any): string {
 }
 
 /**
- * Extract status code from error
+ * Extract the HTTP status code from an error object, or null when it carries none
  */
 export function extractStatusCode(error: any): number | null {
-    // Check various error formats
-    if (error.status) return error.status;
-    if (error.response?.status) return error.response.status;
-    if (error.statusCode) return error.statusCode;
-
-    // Try to extract from message
-    const message = extractErrorMessage(error);
-    if (message.includes("429") || message.toLowerCase().includes("rate limit")) {
-        return 429;
-    }
-    if (message.includes("400")) return 400;
-    if (message.includes("404")) return 404;
-    if (message.includes("503")) return 503;
+    if (error?.status) return error.status;
+    if (error?.response?.status) return error.response.status;
+    if (error?.statusCode) return error.statusCode;
 
     return null;
 }
@@ -232,4 +222,47 @@ export function formatRetryMessage(
         message: `${operationName} encountered an error (${statusCode}): ${errorMessage}. Retrying in ${backoffSeconds} seconds (attempt ${retryCount}/${RETRY_CONFIG.MAX_RETRIES})...`,
         isRateLimit: false,
     };
+}
+
+/**
+ * Manual part-upload retries (UploadManager Retry button) are capped separately
+ * from the automatic HTTP backoff in RETRY_CONFIG.MAX_RETRIES.
+ */
+export const MANUAL_PART_RETRY_LIMIT = 5;
+
+export type RetryablePart = {
+    status: string;
+    retryCount: number;
+    fileIndex?: number;
+};
+
+/**
+ * Parts that the Retry button may re-queue. Failed parts at or above
+ * MANUAL_PART_RETRY_LIMIT stay failed so an empty queue is not treated as success.
+ */
+export function partsEligibleForManualRetry<T extends RetryablePart>(
+    parts: T[],
+    fileIndex?: number
+): T[] {
+    return parts.filter((part) => {
+        if (part.status !== "failed") return false;
+        if (part.retryCount >= MANUAL_PART_RETRY_LIMIT) return false;
+        if (fileIndex !== undefined && part.fileIndex !== fileIndex) return false;
+        return true;
+    });
+}
+
+/**
+ * Failed parts that have already used every manual retry.
+ */
+export function partsExhaustedManualRetries<T extends RetryablePart>(
+    parts: T[],
+    fileIndex?: number
+): T[] {
+    return parts.filter((part) => {
+        if (part.status !== "failed") return false;
+        if (part.retryCount < MANUAL_PART_RETRY_LIMIT) return false;
+        if (fileIndex !== undefined && part.fileIndex !== fileIndex) return false;
+        return true;
+    });
 }

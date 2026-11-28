@@ -82,7 +82,13 @@ export function buildDatabaseService(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {},
+        environment: {
+            // A database delete queues the move of its compliance data on the compliance job queue,
+            // where the compliance job Lambda runs it (`common/compliance/databaseRetirement.py`);
+            // a move it cannot queue goes to the queue's dead-letter queue, to be redriven.
+            COMPLIANCE_JOB_QUEUE_URL: storageResources.sqs.complianceJobQueue.queueUrl,
+            COMPLIANCE_JOB_DLQ_URL: storageResources.sqs.complianceJobDLQ.queueUrl,
+        },
     });
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
@@ -90,6 +96,26 @@ export function buildDatabaseService(
     storageResources.dynamo.pipelineStorageTableV2.grantReadData(fun);
     storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    // A database delete starts the move of its compliance data before the row moves: it writes the
+    // move's record, closes the database's cascades awaiting approval and its waiting pipeline
+    // rules, and records both; the compliance job Lambda moves the rest from the job queue.
+    storageResources.dynamo.complianceEvaluationStorageTable.grant(
+        fun,
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Scan"
+    );
+    storageResources.dynamo.complianceCascadeStorageTable.grant(
+        fun,
+        "dynamodb:Query",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem"
+    );
+    storageResources.dynamo.complianceAuditStorageTable.grant(fun, "dynamodb:PutItem");
+    storageResources.sqs.complianceJobQueue.grantSendMessages(fun);
+    storageResources.sqs.complianceJobDLQ.grantSendMessages(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

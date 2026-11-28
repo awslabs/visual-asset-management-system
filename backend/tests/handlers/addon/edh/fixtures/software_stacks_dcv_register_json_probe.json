@@ -1,0 +1,43 @@
+{
+  "name": "software_stacks_dcv_register_json_probe",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "POST",
+    "path": "/api/dcv/virtual_desktops/software_stacks",
+    "absolutePath": "/api/dcv/virtual_desktops/software_stacks",
+    "query": {},
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "ami_id": "ami-00000abcdefabcdef",
+      "stack_name": "vams-spike-stack",
+      "base_os": "amazonlinux2023",
+      "root_size": 50,
+      "virtual_desktop_profile_id": 1
+    }
+  },
+  "response": {
+    "status": 500,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": false,
+      "message": " virtual_desktop_profile_id must be a valid integer None  (Request ID: d53a523c-0a5f-47a5-a515-7842711cfcbf)"
+    }
+  },
+  "expect": {
+    "requestContentType": "application/json"
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/dcv/software_stacks.py",
+      "source/soca/cluster_manager/utils/cast.py",
+      "source/soca/cluster_manager/utils/error.py"
+    ]
+  }
+}

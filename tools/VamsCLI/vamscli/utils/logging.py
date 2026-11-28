@@ -38,16 +38,29 @@ _SENSITIVE_KEY_FRAGMENTS = (
     'signature',
     'privatekey',
     'cookie',
+    'connectionurl',  # connectionUrl: a connection URL that embeds a session token
 )
 
 # Value-level backstop for credentials that arrive without a helpful key — for example when a
 # response has already been rendered to a string before it reaches a log call. Matches the shapes
 # VAMS actually issues rather than attempting to detect secrets generally.
-_SENSITIVE_VALUE_PATTERNS = (
+_CREDENTIAL_VALUE_PATTERNS = (
     re.compile(r'vams_[A-Za-z0-9_\-]{16,}'),                                  # VAMS API key
     re.compile(r'eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]+'),  # JWT (Cognito/OIDC)
     re.compile(r'(?i)\bBearer\s+[A-Za-z0-9._\-]{16,}'),                       # Bearer header value
+)
+_SENSITIVE_VALUE_PATTERNS = _CREDENTIAL_VALUE_PATTERNS + (
     re.compile(r'(?i)(X-Amz-Signature|X-Amz-Security-Token)=[^&\s\'"]+'),     # presigned URL secrets
+)
+
+# The values of the two presigned-URL parameters that authorize a request by themselves. Matched as a
+# query parameter (`X-Amz-Signature=...`, or `%3D` ... `%26` when the URL is itself percent-encoded) and
+# as a header or mapping entry (`X-Amz-Security-Token: ...`, `"X-Amz-Security-Token": "..."`). An ANSI
+# style code may sit between a header name styled on its own and its separator. The name is kept.
+_PRESIGNED_URL_SECRET = re.compile(
+    r'(?i)(X-Amz-Signature|X-Amz-Security-Token)'
+    r'((?:\x1b\[[0-9;]*m)?["\']?\s*(?:=|:|%3D)\s*["\']?(?:\x1b\[[0-9;]*m)?)'
+    r'(?:(?!%26)[^&\s\'",;<>()\[\]{}\x1b])+'
 )
 
 _MAX_REDACT_DEPTH = 12
@@ -141,7 +154,118 @@ def scrub_text(value: str) -> str:
     return value
 
 
-def redact_sensitive(obj: Any, _depth: int = 0) -> Any:
+def _scrub_credential_shapes(value: str) -> str:
+    """`scrub_text` without the presigned-URL pair, which `_echo` masks keeping the parameter name."""
+    if not isinstance(value, str) or not value:
+        return value
+    for pattern in _CREDENTIAL_VALUE_PATTERNS:
+        value = pattern.sub(REDACTED, value)
+    return value
+
+
+def mask_presigned_url_secrets(value: str) -> str:
+    """Replace the `X-Amz-Signature` and `X-Amz-Security-Token` values in ``value``, keeping the names.
+
+    Part of `mask_console_text`, which `_echo` applies to every line this module writes to the
+    console. The log file gets the full `redact_to_text` treatment instead.
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    return _PRESIGNED_URL_SECRET.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", value)
+
+
+def mask_console_text(value: str) -> str:
+    """What the console shows of a diagnostic line: credential shapes masked, and presigned-URL
+    values masked with their parameter names kept."""
+    return mask_presigned_url_secrets(_scrub_credential_shapes(value))
+
+
+def _echo(message: str) -> None:
+    """Write one diagnostic line to stderr with credentials masked."""
+    click.echo(mask_console_text(message), err=True)
+
+
+def _console_view(body: Any) -> Any:
+    """A request or response body as the `--verbose` echo shows it.
+
+    Credential-named fields and credential-shaped values are masked as in the log file; the
+    presigned-URL parameters are left to `_echo`, which keeps their names.
+    """
+    return redact_sensitive(body, _scrub=_scrub_credential_shapes)
+
+
+# Keys of a search request body whose values name who or what is being investigated.
+_AUDIT_REQUEST_MASKED_KEYS = ('users', 'entityIds', 'apiKeyIds')
+
+
+class LogMaskedOption(click.Option):
+    """A Click option whose typed value never reaches the CLI log file or the `--verbose` echo.
+
+    Use it (`@click.option(..., cls=LogMaskedOption)`) for an option that carries what the user is
+    looking for or who they are looking at, such as the audit search filters. `log_command_start`
+    replaces the value of every such option of the running command with a marker that holds the
+    number of values and their total length, never the value itself. Nothing else about the option
+    changes.
+    """
+    log_masked = True
+
+
+def mask_for_log(value: Any) -> Any:
+    """The log form of a masked option value: a marker with counts and length, never the value.
+    An empty value (option not given) is returned unchanged."""
+    if value is None or value == () or value == [] or value == '':
+        return value
+    if isinstance(value, (list, tuple, set)):
+        total = sum(len(str(item)) for item in value)
+        return f"[masked: {len(value)} values, {total} characters]"
+    return f"[masked: {len(str(value))} characters]"
+
+
+def _log_masked_names() -> set:
+    """Parameter names of the running command that are marked as LogMaskedOption."""
+    try:
+        ctx = click.get_current_context(silent=True)
+        if ctx is None or ctx.command is None:
+            return set()
+        return {p.name for p in ctx.command.params if getattr(p, 'log_masked', False)}
+    except Exception:
+        return set()
+
+
+def _summarize_audit_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep audit search content out of the log file: a search's `contains` terms (the value being
+    looked for), the rows a read returned and an export's text are replaced by counts and lengths.
+
+    The audit log search API does the same in its own records (count, length and a hash only), and
+    the CLI log file outlives the command and may be read by other local users. The shapes are
+    recognised by their keys, so no other payload is touched. Returns ``obj`` itself when it is not
+    an audit payload; otherwise a shallow copy.
+    """
+    if 'recordId' in obj and 'groupKey' in obj and 'timestamp' in obj:
+        # One audit row (`audit show`): its identity and kind only, not its users, parameters or changes.
+        return {key: obj.get(key) for key in ('recordId', 'timestamp', 'groupKey', 'action', 'outcome')}
+    # A search request (`build_filters` always sends `includeProbes`, and `contains` only when given).
+    is_request = 'startTime' in obj and 'endTime' in obj and ('includeProbes' in obj or 'contains' in obj)
+    is_page = 'queryId' in obj and ('Items' in obj or 'content' in obj)
+    if not (is_request or is_page):
+        return obj
+    summary = dict(obj)
+    if is_request:
+        if isinstance(summary.get('contains'), (list, tuple)):
+            summary['contains'] = f"[{len(summary['contains'])} terms omitted]"
+        # The typed identity filters say who is being investigated: counts only, as in the options.
+        for key in _AUDIT_REQUEST_MASKED_KEYS:
+            if isinstance(summary.get(key), (list, tuple)):
+                summary[key] = mask_for_log(summary[key])
+    if is_page:
+        if isinstance(summary.get('Items'), list):
+            summary['Items'] = f"[{len(summary['Items'])} rows omitted]"
+        if isinstance(summary.get('content'), str):
+            summary['content'] = f"[{len(summary['content'])} characters omitted]"
+    return summary
+
+
+def redact_sensitive(obj: Any, _depth: int = 0, _scrub=None) -> Any:
     """
     Return a copy of ``obj`` with credential values replaced by ``REDACTED``.
 
@@ -155,15 +279,16 @@ def redact_sensitive(obj: Any, _depth: int = 0) -> Any:
         if _depth > _MAX_REDACT_DEPTH:
             return '***DEPTH_LIMIT***'
         if isinstance(obj, dict):
+            obj = _summarize_audit_payload(obj)
             return {
-                k: (REDACTED if _is_sensitive_key(k) else redact_sensitive(v, _depth + 1))
+                k: (REDACTED if _is_sensitive_key(k) else redact_sensitive(v, _depth + 1, _scrub))
                 for k, v in obj.items()
             }
         if isinstance(obj, (list, tuple, set)):
-            rendered = [redact_sensitive(v, _depth + 1) for v in obj]
+            rendered = [redact_sensitive(v, _depth + 1, _scrub) for v in obj]
             return type(obj)(rendered) if isinstance(obj, (list, tuple)) else rendered
         if isinstance(obj, str):
-            return scrub_text(obj)
+            return (_scrub or scrub_text)(obj)
         return obj
     except Exception:
         # A redaction failure must never leak the original value, and must never break the command.
@@ -367,15 +492,19 @@ def log_command_start(command_name: str, args: Dict[str, Any] = None):
     # option names: the shared predicate masks a credential option (`password`, `new_password`,
     # `token_override`) and leaves a pagination cursor such as `starting_token` readable.
     safe_args = redact_mapping_for_log(args) if args else {}
+    # Options marked LogMaskedOption (the audit search filters) keep only a count and a length.
+    for name in _log_masked_names():
+        if name in safe_args:
+            safe_args[name] = mask_for_log((args or {}).get(name))
 
     logger.info(f"Command started: {command_name}")
     if safe_args:
         logger.debug(f"Command arguments: {safe_args}")
     
     if _is_verbose_mode():
-        click.echo(f"\n🚀 Starting command: {command_name}", err=True)
+        _echo(f"\n🚀 Starting command: {command_name}")
         if safe_args:
-            click.echo(f"📝 Arguments: {safe_args}", err=True)
+            _echo(f"📝 Arguments: {safe_args}")
 
 
 def log_command_end(command_name: str, success: bool, duration: float):
@@ -394,9 +523,9 @@ def log_command_end(command_name: str, success: bool, duration: float):
     
     if _is_verbose_mode():
         if success:
-            click.echo(f"\n✓ Command completed successfully in {duration:.2f}s", err=True)
+            _echo(f"\n✓ Command completed successfully in {duration:.2f}s")
         else:
-            click.echo(f"\n✗ Command failed after {duration:.2f}s", err=True)
+            _echo(f"\n✗ Command failed after {duration:.2f}s")
 
 
 def log_api_request(method: str, url: str, headers: Dict[str, str] = None, body: Any = None):
@@ -431,40 +560,41 @@ def log_api_request(method: str, url: str, headers: Dict[str, str] = None, body:
             logger.debug(f"[{timestamp}] Request body: {body_str}")
     
     if _is_verbose_mode():
-        click.echo(f"\n🌐 [{timestamp}] API Request: {click.style(method, fg='cyan', bold=True)} {click.style(url, fg='blue')}", err=True)
+        _echo(f"\n🌐 [{timestamp}] API Request: {click.style(method, fg='cyan', bold=True)} {click.style(url, fg='blue')}")
         
         # Enhanced header display
         if safe_headers:
-            click.echo(f"   📋 Headers ({len(safe_headers)} items):", err=True)
+            _echo(f"   📋 Headers ({len(safe_headers)} items):")
             for key, value in safe_headers.items():
                 if key.lower() == 'user-agent':
-                    click.echo(f"      {click.style(key, fg='green')}: {click.style(value, fg='yellow')}", err=True)
+                    _echo(f"      {click.style(key, fg='green')}: {click.style(value, fg='yellow')}")
                 elif key.lower() == 'content-type':
-                    click.echo(f"      {click.style(key, fg='green')}: {click.style(value, fg='magenta')}", err=True)
+                    _echo(f"      {click.style(key, fg='green')}: {click.style(value, fg='magenta')}")
                 else:
-                    click.echo(f"      {click.style(key, fg='green')}: {value}", err=True)
+                    _echo(f"      {click.style(key, fg='green')}: {value}")
         
         # Enhanced body display
         if body:
-            body_str = str(body)
+            shown_body = _console_view(body)
+            body_str = mask_console_text(str(shown_body))
             body_size = len(body_str)
             if body_size > 1000:
-                click.echo(f"   📦 Body ({body_size} chars, truncated for display):", err=True)
-                click.echo(f"      {body_str[:1000]}...", err=True)
-                click.echo(f"      {click.style('(See log file for complete body)', fg='yellow', dim=True)}", err=True)
+                _echo(f"   📦 Body ({body_size} chars, truncated for display):")
+                _echo(f"      {body_str[:1000]}...")
+                _echo(f"      {click.style('(See log file for complete body)', fg='yellow', dim=True)}")
             else:
-                click.echo(f"   📦 Body ({body_size} chars):", err=True)
+                _echo(f"   📦 Body ({body_size} chars):")
                 # Pretty print JSON if possible
                 try:
                     if isinstance(body, (dict, list)):
                         import json
-                        formatted_body = json.dumps(body, indent=2)
+                        formatted_body = json.dumps(shown_body, indent=2)
                         for line in formatted_body.split('\n'):
-                            click.echo(f"      {line}", err=True)
+                            _echo(f"      {line}")
                     else:
-                        click.echo(f"      {body_str}", err=True)
+                        _echo(f"      {body_str}")
                 except Exception:
-                    click.echo(f"      {body_str}", err=True)
+                    _echo(f"      {body_str}")
 
 
 def log_api_response(status_code: int, response_data: Any = None, duration: float = None):
@@ -522,37 +652,38 @@ def log_api_response(status_code: int, response_data: Any = None, duration: floa
             status_icon = '⚠'
         
         duration_display = f" {click.style(f'({duration:.3f}s)', fg='cyan')}" if duration else ""
-        click.echo(f"🔄 [{timestamp}] API Response: {status_icon} {click.style(str(status_code), fg=status_color, bold=True)}{duration_display}{performance_info}", err=True)
+        _echo(f"🔄 [{timestamp}] API Response: {status_icon} {click.style(str(status_code), fg=status_color, bold=True)}{duration_display}{performance_info}")
         
         # Enhanced response data display
         if response_data:
-            response_str = str(response_data)
+            shown_response = _console_view(response_data)
+            response_str = mask_console_text(str(shown_response))
             response_size = len(response_str)
             
             if response_size > 1000:
-                click.echo(f"   📄 Response ({response_size} chars, truncated for display):", err=True)
-                click.echo(f"      {response_str[:1000]}...", err=True)
-                click.echo(f"      {click.style('(See log file for complete response)', fg='yellow', dim=True)}", err=True)
+                _echo(f"   📄 Response ({response_size} chars, truncated for display):")
+                _echo(f"      {response_str[:1000]}...")
+                _echo(f"      {click.style('(See log file for complete response)', fg='yellow', dim=True)}")
             else:
-                click.echo(f"   📄 Response ({response_size} chars):", err=True)
+                _echo(f"   📄 Response ({response_size} chars):")
                 # Pretty print JSON if possible
                 try:
                     if isinstance(response_data, (dict, list)):
                         import json
-                        formatted_response = json.dumps(response_data, indent=2)
+                        formatted_response = json.dumps(shown_response, indent=2)
                         for line in formatted_response.split('\n'):
-                            click.echo(f"      {line}", err=True)
+                            _echo(f"      {line}")
                     else:
-                        click.echo(f"      {response_str}", err=True)
+                        _echo(f"      {response_str}")
                 except Exception:
-                    click.echo(f"      {response_str}", err=True)
+                    _echo(f"      {response_str}")
         
         # Add timing analysis for performance insights
         if duration:
             if duration > 2.0:
-                click.echo(f"   ⏱️  {click.style('Performance Note:', fg='yellow')} Request took {duration:.3f}s - consider checking network or API performance", err=True)
+                _echo(f"   ⏱️  {click.style('Performance Note:', fg='yellow')} Request took {duration:.3f}s - consider checking network or API performance")
             elif duration < 0.1:
-                click.echo(f"   ⚡ {click.style('Performance Note:', fg='green')} Excellent response time: {duration:.3f}s", err=True)
+                _echo(f"   ⚡ {click.style('Performance Note:', fg='green')} Excellent response time: {duration:.3f}s")
 
 
 def log_warning(message: str, show_console: bool = None):
@@ -568,7 +699,7 @@ def log_warning(message: str, show_console: bool = None):
     
     # Show in console if explicitly requested or if verbose mode
     if show_console is True or (show_console is None and _is_verbose_mode()):
-        click.secho(f"⚠ Warning: {message}", fg='yellow', err=True)
+        _echo(click.style(f"⚠ Warning: {message}", fg='yellow'))
 
 
 def log_error(message: str, exception: Exception = None):
@@ -602,9 +733,9 @@ def log_config_info(config: Dict[str, Any]):
     logger.debug(f"Configuration: {safe_config}")
     
     if _is_verbose_mode():
-        click.echo("\n📋 Configuration:", err=True)
+        _echo("\n📋 Configuration:")
         for key, value in safe_config.items():
-            click.echo(f"  {key}: {value}", err=True)
+            _echo(f"  {key}: {value}")
 
 
 def log_info(message: str, show_console: bool = None):
@@ -620,7 +751,7 @@ def log_info(message: str, show_console: bool = None):
     
     # Show in console if explicitly requested or if verbose mode
     if show_console is True or (show_console is None and _is_verbose_mode()):
-        click.echo(f"ℹ {message}", err=True)
+        _echo(f"ℹ {message}")
 
 
 def log_debug(message: str):
@@ -634,7 +765,7 @@ def log_debug(message: str):
     logger.debug(message)
     
     if _is_verbose_mode():
-        click.echo(f"🔍 Debug: {message}", err=True)
+        _echo(f"🔍 Debug: {message}")
 
 
 def get_log_file_path() -> Path:
@@ -683,20 +814,20 @@ def log_operation_timing(operation_name: str, duration: float, details: Dict[str
             perf_color = "red"
             perf_note = "Slow"
         
-        click.echo(f"\n⏱️  [{timestamp}] Operation: {click.style(operation_name, fg='cyan', bold=True)}", err=True)
-        click.echo(f"   Duration: {perf_icon} {click.style(f'{duration:.3f}s', fg=perf_color, bold=True)} ({perf_note})", err=True)
+        _echo(f"\n⏱️  [{timestamp}] Operation: {click.style(operation_name, fg='cyan', bold=True)}")
+        _echo(f"   Duration: {perf_icon} {click.style(f'{duration:.3f}s', fg=perf_color, bold=True)} ({perf_note})")
         
         # Show breakdown if details provided
         if details:
             if 'api_calls' in details:
                 api_count = details['api_calls']
-                click.echo(f"   API Calls: {click.style(str(api_count), fg='blue')} requests", err=True)
+                _echo(f"   API Calls: {click.style(str(api_count), fg='blue')} requests")
             
             if 'phases' in details:
-                click.echo(f"   Phase Breakdown:", err=True)
+                _echo(f"   Phase Breakdown:")
                 for phase, phase_duration in details['phases'].items():
                     percentage = (phase_duration / duration) * 100 if duration > 0 else 0
-                    click.echo(f"     • {phase}: {phase_duration:.3f}s ({percentage:.1f}%)", err=True)
+                    _echo(f"     • {phase}: {phase_duration:.3f}s ({percentage:.1f}%)")
 
 
 def log_auth_diagnostic(auth_type: str, status: str, details: Dict[str, Any] = None, error: Exception = None):
@@ -740,30 +871,30 @@ def log_auth_diagnostic(auth_type: str, status: str, details: Dict[str, Any] = N
             status_icon = "ℹ"
             status_color = "blue"
         
-        click.echo(f"\n🔐 [{timestamp}] Authentication: {click.style(auth_type.upper(), fg='cyan', bold=True)}", err=True)
-        click.echo(f"   Status: {status_icon} {click.style(status, fg=status_color, bold=True)}", err=True)
+        _echo(f"\n🔐 [{timestamp}] Authentication: {click.style(auth_type.upper(), fg='cyan', bold=True)}")
+        _echo(f"   Status: {status_icon} {click.style(status, fg=status_color, bold=True)}")
         
         # Show diagnostic details
         if details:
-            click.echo(f"   📊 Diagnostic Information:", err=True)
+            _echo(f"   📊 Diagnostic Information:")
             
             # Configuration details
             if 'config' in details:
                 config = details['config']
-                click.echo(f"     • API Gateway: {click.style(config.get('api_gateway_url', 'Not configured'), fg='blue')}", err=True)
+                _echo(f"     • API Gateway: {click.style(config.get('api_gateway_url', 'Not configured'), fg='blue')}")
                 if 'amplify_config' in config:
                     amplify = config['amplify_config']
-                    click.echo(f"     • Region: {click.style(amplify.get('region', 'Unknown'), fg='blue')}", err=True)
-                    click.echo(f"     • User Pool: {click.style(amplify.get('cognitoUserPoolId', 'Not configured'), fg='blue')}", err=True)
-                    click.echo(f"     • Client ID: {click.style(amplify.get('cognitoAppClientId', 'Not configured'), fg='blue')}", err=True)
+                    _echo(f"     • Region: {click.style(amplify.get('region', 'Unknown'), fg='blue')}")
+                    _echo(f"     • User Pool: {click.style(amplify.get('cognitoUserPoolId', 'Not configured'), fg='blue')}")
+                    _echo(f"     • Client ID: {click.style(amplify.get('cognitoAppClientId', 'Not configured'), fg='blue')}")
             
             # Profile information
             if 'profile_name' in details:
-                click.echo(f"     • Profile: {click.style(details['profile_name'], fg='magenta')}", err=True)
+                _echo(f"     • Profile: {click.style(details['profile_name'], fg='magenta')}")
             
             # Token information (redacted)
             if 'token_type' in details:
-                click.echo(f"     • Token Type: {click.style(details['token_type'], fg='yellow')}", err=True)
+                _echo(f"     • Token Type: {click.style(details['token_type'], fg='yellow')}")
             
             if 'expires_at' in details:
                 try:
@@ -773,29 +904,29 @@ def log_auth_diagnostic(auth_type: str, status: str, details: Dict[str, Any] = N
                         now = datetime.now()
                         if expires_dt > now:
                             time_left = expires_dt - now
-                            click.echo(f"     • Token Expires: {click.style(f'in {time_left}', fg='green')}", err=True)
+                            _echo(f"     • Token Expires: {click.style(f'in {time_left}', fg='green')}")
                         else:
                             time_ago = now - expires_dt
-                            click.echo(f"     • Token Expires: {click.style(f'{time_ago} ago (EXPIRED)', fg='red')}", err=True)
+                            _echo(f"     • Token Expires: {click.style(f'{time_ago} ago (EXPIRED)', fg='red')}")
                 except Exception:
-                    click.echo(f"     • Token Expires: {click.style('Invalid timestamp', fg='red')}", err=True)
+                    _echo(f"     • Token Expires: {click.style('Invalid timestamp', fg='red')}")
             
             # Feature switches
             if 'feature_switches' in details:
                 fs = details['feature_switches']
                 if isinstance(fs, dict) and 'enabled' in fs:
                     enabled_count = len(fs['enabled']) if fs['enabled'] else 0
-                    click.echo(f"     • Feature Switches: {click.style(f'{enabled_count} enabled', fg='cyan')}", err=True)
+                    _echo(f"     • Feature Switches: {click.style(f'{enabled_count} enabled', fg='cyan')}")
             
             # User information
             if 'user_id' in details:
-                click.echo(f"     • User ID: {click.style(details['user_id'], fg='green')}", err=True)
+                _echo(f"     • User ID: {click.style(details['user_id'], fg='green')}")
         
         # Show error information
         if error:
-            click.echo(f"   ❌ Error Details:", err=True)
-            click.echo(f"     • Type: {click.style(type(error).__name__, fg='red')}", err=True)
-            click.echo(f"     • Message: {click.style(str(error), fg='red')}", err=True)
+            _echo(f"   ❌ Error Details:")
+            _echo(f"     • Type: {click.style(type(error).__name__, fg='red')}")
+            _echo(f"     • Message: {click.style(str(error), fg='red')}")
 
 
 def log_config_diagnostic(config: Dict[str, Any], profile_name: str = None):
@@ -815,47 +946,47 @@ def log_config_diagnostic(config: Dict[str, Any], profile_name: str = None):
     logger.debug(f"[{timestamp}] Configuration diagnostic: {safe_config}")
     
     if _is_verbose_mode():
-        click.echo(f"\n⚙️  [{timestamp}] Configuration Diagnostic", err=True)
+        _echo(f"\n⚙️  [{timestamp}] Configuration Diagnostic")
         if profile_name:
-            click.echo(f"   Profile: {click.style(profile_name, fg='magenta', bold=True)}", err=True)
+            _echo(f"   Profile: {click.style(profile_name, fg='magenta', bold=True)}")
         
         # API Gateway configuration
         api_url = config.get('api_gateway_url')
         if api_url:
-            click.echo(f"   🌐 API Gateway: {click.style(api_url, fg='blue')}", err=True)
+            _echo(f"   🌐 API Gateway: {click.style(api_url, fg='blue')}")
         else:
-            click.echo(f"   🌐 API Gateway: {click.style('Not configured', fg='red')}", err=True)
+            _echo(f"   🌐 API Gateway: {click.style('Not configured', fg='red')}")
         
         # Amplify configuration
         amplify_config = config.get('amplify_config', {})
         if amplify_config:
-            click.echo(f"   🔧 Amplify Configuration:", err=True)
-            click.echo(f"     • Region: {click.style(amplify_config.get('region', 'Not set'), fg='cyan')}", err=True)
-            click.echo(f"     • User Pool ID: {click.style(amplify_config.get('cognitoUserPoolId', 'Not set'), fg='cyan')}", err=True)
-            click.echo(f"     • App Client ID: {click.style(amplify_config.get('cognitoAppClientId', 'Not set'), fg='cyan')}", err=True)
+            _echo(f"   🔧 Amplify Configuration:")
+            _echo(f"     • Region: {click.style(amplify_config.get('region', 'Not set'), fg='cyan')}")
+            _echo(f"     • User Pool ID: {click.style(amplify_config.get('cognitoUserPoolId', 'Not set'), fg='cyan')}")
+            _echo(f"     • App Client ID: {click.style(amplify_config.get('cognitoAppClientId', 'Not set'), fg='cyan')}")
             
             # Check for potential issues
             if not amplify_config.get('region'):
-                click.echo(f"     ⚠️  {click.style('Warning: Region not configured', fg='yellow')}", err=True)
+                _echo(f"     ⚠️  {click.style('Warning: Region not configured', fg='yellow')}")
             if not amplify_config.get('cognitoUserPoolId'):
-                click.echo(f"     ⚠️  {click.style('Warning: User Pool ID not configured', fg='yellow')}", err=True)
+                _echo(f"     ⚠️  {click.style('Warning: User Pool ID not configured', fg='yellow')}")
             if not amplify_config.get('cognitoAppClientId'):
-                click.echo(f"     ⚠️  {click.style('Warning: App Client ID not configured', fg='yellow')}", err=True)
+                _echo(f"     ⚠️  {click.style('Warning: App Client ID not configured', fg='yellow')}")
         else:
-            click.echo(f"   🔧 Amplify Configuration: {click.style('Not available', fg='red')}", err=True)
+            _echo(f"   🔧 Amplify Configuration: {click.style('Not available', fg='red')}")
         
         # Additional configuration items
         other_keys = [k for k in config.keys() if k not in ['api_gateway_url', 'amplify_config']]
         if other_keys:
-            click.echo(f"   📋 Additional Configuration:", err=True)
+            _echo(f"   📋 Additional Configuration:")
             for key in other_keys:
                 value = safe_config[key]
                 if isinstance(value, dict):
-                    click.echo(f"     • {key}: {click.style(f'{len(value)} items', fg='cyan')}", err=True)
+                    _echo(f"     • {key}: {click.style(f'{len(value)} items', fg='cyan')}")
                 elif isinstance(value, list):
-                    click.echo(f"     • {key}: {click.style(f'{len(value)} items', fg='cyan')}", err=True)
+                    _echo(f"     • {key}: {click.style(f'{len(value)} items', fg='cyan')}")
                 else:
-                    click.echo(f"     • {key}: {click.style(str(value), fg='cyan')}", err=True)
+                    _echo(f"     • {key}: {click.style(str(value), fg='cyan')}")
 
 
 def get_log_file_info() -> Dict[str, Any]:

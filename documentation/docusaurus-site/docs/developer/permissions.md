@@ -10,53 +10,67 @@ For an introduction to how the authorization system works, see [Permissions Mode
 
 The following patterns cover the most common access configurations. VAMS provides pre-built permission templates for each of these patterns.
 
-The valid fields per object type, the criteria operators, the permissions, and the permission types can be retrieved from `GET /auth/constraints/permissionObjects` or `vamscli role constraint permission-objects`. This is the same mapping the backend validates constraints against.
+The valid fields per object type, the criteria operators, the permissions, and the permission types can be retrieved from `GET /auth/constraints/permissionObjects` or `vamscli role constraint permission-objects`. This is the same mapping the backend validates constraints against. The object types it returns include any the deployment registers in its add-on or fork constants files; the templates on this page cover the core types only, so a template for such a type is listed on the page of the add-on that registers it, or stays with the fork that registers it ([Extending VAMS in a Fork](customizing-vams.md#4-permissions) has one).
 
 ### Database administrator
 
-Full access to a single database including asset CRUD, pipeline and workflow management, metadata schema management, and the ability to update or delete the database itself. Cannot create new databases.
+Full access to a single database including asset CRUD, the database's archived assets (view, unarchive, permanent delete), pipeline and workflow management, metadata schema management, and the ability to create, update, or delete the database itself. It can create only its own database id, which is also how a deleted database is restored.
 
-**Constraint summary (14 constraints):**
+**Constraint summary (15 constraints):**
 
-| #   | Constraint                | Object Type      | Permissions            | Scope                                                   |
-| --- | ------------------------- | ---------------- | ---------------------- | ------------------------------------------------------- |
-| 1   | Self-service API keys     | `api`            | GET, PUT, POST, DELETE | `/auth/user/api-keys` (own keys only)                   |
-| 2   | Web routes                | `web`            | GET                    | Standard pages + `/assetIngestion`                      |
-| 3   | API routes                | `api`            | GET, PUT, POST, DELETE | All non-admin routes (excludes `/tags`, `/tag-types`)   |
-| 4   | API routes (tags GET)     | `api`            | GET                    | Read-only on `/tags`, `/tag-types`                      |
-| 5   | Database entity           | `database`       | GET, PUT, DELETE       | Scoped to specific database (no POST = no create)       |
-| 6   | Assets                    | `asset`          | GET, PUT, POST, DELETE | Scoped to specific database (includes permanent delete) |
-| 7   | Pipelines (scoped)        | `pipeline`       | GET, PUT, POST, DELETE | Scoped to specific database (full management)           |
-| 8   | Pipelines (GLOBAL)        | `pipeline`       | GET                    | `databaseId equals GLOBAL` (view + execute)             |
-| 9   | Workflows (scoped)        | `workflow`       | GET, PUT, POST, DELETE | Scoped to specific database (full management)           |
-| 10  | Workflows (GLOBAL)        | `workflow`       | GET                    | `databaseId equals GLOBAL` (view + execute)             |
-| 11  | Metadata schemas (scoped) | `metadataSchema` | GET, PUT, POST, DELETE | Scoped to specific database (full management)           |
-| 12  | Metadata schemas (GLOBAL) | `metadataSchema` | GET                    | `databaseId equals GLOBAL` (view only)                  |
-| 13  | Tags                      | `tag`            | GET                    | Global (read-only)                                      |
-| 14  | Tag types                 | `tagType`        | GET                    | Global (read-only)                                      |
+| #   | Constraint                | Object Type      | Permissions            | Scope                                                               |
+| --- | ------------------------- | ---------------- | ---------------------- | ------------------------------------------------------------------- |
+| 1   | Self-service API keys     | `api`            | GET, PUT, POST, DELETE | `/auth/user/api-keys` (own keys only)                               |
+| 2   | Web routes                | `web`            | GET                    | Standard pages + `/assetIngestion`                                  |
+| 3   | API routes                | `api`            | GET, PUT, POST, DELETE | All non-admin routes (excludes `/tags`, `/tag-types`)               |
+| 4   | API routes (tags GET)     | `api`            | GET                    | Read-only on `/tags`, `/tag-types`                                  |
+| 5   | Database entity           | `database`       | GET, PUT, POST, DELETE | The database and its archived record (create: its own id only)      |
+| 6   | Assets                    | `asset`          | GET, PUT, POST, DELETE | The database's live and archived assets (includes permanent delete) |
+| 7   | Pipelines (scoped)        | `pipeline`       | GET, PUT, POST, DELETE | Scoped to specific database (full management)                       |
+| 8   | Pipelines (GLOBAL)        | `pipeline`       | GET                    | `databaseId equals GLOBAL` (view + execute)                         |
+| 9   | Workflows (scoped)        | `workflow`       | GET, PUT, POST, DELETE | Scoped to specific database (full management)                       |
+| 10  | Workflows (GLOBAL)        | `workflow`       | GET                    | `databaseId equals GLOBAL` (view + execute)                         |
+| 11  | Metadata schemas (scoped) | `metadataSchema` | GET, PUT, POST, DELETE | Scoped to specific database (full management)                       |
+| 12  | Metadata schemas (GLOBAL) | `metadataSchema` | GET                    | `databaseId equals GLOBAL` (view only)                              |
+| 13  | Tags                      | `tag`            | GET                    | Global (read-only)                                                  |
+| 14  | Tag types                 | `tagType`        | GET                    | Global (read-only)                                                  |
+| 15  | Zip downloads (list)      | `api`            | GET                    | `/download/zip`: the caller's own zip downloads across assets       |
 
 **Key design decisions:**
 
--   **No database creation** -- The database entity constraint grants GET + PUT + DELETE but **not POST**, preventing new database creation even though the API route constraint allows POST on `/database` (needed for asset operations using `/database/{id}/...` sub-paths).
+-   **Archived records named explicitly** -- An archived asset or deleted database's record is stored under `<databaseId>#deleted` and must pass on that id and on its database id (see [Permissions Model: Archived records](../concepts/permissions-model.md#archived-records)). The `database` and `asset` constraints therefore use `criteriaOr` with `databaseId equals {DATABASE_ID}` and `databaseId equals {DATABASE_ID}#deleted`, which grants the database's archived assets (view, unarchive, permanent delete) and its archived database record (view). Its compliance constraints (`complianceEvaluation`, `complianceCascade` and `complianceBinding`) name both ids the same way, so the role also reads and acts on the compliance records of the database's archived assets (see [Compliance: Archived assets](../concepts/compliance.md#archived-assets)).
+-   **Database creation limited to its own id** -- The database entity constraint grants POST, and `POST /database` is checked at Tier 2 against the `databaseId` in the request body, so the role can create only `{DATABASE_ID}`. Creating that id again is how a deleted database is restored.
 -   **Scoped + GLOBAL pattern** -- Two separate constraints per entity type: one scoped with full CRUD for management, one GLOBAL with GET for viewing and executing shared resources. On a `pipeline` or `workflow` object, POST authorizes **creating** the entity, not executing it; the right to execute comes from Tier 1 on the execute route, and Tier 2 confirms it with `GET` on the workflow and on each pipeline the workflow references. Adding POST to a GLOBAL constraint therefore grants global pipeline and workflow creation without adding any execution capability.
 -   **Metadata schema GLOBAL = GET only** -- Global schema access is read-only to prevent accidentally creating schemas in the GLOBAL scope.
 -   **Tags read-only** -- Since tags and tag types are shared across all databases, the recommended approach is to limit database-scoped roles to GET-only access.
 
-**Example constraint: Database entity (no POST = no create)**
+**Example constraint: Database entity (the database and its archived record)**
 
 ```json
 {
     "name": "my-project-admin-database",
-    "description": "Allow read, update, and delete of my-project-db (no create)",
+    "description": "Allow read, create, update, and delete of my-project-db and read of its archived record",
     "objectType": "database",
-    "criteriaAnd": [
-        { "field": "databaseId", "id": "db1", "operator": "equals", "value": "my-project-db" }
+    "criteriaOr": [
+        { "field": "databaseId", "id": "db1", "operator": "equals", "value": "my-project-db" },
+        {
+            "field": "databaseId",
+            "id": "db2",
+            "operator": "equals",
+            "value": "my-project-db#deleted"
+        }
     ],
     "groupPermissions": [
         {
             "groupId": "my-project-admin",
             "id": "db-get",
             "permission": "GET",
+            "permissionType": "allow"
+        },
+        {
+            "groupId": "my-project-admin",
+            "id": "db-post",
+            "permission": "POST",
             "permissionType": "allow"
         },
         {
@@ -74,6 +88,8 @@ Full access to a single database including asset CRUD, pipeline and workflow man
     ]
 }
 ```
+
+To keep a role from creating its database, leave POST out of this constraint, or, when the role needs POST for database metadata as the Database User does, leave `POST /database` out of its API route constraints. To keep a role away from archived records, name only `my-project-db`.
 
 **Example constraint: GLOBAL pipeline view + execute**
 
@@ -104,37 +120,41 @@ GLOBAL pipelines and workflows are shared by every database, so managing them is
 
 ### Database user
 
-Standard working access within a specific database. Can view all data, create and update assets, upload files, archive (soft delete) assets, and execute workflows. Cannot permanently delete assets, create or delete pipelines/workflows/metadata schemas, modify the database itself, or use asset ingestion.
+Standard working access within a specific database. Can view all data, create and update assets, upload files, archive (soft delete) assets, add, edit, and remove the database's metadata, and execute workflows. Cannot view, unarchive, or permanently delete archived assets, permanently delete assets, create or delete pipelines/workflows/metadata schemas, create the database, edit its details or delete it, or use asset ingestion.
 
-**Constraint summary (17 constraints):**
+**Constraint summary (20 constraints):**
 
-| #   | Constraint                   | Object Type      | Permissions            | Scope                                                                                        |
-| --- | ---------------------------- | ---------------- | ---------------------- | -------------------------------------------------------------------------------------------- |
-| 1   | Self-service API keys        | `api`            | GET, PUT, POST, DELETE | `/auth/user/api-keys` (own keys only)                                                        |
-| 2   | Web routes                   | `web`            | GET                    | Standard pages (excludes `/assetIngestion`)                                                  |
-| 3   | API routes (GET)             | `api`            | GET                    | Broad read access                                                                            |
-| 4   | API routes (POST)            | `api`            | POST                   | Asset operations + workflow execution (excludes `/ingest-asset`, `/metadataschema`, `/tags`) |
-| 5   | API routes (PUT)             | `api`            | PUT                    | Asset updates only (excludes `/pipelines`, `/workflows`, `/metadataschema`, `/tags`)         |
-| 6   | API routes (DELETE)          | `api`            | DELETE                 | Archive paths + `/workflows/executions` (abort) + standard non-asset deletes                 |
-| 7   | API routes (executions deny) | `api`            | GET, DELETE (deny)     | Paths ending in `/logs` and `/permanent` (admin-only execution routes)                       |
-| 8   | Database entity              | `database`       | GET                    | Scoped to specific database (read-only)                                                      |
-| 9   | Assets                       | `asset`          | GET, PUT, POST, DELETE | Scoped to specific database (DELETE needed for archive; permanent delete blocked at Tier 1)  |
-| 10  | Pipelines (scoped)           | `pipeline`       | GET                    | Scoped to specific database (view + execute)                                                 |
-| 11  | Pipelines (GLOBAL)           | `pipeline`       | GET                    | `databaseId equals GLOBAL` (view + execute)                                                  |
-| 12  | Workflows (scoped)           | `workflow`       | GET                    | Scoped to specific database (view + execute)                                                 |
-| 13  | Workflows (GLOBAL)           | `workflow`       | GET                    | `databaseId equals GLOBAL` (view + execute)                                                  |
-| 14  | Metadata schemas (scoped)    | `metadataSchema` | GET                    | Scoped to specific database (view only)                                                      |
-| 15  | Metadata schemas (GLOBAL)    | `metadataSchema` | GET                    | `databaseId equals GLOBAL` (view only)                                                       |
-| 16  | Tags                         | `tag`            | GET                    | Global (read-only)                                                                           |
-| 17  | Tag types                    | `tagType`        | GET                    | Global (read-only)                                                                           |
+| #   | Constraint                   | Object Type      | Permissions            | Scope                                                                                                                                                                                         |
+| --- | ---------------------------- | ---------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Self-service API keys        | `api`            | GET, PUT, POST, DELETE | `/auth/user/api-keys` (own keys only)                                                                                                                                                         |
+| 2   | Web routes                   | `web`            | GET                    | Standard pages (excludes `/assetIngestion`)                                                                                                                                                   |
+| 3   | API routes (GET)             | `api`            | GET                    | Broad read access                                                                                                                                                                             |
+| 4   | API routes (POST)            | `api`            | POST                   | Asset operations + database metadata + workflow execution; `/database/` with a trailing slash leaves out `POST /database` (excludes `/ingest-asset`, `/metadataschema`, `/tags`)              |
+| 5   | API routes (PUT)             | `api`            | PUT                    | Asset and database metadata updates under `/database/{DATABASE_ID}/`, which leaves out `PUT /database/{DATABASE_ID}` (excludes `/pipelines`, `/workflows`, `/metadataschema`, `/tags`)        |
+| 6   | API routes (DELETE)          | `api`            | DELETE                 | Archive paths + `/database/{DATABASE_ID}/metadata` + `/workflows/executions` (abort) + standard non-asset deletes                                                                             |
+| 7   | API routes (executions deny) | `api`            | GET, DELETE (deny)     | Paths ending in `/logs` and `/permanent` (admin-only execution routes)                                                                                                                        |
+| 8   | API routes (unarchive deny)  | `api`            | PUT (deny)             | Paths under `/database/{DATABASE_ID}/` ending in `/unarchiveAsset` (admin-only)                                                                                                               |
+| 9   | Database entity              | `database`       | GET, PUT, POST, DELETE | Scoped to specific database; PUT, POST and DELETE reach only the database metadata routes (Tier 1 leaves out create, edit details and delete)                                                 |
+| 10  | Assets                       | `asset`          | GET, PUT, POST, DELETE | Live assets in the database (DELETE needed for archive; permanent delete blocked at Tier 1)                                                                                                   |
+| 11  | Pipelines (scoped)           | `pipeline`       | GET                    | Scoped to specific database (view + execute)                                                                                                                                                  |
+| 12  | Pipelines (GLOBAL)           | `pipeline`       | GET                    | `databaseId equals GLOBAL` (view + execute)                                                                                                                                                   |
+| 13  | Workflows (scoped)           | `workflow`       | GET                    | Scoped to specific database (view + execute)                                                                                                                                                  |
+| 14  | Workflows (GLOBAL)           | `workflow`       | GET                    | `databaseId equals GLOBAL` (view + execute)                                                                                                                                                   |
+| 15  | Metadata schemas (scoped)    | `metadataSchema` | GET                    | Scoped to specific database (view only)                                                                                                                                                       |
+| 16  | Metadata schemas (GLOBAL)    | `metadataSchema` | GET                    | `databaseId equals GLOBAL` (view only)                                                                                                                                                        |
+| 17  | Tags                         | `tag`            | GET                    | Global (read-only)                                                                                                                                                                            |
+| 18  | Tag types                    | `tagType`        | GET                    | Global (read-only)                                                                                                                                                                            |
+| 19  | Zip downloads                | `api`            | GET, POST, DELETE      | Paths under `/database/` containing `/download/zip`: create, list, get, URL, cancel and delete the caller's own zip downloads, and every user's jobs for an asset (`/download/zip-all-users`) |
+| 20  | Zip downloads (list)         | `api`            | GET                    | `/download/zip`: the caller's own zip downloads across assets                                                                                                                                 |
 
 **Key design decisions:**
 
 -   **Archive vs. permanent delete (two-tier enforcement)** -- The asset entity constraint grants DELETE at Tier 2 because both archive and permanent delete require DELETE on the asset entity. The differentiation happens at Tier 1 API routes: the DELETE API constraint uses the `contains` operator to only match paths containing `archiveAsset` or `archiveFile`, blocking permanent delete paths.
--   **Everyday execution vs. administrative execution routes** -- The Database User can execute workflows, list executions, view execution details, page an execution's detail metadata (`/workflows/executions/{executionId}/details/metadata`), abort executions, and re-run executions. Two execution routes are withheld and reserved for administrators: the detailed execution **logs** route (`/workflows/executions/{executionId}/logs`, which exposes full CloudWatch logs) and the execution **permanent delete** route (`/workflows/executions/{executionId}/permanent`). The template grants the broad `/workflows` prefix on POST (execute + re-run) and on DELETE `/workflows/executions` (abort), then layers an explicit `deny` API constraint on paths ending in `/logs` (GET) and `/permanent` (DELETE) — a `deny` overrides the broad `allow`, so those two routes remain admin-only.
--   **API route method separation** -- Unlike the admin (which uses a single API constraint with all methods), the user has four separate `allow` API constraints, one per HTTP method, each allowing a different route subset, plus the `deny` constraint above.
+-   **No archived records** -- The `database` and `asset` constraints name only `{DATABASE_ID}`, so the role does not reach the database's archived assets or its archived database record (see [Permissions Model: Archived records](../concepts/permissions-model.md#archived-records)). Its compliance constraints name only `{DATABASE_ID}` as well, so the compliance records of archived assets are withheld from it in the same way. The `unarchive deny` constraint also withholds `PUT .../unarchiveAsset` at Tier 1. It names the database because a deny applies across all of a user's roles: an unscoped deny would also block unarchiving in a database where the same user holds an admin role. Archiving and unarchiving files (`archiveFile`, `unarchiveFile`) and asset versions (`assetversions/{id}/archive`, `.../unarchive`) stay available.
+-   **Everyday execution vs. administrative execution routes** -- The Database User can execute workflows, list executions, view execution details, page an execution's detail metadata and files (`/workflows/executions/{executionId}/details/metadata`, `.../details/files`), read its full results (`.../details/results`), abort executions, and re-run executions. Two execution routes are withheld and reserved for administrators: the detailed execution **logs** route (`/workflows/executions/{executionId}/logs`, which exposes full CloudWatch logs) and the execution **permanent delete** route (`/workflows/executions/{executionId}/permanent`). The template grants the broad `/workflows` prefix on POST (execute + re-run) and on DELETE `/workflows/executions` (abort), then layers an explicit `deny` API constraint on paths ending in `/logs` (GET) and `/permanent` (DELETE) — a `deny` overrides the broad `allow`, so those two routes remain admin-only.
+-   **API route method separation** -- Unlike the admin (which uses a single API constraint with all methods), the user has four separate `allow` API constraints, one per HTTP method, each allowing a different route subset, plus the two `deny` constraints above.
 -   **Execute is a Tier-2 `GET`** -- The pipeline and workflow entity constraints grant `GET` only. Executing a workflow authorizes the workflow object with `GET` and each pipeline the workflow references with `GET`; the right to execute is granted at Tier 1 by POST on `/workflows`. Granting POST on a `pipeline` or `workflow` object would instead let the role create pipelines and workflows, which the Tier 1 route constraint already permits — so the entity constraint is what withholds creation.
--   **Tier 2 as a safety net** -- Even though PUT on `/database` is allowed at Tier 1 (needed for asset operations using `/database/{id}/assets/...` sub-paths), Tier 2 blocks it because the database entity constraint only grants GET.
+-   **Database metadata without database management** -- Creating, updating, deleting, and replacing database metadata authorize POST, PUT, and DELETE on the `database` object, so the database entity constraint grants all four actions. The API route constraints keep those actions on the metadata routes: POST matches `/database/` (not `POST /database`, which creates a database), PUT matches `/database/{DATABASE_ID}/` (not `PUT /database/{DATABASE_ID}`, which edits its details), and DELETE matches `/database/{DATABASE_ID}/metadata` exactly (not `DELETE /database/{DATABASE_ID}`, which deletes it).
 
 **Example constraint: API routes DELETE (archive only)**
 
@@ -241,63 +261,134 @@ DELETE is granted at Tier 2 because archive operations require it. Permanent del
 
 ### Database Admin vs. Database User comparison
 
-| Capability                                           | Admin                        | User                         |
-| ---------------------------------------------------- | ---------------------------- | ---------------------------- |
-| View database, assets, pipelines, workflows, schemas | Yes                          | Yes                          |
-| Create and update assets                             | Yes                          | Yes                          |
-| Upload files                                         | Yes                          | Yes                          |
-| Archive (soft delete) assets                         | Yes                          | Yes                          |
-| **Permanent delete** assets                          | **Yes**                      | **No** (Tier 1 blocks)       |
-| Update or delete the database                        | **Yes**                      | **No**                       |
-| Create new databases                                 | No                           | No                           |
-| Create or delete pipelines (scoped)                  | **Yes**                      | **No**                       |
-| Create or delete workflows (scoped)                  | **Yes**                      | **No**                       |
-| Create or delete metadata schemas (scoped)           | **Yes**                      | **No**                       |
-| View and execute GLOBAL pipelines and workflows      | Yes                          | Yes                          |
-| View GLOBAL metadata schemas                         | Yes                          | Yes                          |
-| Asset ingestion                                      | **Yes**                      | **No**                       |
-| Tag management (create, modify, delete)              | No (manage via broader role) | No (manage via broader role) |
-| Tag viewing                                          | Yes                          | Yes                          |
+| Capability                                             | Admin                        | User                         |
+| ------------------------------------------------------ | ---------------------------- | ---------------------------- |
+| View database, assets, pipelines, workflows, schemas   | Yes                          | Yes                          |
+| Create and update assets                               | Yes                          | Yes                          |
+| Upload files                                           | Yes                          | Yes                          |
+| Archive (soft delete) assets                           | Yes                          | Yes                          |
+| **Permanent delete** assets                            | **Yes**                      | **No** (Tier 1 blocks)       |
+| View, unarchive, or permanently delete archived assets | **Yes**                      | **No**                       |
+| View the database's archived record                    | **Yes**                      | **No**                       |
+| Add, edit, and remove the database's metadata          | Yes                          | Yes                          |
+| Edit the database's details or delete the database     | **Yes**                      | **No** (Tier 1 blocks)       |
+| Create a database                                      | **Its own database id only** | **No** (Tier 1 blocks)       |
+| Create or delete pipelines (scoped)                    | **Yes**                      | **No**                       |
+| Create or delete workflows (scoped)                    | **Yes**                      | **No**                       |
+| Create or delete metadata schemas (scoped)             | **Yes**                      | **No**                       |
+| View and execute GLOBAL pipelines and workflows        | Yes                          | Yes                          |
+| View GLOBAL metadata schemas                           | Yes                          | Yes                          |
+| Asset ingestion                                        | **Yes**                      | **No**                       |
+| Tag management (create, modify, delete)                | No (manage via broader role) | No (manage via broader role) |
+| Tag viewing                                            | Yes                          | Yes                          |
 
 ### Database read-only
 
 View-only access scoped to a single database. Can browse assets, view files, and read metadata but cannot modify anything.
 
-**Key constraints (13 constraints):**
+**Key constraints (17 constraints):**
 
 -   `web` -- Allow GET on viewing pages only (no `/upload`, no `/metadataschema`)
 -   `api` -- Allow GET on all read routes; allow POST only on `/auth/routes`, `/auth/loginProfile`, `/search`, `/check-subscription`; allow GET only on `/auth/user/api-keys` (the user can view their own API keys but cannot create, extend, or delete them)
--   `api` (download) -- Allow POST on the file download route (`route__path equals /database/[^/]+/assets/[^/]+/download`): the file download request the file viewers and the download action make, a read whose body names the file and version. The criterion is a full-path match on the request path, so no other route under `/database` matches the grant, including a write route whose last path parameter is set to `download`
+-   `api` (download) -- Allow POST where `route__path` equals the pattern `/database/[^/]+/assets/[^/]+/download`: the file download request the file viewers and the download action make, a read whose body names the file and version. The pattern matches that one route, whatever its path parameters are, so no write route under `/database` matches the grant; a suffix match such as `ends_with /download` would also reach `revertAssetVersion` and `revertFileVersion` with a version ID of `download`
+-   `api` (export) -- Allow POST where `route__path` equals the pattern `/database/[^/]+/assets/[^/]+/export`: the asset export request (`vamscli assets export`), a read whose body carries the export options. It lists the asset tree, its metadata and its files, and signs download links under the controls the file download applies (a distributable asset, a file type outside the executable blocklist, an audit record per link). The pattern keeps it off every write route, as for the download
+-   `api` (zip downloads) -- Allow GET, POST and DELETE on paths that start with `/database/` and contain `/download/zip`, and GET on `/download/zip`: Download as Zip jobs, which are a download. Each user creates, gets, cancels and deletes only their own jobs; the criterion also reaches `/download/zip-all-users`, every user's jobs for an asset, and the URL route signs another user's archive only when the role also reaches the file download route. Every zip download call also requires asset GET permission
 -   `api` (deny) -- Deny GET on paths ending in `/logs`, withholding the detailed execution-logs route that the broad `/workflows` GET allow would otherwise reach
 -   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `pipeline`, `workflow`, `metadataSchema` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `tag`, `tagType` -- Allow GET globally
+-   `api` -- Allow POST where `route__path ends_with /execute` and `route__path starts_with /workflows/GLOBAL/` (the workflow execute route only)
+-   `workflow`, `pipeline` -- Allow GET where `databaseId equals GLOBAL`, so the role may run `GLOBAL` workflows and save pipeline rules in `GLOBAL` schemas. A `GLOBAL` schema may name only `GLOBAL` workflows; a `GLOBAL` workflow that uses a database's pipeline needs `GET` on that pipeline from another role
 
-Key differences from the admin and user roles: web routes are a narrower set of pages, and the UI respects the lack of write permissions. API routes only allow `GET` method, plus `POST` on non-mutating operations. Data constraints have only `GET` permission on all object types.
+Key differences from the admin and user roles: web routes are a narrower set of pages, and the UI respects the lack of write permissions. API routes only allow `GET` method, plus `POST` on non-mutating operations. Data constraints have only `GET` permission on all object types. They name only `{DATABASE_ID}`, so archived assets and the archived database record are not matched.
 
-:::note[Existing read-only roles keep the grants they were imported with]
-Importing a template creates constraints; it does not modify the constraints of an existing role, and each import creates new constraint identifiers. A role imported from an earlier version of this template holds a `<role>-user-api-keys` constraint that allows `POST`, `PUT` and `DELETE` on `/auth/user/api-keys`. To narrow it, edit that constraint to `GET` only (`vamscli role constraint update`) or delete it (`vamscli role constraint delete`); re-importing the template adds a second constraint alongside the first. A role without the template's `<role>-api-routes-download` constraint cannot request a file download, so most file viewers report that the file failed to download; add that one constraint as [Let read-only roles open files in the viewers](../deployment/update-the-solution.md#v267-and-later-let-read-only-roles-open-files-in-the-viewers) describes. The same applies to the Global read-only template below.
+:::note[A role keeps the grants it was imported with]
+Importing a template creates constraints; it does not modify the constraints of an existing role, and each import creates new constraint identifiers, so re-importing the template adds a second constraint alongside the first. A read-only role whose `<role>-user-api-keys` constraint allows `POST`, `PUT` or `DELETE` on `/auth/user/api-keys` lets its users create, extend and delete their own API keys; to make it view-only, edit that constraint to `GET` only (`vamscli role constraint update`) or delete it (`vamscli role constraint delete`). A role without the `<role>-api-routes-download` constraint cannot request a file download, so most file viewers report that the file failed to download; add that one constraint to the role. Likewise, a role without the `<role>-api-routes-export` constraint receives `403` from `vamscli assets export`; add that constraint the same way. The API takes the permission as `groupId`, `permission` and `permissionType`, not the template's `action` and `type`, so pass the constraint in the API's format, with `<role>` replaced by the role name:
+
+```bash
+vamscli role constraint create -c <role>-api-routes-download --json-input '{"name":"<role>-api-routes-download","description":"Allow requesting a file download","objectType":"api","criteriaAnd":[{"field":"route__path","operator":"equals","value":"/database/[^/]+/assets/[^/]+/download"}],"criteriaOr":[],"groupPermissions":[{"groupId":"<role>","permission":"POST","permissionType":"allow"}]}'
+vamscli role constraint create -c <role>-api-routes-export --json-input '{"name":"<role>-api-routes-export","description":"Allow requesting an asset export","objectType":"api","criteriaAnd":[{"field":"route__path","operator":"equals","value":"/database/[^/]+/assets/[^/]+/export"}],"criteriaOr":[],"groupPermissions":[{"groupId":"<role>","permission":"POST","permissionType":"allow"}]}'
+```
+
+Each grant takes effect within about a minute, when the role's cached policy expires. The same applies to the Global read-only template below.
 :::
 
 ### Global read-only
 
-View-only access across all databases (13 constraints). Same as database read-only, except the entity constraints match every database with `databaseId contains .*` instead of scoping to one `databaseId`.
+View-only access across all databases (17 constraints). Same as database read-only, except the entity constraints match every database with `databaseId contains .*` instead of scoping to one `databaseId`. That criterion matches both forms of an archived record's id, so this role also views archived assets and archived database records.
 
 ### Database tag admin
 
 Tag and tag type management scoped to a single database, combined with unconstrained read access so the role sees every tag and tag type in the deployment.
 
-**Key constraints (6 constraints):**
+**Key constraints (7 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/auth/tags`, the web route for the Tags Management page
--   `api` -- Allow GET, PUT, POST, and DELETE on paths starting with `/secure-config`, `/amplify-config`, `/auth/routes`, `/auth/loginProfile`, `/tags`, or `/tag-types` (one `criteriaOr` constraint)
+-   `api` -- Allow GET, PUT, POST, and DELETE on paths starting with `/secure-config`, `/auth/routes`, `/auth/loginProfile`, `/tags`, or `/tag-types` (one `criteriaOr` constraint)
 -   `tag` -- Allow GET where `tagName contains .*`
 -   `tagType` -- Allow GET where `tagTypeName contains .*`
 -   `tag` -- Allow GET, PUT, POST, DELETE where `databaseId equals {DATABASE_ID}`
 -   `tagType` -- Allow GET, PUT, POST, DELETE where `databaseId equals {DATABASE_ID}`
 
 The split between the two constraint pairs is what makes the pattern work. Read is granted with a wildcard on the name field so it matches every tag and tag type, including global ones. Write is granted only on entities whose `databaseId` equals the scoped database, so global tags and tag types (those with no database scope, or `databaseId` equal to `GLOBAL`) stay read-only for the role. To let a role manage global tags as well, add an unconstrained `tag`/`tagType` write constraint.
+
+### Compliance administrator
+
+Compliance management for one database: the database's schemas, read access to `GLOBAL` schemas (bindable, not editable), schema binding on the database and its assets, evaluation and sweeps, quarantine release and exceptions, and approval of the database's cascades.
+
+**Key constraints (16 constraints):**
+
+-   `web` -- Allow GET on paths starting with `/compliance` or `/databases` (the compliance pages and the database compliance overview)
+-   `api` -- Allow GET, PUT, POST, and DELETE on paths starting with `/compliance`, `/secure-config`, `/auth/routes`, or `/auth/loginProfile` (one `criteriaOr` constraint)
+-   `api` -- Allow GET on the path that `equals` `/database`: the database list, from which the Databases page links to the database's compliance overview. The exact match leaves every route below it (`/database/{databaseId}/...`) and `/buckets` ungranted
+-   `complianceSchema` -- Allow GET, PUT, POST, DELETE where `databaseId equals {DATABASE_ID}`
+-   `complianceSchema` -- Allow GET where `databaseId equals GLOBAL`
+-   `complianceEvaluation` -- Allow GET, POST, DELETE where `databaseId equals {DATABASE_ID}`
+-   `complianceCascade` -- Allow GET, POST where `databaseId equals {DATABASE_ID}`
+-   `complianceBinding` -- Allow GET, PUT, DELETE where `databaseId equals {DATABASE_ID}`
+-   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`
+-   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
+-   `api` -- Allow POST where `route__path ends_with /execute` and `route__path starts_with /workflows/{DATABASE_ID}/` or `/workflows/GLOBAL/`: the workflow execute route only (no workflow create, update, archive or re-run route)
+-   `workflow`, `pipeline` -- Allow GET where `databaseId equals {DATABASE_ID}`, and where `databaseId equals GLOBAL`, so the role may run those workflows and save pipeline rules that name them; no workflow or pipeline write
+
+Binding a schema is authorized on the database's `complianceBinding` object (`PUT` binds and `DELETE` unbinds, on the database and on each of its assets), on a `GET` of the schema in its scope, and on a `GET` of the database or asset the binding targets. The Database Admin template carries the same compliance constraints for its database. A binding changes compliance records only, so the `asset` and `database` constraints are read-only and the role adds no write on the database or its assets to any other role a user holds. The database list returns only the databases the caller may `GET`, which for this role is `{DATABASE_ID}`. A user who holds only this role binds, changes and removes the database's schema on the database compliance overview, with the API or with `vamscli compliance bind`; the Databases page shows the role **Create** disabled and no **Edit** or **Delete Selected** action, and links the database name to the compliance overview, because the role cannot search the database's assets. For the same reason the Databases page shows the role no **Metadata** link, and the compliance pages show the database name in the breadcrumb and each asset name as plain text rather than as links to pages the role cannot open. The role reads an asset's evaluation history and revokes an exception from the asset's row on the database compliance overview (**History**, **Revoke exception**), since it cannot open the asset's Compliance tab.
+
+### Compliance read-only
+
+Read-only compliance access: the database's and `GLOBAL` schemas, and the evaluation history, compliance state, quarantine list, cascades and audit trail of one database. The Database User template carries the same compliance constraints for its database.
+
+**Key constraints (11 constraints):**
+
+-   `web` -- Allow GET on paths starting with `/compliance` or `/databases`
+-   `api` -- Allow GET on paths starting with `/compliance`, `/secure-config`, `/auth/routes`, or `/auth/loginProfile`
+-   `api` -- Allow POST on paths starting with `/auth/routes` or `/auth/loginProfile` (non-mutating)
+-   `api` -- Allow GET on the path that `equals` `/database`: the database list, from which the Databases page links to the database's compliance overview. As for the Compliance Admin, the exact match leaves every route below it and `/buckets` ungranted
+-   `complianceSchema` -- Allow GET where `databaseId equals {DATABASE_ID}`
+-   `complianceSchema` -- Allow GET where `databaseId equals GLOBAL`
+-   `complianceEvaluation` -- Allow GET where `databaseId equals {DATABASE_ID}`
+-   `complianceCascade` -- Allow GET where `databaseId equals {DATABASE_ID}`
+-   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`
+-   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
+
+The role reads each asset's evaluation history from **History** on the database compliance overview. Neither compliance template grants the `/assets` or `/search` API routes or any route below `/database/`; both grant only the database list (`GET /database`). To browse the database's assets and files, a user also needs a role that grants those routes, such as Database Read-Only.
+
+### Compliance global administrator
+
+Management of `GLOBAL` compliance schemas and read access to every database's compliance, for a central compliance team (`compliance-global-admin.json`, `ROLE_NAME` only).
+
+**Key constraints (14 constraints):**
+
+-   `web` -- Allow GET on paths starting with `/compliance` or `/databases`
+-   `api` -- Allow GET on paths starting with `/compliance`, `/secure-config`, `/auth/routes`, or `/auth/loginProfile`, and POST on `/auth/routes` and `/auth/loginProfile`
+-   `api` -- Allow POST, PUT, DELETE on paths starting with `/compliance/schemas`
+-   `api` -- Allow GET on the path that `equals` `/database`
+-   `complianceSchema` -- Allow GET, PUT, POST, DELETE where `databaseId equals GLOBAL`, and GET where `databaseId contains .*`
+-   `complianceEvaluation`, `complianceCascade`, `database` -- Allow GET where `databaseId contains .*`
+-   `api` -- Allow POST where `route__path ends_with /execute` and `route__path starts_with /workflows/GLOBAL/`: the execute route of `GLOBAL` workflows only
+-   `workflow`, `pipeline` -- Allow GET where `databaseId equals GLOBAL`, so the role may run `GLOBAL` workflows and save pipeline rules in `GLOBAL` schemas that name them; no workflow or pipeline write
+
+The role binds no schema, evaluates nothing, releases nothing and approves no cascade: outside `/compliance/schemas` its `api` constraints grant `GET` only, so the binding, evaluation, sweep, quarantine and cascade routes refuse it at Tier 1.
 
 ### Multi-database access
 
@@ -434,18 +525,37 @@ VAMS includes pre-built permission templates that you can import to quickly set 
 
 ### Available templates
 
-| Template           | File                      | Variables                  | Description                                                                  |
-| ------------------ | ------------------------- | -------------------------- | ---------------------------------------------------------------------------- |
-| Database Admin     | `database-admin.json`     | `DATABASE_ID`, `ROLE_NAME` | Full management of a specific database (14 constraints)                      |
-| Database User      | `database-user.json`      | `DATABASE_ID`, `ROLE_NAME` | Standard user access with archive-only delete (17 constraints)               |
-| Database Read-Only | `database-readonly.json`  | `DATABASE_ID`, `ROLE_NAME` | View-only access to a specific database (13 constraints)                     |
-| Database Tag Admin | `database-tag-admin.json` | `DATABASE_ID`, `ROLE_NAME` | Database-scoped tag and tag type management with global read (6 constraints) |
-| Global Read-Only   | `global-readonly.json`    | `ROLE_NAME`                | Read-only access across all databases (13 constraints)                       |
-| Deny Tagged Assets | `deny-tagged-assets.json` | `ROLE_NAME`, `TAG_VALUE`   | Overlay: deny editing of assets with a specific tag (1 constraint)           |
+| Template                  | File                           | Variables                     | Description                                                                                                                                                                                                                           |
+| ------------------------- | ------------------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database Admin            | `database-admin.json`          | `DATABASE_ID`, `ROLE_NAME`    | Full management of a specific database, including its compliance (21 constraints)                                                                                                                                                     |
+| Database User             | `database-user.json`           | `DATABASE_ID`, `ROLE_NAME`    | Standard user access with archive-only delete, read-only compliance (25 constraints)                                                                                                                                                  |
+| Database Read-Only        | `database-readonly.json`       | `DATABASE_ID`, `ROLE_NAME`    | View-only access to a specific database (17 constraints)                                                                                                                                                                              |
+| Database Tag Admin        | `database-tag-admin.json`      | `DATABASE_ID`, `ROLE_NAME`    | Database-scoped tag and tag type management with global read (7 constraints)                                                                                                                                                          |
+| Global Read-Only          | `global-readonly.json`         | `ROLE_NAME`                   | Read-only access across all databases (17 constraints)                                                                                                                                                                                |
+| Deny Tagged Asset Editing | `deny-tagged-assets.json`      | `ROLE_NAME`, `TAG_VALUE`      | Overlay: deny editing of assets with a specific tag (1 constraint)                                                                                                                                                                    |
+| Compliance Admin          | `compliance-admin.json`        | `DATABASE_ID`, `ROLE_NAME`    | Compliance schema management, schema binding, evaluation, quarantine actions and cascade approval for one database; runs the database's and `GLOBAL` workflows so it can save pipeline rules (16 constraints)                         |
+| Compliance Readonly       | `compliance-readonly.json`     | `DATABASE_ID`, `ROLE_NAME`    | Read-only compliance access for one database (11 constraints)                                                                                                                                                                         |
+| Compliance Global Admin   | `compliance-global-admin.json` | `ROLE_NAME`                   | `GLOBAL` schema management and read-only compliance across every database; runs `GLOBAL` workflows so it can save pipeline rules (14 constraints)                                                                                     |
+| Audit Reader              | `audit-reader.json`            | `ROLE_NAME`, `ALLOWED_GROUPS` | Search and read the audit log groups matching `ALLOWED_GROUPS` (default `.*`, every group): the Audit Log Search page, the audit routes, the sign-in probes and one `auditLog` constraint (6 constraints). Use an `mfaRequired` role. |
 
 Templates are located in the `documentation/permissionsTemplates/` directory.
 
+Every role template, the add-on ones included, carries one `bucket` constraint that allows `GET` on every asset bucket registration (`bucketId` `contains` `.*`), so a role built from it keeps its bucket listing and can put a database on any bucket where it holds the routes. Narrow it, for example to `bucketName` `starts_with` `team-a-`, to limit a team to its own buckets. The Deny Tagged Asset Editing overlay carries none: it is applied on top of an existing role, which keeps that role's own `bucket` constraint. A role built from a template imported before 2.7.0 has no `bucket` constraint: the v2.6 to v2.7 migration's `bucketReadConstraints` step adds this one to every role allowed `GET /buckets`, `POST /database` or `PUT /database/{databaseId}` that has none; without it, re-import the template.
+
 The Database Admin, Database User, Database Read-Only, and Global Read-Only templates grant `GET` on `/addon/physna/viewer`, the route the Physna viewer plugin calls, with a `starts_with` criterion in their GET API route constraint (the all-methods API route constraint in Database Admin). On a deployment without the Physna add-on the criterion matches no route. The viewer token that route returns is tenant-scoped (see [Physna Viewer](./physna-integration.md#physna-viewer)); to withhold the viewer from a template-built role, remove the `/addon/physna/viewer` criterion from its imported constraint.
+
+#### Zip download routes on roles built from earlier templates
+
+API route constraints match a route by its path, and the asset zip download routes sit under `/database/`. A role imported from a template of a release before Download as Zip therefore already reaches some of them through its broad `/database` GET and `/database/` POST criteria; it does not reach `GET /download/zip` (the caller's jobs across assets) or the `/zipdownloads` web page. Every zip download call still requires asset `GET` permission on the asset (Tier 2). Each user creates, gets, cancels and deletes only their own jobs. `GET /database/{databaseId}/assets/{assetId}/download/zip-all-users` (every user's jobs for an asset, the Download Queue's **Show all users**) sits under `/database/` too, and the URL route signs another user's archive only for a role that also reaches the file download route `POST /database/{databaseId}/assets/{assetId}/download`.
+
+| Earlier template                       | Already reached                                                                                                 | Not reached                                                            |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Database Admin                         | Create, list on the asset, every user's list, get, download URL (another user's archive too), cancel and delete | `GET /download/zip`, the `/zipdownloads` page                          |
+| Database User                          | Create, list on the asset, every user's list, get, download URL (another user's archive too)                    | Cancel and delete (`DELETE`), `GET /download/zip`, the page            |
+| Database Read-Only, Global Read-Only   | List on the asset, every user's list, get                                                                       | Create, download URL, cancel and delete, `GET /download/zip`, the page |
+| Database Tag Admin, Deny Tagged Assets | None                                                                                                            | All                                                                    |
+
+A Database User role from an earlier template can create a zip download that it cannot cancel or delete. To give such a role the full feature, add the `api-routes-zip-downloads` and `api-routes-zip-downloads-list` constraints and the `/zipdownloads` web route criterion from the current template, or import the current template again. To keep a role from creating zip downloads, add an `api` `deny` constraint on `POST` for paths that end with `/download/zip` (the create route only). To keep a role from seeing every user's jobs, add an `api` `deny` constraint on `GET` for paths that end with `/download/zip-all-users`; to keep it from downloading other users' archives while it keeps its own, withhold the file download route (`POST` on paths that end with `/download`), which also withholds single-file downloads.
 
 ### Applying templates
 
@@ -507,7 +617,7 @@ The response includes the count and IDs of all created constraints:
 ```json
 {
     "success": true,
-    "message": "Successfully imported 14 constraints from template 'Database Admin' for role 'my-project-admin'",
+    "message": "Successfully imported 15 constraints from template 'Database Admin' for role 'my-project-admin'",
     "constraintsCreated": 14,
     "constraintIds": ["uuid-1", "uuid-2", "..."],
     "timestamp": "2024-01-01T00:00:00.000000"

@@ -22,6 +22,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from inprocess_worker import in_process_worker  # noqa: E402
+
 _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _LAMBDA_DIR not in sys.path:
     sys.path.insert(0, _LAMBDA_DIR)
@@ -78,9 +81,9 @@ class TestGeometryCounts:
 
 @pytest.mark.unit
 class TestCheckExportable:
-    def test_the_mesh_only_targets_are_stl(self):
+    def test_the_mesh_only_targets_are_the_formats_that_store_triangles_only(self):
         mod = _load()
-        assert mod.MESH_ONLY_OUTPUT_FORMATS == {".stl"}
+        assert mod.MESH_ONLY_OUTPUT_FORMATS == {".stl", ".dae", ".3mf", ".off"}
         assert mod.MESH_ONLY_OUTPUT_FORMATS <= mod.SUPPORTED_OUTPUT_FORMATS
 
     @pytest.mark.parametrize("loaded", [_points(), _scene(_points())])
@@ -88,7 +91,7 @@ class TestCheckExportable:
         with pytest.raises(ValueError, match=r"cloud\.xyz contains no triangles .* \.stl stores triangle"):
             _load().check_exportable(loaded, ".stl", "cloud.xyz")
 
-    @pytest.mark.parametrize("target", [".ply", ".obj", ".glb", ".gltf"])
+    @pytest.mark.parametrize("target", [".ply", ".obj", ".glb", ".gltf", ".usda", ".usdc", ".usdz"])
     def test_a_point_cloud_to_a_point_capable_target_is_allowed(self, target):
         _load().check_exportable(_points(), target, "cloud.xyz")
 
@@ -109,9 +112,9 @@ class TestTheHandlerAppliesTheCheckBeforeExporting:
         trimesh_stub = MagicMock()
         trimesh_stub.load.return_value = loaded
         upload = MagicMock()
-        with patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p: open(p, "w").close())), \
+        with patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p, **kw: open(p, "w").close())), \
                 patch.object(mod, "uploadV2", upload), \
-                patch.object(mod, "trimesh", trimesh_stub):
+                patch.object(mod, "run_worker", in_process_worker(trimesh_stub)):
             mod.convert_input_output(f"s3://abkt/{input_key}", "s3://obkt/files/", output_filetype)
         return loaded.export, upload
 

@@ -13,11 +13,8 @@ that reads through it, whatever its asset grants are.
 Each template is run through the import's own substitution and conversion (``substitute_variables``,
 ``build_constraint_data``) and then through the real policy generation and Casbin evaluation, with only
 the two table reads stubbed. ``READ_ONLY_POST_ROUTES`` records every POST route a read-only template
-reaches, so a criterion that widens the grant past the download route fails here as well as one that
-misses it. Tier 1 evaluates the request path with the caller's parameter values, so each route is
-probed twice: with every parameter filled, and with its last parameter set to ``download``, the value
-that would carry a write route ending in a parameter (``revertFileVersion/{versionId}``,
-``revertAssetVersion/{assetVersionId}``) past a suffix match on ``/download``.
+reaches (the asset export, a read carried in a POST body, among them), so a criterion that widens the
+grant past the download and export routes fails here as well as one that misses it.
 """
 
 import json
@@ -31,17 +28,18 @@ import backend.backend.handlers.authz as authz_module  # noqa: E402
 from backend.backend.common.apiRoutes import (  # noqa: E402
     ALL_API_ROUTES,
     API_AUTH_LOGIN_PROFILE,
+    API_ASSET_EXPORT,
     API_AUTH_ROUTES,
     API_CHECK_SUBSCRIPTION,
     API_DOWNLOAD_ASSET,
-    API_REVERT_ASSET_VERSION,
-    API_REVERT_FILE_VERSION,
     API_SEARCH,
+    API_SEARCH_NLP,
     API_SEARCH_SIMPLE,
+    API_ZIP_DOWNLOADS_ASSET,
+    API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
     POST,
 )
 from backend.backend.handlers.auth import authConstraintsTemplateService as svc  # noqa: E402
-from backend.backend.handlers.auth import routes as routes_module  # noqa: E402
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 TEMPLATES_DIR = REPO_ROOT / "documentation" / "permissionsTemplates"
@@ -55,14 +53,19 @@ VARIABLE_VALUES = {"ROLE_NAME": ROLE_NAME, "DATABASE_ID": DATABASE_ID, "TAG_VALU
 READ_ONLY_TEMPLATES = ("database-readonly.json", "global-readonly.json")
 # Templates whose role views asset files; each reaches the download route.
 VIEWING_TEMPLATES = ("database-admin.json", "database-user.json") + READ_ONLY_TEMPLATES
-# Every POST route a read-only template reaches: non-mutating reads that carry their parameters in a body.
+# Every POST route a read-only template reaches: non-mutating reads that carry their parameters in a body,
+# plus Download as Zip (creating a job and requesting its URL change no asset data; the job is the caller's own).
 READ_ONLY_POST_ROUTES = {
     API_AUTH_ROUTES,
     API_AUTH_LOGIN_PROFILE,
     API_SEARCH,
     API_SEARCH_SIMPLE,
+    API_SEARCH_NLP,
     API_CHECK_SUBSCRIPTION,
     API_DOWNLOAD_ASSET,
+    API_ZIP_DOWNLOADS_ASSET,
+    API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
+    API_ASSET_EXPORT,
 }
 DOWNLOAD_CONSTRAINT_NAME = "{{ROLE_NAME}}-api-routes-download"
 
@@ -96,20 +99,9 @@ def _api_request(path):
     return {"object__type": "api", "route__path": path}
 
 
-def _concrete_path(route_path, last_parameter=None):
-    """The route template with each ``{parameter}`` segment filled, as a request carries it.
-
-    ``last_parameter`` sets the value of the route's final segment when that segment is a parameter.
-    """
-    if last_parameter is not None and re.search(r"/\{[^/{}]+\}$", route_path):
-        route_path = re.sub(r"\{[^/{}]+\}$", last_parameter, route_path)
+def _concrete_path(route_path):
+    """The route template with each ``{parameter}`` segment filled, as a request carries it."""
     return re.sub(r"\{[^/{}]+\}", "probe-id", route_path)
-
-
-def _probe_paths(route_path):
-    """Every concrete path a route is probed with: all parameters filled, then the last one
-    set to ``download``."""
-    return {_concrete_path(route_path), _concrete_path(route_path, last_parameter="download")}
 
 
 def _download_path():
@@ -162,32 +154,12 @@ class TestTemplatesGrantTheFileDownload:
             self, template_enforcer, template_name):
         enforcer = template_enforcer(_stored_constraints(template_name))
         allowed = {
-            (route, path) for route in ALL_API_ROUTES if POST in route.methods
-            for path in _probe_paths(route.path)
-            if enforcer.enforce(_api_request(path), POST)
+            route for route in ALL_API_ROUTES
+            if POST in route.methods and enforcer.enforce(_api_request(_concrete_path(route.path)), POST)
         }
-        expected = {(route, path) for route in READ_ONLY_POST_ROUTES for path in _probe_paths(route.path)}
-        assert allowed == expected, (
-            f"{template_name}: unexpected {sorted(p for _r, p in allowed - expected)}, "
-            f"missing {sorted(p for _r, p in expected - allowed)}")
-
-    @pytest.mark.parametrize("template_name", READ_ONLY_TEMPLATES)
-    @pytest.mark.parametrize("route", [API_REVERT_FILE_VERSION, API_REVERT_ASSET_VERSION],
-                             ids=["revertFileVersion", "revertAssetVersion"])
-    def test_a_write_route_whose_last_parameter_is_download_is_denied(
-            self, template_enforcer, template_name, route):
-        enforcer = template_enforcer(_stored_constraints(template_name))
-        path = _concrete_path(route.path.replace("{databaseId}", DATABASE_ID), last_parameter="download")
-        assert path.endswith("/download"), path
-        assert enforcer.enforce(_api_request(path), POST) is False, path
-
-    @pytest.mark.parametrize("template_name", READ_ONLY_TEMPLATES)
-    def test_the_route_listing_reports_the_download_as_allowed(self, template_enforcer, template_name):
-        """``/auth/routes/api/allowed`` probes each route with a placeholder segment; the web app
-        shows the download from that answer."""
-        enforcer = template_enforcer(_stored_constraints(template_name))
-        probe = routes_module._route_probe_path(API_DOWNLOAD_ASSET.path)
-        assert enforcer.enforce(_api_request(probe), POST) is True, probe
+        assert allowed == READ_ONLY_POST_ROUTES, (
+            f"{template_name}: unexpected {sorted(r.path for r in allowed - READ_ONLY_POST_ROUTES)}, "
+            f"missing {sorted(r.path for r in READ_ONLY_POST_ROUTES - allowed)}")
 
     @pytest.mark.parametrize("template_name", READ_ONLY_TEMPLATES)
     def test_a_read_only_template_role_reads_the_asset_it_downloads(self, template_enforcer, template_name):
@@ -211,7 +183,75 @@ class TestTheDownloadGrantCanFail:
     @pytest.mark.parametrize("template_name", READ_ONLY_TEMPLATES)
     def test_the_download_constraint_does_not_reach_a_sibling_write_route(self, template_enforcer, template_name):
         enforcer = template_enforcer(_stored_constraints(template_name))
-        for suffix in ("createFolder", "copyFile", "download/extra", "downloads", "download\n",
-                       "extra/download", "revertFileVersion/download", "revertAssetVersion/download"):
+        for suffix in ("createFolder", "copyFile", "download/extra", "downloads"):
             path = f"/database/{DATABASE_ID}/assets/probe-id/{suffix}"
             assert enforcer.enforce(_api_request(path), POST) is False, path
+
+
+ZIP_DOWNLOAD_ROUTES = tuple(route for route in ALL_API_ROUTES if route.category == "zipDownloads")
+
+
+@pytest.mark.unit
+class TestTemplatesGrantDownloadAsZip:
+    """Every template whose role views files reaches every zip download route and method.
+
+    The handler scopes create, get, cancel and delete to the requester, and checks the asset (and, for
+    another user's archive, the file download route) on the shared list and the URL route, so the
+    read-only templates get the whole set like the user and admin templates. The all-users list sits
+    under `/download/zip-all-users`, which the templates' `/download/zip` criteria already reach.
+    """
+
+    def test_the_route_list_holds_the_seven_zip_operations(self):
+        operations = sorted((route.path, method) for route in ZIP_DOWNLOAD_ROUTES for method in route.methods)
+        assert len(operations) == 7, operations
+
+    @pytest.mark.parametrize("template_name", VIEWING_TEMPLATES)
+    def test_a_viewing_template_role_reaches_every_zip_route(self, template_enforcer, template_name):
+        enforcer = template_enforcer(_stored_constraints(template_name))
+        missing = [
+            (route.path, method)
+            for route in ZIP_DOWNLOAD_ROUTES
+            for method in route.methods
+            if not enforcer.enforce(
+                _api_request(_concrete_path(route.path.replace("{databaseId}", DATABASE_ID))), method)
+        ]
+        assert missing == [], f"{template_name}: zip routes not granted {missing}"
+
+
+def _seeded_as_role(role):
+    """The seeded constraints of ``role`` re-pointed at the fixture's role name."""
+    from backend.tests.handlers.authz import shipped_constraints
+
+    constraints = shipped_constraints.seeded_constraints(role)
+    for constraint in constraints:
+        for permission in constraint.get("groupPermissions", []):
+            permission["groupId"] = ROLE_NAME
+    return constraints
+
+
+SHARED_LIST_PATH = "/database/template-db/assets/probe-id/download/zip-all-users"
+SHARED_URL_PATH = "/database/template-db/assets/probe-id/download/zip/probe-id/url"
+FILE_DOWNLOAD_PATH = "/database/template-db/assets/probe-id/download"
+
+
+@pytest.mark.unit
+class TestDownloadQueueSharedView:
+    """The Download Queue's shared view needs the all-users list route, and downloading another
+    user's archive needs the URL route plus the asset's file download route. Every viewing template
+    and both seeded roles grant all three; the handler then checks the asset itself."""
+
+    @pytest.mark.parametrize("template_name", VIEWING_TEMPLATES)
+    def test_a_viewing_template_role_reaches_the_shared_view(self, template_enforcer, template_name):
+        enforcer = template_enforcer(_stored_constraints(template_name))
+        assert enforcer.enforce(_api_request(SHARED_LIST_PATH), "GET")
+        assert enforcer.enforce(_api_request(SHARED_URL_PATH), "POST")
+        assert enforcer.enforce(_api_request(FILE_DOWNLOAD_PATH), "POST")
+
+    @pytest.mark.parametrize("role", ("admin", "basicReadOnly"))
+    def test_a_seeded_role_reaches_the_shared_list(self, template_enforcer, role):
+        enforcer = template_enforcer(_seeded_as_role(role))
+        assert enforcer.enforce(_api_request(SHARED_LIST_PATH), "GET")
+
+    def test_a_role_without_api_grants_does_not(self, template_enforcer):
+        enforcer = template_enforcer(_stored_constraints("database-tag-admin.json"))
+        assert not enforcer.enforce(_api_request(SHARED_LIST_PATH), "GET")

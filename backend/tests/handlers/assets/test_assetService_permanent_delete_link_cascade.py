@@ -64,6 +64,11 @@ def _load():
     count_stub = types.ModuleType("handlers.assets.assetCount"); count_stub.update_asset_count = MagicMock()
     files_stub = types.ModuleType("handlers.assets.assetFiles")
     files_stub.delete_s3_prefix_all_versions = MagicMock()
+    files_stub.S3PrefixDeleteIncomplete = type("S3PrefixDeleteIncomplete", (Exception,), {})
+    files_stub.delete_files_metadata = MagicMock()
+    files_stub.delete_auxiliary_files_of_keys = MagicMock()
+    files_stub.delete_file_version_records = MagicMock()
+    files_stub.record_invocation_context = MagicMock()
     files_stub.aux_bucket_asset_file_base = lambda db, key: f"{(db or '').strip('/')}/{(key or '').strip('/')}/"
     authz_stub = types.ModuleType("handlers.authz"); authz_stub.CasbinEnforcer = MagicMock()
     auth_stub = types.ModuleType("handlers.auth"); auth_stub.request_to_claims = MagicMock(return_value={"tokens": ["tester"]})
@@ -229,3 +234,34 @@ class TestPermanentDeleteRemovesEveryLink:
         table, *_ = _run(from_pages=[{"Items": []}], to_pages=[{"Items": []}])
         indexes = {c.kwargs.get("IndexName") for c in table.query.call_args_list}
         assert indexes == {"fromAssetGSI", "toAssetGSI"}
+
+
+@pytest.mark.unit
+class TestThePermanentDeleteWritesNoChangeStamp:
+    """A permanent deletion removes the asset's links and writes nothing else for them: the
+    compliance trigger records each removed link on the asset at its other end from the link
+    table's stream (D14 now holds there; see the trigger's indexed-change tests). The deletion costs
+    what it cost before compliance: no asset-table call per link."""
+
+    def _run_cleanup(self, from_items, to_items):
+        from_pager = Pager({"Items": from_items}, name="fromAssetGSI")
+        to_pager = Pager({"Items": to_items}, name="toAssetGSI")
+        table = MagicMock(name="asset_links_table")
+        table.query.side_effect = RoutedPager(on="IndexName", fromAssetGSI=from_pager,
+                                              toAssetGSI=to_pager)
+        asset_table = MagicMock(name="asset_table")
+        with patch.object(_svc(), "asset_links_table", table), \
+                patch.object(_svc(), "asset_links_table_name", "links-table"), \
+                patch.object(_svc(), "asset_table", asset_table), \
+                patch.object(_svc(), "delete_asset_link_metadata_for_permanent_deletion"):
+            _svc()._delete_asset_links_for_permanent_deletion(
+                DATABASE_ID, ASSET_ID, {"dynamodb_tables": []})
+        return table, asset_table
+
+    def test_removing_the_links_makes_no_asset_table_call(self):
+        links, asset_table = self._run_cleanup([_link("l-out", ASSET_KEY, "db-2:child")],
+                                               [_link("l-in", "db-3:parent", ASSET_KEY)])
+        # The control: both links were removed.
+        assert {c.kwargs["Key"]["assetLinkId"] for c in links.delete_item.call_args_list} == {
+            "l-out", "l-in"}
+        assert asset_table.mock_calls == []

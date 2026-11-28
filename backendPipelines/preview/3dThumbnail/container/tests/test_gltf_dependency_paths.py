@@ -5,9 +5,13 @@
 
 A .gltf file is ordinary asset content, so its buffer and image URIs carry whatever the uploader
 wrote. Each URI is joined to the container's download directory and to the input file's own S3
-prefix, so an absolute or parent-relative value escapes both: the local join reaches any path in the
-container filesystem (the download opens it "wb", creating or truncating it as root) and the S3 join
-reads outside the input file's directory.
+prefix, so an absolute or parent-relative value would escape both: the local join reaches any path
+in the container filesystem (the download opens it "wb", creating or truncating it) and the S3 join
+reads outside the input's asset.
+
+The glTF fetch runs through the shared referenced-file resolver (``preview_pipeline.dependencies``).
+With no asset id the confinement root is the .gltf file's own directory, the narrowest one, which is
+what these cases exercise; ``test_thumbnail_referenced_files.py`` covers the asset-root cases.
 
 Guards S4-PIPELINES-016 (CWE-22)."""
 
@@ -18,7 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from preview_pipeline import core
+from preview_pipeline import dependencies
 
 BUCKET = "asset-bucket"
 OBJECT_KEY = "xid/models/scene.gltf"
@@ -39,26 +43,26 @@ TRAVERSALS = [
 ]
 
 
-def _write_gltf(local_dir, uris, key="images"):
-    """Write the .gltf the container has already downloaded, declaring uris as external resources."""
-    gltf = {"buffers": [], "images": []}
-    gltf[key] = [{"uri": uri} for uri in uris]
-    with open(os.path.join(local_dir, os.path.basename(OBJECT_KEY)), "w", encoding="utf-8") as f:
-        json.dump(gltf, f)
-
-
 def _download_dependencies(tmp_path, uris, key="images"):
-    """Run the dependency download against stubbed S3 + makedirs.
+    """Run the glTF reference fetch against stubbed S3 + makedirs.
 
     Returns (download mock, makedirs mock). makedirs is stubbed so an escaping path cannot create a
     directory outside tmp_path while this test runs against unfixed code."""
-    local_dir = str(tmp_path)
-    _write_gltf(local_dir, uris, key=key)
+    local_root = str(tmp_path)
+    root_key = dependencies.asset_root_key(OBJECT_KEY)
+    assert root_key == S3_DIR + "/"
+    gltf = {"buffers": [], "images": []}
+    gltf[key] = [{"uri": uri} for uri in uris]
+    local_input = os.path.join(local_root, "scene.gltf")
+    with open(local_input, "w", encoding="utf-8") as f:
+        json.dump(gltf, f)
     download = MagicMock(side_effect=lambda bucket, key_, path: path)
     makedirs = MagicMock()
-    with patch.object(core.s3, "download", download), \
-            patch.object(core.os, "makedirs", makedirs):
-        core._download_gltf_dependencies(BUCKET, OBJECT_KEY, local_dir)
+    with patch.object(dependencies.s3, "download", download), \
+            patch.object(dependencies.s3, "head_object_size", MagicMock(return_value=10)), \
+            patch.object(dependencies.os, "makedirs", makedirs):
+        dependencies.fetch_referenced_files(BUCKET, OBJECT_KEY, local_input, local_root, root_key,
+                                            ".gltf")
     return download, makedirs
 
 
@@ -87,7 +91,7 @@ class TestTraversalUrisAreRejected:
     @pytest.mark.parametrize("uri", TRAVERSALS)
     def test_a_traversal_uri_downloads_nothing(self, tmp_path, uri):
         """The positive control: unfixed, os.path.join puts the local path at the traversal target
-        and s3_utils.download opens it "wb", so the container writes the file as root."""
+        and s3_utils.download opens it "wb", so the container writes the file."""
         download, makedirs = _download_dependencies(tmp_path, [uri])
         _assert_confined(tmp_path, download, makedirs)
         download.assert_not_called()
@@ -143,16 +147,17 @@ class TestLegitimateUrisStillResolve:
 
 
 @pytest.mark.unit
-class TestResolveGltfDependency:
+class TestResolveGltfReference:
     @pytest.mark.parametrize("uri", TRAVERSALS)
-    def test_rejected(self, tmp_path, uri):
-        assert core._resolve_gltf_dependency(uri, str(tmp_path)) is None
+    def test_rejected(self, uri):
+        assert dependencies.resolve_reference(uri, "", percent_encoded=True) is None
 
     @pytest.mark.parametrize("uri", ["", "   ", None])
-    def test_a_blank_uri_is_rejected(self, tmp_path, uri):
-        assert core._resolve_gltf_dependency(uri, str(tmp_path)) is None
+    def test_a_blank_uri_is_rejected(self, uri):
+        assert dependencies.resolve_reference(uri, "", percent_encoded=True) is None
 
     def test_accepted_paths_keep_their_relative_shape(self, tmp_path):
-        relative, local = core._resolve_gltf_dependency("textures/wood.png", str(tmp_path))
+        relative = dependencies.resolve_reference("textures/wood.png", "", percent_encoded=True)
         assert relative == "textures/wood.png"
+        local = dependencies.local_path_for(str(tmp_path), relative)
         assert os.path.realpath(local).startswith(os.path.realpath(str(tmp_path)) + os.sep)

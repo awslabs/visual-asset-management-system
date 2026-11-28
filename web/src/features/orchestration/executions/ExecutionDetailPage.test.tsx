@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -21,6 +21,8 @@ jest.mock("@monaco-editor/react", () => ({
 jest.mock("../api/queries", () => ({
     useExecutionDetails: jest.fn(),
     useExecutionDetailMetadata: jest.fn(),
+    useExecutionDetailFiles: jest.fn(),
+    useExecutionResults: jest.fn(),
 }));
 
 /**
@@ -58,8 +60,20 @@ describe("ExecutionDetailPage", () => {
         });
         jest.clearAllMocks();
         // Default: no collection escalated. Tests about escalation override this.
-        const { useExecutionDetailMetadata } = require("../api/queries");
+        const {
+            useExecutionDetailMetadata,
+            useExecutionDetailFiles,
+            useExecutionResults,
+        } = require("../api/queries");
         useExecutionDetailMetadata.mockReturnValue(IDLE_PAGED_METADATA);
+        useExecutionDetailFiles.mockReturnValue(IDLE_PAGED_METADATA);
+        useExecutionResults.mockReturnValue({
+            data: undefined,
+            pageContents: [],
+            isLoading: false,
+            isError: false,
+            error: null,
+        });
     });
 
     it("shows the recorded per-step settings and flags what the template overrode", async () => {
@@ -468,18 +482,71 @@ describe("ExecutionDetailPage", () => {
         );
     };
 
+    it("shows the output ingestion progress of a run copying its large outputs", async () => {
+        renderDetail({
+            executionStatus: "RUNNING",
+            executionPhase: "INGESTING_OUTPUTS",
+            outputIngestion: {
+                filesTotal: 2,
+                filesDone: 1,
+                bytesTotal: 4096,
+                bytesDone: 1024,
+                files: [
+                    {
+                        relativeKey: "/scan.e57",
+                        status: "RUNNING",
+                        bytesTotal: 3072,
+                        partsTotal: 4,
+                        partsDone: 1,
+                    },
+                ],
+                filesTruncated: false,
+            },
+        });
+        expect(await screen.findByText("Ingesting outputs (1 of 2)")).toBeInTheDocument();
+        expect(screen.getByRole("table", { name: "Output files being copied" })).toHaveTextContent(
+            "/scan.e57"
+        );
+    });
+
+    it("shows no ingestion progress for a run without the phase", async () => {
+        renderDetail({ executionStatus: "SUCCEEDED" });
+        expect(await screen.findByRole("tab", { name: /Outputs/i })).toBeInTheDocument();
+        expect(screen.queryByTestId("output-ingestion-progress")).not.toBeInTheDocument();
+    });
+
+    it("marks an output file the copy engine landed, and only that one", async () => {
+        renderDetail({
+            outputs: {
+                files: [
+                    { relativeFilePath: "/big.e57", ingestionStatus: "SUCCEEDED" },
+                    { relativeFilePath: "/small.glb" },
+                ],
+            } as any,
+        });
+        await userEvent.click(await screen.findByRole("tab", { name: /Outputs/i }));
+        const table = screen.getByRole("table", { name: "Output files" });
+        expect(within(table).getAllByText("Ingested by copy engine")).toHaveLength(1);
+        expect(within(table).getByText("/big.e57").closest("td")).toHaveTextContent(
+            "Ingested by copy engine"
+        );
+        expect(within(table).getByText("/small.glb").closest("td")).not.toHaveTextContent(
+            "Ingested"
+        );
+    });
+
     it("marks a truncated input section where it is rendered, not only in the banner", async () => {
         // A user scrolled to the table must be able to tell the list is a subset; the page-level banner
-        // is off-screen by then.
+        // is off-screen by then. Files now escalate to the paged route, so with the paged read still
+        // idle the section stays marked Partial until the walk completes.
         renderDetail({
             inputFiles: [{ databaseId: "db-1", assetId: "a1", inputAssetFileKey: "/f.glb" }],
             inputMetadata: [{ assetId: "a1", filePath: "/f.glb", metadata: { k: "v" } }],
             truncatedCollections: ["inputFiles"],
         });
 
-        expect(await screen.findByText(/these sections are a subset/i)).toBeInTheDocument();
         // Exactly one section carries the marker — the truncated one.
-        expect(screen.getAllByText("Partial")).toHaveLength(1);
+        expect(await screen.findAllByText("Partial")).toHaveLength(1);
     });
 
     it("marks each metadata collection independently", async () => {
@@ -652,6 +719,53 @@ describe("ExecutionDetailPage", () => {
         expect(screen.getByText("Attribute")).toBeInTheDocument();
     });
 
+    it("marks a file record a whole-asset expansion added, and only that one", async () => {
+        // The server reports `expanded` on a file record the assetFileMetadata expansion added: the
+        // step was handed it as context, not as an input file, so the table must not present it
+        // like one. A row without the flag (a run recorded before it existed) is not marked.
+        renderDetail({
+            inputMetadata: [
+                {
+                    pipelineId: "p1",
+                    assetId: "a1",
+                    filePath: "/",
+                    metadata: { title: "A1" },
+                    expanded: false,
+                },
+                {
+                    pipelineId: "p1",
+                    assetId: "a1",
+                    filePath: "/parts/m.glb",
+                    metadata: { material: "steel" },
+                    expanded: true,
+                },
+                { pipelineId: "p1", assetId: "a1", filePath: "/x.glb", metadata: { k: "v" } },
+            ],
+        });
+
+        expect(await screen.findByText(/Input Asset and File Metadata \(3\)/)).toBeInTheDocument();
+        const badges = screen.getAllByText("Expanded");
+        expect(badges).toHaveLength(1);
+        const row = badges[0].closest("tr") as HTMLElement;
+        expect(within(row).getByText("/parts/m.glb")).toBeInTheDocument();
+        expect(within(row).getByText("material")).toBeInTheDocument();
+        expect(badges[0]).toHaveAttribute(
+            "title",
+            expect.stringContaining("not one of its input files")
+        );
+        // The title tooltip shows only on mouse hover, so the badge is also described by a visually
+        // hidden sentence in its row that a screen reader reads.
+        expect(badges[0]).toHaveAccessibleDescription(
+            expect.stringContaining("not one of its input files")
+        );
+        const explanation = document.getElementById(
+            badges[0].getAttribute("aria-describedby") as string
+        );
+        expect(explanation).toHaveClass("sr-only");
+        expect(row).toContainElement(explanation);
+        expect(explanation).toHaveTextContent(/not one of its input files/);
+    });
+
     it("renders a metadata row carrying no pipelineId without failing", async () => {
         // An execution recorded before per-pipeline attribution has no pipelineId on its rows; the cell
         // falls back to the same dash the output tables use rather than rendering blank or throwing.
@@ -697,6 +811,35 @@ describe("ExecutionDetailPage", () => {
         expect(screen.getByText("p2")).toBeInTheDocument();
     });
 
+    it("tells a file metadata row and a file attribute row with the same key apart", async () => {
+        renderDetail({
+            outputs: {
+                metadata: [
+                    {
+                        targetFilePath: "/out.glb",
+                        metadataKey: "units",
+                        metadataValue: "mm",
+                        metadataType: "metadata",
+                        pipelineId: "p1",
+                    },
+                    {
+                        targetFilePath: "/out.glb",
+                        metadataKey: "units",
+                        metadataValue: "m",
+                        metadataType: "attribute",
+                        pipelineId: "p1",
+                    },
+                ],
+            } as any,
+        });
+
+        await userEvent.click(await screen.findByRole("tab", { name: /Outputs/i }));
+        expect(screen.getByText(/Output Metadata \(2\)/)).toBeInTheDocument();
+        expect(screen.getByRole("columnheader", { name: /^Type$/i })).toBeInTheDocument();
+        expect(screen.getByRole("cell", { name: "metadata" })).toBeInTheDocument();
+        expect(screen.getByRole("cell", { name: "attribute" })).toBeInTheDocument();
+    });
+
     it("renders an output metadata row carrying no pipelineId as a dash", async () => {
         // A run recorded before per-pipeline attribution has no pipelineId; the cell falls back to the
         // same dash the sibling output-files table uses rather than rendering blank.
@@ -722,6 +865,8 @@ describe("ExecutionDetailPage", () => {
                     renderedConfigLocation: {
                         bucket: "run-bkt",
                         key: "executions/e-t/input/1/config.json",
+                        bucketId: "registration-1",
+                        relativeKey: "executions/e-t/input/1/config.json",
                     },
                 },
             ],
@@ -729,9 +874,11 @@ describe("ExecutionDetailPage", () => {
 
         await userEvent.click(await screen.findByRole("tab", { name: /Pipelines/i }));
         expect(screen.getByText("Truncated")).toBeInTheDocument();
+        // The S3 path is what an operator reads the object with; the registration id is not shown.
         expect(
             screen.getByText("s3://run-bkt/executions/e-t/input/1/config.json")
         ).toBeInTheDocument();
+        expect(screen.queryByText(/registration-1/)).not.toBeInTheDocument();
     });
 
     it("shows no config location when the inline body is complete", async () => {
@@ -772,9 +919,16 @@ describe("ExecutionDetailPage", () => {
     const renderEscalated = (
         data: Partial<ExecutionDetail>,
         byCollection: Record<string, any>,
-        canRoute: (method: string, path: string) => boolean = () => true
+        canRoute: (method: string, path: string) => boolean = () => true,
+        byFileCollection: Record<string, any> = {},
+        resultsPaged: any = undefined
     ) => {
-        const { useExecutionDetails, useExecutionDetailMetadata } = require("../api/queries");
+        const {
+            useExecutionDetails,
+            useExecutionDetailMetadata,
+            useExecutionDetailFiles,
+            useExecutionResults,
+        } = require("../api/queries");
         const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
         useExecutionDetails.mockReturnValue({
             data: {
@@ -791,6 +945,19 @@ describe("ExecutionDetailPage", () => {
             (_executionId: string, collection: string) =>
                 byCollection[collection] || IDLE_PAGED_METADATA
         );
+        useExecutionDetailFiles.mockImplementation(
+            (_executionId: string, collection: string) =>
+                byFileCollection[collection] || IDLE_PAGED_METADATA
+        );
+        useExecutionResults.mockReturnValue(
+            resultsPaged || {
+                data: undefined,
+                pageContents: [],
+                isLoading: false,
+                isError: false,
+                error: null,
+            }
+        );
         useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(canRoute) });
         return render(
             <QueryClientProvider client={queryClient}>
@@ -800,6 +967,42 @@ describe("ExecutionDetailPage", () => {
             </QueryClientProvider>
         );
     };
+
+    it("re-reads truncated results through the paged route and loads the next page on request", async () => {
+        const fetchNextPage = jest.fn();
+        renderEscalated(
+            {
+                outputs: { results: [{ resultsContent: "inline subset" }] },
+                truncatedCollections: ["outputs.results"],
+            } as any,
+            {},
+            () => true,
+            {},
+            {
+                data: {
+                    resultContent: "page one text",
+                    resultContentTruncated: false,
+                    resultRowCount: 1,
+                    resultContentBytes: 13,
+                },
+                pageContents: ["page one text"],
+                readFullText: jest.fn(),
+                isLoading: false,
+                isError: false,
+                error: null,
+                hasNextPage: true,
+                isFetchingNextPage: false,
+                fetchNextPage,
+            }
+        );
+        await userEvent.click(await screen.findByRole("tab", { name: /Outputs/i }));
+        expect(await screen.findByText("page one text")).toBeInTheDocument();
+        expect(screen.queryByText("inline subset")).not.toBeInTheDocument();
+        fireEvent.click(screen.getByTestId("results-section-load-more"));
+        expect(fetchNextPage).toHaveBeenCalledTimes(1);
+        // The full result can be saved without painting it.
+        expect(screen.getByTestId("results-section-download")).toHaveTextContent("Download");
+    });
 
     /** Metadata rows in the paged route's shape, one map entry each. */
     const pagedMetadataRows = (count: number, offset = 0) =>
@@ -865,6 +1068,61 @@ describe("ExecutionDetailPage", () => {
 
         await userEvent.click(await screen.findByRole("button", { name: /Load more rows/i }));
         expect(fetchNextPage).toHaveBeenCalled();
+    });
+
+    it("keeps the section's Load more focusable while the next page is read, and ignores a press", async () => {
+        const fetchNextPage = jest.fn();
+        renderEscalated(
+            { inputMetadata: [], truncatedCollections: ["inputMetadata"] },
+            {
+                input: pagedResult([pagedMetadataRows(2)], {
+                    hasNextPage: true,
+                    isFetchingNextPage: true,
+                    fetchNextPage,
+                }),
+            }
+        );
+        const loadMore = await screen.findByRole("button", { name: "Loading…" });
+        expect(loadMore).toHaveAttribute("aria-disabled", "true");
+        expect(loadMore).not.toBeDisabled();
+        await userEvent.click(loadMore);
+        expect(fetchNextPage).not.toHaveBeenCalled();
+    });
+
+    it("keeps the result's Load more and Download focusable while they read", async () => {
+        const fetchNextPage = jest.fn();
+        renderEscalated(
+            {
+                outputs: { results: [{ resultsContent: "inline subset" }] },
+                truncatedCollections: ["outputs.results"],
+            } as any,
+            {},
+            () => true,
+            {},
+            {
+                data: {
+                    resultContent: "page one text",
+                    resultContentTruncated: false,
+                    resultRowCount: 1,
+                    resultContentBytes: 13,
+                },
+                pageContents: ["page one text"],
+                readFullText: jest.fn(),
+                isLoading: false,
+                isError: false,
+                error: null,
+                hasNextPage: true,
+                isFetchingNextPage: true,
+                fetchNextPage,
+            }
+        );
+        await userEvent.click(await screen.findByRole("tab", { name: /Outputs/i }));
+        const loadMore = await screen.findByTestId("results-section-load-more");
+        expect(loadMore).toHaveAccessibleName("Loading…");
+        expect(loadMore).toHaveAttribute("aria-disabled", "true");
+        expect(loadMore).not.toBeDisabled();
+        await userEvent.click(loadMore);
+        expect(fetchNextPage).not.toHaveBeenCalled();
     });
 
     it("shows no Load more control once the collection is fully loaded", async () => {
@@ -1008,31 +1266,43 @@ describe("ExecutionDetailPage", () => {
         expect(screen.getAllByText("Partial")).toHaveLength(1);
     });
 
-    it("says plainly that a truncated file collection has no complete set to load", async () => {
-        // Files stay inline with no paged route, so the flag is the reader's only signal — and there is
-        // nothing further to fetch.
+    it("escalates a truncated file collection to the paged files route", async () => {
+        // Files now HAVE a paged route (#858), so a truncated file collection is read in full page by
+        // page — a "Load more rows" control appears while more pages remain, not a dead-end note.
+        const fetchNextPage = jest.fn();
         renderEscalated(
             {
                 inputFiles: [{ databaseId: "db-1", assetId: "a1", inputAssetFileKey: "/f.glb" }],
                 truncatedCollections: ["inputFiles"],
             },
-            {}
+            {},
+            () => true,
+            {
+                input: pagedResult(
+                    [[{ databaseId: "db-1", assetId: "a1", inputAssetFileKey: "/paged.glb" }]],
+                    { hasNextPage: true, fetchNextPage }
+                ),
+            }
         );
 
-        expect(await screen.findByText(/not retrievable through this view/i)).toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: /Load more rows/i })).not.toBeInTheDocument();
+        expect(await screen.findByRole("button", { name: /Load more rows/i })).toBeInTheDocument();
+        const { useExecutionDetailFiles } = require("../api/queries");
+        expect(useExecutionDetailFiles).toHaveBeenCalledWith("e-p", "input", true);
     });
 
     it("does not call a metadata collection a subset in the banner once it is paged", async () => {
-        // The banner named every flagged collection as a subset. An escalated one is not — it is read
-        // separately, page by page — so the two are stated apart.
+        // The banner names a flagged collection a subset only when it cannot be escalated. An escalated
+        // one is read page by page and stated apart; here the files route is DENIED so inputFiles stays
+        // a subset while inputMetadata (permitted) escalates.
         renderEscalated(
             {
                 inputFiles: [{ databaseId: "db-1", assetId: "a1", inputAssetFileKey: "/f.glb" }],
                 inputMetadata: [],
                 truncatedCollections: ["inputFiles", "inputMetadata"],
             },
-            { input: pagedResult([pagedMetadataRows(1)]) }
+            { input: pagedResult([pagedMetadataRows(1)]) },
+            // Deny the files route so inputFiles cannot escalate; permit metadata.
+            (_method, path) => path !== "/workflows/executions/{executionId}/details/files"
         );
 
         const subset = await screen.findByText(/sections are a subset: inputFiles\./);
@@ -1426,5 +1696,127 @@ describe("ExecutionDetailPage sub-processes", () => {
         expect(
             screen.queryByText("The state machine defines more stages than are listed here.")
         ).not.toBeInTheDocument();
+    });
+});
+
+/**
+ * The header names the published workflow version a run started on, and badges a version the workflow
+ * no longer runs because its state machine has been redeployed since the run.
+ */
+describe("ExecutionDetailPage workflow version", () => {
+    let queryClient: QueryClient;
+
+    const renderVersion = (fields: Partial<ExecutionDetail>) => {
+        const { useExecutionDetails, useExecutionDetailMetadata } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useExecutionDetailMetadata.mockReturnValue(IDLE_PAGED_METADATA);
+        useExecutionDetails.mockReturnValue({
+            data: {
+                workflowExecutionId: "e-ver",
+                workflowId: "wf-1",
+                workflowDatabaseId: "db-1",
+                executionStatus: "SUCCEEDED",
+                ...fields,
+            },
+            isLoading: false,
+            error: null,
+        });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+        return render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionDetailPage executionId="e-ver" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+    };
+
+    const versionField = () => screen.getByText("Workflow Version:").parentElement as HTMLElement;
+
+    beforeEach(() => {
+        queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        jest.clearAllMocks();
+    });
+
+    it("shows the version a run started on as the latest", () => {
+        renderVersion({ workflowVersion: 3, workflowVersionCurrent: true });
+        const field = versionField();
+        expect(within(field).getByText("3")).toBeInTheDocument();
+        expect(within(field).getByText("(latest)")).toBeInTheDocument();
+        expect(within(field).queryByText("Superseded")).not.toBeInTheDocument();
+    });
+
+    it("badges a superseded version and explains it", async () => {
+        renderVersion({ workflowVersion: 3, workflowVersionCurrent: false });
+        const field = versionField();
+        expect(within(field).getByText("3")).toBeInTheDocument();
+        expect(within(field).getByText("Superseded")).toBeInTheDocument();
+        expect(within(field).queryByText("(latest)")).not.toBeInTheDocument();
+
+        await userEvent.hover(
+            within(field).getByRole("button", { name: "About superseded versions" })
+        );
+        expect(
+            (await screen.findAllByText(/has been redeployed since this run started/)).length
+        ).toBeGreaterThan(0);
+        // Every builder save redeploys, so the tooltip must not present step or pipeline changes as
+        // the only causes.
+        expect(screen.getAllByText(/saved in the workflow builder/).length).toBeGreaterThan(0);
+    });
+
+    it("says a run started before versions were recorded has none", () => {
+        renderVersion({ workflowVersion: null, workflowVersionCurrent: null });
+        const field = versionField();
+        expect(within(field).getByText("Not recorded")).toBeInTheDocument();
+        expect(within(field).queryByText("Superseded")).not.toBeInTheDocument();
+    });
+
+    it("shows no version field when the service does not report one", () => {
+        renderVersion({});
+        expect(screen.queryByText("Workflow Version:")).not.toBeInTheDocument();
+    });
+});
+
+describe("ExecutionDetailPage when a later poll fails", () => {
+    it("keeps the loaded execution and says the page could not be refreshed", () => {
+        const queries = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        queries.useExecutionDetailMetadata.mockReturnValue(IDLE_PAGED_METADATA);
+        queries.useExecutionDetailFiles.mockReturnValue(IDLE_PAGED_METADATA);
+        queries.useExecutionResults.mockReturnValue({
+            data: undefined,
+            pageContents: [],
+            isLoading: false,
+            isError: false,
+            error: null,
+        });
+        queries.useExecutionDetails.mockReturnValue({
+            data: {
+                workflowExecutionId: "e-poll",
+                workflowId: "wf-1",
+                workflowDatabaseId: "db-1",
+                executionStatus: "RUNNING",
+                pipelines: [],
+            },
+            isLoading: false,
+            error: new Error("Service unavailable"),
+        });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+
+        render(
+            <QueryClientProvider client={new QueryClient()}>
+                <MemoryRouter>
+                    <ExecutionDetailPage executionId="e-poll" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.getByRole("heading", { name: "Execution Detail" })).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                "Could not refresh: Service unavailable. The page shows the last answer."
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText("Error Loading Execution")).not.toBeInTheDocument();
     });
 });

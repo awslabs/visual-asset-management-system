@@ -3,9 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { apiClient, isNetworkFailure, NETWORK_FAILURE_MESSAGE } from "./apiClient";
+import {
+    apiClient,
+    isNetworkFailure,
+    isRequestBlocked,
+    NETWORK_FAILURE_MESSAGE,
+} from "./apiClient";
+import { markUnanswered, requestFailureMessage } from "./networkFailure";
 import { default as vamsConfig } from "../config";
 import { ensureApiStage } from "../utils/apiEndpoint";
+import type { NlpSearchRequest, NlpSearchResponse } from "../components/search/types";
+
+// Components tell a blocked request from a permission denial through the service layer.
+export { isRequestBlocked };
 
 export const getAmplifyConfig = async () => {
     console.log("getAmplifyConfig");
@@ -195,7 +205,8 @@ export const fetchAllowedApiRoutes = async () => {
  * @param {string} [params.versionId] - Optional version ID
  * @param {string} [params.assetVersionId] - Optional asset version ID
  * @param {string} [params.downloadType="assetFile"] - Download type: "assetFile" (default) or "assetPreview"
- * @returns {Promise<boolean|{message}|any>}
+ * @returns {Promise<boolean|{message}|any>} `[true, url]` on success; `[false, message, status?]` on
+ *   failure, where `status` is the HTTP status when the request itself was rejected (e.g. 403, 410).
  */
 export const downloadAsset = async ({
     databaseId,
@@ -204,6 +215,7 @@ export const downloadAsset = async ({
     versionId,
     assetVersionId = undefined,
     downloadType = "assetFile",
+    signal = undefined,
 }: any) => {
     try {
         // Build request body with new model structure
@@ -220,6 +232,7 @@ export const downloadAsset = async ({
 
         const response = await apiClient.post(`database/${databaseId}/assets/${assetId}/download`, {
             body: body,
+            ...(signal ? { signal } : {}),
         });
 
         // Handle new response structure
@@ -242,11 +255,31 @@ export const downloadAsset = async ({
         }
     } catch (error: any) {
         console.log(error);
+        // Failure tuple is [false, message, status?]. The status is the HTTP status of the download
+        // request when known (ApiError), so a caller fetching several entries can tell a per-entry
+        // authorization denial (401/403) or archived version (410) apart from a generic failure.
+        // A request the AWS WAF web ACL blocked carries no status, so its message is shown; a
+        // request that got no response at all says the service could not be reached.
+        if (isNetworkFailure(error)) {
+            return markUnanswered([false, NETWORK_FAILURE_MESSAGE, undefined]);
+        }
         // Check for 410 Gone status (archived file)
         if (error.status === 410) {
-            return [false, "This file version has been archived and cannot be downloaded"];
+            return [false, "This file version has been archived and cannot be downloaded", 410];
         }
-        return [false, error?.message];
+        // The fourth entry is the API's own `message` from the response body, so a viewer or a
+        // preview can show why the API refused (for example a quarantined asset while the download
+        // block is on, D166) instead of its generic text (core/streamFailure.ts).
+        // It is present only with the status (an ApiError carries the parsed body; it is read by
+        // shape so a test double of the client without the class is not a TypeError here).
+        const blocked = isRequestBlocked(error);
+        const status = blocked ? undefined : error?.status;
+        const failure: any[] = [false, error?.message, status];
+        if (typeof status === "number" && typeof error?.body?.message === "string") {
+            failure.push(error.body.message);
+        }
+        // Only these two failures carry no API answer and a message that says what happened.
+        return blocked ? markUnanswered(failure) : failure;
     }
 };
 
@@ -448,9 +481,10 @@ export const fetchAsset = async ({ databaseId, assetId, showArchived = false }: 
  * Fetches an asset and, on failure, also returns the HTTP status so a caller can tell an
  * authorization denial (403) from a missing asset.
  * @returns `[true, asset]` on success; `[false, message, status?]` on failure, where `status` is
- *   the HTTP status when the request itself was rejected. A request whose response the browser
- *   never saw (a network failure, or a dropped cross-origin response) carries no status and a
- *   message saying the service could not be reached.
+ *   the HTTP status when the request itself was rejected. A request the AWS WAF web ACL blocked
+ *   carries no status, so its message (which names the request ID) is shown. A request whose
+ *   response the browser never saw (a network failure, or a cross-origin preflight a web ACL
+ *   blocked) carries no status and a message saying the service could not be reached.
  */
 export const fetchAssetWithStatus = async ({
     databaseId,
@@ -476,7 +510,7 @@ export const fetchAssetWithStatus = async ({
         if (isNetworkFailure(error)) {
             return [false, NETWORK_FAILURE_MESSAGE, undefined];
         }
-        return [false, error?.message, error?.status];
+        return [false, error?.message, isRequestBlocked(error) ? undefined : error?.status];
     }
 };
 /**
@@ -640,13 +674,21 @@ export const fetchTagTypesForAsset = async (params?: { databaseId?: string }) =>
     });
 };
 
-export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = false }: any) => {
+export const fetchAssetLinks = async ({
+    assetId,
+    databaseId,
+    childTreeView = false,
+    showArchived = false,
+}: any) => {
     try {
         let response;
         if (assetId) {
             const queryParams: any = {};
             if (childTreeView) {
                 queryParams.childTreeView = "true";
+            }
+            if (showArchived) {
+                queryParams.showArchived = "true";
             }
 
             console.log("Fetching asset links with params:", queryParams);
@@ -696,7 +738,7 @@ export const fetchAssetLinks = async ({ assetId, databaseId, childTreeView = fal
         // surface the failure instead of rendering an empty (success-shaped)
         // relationship tree.
         console.log("Error fetching asset links:", error);
-        return [false, error?.message || "An error occurred"];
+        return [false, requestFailureMessage(error, "An error occurred")];
     }
 };
 
@@ -709,9 +751,14 @@ export const deleteAssetLink = async ({ assetLinkId }: any) => {
         return [true, response?.message ?? response];
     } catch (error: any) {
         // [false, message, status] so callers can distinguish authorization
-        // failures (403) from other errors.
+        // failures (403) from other errors. A blocked request carries no status, so its
+        // message is shown.
         console.log(error);
-        return [false, error?.message || "Failed to delete asset link", error?.status];
+        return [
+            false,
+            error?.message || "Failed to delete asset link",
+            isRequestBlocked(error) ? undefined : error?.status,
+        ];
     }
 };
 
@@ -719,6 +766,13 @@ export const deleteAssetLink = async ({ assetLinkId }: any) => {
  * Returns array of all subscription constraints from the auth/constraints api
  * @returns {Promise<boolean|{rules}|any>}
  */
+/**
+ * The key that identifies one subscription row in the list: two databases may hold assets with the
+ * same asset id, so the entity id alone does not.
+ */
+export const subscriptionRowKey = (item: any) =>
+    `${item?.eventName}:${item?.entityName}:${item?.databaseId}:${item?.entityId}`;
+
 export const fetchSubscriptionRules = async () => {
     try {
         let response = await apiClient.get("subscriptions", {});
@@ -734,7 +788,10 @@ export const fetchSubscriptionRules = async () => {
                     response = await apiClient.get("subscriptions", init);
                     items = items.concat(response.message.Items);
                 }
-                return items;
+                return items.map((item) => ({
+                    ...item,
+                    subscriptionKey: subscriptionRowKey(item),
+                }));
             } else {
                 return response.message;
             }
@@ -1041,22 +1098,35 @@ export const resetCognitoUserPassword = async ({ userId, confirmReset }: any) =>
 };
 
 /**
- * Returns array of all the comments that are attached to a given assetId
+ * The comment routes of one asset, addressed by its database and asset id. A comment's own id is the
+ * last segment; its target (the asset version) is a query filter or a body field, never a segment.
+ */
+const commentsPath = (databaseId: string, assetId: string, commentId?: string) =>
+    `comments/database/${encodeURIComponent(databaseId)}/assets/${encodeURIComponent(assetId)}` +
+    (commentId ? `/${encodeURIComponent(commentId)}` : "");
+
+/**
+ * Returns array of all the comments that are attached to the asset (databaseId, assetId)
  * @returns {Promise<boolean|{message}|any>}
  */
-export const fetchAllComments = async ({ assetId }: any) => {
+export const fetchAllComments = async ({ databaseId, assetId, showArchived = false }: any) => {
     try {
-        let response = await apiClient.get(`comments/assets/${assetId}`, {});
+        // An archived asset's comments are only found when asked for
+        const archivedParams: Record<string, string> = showArchived ? { showArchived: "true" } : {};
+        let response = await apiClient.get(
+            commentsPath(databaseId, assetId),
+            showArchived ? { queryStringParameters: archivedParams } : {}
+        );
         let items: any[] = [];
         const init: { queryStringParameters: Record<string, any> } = {
-            queryStringParameters: { startingToken: null },
+            queryStringParameters: { startingToken: null, ...archivedParams },
         };
         if (response.message) {
             if (response.message.Items) {
                 items = items.concat(response.message.Items);
                 while (response.message.NextToken) {
                     init["queryStringParameters"]["startingToken"] = response.message.NextToken;
-                    response = await apiClient.get(`comments/assets/${assetId}`, init);
+                    response = await apiClient.get(commentsPath(databaseId, assetId), init);
                     items = items.concat(response.message.Items);
                 }
                 return items;
@@ -1068,7 +1138,7 @@ export const fetchAllComments = async ({ assetId }: any) => {
         }
     } catch (error: any) {
         console.log(error);
-        return error?.message;
+        return isNetworkFailure(error) ? NETWORK_FAILURE_MESSAGE : error?.message;
     }
 };
 
@@ -1076,12 +1146,9 @@ export const fetchAllComments = async ({ assetId }: any) => {
  * Deletes the given comment from the database
  * @returns {Promise<boolean|{message}|any>}
  */
-export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }: any) => {
+export const deleteComment = async ({ databaseId, assetId, commentId }: any) => {
     try {
-        const response = await apiClient.del(
-            `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
-            {}
-        );
+        const response = await apiClient.del(commentsPath(databaseId, assetId, commentId), {});
         if (response.message) {
             console.log(response.message);
             return [true, response.message];
@@ -1090,7 +1157,7 @@ export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }: any
             return false;
         }
     } catch (error: any) {
-        if (error.status === 403) return error.status;
+        if (error.status === 403 && !isRequestBlocked(error)) return error.status;
         return [false, error?.message];
     }
 };
@@ -2188,6 +2255,7 @@ export const fetchAssetS3FilesPage = async ({
     pageSize = null,
     assetVersionId = null,
     prefix = null,
+    showArchived = false,
 }: any) => {
     try {
         if (!databaseId || !assetId) {
@@ -2220,6 +2288,11 @@ export const fetchAssetS3FilesPage = async ({
         // Server-side folder scope: only keys under this asset-relative prefix are listed.
         if (prefix) {
             queryParams.prefix = prefix;
+        }
+
+        // An archived asset is only found when asked for; a live asset's listing is unchanged.
+        if (showArchived) {
+            queryParams.showArchived = "true";
         }
 
         const response = await apiClient.get(`database/${databaseId}/assets/${assetId}/listFiles`, {
@@ -2291,6 +2364,7 @@ export async function* fetchAssetS3FilesStreaming({
     basic = false,
     pageSize,
     assetVersionId = null,
+    showArchived = false,
 }: {
     databaseId: string;
     assetId: string;
@@ -2298,6 +2372,7 @@ export async function* fetchAssetS3FilesStreaming({
     basic?: boolean;
     pageSize?: any;
     assetVersionId?: string | null | undefined;
+    showArchived?: boolean;
 }) {
     let nextToken = null;
     let pageNumber = 0;
@@ -2312,6 +2387,7 @@ export async function* fetchAssetS3FilesStreaming({
             startingToken: nextToken,
             pageSize,
             assetVersionId,
+            showArchived,
         });
 
         if (!result.success) {
@@ -2347,14 +2423,21 @@ export async function* fetchAssetS3FilesStreaming({
  * @param {string} params.assetId - Asset ID
  * @param {string} params.fileKey - File key/path
  * @param {boolean} params.includeVersions - If to include file version data on the response
- * @returns {Promise<any>}
+ * @param {boolean} [params.showArchived=false] - Also find an archived asset
+ * @returns `[true, fileInfo]` on success; `[false, message, status?]` on failure, where `status` is
+ *   the HTTP status when the request itself was rejected, so a caller can tell a missing file or
+ *   asset (400 "File not found.", 404) and a permission denial (403) from a request that may
+ *   succeed when tried again. A request the AWS WAF web ACL blocked carries no status, so its
+ *   message (which names the request ID) is shown. A request whose response the browser never saw
+ *   carries no status and a message saying the service could not be reached.
  */
 export const fetchFileInfo = async ({
     databaseId,
     assetId,
     fileKey,
     includeVersions = false,
-}: any) => {
+    showArchived = false,
+}: any): Promise<[boolean, any, number?]> => {
     try {
         if (!databaseId || !assetId || !fileKey) {
             return [false, "Missing required parameters"];
@@ -2364,6 +2447,7 @@ export const fetchFileInfo = async ({
             queryStringParameters: {
                 filePath: fileKey,
                 includeVersions: includeVersions ? "true" : "false",
+                ...(showArchived ? { showArchived: "true" } : {}),
             },
         });
 
@@ -2385,7 +2469,14 @@ export const fetchFileInfo = async ({
         }
     } catch (error: any) {
         console.log("Error fetching file info:", error);
-        return [false, error?.message || "Failed to fetch file information"];
+        if (isNetworkFailure(error)) {
+            return [false, NETWORK_FAILURE_MESSAGE, undefined];
+        }
+        return [
+            false,
+            error?.message || "Failed to fetch file information",
+            isRequestBlocked(error) ? undefined : error?.status,
+        ];
     }
 };
 
@@ -2549,16 +2640,23 @@ export const deleteAssetMetadata = async ({ databaseId, assetId, metadataKeys }:
  * @param {string} params.type - 'metadata' or 'attribute'
  * @returns {Promise<any>}
  */
-export const fetchFileMetadata = async ({ databaseId, assetId, filePath, type }: any) => {
+export const fetchFileMetadata = async ({
+    databaseId,
+    assetId,
+    filePath,
+    type,
+    assetVersionId,
+}: any) => {
     try {
         if (!databaseId || !assetId || !filePath || !type) {
             return { metadata: [], message: "Missing required parameters" };
         }
 
-        // Follow NextToken to aggregate all pages of metadata.
+        // Follow NextToken to aggregate all pages of metadata. An asset version id reads the
+        // snapshot taken with that asset version.
         return await fetchAllMetadataPages(
             `database/${databaseId}/assets/${assetId}/metadata/file`,
-            { filePath, type }
+            assetVersionId ? { filePath, type, assetVersionId } : { filePath, type }
         );
     } catch (error: any) {
         console.log("Error fetching file metadata:", error);
@@ -3189,12 +3287,13 @@ export const unsubscribeFromAsset = async (body: any) => {
     }
 };
 
-export const createComment = async ({ assetId, assetVersionIdAndCommentId, body }: any) => {
+/**
+ * Adds a comment to the asset (databaseId, assetId). The body carries commentBody and the asset version
+ * the comment is about (assetVersionId); the API generates the comment id and returns it.
+ */
+export const createComment = async ({ databaseId, assetId, body }: any) => {
     try {
-        const response = await apiClient.post(
-            `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
-            { body }
-        );
+        const response = await apiClient.post(commentsPath(databaseId, assetId), { body });
         if (response.message) {
             if (
                 response.message.indexOf("error") !== -1 ||
@@ -3212,12 +3311,11 @@ export const createComment = async ({ assetId, assetVersionIdAndCommentId, body 
     }
 };
 
-export const updateComment = async ({ assetId, assetVersionIdAndCommentId, body }: any) => {
+export const updateComment = async ({ databaseId, assetId, commentId, body }: any) => {
     try {
-        const response = await apiClient.put(
-            `comments/assets/${assetId}/assetVersionId:commentId/${assetVersionIdAndCommentId}`,
-            { body }
-        );
+        const response = await apiClient.put(commentsPath(databaseId, assetId, commentId), {
+            body,
+        });
         if (response.message) {
             if (
                 response.message.indexOf("error") !== -1 ||
@@ -3405,22 +3503,41 @@ export const fetchSearchMappings = async () => {
     }
 };
 
+export const searchNlp = async (
+    body: NlpSearchRequest
+): Promise<[boolean, NlpSearchResponse | string]> => {
+    try {
+        const response = await apiClient.post("search/nlp", {
+            "Content-type": "application/json",
+            body,
+        } as any);
+        return [true, response as NlpSearchResponse];
+    } catch (error: any) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+/**
+ * POST /ingest-asset, either stage. The structured response is the data: the initialize stage
+ * answers `{ message, uploadId, files }` (each file with `relativeKey`, `uploadIdS3`, `numParts`
+ * and `partUploadUrls`), the complete stage `{ message, uploadId, assetId, fileResults,
+ * overallSuccess, largeFileAsynchronousHandling }`. Both carry a `message`, so returning the
+ * message in place of the response would drop the file list the caller uploads to.
+ * @returns {Promise<[boolean, any]>} `[true, response]`, or `[false, message]` for a failed request
+ */
 export const ingestAsset = async (body: any) => {
     try {
         const response = await apiClient.post("ingest-asset", { body });
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            }
-            return [true, response.message];
+        if (response?.success === false) {
+            return [false, response?.message ?? "The ingest request failed."];
         }
         return [true, response];
     } catch (error: any) {
         console.log(error);
+        if (isNetworkFailure(error)) {
+            return [false, NETWORK_FAILURE_MESSAGE];
+        }
         return [false, error?.message];
     }
 };
@@ -3438,75 +3555,276 @@ export const fetchLoginProfile = async ({ username }: any) => {
     }
 };
 
-/**
- * Response envelope returned by `GET /addon/physna/viewer`.
- *
- * The backend now returns JSON describing what the frontend should show
- * instead of pre-rendering an iframe HTML payload. The frontend switches
- * on `status` and, for `"ready"`, uses the viewer-token bundle to build
- * a direct Physna iframe src.
- */
-export interface PhysnaViewerMetadataResponse {
-    status:
-        | "ready"
-        | "indexing"
-        | "failed"
-        | "not_synced"
-        | "not_found"
-        | "unsupported"
-        | "forbidden"
-        | "upstream_unavailable"
-        | "invalid_request"
-        | "method_not_allowed"
-        | "request_failed"
-        | "internal_error";
-    message: string;
-    /** Populated only when `status === "ready"`. */
-    tenantId?: string;
-    physnaAssetId?: string;
-    viewerToken?: string;
-    physnaApiBase?: string;
-    /** Populated on `indexing` and `failed` — raw upstream state for display. */
-    physnaState?: string;
-}
+// ===== Download as Zip (prepared archive downloads) =====
+// Every job is owned by the signed-in user: the API keys each call on the authenticated identity, so
+// another user's job reads as not found. Failure tuples are [false, message, status?]; the status
+// lets a caller tell "feature disabled" (404) or "not ready" (409) from a generic failure. A request
+// the AWS WAF web ACL blocked carries no status, so its message is shown as it is.
+
+const zipAssetPath = (databaseId: string, assetId: string) =>
+    `database/${encodeURIComponent(databaseId)}/assets/${encodeURIComponent(assetId)}/download/zip`;
+
+const zipFailure = (error: any, fallback: string): [false, string, number | undefined] => {
+    console.log(error);
+    return [
+        false,
+        requestFailureMessage(error, fallback),
+        isRequestBlocked(error) ? undefined : error?.status,
+    ];
+};
 
 /**
- * Fetch Physna viewer metadata (authz + lookup + viewer-token mint) from the
- * VAMS backend. The frontend uses the returned envelope to decide whether to
- * render a direct-to-Physna iframe, show a "still indexing" placeholder, or
- * surface an error.
- *
- * Uses `apiClient` because the endpoint now returns JSON (previously it
- * returned HTML for an iframe, which required a direct `fetch`).
+ * Shown for a create that got no response: the request may have reached the API, so the job may
+ * exist, and creating it again could start a second one.
  */
-export const fetchPhysnaViewerMetadata = async ({
+export const ZIP_CREATE_OUTCOME_UNKNOWN_MESSAGE =
+    "The request got no reply, so the zip download may have been created. Check the Download Queue before trying again.";
+
+const zipListQuery = ({ maxItems, pageSize, startingToken }: any): Record<string, string> => {
+    const query: Record<string, string> = {};
+    if (maxItems) query.maxItems = `${maxItems}`;
+    if (pageSize) query.pageSize = `${pageSize}`;
+    if (startingToken) query.startingToken = startingToken;
+    return query;
+};
+
+/**
+ * Creates a zip download job for a selection of an asset's files, folders or the whole asset.
+ * @param {Object} params.body - CreateZipDownloadRequestModel (selection, format, compression,
+ *   archiveFileName, optional assetVersionId pin)
+ * @returns {Promise<[boolean, any, number?]>} [true, job] or [false, message, status]
+ */
+export const createZipDownload = async ({ databaseId, assetId, body }: any) => {
+    try {
+        const response = await apiClient.post(zipAssetPath(databaseId, assetId), { body });
+        if (response?.success === false) {
+            return [false, response?.message ?? "Failed to create the zip download"];
+        }
+        return [true, response];
+    } catch (error: any) {
+        if (isNetworkFailure(error)) {
+            console.log(error);
+            return [false, ZIP_CREATE_OUTCOME_UNKNOWN_MESSAGE, undefined];
+        }
+        return zipFailure(error, "Failed to create the zip download");
+    }
+};
+
+/**
+ * Lists the caller's zip downloads for one asset (one page, newest first).
+ * @returns {Promise<[boolean, {Items, NextToken} | string, number?]>}
+ */
+export const fetchAssetZipDownloads = async ({
     databaseId,
     assetId,
-    relativePath,
-}: {
-    databaseId: string;
-    assetId: string;
-    relativePath: string;
-}): Promise<[boolean, PhysnaViewerMetadataResponse | string]> => {
+    maxItems,
+    pageSize,
+    startingToken,
+}: any) => {
     try {
-        const response = await apiClient.get("addon/physna/viewer", {
-            queryStringParameters: {
-                databaseId,
-                assetId,
-                relativePath,
-            },
+        const response = await apiClient.get(zipAssetPath(databaseId, assetId), {
+            queryStringParameters: zipListQuery({ maxItems, pageSize, startingToken }),
         });
-        if (response && typeof response === "object" && "status" in response) {
-            return [true, response as PhysnaViewerMetadataResponse];
+        if (response?.success === false) {
+            return [false, response?.message ?? "Failed to load zip downloads"];
         }
-        if (response?.message) {
-            console.log(response.message);
-            return [false, response.message];
-        }
-        return [false, "Unexpected response shape from viewer endpoint"];
+        return [true, { Items: response?.Items ?? [], NextToken: response?.NextToken ?? null }];
     } catch (error: any) {
-        console.log(error);
-        return [false, error?.message || "Failed to load Physna viewer"];
+        return zipFailure(error, "Failed to load zip downloads");
+    }
+};
+
+/**
+ * Lists every user's download jobs for one asset (one page, newest first): the Download Queue's
+ * "Show all users". The API decides who may call it (the route plus asset read) and returns, per row,
+ * `requestedBy`, `isOwn` and its own `canDownload` / `canRemove` decisions for the caller.
+ * @returns {Promise<[boolean, {Items, NextToken} | string, number?]>}
+ */
+export const fetchAssetZipDownloadsAllUsers = async ({
+    databaseId,
+    assetId,
+    maxItems,
+    pageSize,
+    startingToken,
+}: any) => {
+    try {
+        const response = await apiClient.get(
+            `database/${encodeURIComponent(databaseId)}/assets/${encodeURIComponent(
+                assetId
+            )}/download/zip-all-users`,
+            { queryStringParameters: zipListQuery({ maxItems, pageSize, startingToken }) }
+        );
+        if (response?.success === false) {
+            return [false, response?.message ?? "Failed to load download jobs"];
+        }
+        return [true, { Items: response?.Items ?? [], NextToken: response?.NextToken ?? null }];
+    } catch (error: any) {
+        return zipFailure(error, "Failed to load download jobs");
+    }
+};
+
+/**
+ * Lists the caller's zip downloads across every asset (one page, newest first).
+ * @returns {Promise<[boolean, {Items, NextToken} | string, number?]>}
+ */
+export const fetchZipDownloads = async ({ maxItems, pageSize, startingToken }: any = {}) => {
+    try {
+        const response = await apiClient.get("download/zip", {
+            queryStringParameters: zipListQuery({ maxItems, pageSize, startingToken }),
+        });
+        if (response?.success === false) {
+            return [false, response?.message ?? "Failed to load zip downloads"];
+        }
+        return [true, { Items: response?.Items ?? [], NextToken: response?.NextToken ?? null }];
+    } catch (error: any) {
+        return zipFailure(error, "Failed to load zip downloads");
+    }
+};
+
+/** Reads one of the caller's zip downloads. */
+export const fetchZipDownload = async ({ databaseId, assetId, requestId }: any) => {
+    try {
+        const response = await apiClient.get(
+            `${zipAssetPath(databaseId, assetId)}/${encodeURIComponent(requestId)}`
+        );
+        if (response?.success === false) {
+            return [false, response?.message ?? "Failed to load the zip download"];
+        }
+        return [true, response];
+    } catch (error: any) {
+        return zipFailure(error, "Failed to load the zip download");
+    }
+};
+
+/**
+ * Issues a short-lived download URL for a finished zip download. The URL is a credential for the
+ * archive until it expires: never log it.
+ * @returns {Promise<[boolean, {url, expiresIn, archiveFileName, archiveSizeBytes} | string, number?]>}
+ */
+export const getZipDownloadUrl = async ({ databaseId, assetId, requestId }: any) => {
+    try {
+        const response = await apiClient.post(
+            `${zipAssetPath(databaseId, assetId)}/${encodeURIComponent(requestId)}/url`
+        );
+        if (response?.success === false || !response?.url) {
+            return [false, response?.message ?? "Failed to get the download link"];
+        }
+        return [true, response];
+    } catch (error: any) {
+        return zipFailure(error, "Failed to get the download link");
+    }
+};
+
+/**
+ * Cancels a queued or running zip download, or deletes a finished one and its archive.
+ * With `intent: "cancel"` the request carries the cancel intent: the API then never deletes the
+ * job. A job that finished before the cancel arrived is kept and answered `action: "ended"`, with
+ * `status` its final status (SUCCEEDED or FAILED; "" if the job was removed meanwhile).
+ * @returns {Promise<[boolean, {message, action: "cancelled" | "deleted" | "ended", status?} | string, number?]>}
+ */
+export const deleteZipDownload = async ({ databaseId, assetId, requestId, intent }: any) => {
+    try {
+        const response = await apiClient.del(
+            `${zipAssetPath(databaseId, assetId)}/${encodeURIComponent(requestId)}`,
+            intent === "cancel" ? { queryStringParameters: { intent: "cancel" } } : undefined
+        );
+        if (response?.success === false) {
+            return [false, response?.message ?? "Failed to remove the zip download"];
+        }
+        return [true, response];
+    } catch (error: any) {
+        return zipFailure(error, "Failed to remove the zip download");
+    }
+};
+
+// ---------------------------------------------------------------------------------------------
+// Audit-log search (`/audit/*`). Five routes, one function each. Every function answers
+// `[true, data]` or `[false, message, status?]`; the page shows `message` as is (the API's
+// errors are generic and name no group or value) and tells 403, 404 and 429 apart by `status`.
+// ---------------------------------------------------------------------------------------------
+
+const auditFailure = (error: any, fallback: string): [false, string, number | undefined] => {
+    const status = isRequestBlocked(error) ? undefined : error?.status;
+    return [false, error?.message || fallback, typeof status === "number" ? status : undefined];
+};
+
+const auditQueryPath = (queryId: string) => `audit/queries/${encodeURIComponent(queryId)}`;
+
+/** The log groups the caller may search, with their actions, entity types and the search limits. */
+export const fetchAuditLogGroups = async () => {
+    try {
+        return [true, await apiClient.get("audit/log-groups", {})];
+    } catch (error: any) {
+        return auditFailure(error, "Failed to load the audit log groups");
+    }
+};
+
+/** Starts a search (`POST /audit/queries`); the body holds named filters only, never query text. */
+export const startAuditQuery = async (body: Record<string, unknown>) => {
+    try {
+        return [true, await apiClient.post("audit/queries", { body })];
+    } catch (error: any) {
+        return auditFailure(error, "Failed to start the audit search");
+    }
+};
+
+/**
+ * One long-poll of a search: waits on the server up to `wait` seconds for a terminal state, and
+ * returns the status, statistics and one page of rows. `startingToken` pages a finished query.
+ */
+export const getAuditQuery = async ({
+    queryId,
+    wait,
+    pageSize,
+    startingToken,
+    sort,
+}: {
+    queryId: string;
+    wait?: number;
+    pageSize?: number;
+    startingToken?: string;
+    sort?: string;
+}) => {
+    try {
+        const queryStringParameters: Record<string, string> = {};
+        if (wait !== undefined) queryStringParameters.wait = `${wait}`;
+        if (pageSize !== undefined) queryStringParameters.pageSize = `${pageSize}`;
+        if (startingToken) queryStringParameters.startingToken = startingToken;
+        if (sort) queryStringParameters.sort = sort;
+        return [true, await apiClient.get(auditQueryPath(queryId), { queryStringParameters })];
+    } catch (error: any) {
+        return auditFailure(error, "Failed to read the audit search");
+    }
+};
+
+/** Stops a running search (`DELETE /audit/queries/{queryId}`). */
+export const stopAuditQuery = async (queryId: string) => {
+    try {
+        return [true, await apiClient.del(auditQueryPath(queryId), {})];
+    } catch (error: any) {
+        return auditFailure(error, "Failed to stop the audit search");
+    }
+};
+
+/** One export chunk (`GET /audit/queries/{queryId}/export`); follow `NextToken` for the rest. */
+export const exportAuditQuery = async ({
+    queryId,
+    format,
+    startingToken,
+}: {
+    queryId: string;
+    format: "csv" | "ndjson";
+    startingToken?: string;
+}) => {
+    try {
+        const queryStringParameters: Record<string, string> = { format };
+        if (startingToken) queryStringParameters.startingToken = startingToken;
+        return [
+            true,
+            await apiClient.get(`${auditQueryPath(queryId)}/export`, { queryStringParameters }),
+        ];
+    } catch (error: any) {
+        return auditFailure(error, "Failed to export the audit search");
     }
 };
 

@@ -293,7 +293,7 @@ class TestSystemConfigDefaultsFill:
         """Registration is self-healing: a bundle with no systemConfig still writes the complete
         defaults. Sending the raw {} once blanked stored blocks; merely OMITTING the field instead left
         rows already blanked that way stuck empty, because nothing rewrote them (observed live on
-        conversion-3d-basic and metadata-extraction-cad-mesh)."""
+        conversion-3d-basic and system-genai-metadata)."""
         from backend.backend.common.workflows.workflowRecords import build_workflow_system_config
         body = vsi._workflow_update_body({"workflowName": "W"}, "GLOBAL", "p1")
         assert body["systemConfig"] == build_workflow_system_config()
@@ -617,7 +617,7 @@ class TestBuiltInSchemasValidate:
         import glob
         root = self._schema_root()
         found = set()
-        for pat in ("/**/vamsSchema/**/pipeline.json", "/**/vamsSchema/pipeline.json"):
+        for pat in ("/**/vamsSchema*/**/pipeline.json", "/**/vamsSchema*/pipeline.json"):
             for f in glob.glob(root + pat, recursive=True):
                 found.add(os.path.normpath(f))
         return sorted(found)

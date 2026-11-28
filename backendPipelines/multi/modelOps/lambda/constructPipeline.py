@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import boto3
+from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
 import manifestHelper
 from botocore.config import Config
@@ -58,7 +59,7 @@ def lambda_handler(event, context):
 
     try:
         # construct different pipeline definition
-        definition = construct_modelops_definition(event)
+        definition, staged_input_uri = construct_modelops_definition(event)
 
         logger.info(f"Definition: {definition}")
 
@@ -68,6 +69,9 @@ def lambda_handler(event, context):
             "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
             "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
             "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
+            # The staged copy of a non-current input version ("" when the handler reads the
+            # original object), which pipelineEnd deletes on success and on failure.
+            "stagedInputS3Uri": staged_input_uri,
             "status": "STARTING"
         }
     except Exception as e:
@@ -89,6 +93,17 @@ def input_object_prefix(input_s3_asset_file_key):
     if "/" not in key:
         return ""
     return key.rsplit("/", 1)[0]
+
+
+def input_relative_subdir(event, input_s3_asset_file_key):
+    """The input file's subdirectory within the asset ('parts/housing', or ''): the folder of its
+    manifest relativePath when the event carries one, which holds for an asset created on an existing
+    bucket folder and for a chained step's input alike; else located by the threaded assetId
+    (``relative_subdir_from_asset_id``)."""
+    relative = (event.get("inputRelativePath") or "").strip("/")
+    if relative:
+        return relative.rsplit("/", 1)[0] if "/" in relative else ""
+    return relative_subdir_from_asset_id(input_s3_asset_file_key, event.get('assetId', ''))
 
 
 def relative_subdir_from_asset_id(input_s3_asset_file_key, asset_id):
@@ -158,7 +173,96 @@ def output_object_prefix(output_s3_asset_files_key, relative_subdir):
     return f"{prefix}{subdir}/" if subdir else prefix
 
 
-def construct_modelops_definition(event) -> dict:
+# The error codes Amazon S3 answers with for a version that no longer exists: NoSuchVersion on a GET
+# or copy, a bare 404 on a HEAD and 405 for a delete marker. Any other error is raised as it is.
+MISSING_VERSION_ERROR_CODES = {"NoSuchVersion", "NoSuchKey", "404", "405", "MethodNotAllowed"}
+
+# Where a non-current input version is copied in the auxiliary bucket. pipelineEnd deletes the copy
+# when the run ends, and the bucket's lifecycle rule for this prefix expires one a crashed run leaves.
+# The "." keeps it apart from every run's own pipelines/<pipelineId>/ prefix: a pipeline id cannot
+# contain one. pipelineEnd.py carries the same value.
+STAGED_INPUT_PREFIX = "pipelines/modelops.staged-inputs/"
+
+
+class InputVersionUnavailableError(Exception):
+    """The input file's launch-time version was deleted before the run read it."""
+
+
+def _missing_version(bucket, key, version_id):
+    return InputVersionUnavailableError(
+        f"The input file {key} at version {version_id} no longer exists in bucket {bucket}; "
+        f"it was deleted after the run started.")
+
+
+def staged_input_key(auxiliary_files_key, input_key):
+    """The auxiliary-bucket key a non-current input version is copied to: the staged-inputs prefix,
+    the run's auxiliary working path below `pipelines/` (`<pipelineId>/<executionId>`, which keeps
+    concurrent runs apart), then the input's full original key. Keeping the whole key keeps the
+    asset-relative layout the handler and the output placement read."""
+    run = (auxiliary_files_key or "").strip("/")
+    if run.startswith("pipelines/"):
+        run = run[len("pipelines/"):]
+    parts = [STAGED_INPUT_PREFIX.rstrip("/"), run, input_key.lstrip("/")]
+    return "/".join(part for part in parts if part)
+
+
+def stage_input_version(input_bucket, input_key, version_id, auxiliary_bucket, auxiliary_files_key,
+                        always_copy=False):
+    """The bucket and key the ModelOps handler reads the input from.
+
+    The ModelOps image reads Amazon S3 itself, by bucket and key, and cannot take a version. When the
+    run's launch-time version is still the key's current version (the common case), or there is no
+    version to honour, the handler reads the original object. Otherwise that version is copied into
+    the run's auxiliary working prefix and the handler reads the copy. A version deleted after launch
+    fails the run rather than reading the current object.
+
+    ``always_copy`` stages the copy in every case (``single_file_asset_object``): the handler is
+    pointed at the copy's folder, which holds only that file, rather than at the object's own folder.
+    """
+    if not version_id and not always_copy:
+        return input_bucket, input_key
+    source = {"Bucket": input_bucket, "Key": input_key}
+    if version_id:
+        try:
+            head = s3.head_object(Bucket=input_bucket, Key=input_key, VersionId=version_id)
+            current = s3.head_object(Bucket=input_bucket, Key=input_key)
+        except ClientError as e:
+            if str(e.response.get("Error", {}).get("Code", "")) in MISSING_VERSION_ERROR_CODES:
+                raise _missing_version(input_bucket, input_key, version_id) from e
+            raise
+        # A response without a VersionId (an unversioned bucket) cannot name a different version, so
+        # it reads the original object.
+        if not current.get("VersionId") or current.get("VersionId") == head.get("VersionId", version_id):
+            if not always_copy:
+                return input_bucket, input_key
+        if current.get("VersionId"):
+            source["VersionId"] = version_id
+
+    staged_key = staged_input_key(auxiliary_files_key, input_key)
+    try:
+        s3.copy(source, auxiliary_bucket, staged_key)
+    except ClientError as e:
+        if str(e.response.get("Error", {}).get("Code", "")) in MISSING_VERSION_ERROR_CODES:
+            raise _missing_version(input_bucket, input_key, version_id) from e
+        raise
+    staged = f"version {source['VersionId']} of {input_key}" if "VersionId" in source else input_key
+    logger.info(f"Staged input {staged} at s3://{auxiliary_bucket}/{staged_key}")
+    return auxiliary_bucket, staged_key
+
+
+def single_file_asset_object(event, input_bucket, input_key):
+    """Whether the input is the object of a single-file asset: the manifest's asset root
+    (``inputAssetRootS3Key``) has no trailing ``/``, names the input key itself, and is in the input's
+    bucket (``inputAssetRootBucket``, the input's bucket when not named). That asset holds the object and
+    its companion folder ``{key}/``, not the other keys of the object's own folder."""
+    root = (event.get("inputAssetRootS3Key") or "").lstrip("/")
+    root_bucket = event.get("inputAssetRootBucket") or input_bucket
+    return bool(root) and not root.endswith("/") and root == input_key.lstrip("/") and root_bucket == input_bucket
+
+
+def construct_modelops_definition(event):
+    """The container command, and the S3 URI of the staged input copy ("" when there is none)."""
+    staged_input_uri = ""
     input_s3_asset_file_uri = event['inputS3AssetFilePath']
     output_s3_asset_files_uri = event['outputS3AssetFilesPath']
     input_s3_asset_file_bucket, input_s3_asset_file_key = input_s3_asset_file_uri.replace("s3://", "").split("/", 1)
@@ -187,7 +291,7 @@ def construct_modelops_definition(event) -> dict:
         # that does not change the file extension gains one further folder, so the write-back cannot
         # resolve to the input's own key.
         relative_subdir = output_relative_subdir(
-            relative_subdir_from_asset_id(input_s3_asset_file_key, event.get('assetId', '')),
+            input_relative_subdir(event, input_s3_asset_file_key),
             input_s3_asset_extension, output_s3_asset_extension)
 
         # The destination the produced file is written to. The workflow's output-files prefix is the
@@ -205,8 +309,18 @@ def construct_modelops_definition(event) -> dict:
         # rather than raising KeyError on a valid configuration.
         state = config.setdefault("state", {})
         state["name"] = input_s3_asset_file_filename
-        state["bucket"] = input_s3_asset_file_bucket
-        state["prefix"] = input_object_prefix(input_s3_asset_file_key)
+        # The handler reads the input at the version the run recorded at launch: the original
+        # object when that is current, a staged copy of that version otherwise. A single-file
+        # asset's object is always read from the run's own copy, so the folder the handler is given
+        # holds that file only.
+        read_bucket, read_key = stage_input_version(
+            input_s3_asset_file_bucket, input_s3_asset_file_key, event.get("inputVersionId") or "",
+            inputOutput_s3_assetAuxiliary_files_bucket, inputOutput_s3_assetAuxiliary_files_key,
+            always_copy=single_file_asset_object(event, input_s3_asset_file_bucket, input_s3_asset_file_key))
+        if (read_bucket, read_key) != (input_s3_asset_file_bucket, input_s3_asset_file_key):
+            staged_input_uri = f"s3://{read_bucket}/{read_key}"
+        state["bucket"] = read_bucket
+        state["prefix"] = input_object_prefix(read_key)
         state["extension"] = input_s3_asset_extension.replace(".", "")
 
         # The state block above addresses the INPUT object, so the output block is what names where
@@ -240,5 +354,5 @@ def construct_modelops_definition(event) -> dict:
          command
     ]
 
-    return commands
+    return commands, staged_input_uri
 

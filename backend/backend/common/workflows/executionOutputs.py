@@ -21,6 +21,9 @@ This module centralizes the parts those three lambdas must do identically:
   - The terminal-status write guard (`not_terminal_condition` / `is_conditional_check_failure`),
     which every writer of a terminal status on a main or pipeline row shares so the condition
     cannot drift between them. The abort path in handlers.workflows.executionService uses it too.
+  - The `workflow.execution.completed` announcement (`emit_workflow_execution_completed`) the
+    writer that won that guard publishes on the orchestration bus, so the end-state lambda, the
+    error handler and the execution service emit one event shape under one configuration guard.
 
 Callers inject their boto3 dynamo resource + s3 client and the resolved table names, so no AWS
 client is constructed here and no resource name is read from the environment (mirrors
@@ -29,16 +32,20 @@ resolves the Powertools log level from the environment at import.
 """
 
 import json
+import re
 
 from customLogging.logger import safeLogger
 
 from common.workflows import executionRecords as er
+from common.workflows import subExecutionStages as ses
 
-logger = safeLogger(service_name="ExecutionOutputs")
+logger = safeLogger()
 
 # Terminal statuses: a pipeline/main row already in one of these is finished and is not
-# re-stamped by the error handler (only in-flight rows are marked terminal).
-TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT")
+# re-stamped by the error handler (only in-flight rows are marked terminal). SKIPPED is the main row of a
+# fileUpload trigger launch a concurrency restriction refused (er.EXECUTION_STATUS_SKIPPED): terminal
+# from its first write, so no abort, reconcile or terminal writer ever overwrites it.
+TERMINAL_STATUSES = ("SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", er.EXECUTION_STATUS_SKIPPED)
 
 # Sub-process resource types a registered locator can name (mirrors registerPipelineExecution).
 RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION = "stepFunctionsExecution"
@@ -49,6 +56,17 @@ RESOURCE_TYPE_BATCH_JOB = "batchJob"
 # A Deadline Cloud farm job the workflow submitted through createJob.waitForTaskToken. Step Functions
 # owns the token and not the job, so stopping the execution leaves the job running on the farm.
 RESOURCE_TYPE_DEADLINE_CLOUD_JOB = "deadlineCloudJob"
+# A SageMaker training job and a SageMaker pipeline execution a pipeline registered in the deployment
+# account. Both are stopped by name/ARN through the SageMaker API; a bridge that owns them in another
+# account registers them for display and stops them itself.
+RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB = "sageMakerTrainingJob"
+RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION = "sageMakerPipelineExecution"
+
+# Resource types the abort and failure paths can stop. A registered sub-process of any other type is
+# tracked and displayed but left running when its execution is aborted, and the abort response names it.
+ABORTABLE_RESOURCE_TYPES = frozenset((
+    RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION, RESOURCE_TYPE_BATCH_JOB, RESOURCE_TYPE_DEADLINE_CLOUD_JOB,
+    RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB, RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION))
 
 # The reserved job parameter DeadlineCloudTaskBuilder injects that names the VAMS pipeline execution a
 # farm job belongs to. Deadline stores every job parameter as {"string": "<value>"}.
@@ -139,11 +157,13 @@ def _list_current_output_files_unversioned(s3_client, bucket, files_prefix):
 
 
 def _output_file_entry(key, files_prefix, version_id, size):
-    """One output-files listing entry. relativePath is asset-relative to the files prefix."""
+    """One output-files listing entry. relativePath is asset-relative to the files prefix, with one
+    leading slash: output processing writes an output back at that path, dropping every leading slash
+    (processWorkflowExecutionOutput), so the entry names the asset path the output replaces."""
     relative = key[len(files_prefix):] if key.startswith(files_prefix) else key
     return {
         "key": key,
-        "relativePath": er.normalize_file_key(relative),
+        "relativePath": "/" + relative.lstrip("/"),
         "versionId": version_id,
         "fileSize": size or 0,
         "contentType": "",
@@ -204,21 +224,30 @@ def _key_eq(attr, value):
 # ---------------------------------------------------------------------------
 
 def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, output_files_prefix,
-                                 current_output_files=None):
+                                 current_output_files=None, output_bucket_region=""):
     """Resolve the next pipeline's input FILE entries (the shadowing logic).
 
     original_inputs: list of self-locating entries {relativePath, databaseId, assetId,
-        assetRootS3Key, auxPreviewPrefix, bucket, key, versionId} for the execution's original
-        input files. For each original input, if a file exists at the SAME asset-relative path
+        assetRootS3Key, assetRootBucket, auxPreviewPrefix, bucket, key, versionId} for the
+        execution's original input files (assetRootBucket defaults to bucket). For each original
+        input, if a file exists at the SAME asset-relative path
         under the output files prefix, the resolved entry points at that output file's
         bucket/key/latest versionId (a prior pipeline shadowed it) -- preserving the original's
-        databaseId/assetId/root/aux-preview for traceability; otherwise it keeps the original
+        databaseId/assetId/root (with its asset bucket)/aux-preview for traceability; otherwise it
+        keeps the original
         entry. Only the output FILES folder shadows. Output files at relative paths with no
         matching input are appended as additional inputs (new files a prior pipeline produced),
         located in the output bucket.
 
     current_output_files: the output-files listing when the caller already has it (the attribution
-        step in the same invocation lists the identical set), so the listing is not repeated."""
+        step in the same invocation lists the identical set), so the listing is not repeated.
+
+    output_bucket_region: the output bucket's Region, carried as bucketRegion on every entry that
+        points into it (shadowed inputs and new output files); an original input keeps its own.
+
+    excludeLocations (a folder input's nested-asset locations) is carried on both branches: the locations are
+        keys in the asset's own bucket under its root, which shadowing does not change (it replaces only the
+        entry's bucket, key and version). A new output file carries none."""
     output_files = (current_output_files if current_output_files is not None
                     else list_current_output_files(s3_client, output_bucket, output_files_prefix))
     output_by_rel = {}
@@ -227,30 +256,48 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
 
     resolved = []
     seen_rel = set()
+    seen_shadowed = set()
     for entry in original_inputs:
         rel = er.normalize_file_key(entry.get("relativePath", ""))
         seen_rel.add(rel)
+        # A path selected at two versions has two original entries; once an output shadows it they
+        # name the same object, so it is listed once per asset. Different assets sharing the path
+        # each keep their entry.
+        if rel in output_by_rel:
+            identity = (entry.get("databaseId", ""), entry.get("assetId", ""), rel)
+            if identity in seen_shadowed:
+                continue
+            seen_shadowed.add(identity)
         shadow = output_by_rel.get(rel)
         if shadow:
             # Shadowed in place: point at the output file's version but keep the original's
-            # asset identity/root/aux-preview for traceability.
+            # asset identity/root/aux-preview for traceability. The root stays paired with the
+            # original's asset bucket, since the entry's own bucket is now the output bucket.
             resolved.append(er.build_manifest_entry(
                 rel, output_bucket, shadow["key"], shadow.get("versionId", ""),
                 database_id=entry.get("databaseId", ""), asset_id=entry.get("assetId", ""),
                 asset_root_s3_key=entry.get("assetRootS3Key", ""),
-                aux_preview_prefix=entry.get("auxPreviewPrefix", "")))
+                asset_root_bucket=entry.get("assetRootBucket") or entry.get("bucket", ""),
+                aux_preview_prefix=entry.get("auxPreviewPrefix", ""),
+                bucket_region=output_bucket_region,
+                exclude_locations=entry.get("excludeLocations")))
         else:
             resolved.append(er.build_manifest_entry(
                 rel, entry.get("bucket", ""), entry.get("key", ""), entry.get("versionId", ""),
                 database_id=entry.get("databaseId", ""), asset_id=entry.get("assetId", ""),
                 asset_root_s3_key=entry.get("assetRootS3Key", ""),
-                aux_preview_prefix=entry.get("auxPreviewPrefix", "")))
+                asset_root_bucket=entry.get("assetRootBucket", ""),
+                aux_preview_prefix=entry.get("auxPreviewPrefix", ""),
+                bucket_region=entry.get("bucketRegion", ""),
+                bucket_account_id=entry.get("bucketAccountId", ""),
+                exclude_locations=entry.get("excludeLocations")))
 
     # New output files (no matching original input path) become additional inputs, located in
     # the output bucket (no originating asset identity).
     for rel, f in output_by_rel.items():
         if rel not in seen_rel:
-            resolved.append(er.build_manifest_entry(rel, output_bucket, f["key"], f.get("versionId", "")))
+            resolved.append(er.build_manifest_entry(rel, output_bucket, f["key"], f.get("versionId", ""),
+                                                    bucket_region=output_bucket_region))
     return resolved
 
 
@@ -270,7 +317,8 @@ def build_resolved_manifest(s3_client, original_inputs, output_bucket, output_fi
     ctx = envelope_context or {}
     resolved_files = resolve_manifest_input_files(
         s3_client, original_inputs, output_bucket, output_files_prefix,
-        current_output_files=current_output_files)
+        current_output_files=current_output_files,
+        output_bucket_region=(ctx.get("outputs") or {}).get("bucketRegion", ""))
     return er.build_manifest_envelope(
         input_files=resolved_files,
         input_metadata_s3_location=ctx.get("inputMetadataS3Location", ""),
@@ -313,6 +361,281 @@ def record_pipeline_output_files(dynamo, output_files_table, pipeline_execution_
             ))
 
 
+# ---------------------------------------------------------------------------
+# Per-run output ingest ledger
+# ---------------------------------------------------------------------------
+#
+# The end-state step moves each output into the asset (copy, then delete of the staged source) before
+# it records the run's output rows, and its state is retried on States.Timeout and transient Lambda
+# faults. A retried attempt lists only what is still staged, so it needs a durable record of what an
+# earlier attempt already handed to ingestion. The ledger is that record: one row per output, written
+# to the PipelineExecutionOutputFiles table under a partition of its own,
+# `ingest#<workflowExecutionId>`, with the row's usual `fileType:relativeFilePath` sort key. No reader
+# of the run's output rows queries that partition (they query by pipelineExecutionId), so ledger rows
+# never show as outputs; the permanent execution delete removes the partition with the run's other rows.
+#
+# States: `moving` is written BEFORE an output is handed to ingestion (the outcome is not yet known),
+# `ingested` once the ingestion response says it landed. A failed output's row is dropped, so a later
+# attempt ingests it afresh.
+
+INGEST_LEDGER_PARTITION_PREFIX = "ingest#"
+INGEST_STATE_MOVING = "moving"
+INGEST_STATE_INGESTED = "ingested"
+# Handed to the large object copy engine (#1123): the row carries the copy job's id (`engineJobId`).
+# Not `moving`, so no attempt waits on it or takes it over (the engine copy is bounded by the run's
+# maximum output-ingestion wait, not by an attempt's time) and no claim succeeds over it, so it is never
+# handed to ingestion again. FinalizeOutputs (settle_engine_rows) makes it `ingested` once the copy
+# landed, or releases it when the copy did not. Its staged version is the one the job pinned: the job
+# deletes it after landing, so the end-state step's staged-version delete (#1291) never runs for it.
+INGEST_STATE_ENGINE_COPYING = "engine-copying"
+INGEST_LEDGER_SORT_KEY = "fileType:relativeFilePath"
+# Upper bound on the ledger rows one read returns: twice the output-file recording cap, so a run whose
+# output was truncated at the cap still reads every row it wrote.
+MAX_INGEST_LEDGER_ROWS = 20000
+
+
+def ingest_ledger_partition(workflow_execution_id):
+    """The PipelineExecutionOutputFiles partition holding a run's ingest ledger. The prefix keeps it
+    apart from every pipelineExecutionId partition."""
+    return f"{INGEST_LEDGER_PARTITION_PREFIX}{workflow_execution_id}"
+
+
+def ingest_ledger_sort_key(descriptor):
+    """The ledger sort-key value of an output descriptor; the same value its output row carries."""
+    return f"{descriptor.get('fileType', 'file')}:{descriptor.get('relativeFilePath', '')}"
+
+
+def write_ingest_ledger(dynamo, output_files_table, workflow_execution_id, descriptors, state,
+                        upload_id=""):
+    """Write (or overwrite) one ledger row per output descriptor in `state`, batched. `upload_id` names
+    the external upload record the outputs were handed to, so a later attempt can wait for that
+    ingestion to finish before it lists the staged outputs again."""
+    if not workflow_execution_id or not descriptors:
+        return
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    with table.batch_writer(overwrite_by_pkeys=["pipelineExecutionId", INGEST_LEDGER_SORT_KEY]) as batch:
+        for d in descriptors:
+            item = er.build_output_file_record(
+                pipeline_execution_id=partition,
+                file_type=d.get("fileType", "file"),
+                relative_file_path=d.get("relativeFilePath", ""),
+                s3_bucket=d.get("s3Bucket", ""), s3_key=d.get("s3Key", ""),
+                file_size=d.get("fileSize", 0), content_type=d.get("contentType", ""),
+                s3_version_id=d.get("s3VersionId", ""),
+            )
+            item["ingestState"] = state
+            if upload_id:
+                item["uploadId"] = upload_id
+            batch.put_item(Item=item)
+
+
+# A `moving` row names the attempt that wrote it (`ingestHolder`, the attempt's Lambda request id)
+# and when (`movingSince`, epoch seconds). Another attempt may take the row over only when it is older
+# than INGEST_TAKEOVER_SECONDS (the end-state step's 15-minute timeout plus a margin: no attempt that
+# old is alive), when it predates these fields, or when the reader saw that its upload finished and
+# the row is still exactly as it read it (`takeover`). A row already `ingested` is never taken.
+INGEST_TAKEOVER_SECONDS = 15 * 60 + 5 * 60
+INGEST_CLAIM_WORKERS = 16
+
+
+def is_live_moving_row(row, holder, now_epoch):
+    """Whether `row` is held `moving` by another attempt that may still be running."""
+    if not row or row.get("ingestState") != INGEST_STATE_MOVING:
+        return False
+    other = row.get("ingestHolder")
+    since = row.get("movingSince")
+    if not other or other == holder or since is None:
+        return False
+    return int(now_epoch) - int(since) < INGEST_TAKEOVER_SECONDS
+
+
+def claim_ingest_rows(dynamo, output_files_table, workflow_execution_id, descriptors, holder, upload_id,
+                      now_epoch, takeover=None):
+    """Mark each output `moving` for `holder`, each with a conditional put, and return the descriptors
+    this holder now holds; only those may be handed to ingestion.
+
+    The put succeeds when the output has no row, when the row is `moving` and this holder's already,
+    stale (older than INGEST_TAKEOVER_SECONDS or written before holders were recorded), or unchanged
+    since the reader saw its upload finish (`takeover`: {sort key: (holder, movingSince)}). It never
+    succeeds over an `ingested` row or over a live attempt's `moving` row, so two attempts never hand
+    the same output to ingestion."""
+    if not workflow_execution_id or not descriptors:
+        return []
+    from concurrent.futures import ThreadPoolExecutor
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    takeover = takeover or {}
+    now = int(now_epoch)
+
+    def _claim(d):
+        sort_key = ingest_ledger_sort_key(d)
+        item = er.build_output_file_record(
+            pipeline_execution_id=partition,
+            file_type=d.get("fileType", "file"),
+            relative_file_path=d.get("relativeFilePath", ""),
+            s3_bucket=d.get("s3Bucket", ""), s3_key=d.get("s3Key", ""),
+            file_size=d.get("fileSize", 0), content_type=d.get("contentType", ""),
+            s3_version_id=d.get("s3VersionId", ""),
+        )
+        item.update({"ingestState": INGEST_STATE_MOVING, "ingestHolder": holder, "movingSince": now})
+        if upload_id:
+            item["uploadId"] = upload_id
+        condition = ("attribute_not_exists(ingestState) OR (ingestState = :moving AND ("
+                     "ingestHolder = :me OR attribute_not_exists(movingSince) OR movingSince < :stale")
+        values = {":moving": INGEST_STATE_MOVING, ":me": holder, ":stale": now - INGEST_TAKEOVER_SECONDS}
+        if sort_key in takeover:
+            old_holder, old_since = takeover[sort_key]
+            condition += " OR (ingestHolder = :old AND movingSince = :since)"
+            values.update({":old": old_holder, ":since": old_since})
+        condition += "))"
+        try:
+            table.put_item(Item=item, ConditionExpression=condition, ExpressionAttributeValues=values)
+            return d
+        except Exception as e:
+            if is_conditional_check_failure(e):
+                return None
+            raise
+
+    with ThreadPoolExecutor(max_workers=min(INGEST_CLAIM_WORKERS, len(descriptors))) as executor:
+        return [d for d in executor.map(_claim, descriptors) if d is not None]
+
+
+def drop_ingest_ledger_rows(dynamo, output_files_table, workflow_execution_id, descriptors, holder=None):
+    """Delete the ledger rows of outputs whose ingestion failed. With `holder`, each delete is
+    conditional on the row still being that holder's `moving` row, so a row another attempt took over
+    or settled is left alone."""
+    if not workflow_execution_id or not descriptors:
+        return
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    if holder is None:
+        with table.batch_writer(overwrite_by_pkeys=["pipelineExecutionId", INGEST_LEDGER_SORT_KEY]) as batch:
+            for d in descriptors:
+                batch.delete_item(Key={"pipelineExecutionId": partition,
+                                       INGEST_LEDGER_SORT_KEY: ingest_ledger_sort_key(d)})
+        return
+    for d in descriptors:
+        try:
+            table.delete_item(
+                Key={"pipelineExecutionId": partition, INGEST_LEDGER_SORT_KEY: ingest_ledger_sort_key(d)},
+                ConditionExpression="ingestState = :moving AND ingestHolder = :me",
+                ExpressionAttributeValues={":moving": INGEST_STATE_MOVING, ":me": holder})
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+
+
+def mark_engine_copying(dynamo, output_files_table, workflow_execution_id, descriptors, job_ids, holder):
+    """Move `holder`'s `moving` rows of outputs handed to copy jobs to `engine-copying` with each job
+    id. Conditional on the row being `holder`'s `moving` row, or already `engine-copying` with the
+    same job (a repeated hand-off). A row another attempt took over meanwhile is left to it."""
+    if not workflow_execution_id or not descriptors:
+        return
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    for d, job_id in zip(descriptors, job_ids):
+        try:
+            table.update_item(
+                Key={"pipelineExecutionId": partition, INGEST_LEDGER_SORT_KEY: ingest_ledger_sort_key(d)},
+                UpdateExpression="SET ingestState = :engine, engineJobId = :job REMOVE movingSince",
+                ConditionExpression=("(ingestState = :moving AND ingestHolder = :me) OR "
+                                     "(ingestState = :engine AND engineJobId = :job)"),
+                ExpressionAttributeValues={":engine": INGEST_STATE_ENGINE_COPYING, ":job": job_id,
+                                           ":moving": INGEST_STATE_MOVING, ":me": holder})
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+            logger.warning("An output's ledger row changed before its engine hand-off was recorded")
+
+
+def settle_engine_rows(dynamo, output_files_table, workflow_execution_id, ledger, status_by_job,
+                       succeeded_status, jobs_by_source_key=None, terminal_statuses=()):
+    """Settle the run's rows of outputs the copy engine copied, from their jobs' outcomes. Returns
+    (ingested, released) counts.
+
+    - Every `engine-copying` row: `ingested` when its job ended `succeeded_status`, released (deleted)
+      otherwise, conditional on the row still naming that job.
+    - A `moving` row whose staged key is the source of one of this run's copy jobs
+      (`jobs_by_source_key`: {source key: (job id, status)}): the attempt that handed it to the
+      engine died before it recorded the hand-off (#1271 + #1123, combined smoke D1). Settled the same
+      way, but only once the job has ended (`terminal_statuses`), and conditional on the row being
+      exactly as read (same holder and `movingSince`). A `moving` row no job reads from is a small-file
+      move, possibly by a live attempt, and is never touched."""
+    partition = ingest_ledger_partition(workflow_execution_id)
+    table = dynamo.Table(output_files_table)
+    jobs_by_source_key = jobs_by_source_key or {}
+    ingested = released = 0
+    for sort_key, row in (ledger or {}).items():
+        state = row.get("ingestState")
+        key = {"pipelineExecutionId": partition, INGEST_LEDGER_SORT_KEY: sort_key}
+        if state == INGEST_STATE_ENGINE_COPYING:
+            job_id = row.get("engineJobId", "")
+            status = status_by_job.get(job_id)
+            condition = "ingestState = :state AND engineJobId = :job"
+            values = {":state": INGEST_STATE_ENGINE_COPYING, ":job": job_id}
+        elif state == INGEST_STATE_MOVING and row.get("s3Key") in jobs_by_source_key:
+            job_id, status = jobs_by_source_key[row["s3Key"]]
+            if status not in terminal_statuses:
+                continue
+            condition = "ingestState = :state AND ingestHolder = :holder AND movingSince = :since"
+            values = {":state": INGEST_STATE_MOVING, ":holder": row.get("ingestHolder", ""),
+                      ":since": row.get("movingSince")}
+        else:
+            continue
+        try:
+            if status == succeeded_status:
+                table.update_item(Key=key, UpdateExpression="SET ingestState = :ingested, engineJobId = :jid",
+                                  ConditionExpression=condition,
+                                  ExpressionAttributeValues={**values, ":ingested": INGEST_STATE_INGESTED,
+                                                             ":jid": job_id})
+                ingested += 1
+            else:
+                table.delete_item(Key=key, ConditionExpression=condition, ExpressionAttributeValues=values)
+                released += 1
+        except Exception as e:
+            if not is_conditional_check_failure(e):
+                raise
+    return ingested, released
+
+
+def read_ingest_ledger(dynamo, output_files_table, workflow_execution_id):
+    """The run's ledger rows as {sort key: row}, at most MAX_INGEST_LEDGER_ROWS (a longer ledger is
+    logged and read up to the bound). Empty for a run that wrote none, including a run whose earlier
+    attempts ran before the ledger existed."""
+    ledger = {}
+    if not workflow_execution_id:
+        return ledger
+    table = dynamo.Table(output_files_table)
+    kwargs = {'KeyConditionExpression': _key_eq(
+        'pipelineExecutionId', ingest_ledger_partition(workflow_execution_id))}
+    resp = table.query(**kwargs)
+    while True:
+        for row in resp.get('Items', []):
+            ledger[row.get(INGEST_LEDGER_SORT_KEY, '')] = row
+        if 'LastEvaluatedKey' not in resp:
+            break
+        if len(ledger) >= MAX_INGEST_LEDGER_ROWS:
+            logger.warning(f"Ingest ledger read stopped at the {MAX_INGEST_LEDGER_ROWS}-row bound")
+            break
+        kwargs['ExclusiveStartKey'] = resp['LastEvaluatedKey']
+        resp = table.query(**kwargs)
+    return ledger
+
+
+def ledger_row_descriptor(row):
+    """The output descriptor (the shape the end-state step collects) a ledger row records."""
+    return {
+        "fileType": row.get("fileType", "file"),
+        "relativeFilePath": row.get("relativeFilePath", ""),
+        "s3Bucket": row.get("s3Bucket", ""),
+        "s3Key": row.get("s3Key", ""),
+        "fileSize": int(row.get("fileSize", 0) or 0),
+        "contentType": row.get("contentType", ""),
+        "s3VersionId": row.get("s3VersionId", ""),
+    }
+
+
 def is_conditional_check_failure(error):
     """Whether a DynamoDB write error is a ConditionalCheckFailedException (the row already holds a
     terminal status), as opposed to a real failure that must surface."""
@@ -322,6 +645,13 @@ def is_conditional_check_failure(error):
         if code:
             return code == "ConditionalCheckFailedException"
     return "ConditionalCheckFailed" in str(error)
+
+
+# Main-row attributes of a run whose large outputs are being copied into the asset (the phase and its
+# progress counters). They describe a RUNNING row only, so every write of a terminal status removes
+# them (a no-op on a row that never entered the phase).
+INGESTION_PHASE_ATTRIBUTES = ("executionPhase", "outputIngestion")
+REMOVE_INGESTION_PHASE = " REMOVE " + ", ".join(INGESTION_PHASE_ATTRIBUTES)
 
 
 def not_terminal_condition(values):
@@ -338,18 +668,43 @@ def not_terminal_condition(values):
             + ", ".join(terminal_names) + ")")
 
 
+# Marks a FAILED the end-state step wrote (`executionFailedBy`). Attempts of that step can overlap, and
+# one can record FAILED (it saw outputs vanish mid-move) before the attempt that moved them records
+# SUCCEEDED; that SUCCEEDED may replace a FAILED carrying this marker. A FAILED or ABORTED the error
+# handler or the abort path wrote carries no marker and is never replaced.
+END_STATE_FAILURE_SOURCE = "endStateStep"
+
+
+def end_state_status_write(values, status):
+    """The (SET/REMOVE clause additions, ConditionExpression) of an end-state status write. FAILED is
+    marked END_STATE_FAILURE_SOURCE; SUCCEEDED is allowed over a FAILED with that mark and clears it
+    (and its error). Adds the placeholders to `values`."""
+    condition = not_terminal_condition(values)
+    values[":failedBy"] = END_STATE_FAILURE_SOURCE
+    if status == "FAILED":
+        return ", executionFailedBy = :failedBy", "", condition
+    values[":failedStatus"] = "FAILED"
+    condition = f"({condition}) OR (executionStatus = :failedStatus AND executionFailedBy = :failedBy)"
+    return "", " REMOVE executionFailedBy, executionError", condition
+
+
 def set_pipeline_status(dynamo, pipeline_executions_table, pipeline_execution_id,
-                        workflow_execution_id, status, stop_date=None):
+                        workflow_execution_id, status, stop_date=None, end_state=False):
     """Set a pipeline-execution row's status (and stop date when terminal), conditioned on the row not
     already being terminal so a still-in-flight writer (the interim tracking lambda) cannot regress a
-    row the abort/error path already finished. A row that is already terminal is left untouched."""
+    row the abort/error path already finished. A row that is already terminal is left untouched, except
+    that with `end_state` a SUCCEEDED replaces a FAILED the end-state step wrote (end_state_status_write)."""
     table = dynamo.Table(pipeline_executions_table)
     expr = "SET executionStatus = :st"
     values = {":st": status}
     if stop_date:
         expr += ", executionStopDate = :s"
         values[":s"] = stop_date
-    condition = not_terminal_condition(values)
+    if end_state:
+        set_extra, remove_extra, condition = end_state_status_write(values, status)
+        expr += set_extra + remove_extra.replace(", executionError", "")
+    else:
+        condition = not_terminal_condition(values)
     try:
         table.update_item(
             Key={"pipelineExecutionId": pipeline_execution_id,
@@ -402,7 +757,11 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
     """Set terminal status + stop date (+ optional log/error) on the V2 main execution row, under the
     same terminal guard the pipeline rows use: a row another writer already finished keeps its status.
     Losing that race is the expected outcome for the second writer, not a failure, so the
-    ConditionalCheckFailed is logged and swallowed while any other write error surfaces."""
+    ConditionalCheckFailed is logged and swallowed while any other write error surfaces.
+
+    Returns True when this call wrote the terminal status and False when the guard rejected it. The
+    caller that announces the terminal status on the orchestration bus keys on that answer: only the
+    writer whose status landed announces, so a run finished by two writers is announced once."""
     table = dynamo.Table(main_table_name)
     expr = "SET executionStopDate = :s, executionStatus = :st, lastSfnSyncCheckDate = :s"
     values = {":s": stop_date, ":st": status}
@@ -412,6 +771,7 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
     if execution_error is not None:
         expr += ", executionError = :er"
         values[":er"] = execution_error or ""
+    expr += REMOVE_INGESTION_PHASE
     condition = not_terminal_condition(values)
     try:
         table.update_item(
@@ -426,9 +786,79 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
             raise
         logger.info(f"Main execution row {workflow_execution_id} already holds a terminal status; "
                     f"the {status} finalization write was skipped")
+        return False
+    return True
 
 
-def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadline_client=None):
+def emit_workflow_execution_completed(events_client, event_bus_arn, event_source_prefix,
+                                      workflow_execution_id, workflow_database_id, workflow_id,
+                                      execution_status, started_at, completed_at,
+                                      execution_group_id=""):
+    """Best-effort `workflow.execution.completed` event on the orchestration bus, published by the
+    writer whose terminal-status write on the main execution row landed (the end-state lambda, the
+    error handler, the abort API, or a read-path reconcile that observed the completion first).
+
+    Skipped (logged) when no bus ARN or no event source prefix is configured: the standing rule on the
+    bus matches `Source` by that prefix, so an event published without it could never be delivered. A
+    publish failure is logged and never fails the terminal-status write that precedes it. Returns True
+    when an event was published.
+
+    `events_client` is injected like this module's other clients, so the three lambdas that emit share
+    one implementation while each keeps its own client and configuration."""
+    if not event_bus_arn or not event_source_prefix:
+        logger.info("No orchestration bus or event source prefix configured; "
+                    "workflow completion event skipped")
+        return False
+    try:
+        events_client.put_events(Entries=[er.workflow_execution_completed_event(
+            event_bus_arn=event_bus_arn,
+            event_source_prefix=event_source_prefix,
+            execution_id=workflow_execution_id,
+            workflow_database_id=workflow_database_id,
+            workflow_id=workflow_id,
+            status=execution_status,
+            started_at=started_at,
+            completed_at=completed_at,
+            execution_group_id=execution_group_id,
+        )])
+    except Exception as e:
+        logger.exception(f"Failed publishing workflow completion event for {workflow_execution_id}: {e}")
+        return False
+    return True
+
+
+def refresh_main_row_log(dynamo, main_table_name, workflow_execution_id, workflow_database_id,
+                         workflow_id, execution_log):
+    """Replace the main row's stored executionLog with a later, fuller read of the same log.
+
+    Written only when the row still exists (a permanent delete in between must not leave a partial
+    item behind) and its stored log is shorter than this one, so two writers refreshing one run keep
+    the longer read and a refresh never shortens what is stored. Returns True when it wrote. A
+    ConditionalCheckFailed is the expected outcome when either does not hold; any other write error
+    surfaces."""
+    if not execution_log:
+        return False
+    try:
+        dynamo.Table(main_table_name).update_item(
+            Key={"workflowExecutionId": workflow_execution_id,
+                 "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
+            UpdateExpression="SET executionLog = :lg",
+            ConditionExpression=("attribute_exists(workflowExecutionId) AND "
+                                 "(attribute_not_exists(executionLog) OR size(executionLog) < :n)"),
+            ExpressionAttributeValues={":lg": execution_log,
+                                       ":n": len(execution_log.encode("utf-8"))},
+        )
+        return True
+    except Exception as e:
+        if not is_conditional_check_failure(e):
+            raise
+        logger.info(f"Main execution row {workflow_execution_id} is gone or already stores a log at "
+                    f"least as long; the log refresh was skipped")
+        return False
+
+
+def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadline_client=None,
+                                sagemaker_client=None):
     """Best-effort stop of one registered sub-process. Dispatches on the entry's resourceType and
     returns a message describing what could NOT be stopped, or "" when nothing needs surfacing
     (stopped cleanly, already finished, no actionable locator, or no client for that type).
@@ -500,22 +930,63 @@ def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadlin
                 return ""
             return (f"Sub-process stop failed for Deadline Cloud job {job_id}: "
                     f"{_error_code(e) or e}; it may still be running on the farm.")
-    locator = (sub.get("executionArn") or sub.get("jobArn") or sub.get("jobId")
-               or sub.get("taskArn") or sub.get("arn") or resource_type)
+    if resource_type == RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB:
+        # StopTrainingJob takes the job NAME; the registration records the ARN. A job the pipeline
+        # registered keeps its instance running after the parent state machine stops, so it is stopped
+        # explicitly. No client (a deployment without the grant) is named rather than passed over.
+        training_job_arn = sub.get("trainingJobArn", "")
+        if not training_job_arn:
+            return ""
+        job_name = ses.sagemaker_training_job_name_from_arn(training_job_arn)
+        if not job_name:
+            logger.warning(f"Registered SageMaker training job {training_job_arn} is not a training-job ARN")
+            return (f"Sub-process stop failed for SageMaker training job "
+                    f"{display_identifier(training_job_arn)}: its registration is not a training-job "
+                    "ARN, so it could not be stopped; it may still be running.")
+        if sagemaker_client is None:
+            return (f"Sub-process stop failed for SageMaker training job {job_name}: SageMaker is not "
+                    "available in this deployment, so it could not be stopped; it may still be running.")
+        try:
+            sagemaker_client.stop_training_job(TrainingJobName=job_name)
+            return ""
+        except Exception as e:
+            benign, reason = _classify_sagemaker_stop_error(
+                e, f"training job {job_name}",
+                lambda: sagemaker_client.describe_training_job(
+                    TrainingJobName=job_name).get("TrainingJobStatus", ""),
+                _SAGEMAKER_TRAINING_SETTLED_STATUSES, _SAGEMAKER_TRAINING_NOT_RUNNING_RE)
+            if benign:
+                return ""
+            return (f"Sub-process stop failed for SageMaker training job {job_name}: {reason}; it may "
+                    "still be running.")
+    if resource_type == RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION:
+        pipeline_execution_arn = sub.get("pipelineExecutionArn", "")
+        if not pipeline_execution_arn:
+            return ""
+        # Named by the execution id tail in every message: the ARN carries the account id and Region.
+        _pipeline_name, execution_id = ses.sagemaker_pipeline_execution_ids_from_arn(pipeline_execution_arn)
+        display = execution_id or "(unparseable ARN)"
+        if sagemaker_client is None:
+            return (f"Sub-process stop failed for SageMaker pipeline execution {display}: SageMaker is "
+                    "not available in this deployment, so it could not be stopped; it may still be "
+                    "running.")
+        try:
+            sagemaker_client.stop_pipeline_execution(PipelineExecutionArn=pipeline_execution_arn)
+            return ""
+        except Exception as e:
+            benign, reason = _classify_sagemaker_stop_error(
+                e, f"pipeline execution {display}",
+                lambda: sagemaker_client.describe_pipeline_execution(
+                    PipelineExecutionArn=pipeline_execution_arn).get("PipelineExecutionStatus", ""),
+                _SAGEMAKER_PIPELINE_SETTLED_STATUSES, _SAGEMAKER_PIPELINE_NOT_RUNNING_RE)
+            if benign:
+                return ""
+            return (f"Sub-process stop failed for SageMaker pipeline execution {display}: {reason}; it "
+                    "may still be running.")
+    locator = sub_process_locator(sub)
     logger.info(f"Registered sub-process of type '{resource_type}' cannot be stopped by VAMS: {locator}")
     return (f"Sub-process of type '{resource_type}' ({display_identifier(locator)}) could not be "
             "stopped: stopping this resource type is not supported; it may still be running.")
-
-
-def display_identifier(value):
-    """`value` as a client may see it: an ARN is reduced to its final path or colon segment (the
-    execution name, job id or task id) so the account id and Region it carries never reach a client;
-    any other value is returned unchanged. The full ARN belongs in server log lines only."""
-    value = str(value or "")
-    if not value.startswith("arn:"):
-        return value
-    tail = value.split("/")[-1]
-    return tail.split(":")[-1] if tail == value else tail
 
 
 def _error_code(error):
@@ -538,6 +1009,107 @@ def _is_benign_cancel_error(error):
     when a run completes as it is being cancelled, which leaves nothing running to report."""
     code = _error_code(error) or type(error).__name__
     return code in ("ConflictException", "ResourceNotFoundException")
+
+
+# Statuses in which a SageMaker Stop* is refused because there is nothing left to stop: the resource
+# has finished, or a stop is already under way. A Stop* refused for one of these is the normal race
+# when a run completes as it is being stopped (or a re-abort), and leaves nothing running to report.
+_SAGEMAKER_TRAINING_SETTLED_STATUSES = frozenset(("Stopped", "Stopping", "Completed", "Failed"))
+_SAGEMAKER_PIPELINE_SETTLED_STATUSES = frozenset(("Stopped", "Stopping", "Succeeded", "Failed"))
+
+# SageMaker's own ValidationException wording for a Stop* on a job or pipeline execution that is not
+# running, as the service returns it (StopTrainingJob: "The request was rejected because the training
+# job is in status Stopped." / "... Completed."; StopPipelineExecution: "Pipeline execution with ARN
+# ... status 'Failed'. Only pipelines with 'Executing' status can be stopped."). Consulted only when the
+# Describe* call that normally classifies the refusal itself fails (a throttle, a denial or a transient
+# service error), so a rewording degrades to a false "may still be running" warning there rather than to
+# a wrong classification. The unit tests pin these strings verbatim.
+_SAGEMAKER_TRAINING_NOT_RUNNING_RE = re.compile(
+    r"training job is in status (Stopped|Stopping|Completed|Failed)\b", re.IGNORECASE)
+_SAGEMAKER_PIPELINE_NOT_RUNNING_RE = re.compile(
+    r"status '(Stopped|Stopping|Succeeded|Failed)'|Only pipelines with 'Executing' status can be stopped",
+    re.IGNORECASE)
+# Error codes a Stop* answers with when the resource is not in a stoppable state. Any other code (a
+# denied permission above all) is a real failure and is never classified further.
+_SAGEMAKER_STATE_REFUSAL_CODES = frozenset(("ValidationException", "ConflictException"))
+
+
+def _sagemaker_error_message(error):
+    """The service message of a botocore ClientError, or '' when the error carries none."""
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        return str((response.get("Error") or {}).get("Message", "") or "")
+    return ""
+
+
+def _classify_sagemaker_stop_error(error, what, describe_status, settled_statuses, not_running_re):
+    """Whether a StopTrainingJob / StopPipelineExecution failure left nothing running: (benign, reason).
+
+    Rule, in order: ResourceNotFound → benign (the resource is gone). Any code other than a
+    state-refusal code (ValidationException / ConflictException) → a real failure, reported by its
+    code. For a state refusal the resource's live status is read through `describe_status` — on this
+    exception path only, never on a stop that succeeded — and a status in `settled_statuses` is
+    benign while any other status (a job still InProgress / Executing whose stop was refused) is
+    reported with that status. When Describe itself fails (a throttle, a denial or a transient service
+    error), the refusal is classified by SageMaker's own message against `not_running_re`, and a
+    message outside that wording is reported as the refusal code.
+
+    The returned `reason` carries only an AWS error code or a SageMaker status word, never the service
+    message, the ARN or the account; the specifics are logged here instead."""
+    code = _error_code(error) or type(error).__name__
+    if code in ("ResourceNotFound", "ResourceNotFoundException"):
+        logger.info(f"SageMaker {what} is no longer described by SageMaker; nothing to stop")
+        return True, ""
+    if code not in _SAGEMAKER_STATE_REFUSAL_CODES:
+        logger.warning(f"SageMaker stop refused for {what}: {code}: {_sagemaker_error_message(error) or error}")
+        return False, code
+    service_message = _sagemaker_error_message(error)
+    try:
+        status = str(describe_status() or "")
+    except Exception as describe_error:
+        status = ""
+        logger.info(f"SageMaker {what}: stop refused ({code}: {service_message}) and the status could "
+                    f"not be described ({_error_code(describe_error) or describe_error}); classifying "
+                    "by the service message")
+    if status:
+        if status in settled_statuses:
+            logger.info(f"SageMaker {what} is already {status}; the refused stop left nothing running")
+            return True, ""
+        logger.warning(f"SageMaker {what} is {status} but its stop was refused ({code}: {service_message})")
+        return False, f"{code} while the job is {status}"
+    if not_running_re.search(service_message):
+        logger.info(f"SageMaker {what} is already finished or stopping per the service message; the "
+                    "refused stop left nothing running")
+        return True, ""
+    logger.warning(f"SageMaker stop refused for {what}: {code}: {service_message or error}")
+    return False, code
+
+
+def sub_process_locator(sub):
+    """The identifier a registered sub-process is best named by in a log line or a stop message: the
+    first locator key the registration carries, else its resourceType."""
+    sub = sub or {}
+    return (sub.get("executionArn") or sub.get("jobArn") or sub.get("jobId")
+            or sub.get("trainingJobArn") or sub.get("pipelineExecutionArn")
+            or sub.get("taskArn") or sub.get("arn")
+            or sub.get("resourceType", "") or RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION)
+
+
+def sub_process_display_locator(sub):
+    """The identifier a registered sub-process is named by in an API response or a client-facing
+    message: the same as `sub_process_locator`, reduced by `display_identifier`."""
+    return display_identifier(sub_process_locator(sub))
+
+
+def display_identifier(value):
+    """`value` as a client may see it: an ARN is reduced to its final path or colon segment (the
+    execution name, job id or task id) so the account id and Region it carries never reach a client;
+    any other value is returned unchanged. The full ARN belongs in server log lines only."""
+    value = str(value or "")
+    if not value.startswith("arn:"):
+        return value
+    tail = value.split("/")[-1]
+    return tail.split(":")[-1] if tail == value else tail
 
 
 # ---------------------------------------------------------------------------
@@ -686,7 +1258,8 @@ def _unregistered_deadline_job_warning(prow, deadline_client, get_pipeline_defin
 
 
 def stop_registered_sub_processes(pipeline_rows, sfn_client=None, batch_client=None,
-                                  deadline_client=None, get_pipeline_definition=None):
+                                  deadline_client=None, get_pipeline_definition=None,
+                                  sagemaker_client=None):
     """Stop every sub-process registered by a non-terminal pipeline row. Returns the list of messages
     for the ones that could not be stopped, so the caller can record what was left running.
 
@@ -702,7 +1275,7 @@ def stop_registered_sub_processes(pipeline_rows, sfn_client=None, batch_client=N
         for sub in prow.get("registeredSubExecutions", []) or []:
             message = stop_registered_sub_process(
                 sub or {}, sfn_client=sfn_client, batch_client=batch_client,
-                deadline_client=deadline_client)
+                deadline_client=deadline_client, sagemaker_client=sagemaker_client)
             if message:
                 warnings.append(message)
         message = _unregistered_deadline_job_warning(
@@ -714,7 +1287,8 @@ def stop_registered_sub_processes(pipeline_rows, sfn_client=None, batch_client=N
 
 def mark_inflight_pipelines_terminal(dynamo, pipeline_executions_table, pipeline_rows,
                                      status, stop_date, sfn_client=None, batch_client=None,
-                                     deadline_client=None, get_pipeline_definition=None):
+                                     deadline_client=None, get_pipeline_definition=None,
+                                     sagemaker_client=None):
     """Set every non-terminal pipeline row to `status` + stop_date (used by the error handler to fail
     in-flight pipelines), stopping each row's registered sub-processes FIRST.
 
@@ -724,7 +1298,8 @@ def mark_inflight_pipelines_terminal(dynamo, pipeline_executions_table, pipeline
     caller with no stop permissions still reconciles the rows."""
     warnings = stop_registered_sub_processes(
         pipeline_rows, sfn_client=sfn_client, batch_client=batch_client,
-        deadline_client=deadline_client, get_pipeline_definition=get_pipeline_definition)
+        deadline_client=deadline_client, get_pipeline_definition=get_pipeline_definition,
+        sagemaker_client=sagemaker_client)
     for prow in pipeline_rows:
         if prow.get("executionStatus", "") in TERMINAL_STATUSES:
             continue
