@@ -447,12 +447,16 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
             looked_up.update(f"{database}:{asset}" for database, asset in wanted)
             unretrieved.update(f"{database}:{asset}" for database, asset in unresolved_key_list)
 
-        def build_tree_recursive(asset_id: str, database_id: str, current_path: Set[str]) -> Tuple[List[Dict], int, int, bool]:
+        def build_tree_recursive(asset_id: str, database_id: str, current_path: Set[str], count_denials: bool = True) -> Tuple[List[Dict], int, int, bool]:
             """Recursively build tree nodes as dictionaries with path-based cycle detection.
 
             Returns (nodes, subtree node count, subtree depth, cacheable). A result is not
             cacheable when the cycle guard or a ceiling cut it, because it then depends on how the
             walk arrived at the asset rather than on the asset itself.
+
+            ``count_denials`` suppresses the unauthorized/unresolved counting for one expansion:
+            the root expansion passes ``False`` because the flat relationship pass already counted
+            the root's own children into the same models.
             """
             nonlocal nodes_emitted, truncated
 
@@ -532,8 +536,9 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
                     }
                     tree_nodes.append(tree_node)
                 elif child_key in unretrieved:
-                    unresolved_counts.children += 1
-                else:
+                    if count_denials:
+                        unresolved_counts.children += 1
+                elif count_denials:
                     unauthorized_counts.children += 1
 
             if cacheable:
@@ -541,8 +546,13 @@ def build_child_tree(root_asset_id: str, root_database_id: str, claims_and_roles
 
             return tree_nodes, subtree_size, subtree_depth, cacheable
 
-        # Get the tree as dictionaries, starting with an empty path
-        tree_dicts, _, _, _ = build_tree_recursive(root_asset_id, root_database_id, set())
+        # Get the tree as dictionaries, starting with an empty path. The flat relationship pass
+        # already counted the root's own hidden children into the same models, so the root
+        # expansion must not count its denials -- that made the tree view report each of the
+        # root's hidden child links twice. Deeper expansions still count theirs: links the flat
+        # pass never sees.
+        tree_dicts, _, _, _ = build_tree_recursive(
+            root_asset_id, root_database_id, set(), count_denials=False)
 
         # Convert to AssetTreeNodeModel objects
         def dict_to_model(node_dict):

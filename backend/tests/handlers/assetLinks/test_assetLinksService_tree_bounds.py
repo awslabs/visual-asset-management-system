@@ -431,9 +431,10 @@ class TestUnprocessedKeysAreNotUnauthorized:
         """The tree walk resolves its own children, so it needs the same distinction.
 
         ``c1`` stays deferred past the retry budget while ``c2`` resolves: the sibling must still be
-        emitted, and the missing one counted as unresolved rather than denied. Asserted against
-        ``build_child_tree`` rather than the whole listing, because the flat relationship pass over
-        the root's own links counts them a second time into the same models.
+        emitted, and the missing one counted as unresolved rather than denied. The flat
+        relationship pass over the root's own links reads the same batch and defers ``c1`` too, so
+        the assertion runs through the whole tree-view listing and the two passes must land on one
+        count.
         """
         tree_reader.table.query.side_effect = GraphReader({
             f"{DB}:root": [_child_link((DB, "root"), (DB, "c1")),
@@ -441,17 +442,14 @@ class TestUnprocessedKeysAreNotUnauthorized:
         })
         tree_reader.dynamo.batch_get_item.side_effect = DeferringBatchReader(
             defer_keys={f"{DB}:c1"}, defer_rounds=99)
-        unauthorized = als.UnauthorizedCountsModel()
-        unresolved = als.UnresolvedCountsModel()
 
         with patch(f"{MOD}.BATCH_GET_RETRY_BASE_SECONDS", 0):
-            children, truncated = als.build_child_tree(
-                "root", DB, CLAIMS, unauthorized, unresolved)
+            response = als.get_asset_links_for_asset("root", DB, True, CLAIMS)
 
-        assert [node.assetId for node in children] == ["c2"]
-        assert unresolved.children == 1
-        assert unauthorized.children == 0
-        assert truncated is False
+        assert [node.assetId for node in response.children] == ["c2"]
+        assert response.unresolvedCounts.children == 1
+        assert response.unauthorizedCounts.children == 0
+        assert response.treeTruncated is False
 
     def test_a_denied_link_is_still_counted_unauthorized(self, listing_reader):
         """Positive control: a real permission denial must keep reading as a denial.
@@ -470,3 +468,44 @@ class TestUnprocessedKeysAreNotUnauthorized:
 
         assert response.related == []
         assert response.unauthorizedCounts.related == 1
+
+
+@pytest.mark.unit
+class TestRootDenialsAreCountedOnce:
+    """The flat pass and the tree walk count into the same models, so the root's own denials
+    must land in them exactly once across the two passes.
+
+    ``childTreeView`` adds hidden descendants to the flat listing, and both passes count into
+    the same ``unauthorizedCounts``/``unresolvedCounts`` models -- while the root expansion
+    counted its own denials too, a root child the caller may not see reported as two.
+    """
+
+    def test_a_denied_root_child_is_counted_once(self, tree_reader):
+        tree_reader.table.query.side_effect = GraphReader({
+            f"{DB}:root": [_child_link((DB, "root"), (DB, "c1")),
+                           _child_link((DB, "root"), (DB, "c2"))],
+        })
+
+        with patch(f"{MOD}.check_asset_permission",
+                   side_effect=lambda asset, claims, action="GET": asset["assetId"] != "c2"):
+            flat = als.get_asset_links_for_asset("root", DB, False, CLAIMS)
+            tree = als.get_asset_links_for_asset("root", DB, True, CLAIMS)
+
+        assert flat.unauthorizedCounts.children == 1
+        assert tree.unauthorizedCounts.children == 1, (
+            "the tree view counts the root's own hidden children once, like the flat view")
+
+    def test_hidden_descendants_below_the_root_are_still_counted(self, tree_reader):
+        """The root's own denials are counted by the flat pass; deeper ones only the tree sees."""
+        tree_reader.table.query.side_effect = GraphReader({
+            f"{DB}:root": [_child_link((DB, "root"), (DB, "c1"))],
+            f"{DB}:c1": [_child_link((DB, "c1"), (DB, "g1"))],
+        })
+
+        with patch(f"{MOD}.check_asset_permission",
+                   side_effect=lambda asset, claims, action="GET": asset["assetId"] != "g1"):
+            flat = als.get_asset_links_for_asset("root", DB, False, CLAIMS)
+            tree = als.get_asset_links_for_asset("root", DB, True, CLAIMS)
+
+        assert flat.unauthorizedCounts.children == 0
+        assert tree.unauthorizedCounts.children == 1
