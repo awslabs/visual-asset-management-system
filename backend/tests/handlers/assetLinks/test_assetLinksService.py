@@ -221,9 +221,10 @@ def test_unsupported_relationship_type(mock_casbin_enforcer, mock_request_to_cla
 @patch('backend.backend.handlers.assetLinks.createAssetLink.request_to_claims')
 @patch('backend.backend.handlers.assetLinks.createAssetLink.CasbinEnforcer')
 @patch('backend.backend.handlers.assetLinks.createAssetLink.validate_assets_exist')
-def test_invalid_asset_ids(mock_validate_assets_exist, mock_casbin_enforcer, 
+@patch('backend.backend.handlers.assetLinks.createAssetLink.check_asset_permissions')
+def test_invalid_asset_ids(mock_check_asset_permissions, mock_validate_assets_exist, mock_casbin_enforcer,
                           mock_request_to_claims, valid_event, mock_env_variables):
-    """Test handling of invalid asset IDs"""
+    """Test handling of invalid asset IDs, for a caller allowed on both assets"""
     # Setup mocks
     mock_request_to_claims.return_value = {"tokens": ["test-token"]}
     
@@ -231,6 +232,7 @@ def test_invalid_asset_ids(mock_validate_assets_exist, mock_casbin_enforcer,
     mock_casbin_enforcer_instance.enforceAPI.return_value = True
     mock_casbin_enforcer.return_value = mock_casbin_enforcer_instance
     
+    mock_check_asset_permissions.return_value = True
     mock_validate_assets_exist.return_value = False
     
     # Execute

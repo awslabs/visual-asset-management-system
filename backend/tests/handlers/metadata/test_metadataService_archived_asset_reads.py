@@ -195,7 +195,7 @@ def _live_only(entity):
 
 @pytest.mark.unit
 class TestRefusedMatchesMissing:
-    """With showArchived, Tier 2 is decided before existence on every metadata read."""
+    """Tier 2 is decided before existence on every metadata read; with showArchived, on the archived id."""
 
     @pytest.mark.parametrize("read", _READS, ids=_READ_IDS)
     def test_a_refused_archived_asset_answers_as_a_missing_id(self, read):
@@ -218,10 +218,21 @@ class TestRefusedMatchesMissing:
         assert "Asset not found" in _message(response)
 
     @pytest.mark.parametrize("read", _READS, ids=_READ_IDS)
-    def test_without_the_flag_existence_is_still_checked_first(self, read):
+    def test_without_the_flag_a_missing_id_is_decided_on_its_live_id(self, read):
         _id, path, query = read
         harness = _Harness(_Table(), authorized=_live_only)
         response = harness.call(_event("GET", path, query))
         assert response["statusCode"] == 400
         assert "Asset not found" in _message(response)
-        assert harness.authorized_objects == []
+        assert harness.authorized_objects == [{"databaseId": _DB, "assetId": _ASSET, "object__type": "asset"}]
+
+    @pytest.mark.parametrize("read", _READS, ids=_READ_IDS)
+    def test_without_the_flag_a_refused_caller_gets_the_same_answer_for_a_missing_id(self, read):
+        _id, path, query = read
+        refused = _Harness(_Table(_live()), authorized=False).call(_event("GET", path, query))
+        missing = _Harness(_Table(), authorized=False)
+        missing_response = missing.call(_event("GET", path, query))
+        assert refused["statusCode"] == 403
+        assert (missing_response["statusCode"], _message(missing_response)) == \
+            (refused["statusCode"], _message(refused))
+        assert missing.queried_keys == []

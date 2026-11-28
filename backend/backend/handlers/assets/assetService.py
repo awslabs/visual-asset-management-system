@@ -1875,8 +1875,10 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
     asset = get_asset_details(databaseId, assetId, showArchived=True)
 
     # Check authorization before existence, so a refused caller cannot use the not-found
-    # response to learn which assets exist
-    if not authorize_single_asset(asset, databaseId, assetId, "DELETE", claims_and_roles):
+    # response to learn which assets exist. The read includes archived assets, so a missing
+    # asset is decided as an archived one would be.
+    if not authorize_single_asset(asset, databaseId, assetId, "DELETE", claims_and_roles,
+                                  include_archived=True):
         raise AuthorizationDenied()
 
     if not asset:

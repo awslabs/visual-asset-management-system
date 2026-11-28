@@ -83,6 +83,18 @@ def asset_authorization_object(asset, databaseId, assetId, include_archived=Fals
     return {'databaseId': stand_in_database_id, 'assetId': assetId, 'object__type': 'asset'}
 
 
+def database_authorization_object(database, databaseId):
+    """The object Tier 2 decides for a single-database request, built before existence is revealed.
+
+    A found record is evaluated as a copy annotated with its object type, so the record a caller
+    writes back carries no object type. When no record was found, the requested id stands in, so
+    the verdict is reached whether or not the database exists.
+    """
+    if database:
+        return {**database, 'object__type': 'database'}
+    return {'databaseId': databaseId or '', 'object__type': 'database'}
+
+
 def query_all_items(table, **query_kwargs) -> List[Dict]:
     """Query a table, paging to exhaustion, and return every matching item.
 
