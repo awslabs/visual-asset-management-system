@@ -155,6 +155,8 @@ The `versions` list is present only when `includeVersions` is `true`. `changeWor
 
 Moves or renames a file within the asset. This copies the file to the new location and deletes the original. The copy runs within the request, so moving a large file can take longer than the Amazon API Gateway integration timeout; see [API Gateway Timeout for Large Operations](../troubleshooting/known-limitations.md#api-gateway-timeout-for-large-operations).
 
+A `sourcePath` of `/`, or one that resolves to the entry the file list shows at `/`, names the top-level asset folder: for an asset stored at `a1/`, its full key `a1/`, and for an asset created from one Amazon S3 object, its companion folder `{key}/`. These requests return `400` with a `message` that contains `Cannot move or rename the top-level asset folder`, and nothing is moved. `/a1/` is the subfolder named like the asset (key `a1/a1/`).
+
 **Request Parameters:**
 
 | Parameter    | Location | Type   | Required | Description          |
@@ -188,11 +190,11 @@ Moves or renames a file within the asset. This copies the file to the new locati
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                                                                 |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, source file not found, destination already exists, the source is the file of a single-file asset (`The file of a single-file asset cannot be moved or renamed.`), or the destination file name has a blocked extension. |
-| `403`  | Not authorized to modify files in this asset.                                                                                                                                                                                               |
-| `500`  | Internal server error.                                                                                                                                                                                                                      |
+| Status | Description                                                                                                                                                                                                                                                                           |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, source file not found, destination already exists, the source is the top-level asset folder, the source is the file of a single-file asset (`The file of a single-file asset cannot be moved or renamed.`), or the destination file name has a blocked extension. |
+| `403`  | Not authorized to modify files in this asset.                                                                                                                                                                                                                                         |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                |
 
 ---
 
@@ -255,7 +257,7 @@ Permanently deletes a file from the asset. This removes all versions of the file
 
 When Amazon S3 does not delete every version of every file under a prefix, the request returns `400`. The files that were deleted lose their metadata, attributes, version records and auxiliary data, and the remaining files keep theirs, so the delete can be retried. When Amazon S3 does not delete every version of a single file, or its previews cannot be listed, the request returns `400` and the file keeps its previews, auxiliary data and records. When the file is deleted but one of its previews is not, the request returns `400`: the file loses its metadata, version records and auxiliary data, the preview that was kept keeps its version records, and deleting the file again removes it.
 
-A `filePath` of `/` names the top-level asset folder, and so does a folder (`isPrefix` `true`) whose path resolves to the asset's own location folder: for an asset stored at `a1/`, its full key `a1/` resolves to it. These requests return `400` with a `message` that contains `Cannot delete the top-level asset folder`, and nothing is deleted. A path with a leading `/` is a path in the asset, so `/a1/` is the subfolder named like the asset (key `a1/a1/`) and deletes only that subfolder. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
+A `filePath` of `/` names the top-level asset folder, and so does a path that resolves to the entry the file list shows at `/`, whether `isPrefix` is `true` or `false`: for an asset stored at `a1/`, its full key `a1/`, and for an asset created from one Amazon S3 object, its companion folder `{key}/`. These requests return `400` with a `message` that contains `Cannot delete the top-level asset folder`, and nothing is deleted. A path with a leading `/` is a path in the asset, so `/a1/` is the subfolder named like the asset (key `a1/a1/`) and deletes only that subfolder. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
 
 :::danger[Irreversible Operation]
 This permanently deletes the file and all its versions. Consider using [Archive File](#archive-file) for soft-deletion instead.
@@ -310,7 +312,7 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 
 Soft-deletes a file by creating an S3 delete marker. The file can be restored using [Unarchive File](#unarchive-file).
 
-A `filePath` of `/`, or a folder (`isPrefix` `true`) whose path resolves to the asset's own location folder, such as `a1/` (its full key) for an asset stored at `a1/`, returns `400` with a `message` that contains `Cannot archive the top-level asset folder`, and nothing is archived. `/a1/` is the subfolder named like the asset (key `a1/a1/`) and archives only that subfolder. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
+A `filePath` of `/`, or a path that resolves to the entry the file list shows at `/` (`isPrefix` `true` or `false`), such as `a1/` (its full key) for an asset stored at `a1/` or the companion folder `{key}/` of an asset created from one Amazon S3 object, returns `400` with a `message` that contains `Cannot archive the top-level asset folder`, and nothing is archived. `/a1/` is the subfolder named like the asset (key `a1/a1/`) and archives only that subfolder. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
 
 **Request Parameters:**
 
@@ -448,6 +450,8 @@ Creates a new folder (zero-byte S3 object with trailing slash) within the asset'
 
 Reverts a file to a specific previous S3 version by copying the old version as the new current version.
 
+A `filePath` of `/`, or one that resolves to the entry the file list shows at `/` (for an asset stored at `a1/`, its full key `a1/`; for an asset created from one Amazon S3 object, its companion folder `{key}/`), names the top-level asset folder. These requests return `400` with a `message` that contains `Cannot revert the top-level asset folder`, and nothing changes.
+
 **Request Parameters:**
 
 | Parameter    | Location | Type   | Required | Description                     |
@@ -482,11 +486,11 @@ Reverts a file to a specific previous S3 version by copying the old version as t
 
 **Error Responses:**
 
-| Status | Description                                       |
-| ------ | ------------------------------------------------- |
-| `400`  | Invalid parameters, or file or version not found. |
-| `403`  | Not authorized to revert file versions.           |
-| `500`  | Internal server error.                            |
+| Status | Description                                                                   |
+| ------ | ----------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, the top-level asset folder, or file or version not found. |
+| `403`  | Not authorized to revert file versions.                                       |
+| `500`  | Internal server error.                                                        |
 
 ---
 

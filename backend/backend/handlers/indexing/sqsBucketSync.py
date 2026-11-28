@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Tuple
 from botocore.exceptions import ClientError
 from botocore.config import Config as BotoConfig
 from boto3.dynamodb.conditions import Key
-from common.validators import object_name_regex, validate
+from common.validators import new_asset_id_regex, object_name_regex, validate
 from common.eventLogSummary import event_log_summary
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
@@ -1353,6 +1353,15 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         AssetLocationInUseError: another asset's location holds the folder.
         RecordRedrive: the id could not be checked.
     """
+    # The folder name is a NEW asset id. Its last character must be one the rest
+    # of the id admits; the shared ASSET_ID rule stays broader so an id an
+    # earlier release stored (for example one ending in '#') stays addressable.
+    if not new_asset_id_regex.fullmatch(asset_id):
+        logger.warning(
+            f"Bucket sync cannot create asset {asset_id!r}: the last character must be "
+            "a letter, digit, underscore, comma, apostrophe or hyphen"
+        )
+        return None
     holders = database_asset_id_rows(database_id, asset_id)
     if holders:
         raise AssetIdInUseError(asset_id, holders)
@@ -2655,8 +2664,9 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
                     )
                     database_id_to_use = restored_database_id
             if not asset_data and not archived_asset:
-                # Auto-create an asset for a new first-level folder.
-                if not first_folder_valid:
+                # Auto-create an asset for a new first-level folder. The folder name is a new asset id,
+                # so it also follows the new-id rule; an existing asset was found by the lookups above.
+                if not first_folder_valid or not new_asset_id_regex.fullmatch(asset_id):
                     logger.info(f"Asset ID {asset_id} is not valid, skipping processing but forwarding to indexers")
                     return False, True, f"Asset ID {asset_id} is not valid"
                 derived_location = derive_location({'baseAssetsPrefix': base_prefix}, '', asset_id)

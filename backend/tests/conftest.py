@@ -373,6 +373,7 @@ sys.modules['common.dynamodb'].get_asset_record = _real_ddb_module.get_asset_rec
 # asset_authorization_object builds the record or stand-in Tier 2 decides; a MagicMock stand-in
 # would hand enforce() a mock instead of the identifiers a test asserts on.
 sys.modules['common.dynamodb'].asset_authorization_object = _real_ddb_module.asset_authorization_object
+sys.modules['common.dynamodb'].database_authorization_object = _real_ddb_module.database_authorization_object
 sys.modules['common.dynamodb'].ARCHIVED_ASSET_DATABASE_SUFFIX = \
     _real_ddb_module.ARCHIVED_ASSET_DATABASE_SUFFIX
 # apiRoutes is pure constants (no AWS deps), so load the REAL module by path

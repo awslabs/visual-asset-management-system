@@ -497,6 +497,10 @@ CORE_UNALLOWED_FILE_EXTENSION_LIST = [
 
 #Unallowed MIME type list for many of the equivilent file extensions in UNALLOWED_FILE_EXTENSION_LIST.
 #Same contract: lower-case entries, matched against the lower-cased media type (parameters stripped).
+#Word documents (application/vnd.openxmlformats-officedocument.wordprocessingml.document, which runs no
+#macros) and JavaScript (application/javascript) are ordinary asset content and are not core entries; a
+#deployment that wants either refused adds it to its add-on or custom lane. The macro-enabled Word type
+#stays blocked here and as .docm above.
 CORE_UNALLOWED_MIME_LIST = [
     "application/java-archive",
     "application/x-python-code",
@@ -510,11 +514,9 @@ CORE_UNALLOWED_MIME_LIST = [
     "application/x-ini",
     "application/x-inf",
     "application/x-sql",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/x-ms-shortcut",
     "application/x-bat-script",
     "application/vnd.ms-word.document.macroenabled.12",
-    "application/javascript",
     "application/x-vbs",
     "application/x-powershell",
     "application/x-msdos-program",

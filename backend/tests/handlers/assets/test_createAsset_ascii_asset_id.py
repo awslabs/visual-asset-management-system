@@ -138,6 +138,25 @@ class TestANonAsciiAssetIdIsRefusedAtCreate:
 
 
 @pytest.mark.unit
+class TestALastCharacterTheNewRuleRefusesIsRefusedAtCreate:
+    @pytest.mark.parametrize("asset_id", ["pump%", "pump)", "pump!"])
+    def test_it_raises_a_value_error_naming_the_last_character_rule(self, asset_id):
+        m = _load(fresh=True)
+        _wire_create(m)
+        with pytest.raises(ValueError) as excinfo:
+            m.create_asset(_request_model(m, asset_id), {"tokens": ["user1"]})
+        assert "must end with" in str(excinfo.value)
+
+    def test_nothing_is_written(self):
+        m = _load(fresh=True)
+        _wire_create(m)
+        with pytest.raises(ValueError):
+            m.create_asset(_request_model(m, "pump%"), {"tokens": ["user1"]})
+        assert m.saved == []
+        assert m.asset_table.put_item_calls == []
+
+
+@pytest.mark.unit
 class TestLegitimateAssetIdsStillCreate:
     """POSITIVE CONTROLS. Without these the refusal above passes equally on a gate
     that rejects everything, or on an assetId narrowed toward the ID rule."""

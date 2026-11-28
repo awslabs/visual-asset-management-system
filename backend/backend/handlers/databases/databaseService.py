@@ -13,7 +13,7 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.apiRoutes import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
 from common.validators import validate
-from common.dynamodb import validate_pagination_info, to_update_expr
+from common.dynamodb import validate_pagination_info, to_update_expr, database_authorization_object
 from common.bucketRegistrations import (
     BUCKET_NOT_AVAILABLE_MESSAGE,
     bucket_authorization_object,
@@ -329,18 +329,19 @@ def update_database(database_id, update_data, claims_and_roles=None, event=None)
         db_response = table.get_item(Key={'databaseId': database_id})
         database = db_response.get("Item", {})
         
-        if not database:
-            raise VAMSGeneralErrorResponse("Database not found")
-        
-        # Check authorization. The empty-token and absent-claims cases deny explicitly rather than
-        # skipping the check: without an authenticated identity there is nothing to evaluate, and
-        # falling through would reach the update_item below unauthorized (backend/CLAUDE.md Rule 4).
-        database.update({"object__type": "database"})
+        # Check authorization before the database's existence is reported, on the record or, when
+        # there is none, the requested id, so a refused caller gets the same 403 either way. The
+        # empty-token and absent-claims cases deny explicitly rather than skipping the check: without
+        # an authenticated identity there is nothing to evaluate, and falling through would reach the
+        # update_item below unauthorized (backend/CLAUDE.md Rule 4).
         if not claims_and_roles or len(claims_and_roles["tokens"]) == 0:
             raise DatabaseAccessDeniedError("Access denied")
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(database, "PUT"):
+        if not casbin_enforcer.enforce(database_authorization_object(database, database_id), "PUT"):
             raise DatabaseAccessDeniedError("Access denied")
+
+        if not database:
+            raise VAMSGeneralErrorResponse("Database not found")
         
         # If defaultBucketId is being updated, verify it exists. Moving a database onto a bucket also
         # needs it to be active (a retired registration left the configuration) and the caller to be
@@ -372,8 +373,7 @@ def update_database(database_id, update_data, claims_and_roles=None, event=None)
             raise VAMSGeneralErrorResponse("At least one field must be provided for update")
 
         # Write only the supplied fields, so a concurrent writer's attributes (the recount's assetCount)
-        # are not reverted and the object__type marker set for the Casbin check is never stored. The
-        # condition keeps a database deleted mid-edit from being recreated.
+        # are not reverted. The condition keeps a database deleted mid-edit from being recreated.
         logger.info(f"Updating database {database_id}")
         keys_map, values_map, expr = to_update_expr(updates)
         try:
@@ -429,28 +429,25 @@ def delete_database(database_id, claims_and_roles=None):
         )
         database = db_response.get("Item", {})
 
-        if not database:
-            return DeleteDatabaseResponseModel(
-                message="Record not found",
-                statusCode=404
-            )
-
-        # Authorize before the content checks, so a caller denied on the database learns
-        # nothing about what it contains
+        # Authorize before the database's existence is reported and before the content checks, on
+        # the record or, when there is none, the requested id, so a caller denied on the database
+        # gets the same 403 whether or not it exists and learns nothing about what it contains
         allowed = False
-        database.update({
-            "object__type": "database"
-        })
-        
         if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if casbin_enforcer.enforce(database, "DELETE"):
+            if casbin_enforcer.enforce(database_authorization_object(database, database_id), "DELETE"):
                 allowed = True
 
         if not allowed:
             return DeleteDatabaseResponseModel(
                 message="Action not allowed",
                 statusCode=403
+            )
+
+        if not database:
+            return DeleteDatabaseResponseModel(
+                message="Record not found",
+                statusCode=404
             )
 
         # Check for active workflows, pipelines, and assets
@@ -491,8 +488,6 @@ def delete_database(database_id, claims_and_roles=None):
                 message=databaseRetirement.WAIT_INDEX_NOT_READY_MESSAGE,
                 statusCode=databaseRetirement.WAIT_INDEX_NOT_READY_STATUS
             )
-        # The Casbin type marker is not part of the stored record
-        database.pop("object__type", None)
         database['databaseId'] = database_id + "#deleted"
         try:
             table.put_item(Item=database)

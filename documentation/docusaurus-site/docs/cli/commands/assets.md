@@ -241,6 +241,8 @@ vamscli assets download -d my-db -a my-asset --shareable-links-only
 vamscli assets download /local/path -d my-db -a my-asset --asset-link-children-tree-depth 2
 ```
 
+Each file is saved byte for byte as it is stored, as `aws s3 cp` saves it. A file stored with a `Content-Encoding` (for example a gzip-compressed glTF written straight to the asset bucket) is saved compressed; see [Downloaded File Is Compressed and Does Not Open](../troubleshooting/assets-files.md#downloaded-file-is-compressed-and-does-not-open).
+
 The command exits non-zero when any file did not arrive, so a partial transfer is distinguishable from a complete one. The report still goes to stdout: `overall_success` gives the outcome, and each entry in `failed_downloads` names a file in `relative_key` with the reason in `error`. A file the service declines to issue a download URL for is counted as a failure like any other — an asset that is not distributable, for example, lists its files but permits none of them to be fetched, and that reads as `failed_downloads` entries rather than an empty success. When nothing at all could be prepared, the error message names the reason.
 
 ---
