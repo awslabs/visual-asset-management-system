@@ -593,6 +593,11 @@ export async function openFileManager(
  * its caret (`.tree-item-caret`, TOGGLE_EXPANDED). So after selecting a folder, expand it through the
  * caret when its next segment is not yet visible. The visibility check comes first because a folder
  * that is already expanded would collapse on a caret click.
+ *
+ * A folder can be named like a file beside it ("/a.txt" and "/a.txt/b.txt"; an asset converted from a
+ * single file holds "/model.glb" and "/model.glb/..."), and the folder row comes first. So every segment
+ * before the last is matched as a folder, a last segment followed by "/" as a folder, and any other last
+ * segment as the file of that name, or as the folder when there is no such file (the asset root, for one).
  */
 export async function selectTreePath(
     page: Page,
@@ -600,13 +605,23 @@ export async function selectTreePath(
     options: { modifiers?: Array<"Control" | "Shift"> } = {}
 ): Promise<void> {
     const segments = filename.split("/").filter(Boolean);
+    const leafIsFolder = filename.endsWith("/");
     for (let index = 0; index < segments.length; index++) {
         const segment = segments[index];
-        const node = treeNode(page, segment);
-        await expect(node, `${segment} is not listed in the file tree`).toBeVisible({
+        const isLeaf = index === segments.length - 1;
+        const kind: TreeNodeKind | undefined = !isLeaf || leafIsFolder ? "folder" : undefined;
+        await expect(
+            treeNode(page, segment, kind),
+            `${segment} is not listed in the file tree`
+        ).toBeVisible({
             timeout: 60_000,
         });
-        const isLeaf = index === segments.length - 1;
+        // A file path names the file even when a folder of its name is listed before it
+        const fileRow = treeNode(page, segment, "file");
+        const node =
+            kind === undefined && (await fileRow.count()) > 0
+                ? fileRow
+                : treeNode(page, segment, kind);
         if (isLeaf && options.modifiers?.length) {
             await node.scrollIntoViewIfNeeded().catch(() => undefined);
             await node.click({ modifiers: options.modifiers, timeout: 8_000 });
@@ -731,13 +746,27 @@ export function viewerSamples(): ViewerSamples | null {
  *     So exact matching cannot find a folder in the visible tree at all, whatever the scope.
  *
  * Scoping to `.directory-tree` and allowing the optional `(n)` suffix handles files and folders alike.
+ *
+ * `kind` picks a file or a folder row when both carry the name (a file "a.txt" beside a folder "a.txt/"):
+ * a folder row has an expand caret (`.tree-item-caret`) and a file row has none. Without it the first row
+ * of the name is taken, whichever it is.
  */
-export function treeNode(page: Page, name: string): Locator {
+export type TreeNodeKind = "file" | "folder";
+
+export function treeNode(page: Page, name: string, kind?: TreeNodeKind): Locator {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const rows = page.locator(".directory-tree .tree-item-content");
+    const caret = page.locator(".tree-item-caret");
+    const kindRows =
+        kind === "folder"
+            ? rows.filter({ has: caret })
+            : kind === "file"
+            ? rows.filter({ hasNot: caret })
+            : rows;
     // e2e test helper: the tree-node name is escaped with the standard metacharacter escape before
     // it is interpolated into the RegExp below.
-    return page
-        .locator(".directory-tree .tree-item-name")
+    return kindRows
+        .locator(".tree-item-name")
         .filter({ hasText: new RegExp(`^${escaped}(\\(\\d+\\))?$`) }) // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
         .first();
 }
