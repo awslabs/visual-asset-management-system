@@ -26,6 +26,7 @@ from common.validators import trim_name
 from models.common import validation_error_message
 from common.workflows import executionValidation as ev
 from common.workflows import templateRender as tr
+from common.workflows.stepfunctions_builder import DEADLINE_JOB_SETTING_RANGES, deadline_job_setting
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="PipelineV2Models")
@@ -659,17 +660,14 @@ def _validate_execution_config(execution_config):
         if len(template_body) > MAX_DEADLINE_TEMPLATE_LENGTH:
             raise ValueError(
                 f"deadlineCloud.template must be at most {MAX_DEADLINE_TEMPLATE_LENGTH} characters")
-        # The createJob task state casts these to int.
-        for field in ("priority", "maxRetriesPerTask", "maxFailedTasksCount"):
+        # Deadline Cloud createJob refuses a value outside its range, and DynamoDB cannot store a
+        # float, so a fractional, non-numeric or out-of-range value is refused here (400) rather than
+        # failing the write (500) or every run of a workflow that uses the pipeline.
+        for field in DEADLINE_JOB_SETTING_RANGES:
             raw = dc.get(field)
             if raw in (None, ""):
                 continue
-            try:
-                value = int(raw)
-            except (ValueError, TypeError):
-                raise ValueError(f"deadlineCloud.{field} must be an integer")
-            if value < 0:
-                raise ValueError(f"deadlineCloud.{field} cannot be negative")
+            deadline_job_setting(field, raw, f"deadlineCloud.{field}")
     if checks:
         (valid, message) = validate(checks)
         if not valid:

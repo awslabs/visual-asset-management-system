@@ -31,8 +31,11 @@ from common.s3MetadataKeys import (
 from common.s3PathPatterns import (
     PREVIEW_FILE_PATTERN,
     ALLOWED_PREVIEW_FILE_EXTENSIONS,
-    TEMPORARY_UPLOAD_PREFIX,
     PREVIEW_PREFIX,
+    legacy_staged_upload_key,
+    UPLOAD_STAGING_LAYOUT_PER_UPLOAD,
+    max_uploaded_file_key_bytes,
+    staged_upload_key,
 )
 from common.apiRoutes import API_UPLOADS, API_UPLOAD_COMPLETE, API_UPLOAD_COMPLETE_EXTERNAL
 from common.dynamodb import to_update_expr
@@ -42,7 +45,8 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
-from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived
+from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived, asset_file_paths
+from common.assetLocations import contains, _is_preview_of
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
@@ -325,6 +329,15 @@ def update_asset_attributes(databaseId, assetId, updates):
         logger.exception(f"Error saving asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error saving asset.")
 
+
+def legacy_staging_key_for(upload_details, base_assets_prefix, final_s3_key):
+    """The per-path staging key (LEGACY STAGING KEY, #1928) an upload may still be open under, or None
+    for an upload whose record says it stages per upload, which never staged there."""
+    if upload_details.get('stagingLayout') == UPLOAD_STAGING_LAYOUT_PER_UPLOAD:
+        return None
+    return legacy_staged_upload_key(base_assets_prefix, final_s3_key)
+
+
 def save_upload_details(upload_data):
     """Save upload details to DynamoDB"""
     try:
@@ -448,8 +461,8 @@ def determine_asset_type(assetId, bucket, prefix):
         non_archived_files = []
         file_count = 0
         for item in contents:
-            if item['Key'].endswith('/'):
-                # Skip folder markers
+            if item['Key'].endswith('/') or not contains(prefix, item['Key']):
+                # Skip folder markers and keys the location does not hold
                 continue
                 
             try:
@@ -625,35 +638,37 @@ def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
         VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: execution_id or "",
     }
 
-def normalize_s3_path(asset_base_key, file_path):
+# The refusal of an upload path that names no file of the asset ('..' segments, or a key outside it)
+FILE_PATH_NOT_IN_ASSET_MESSAGE = "The file path does not name a file in this asset."
+
+# The refusal of a workflow output at a single-file asset's own file path
+OWN_FILE_OUTPUT_REFUSAL = ("A workflow output cannot replace the file of a single-file asset. "
+                           "Write the output under another file name or folder.")
+
+
+def upload_key_too_long_message(max_key_bytes):
+    """The refusal of an upload whose file key is longer than `max_key_bytes`
+    (common/s3PathPatterns.max_uploaded_file_key_bytes for the bucket). Names the bound, not the key."""
+    return (f"File key is too long to upload: a file key, including its asset location, "
+            f"may be at most {max_key_bytes} bytes")
+
+
+def upload_paths_for(bucket_name, asset, base_assets_prefix, asset_id):
+    """The asset-relative path <-> S3 key mapping of the asset's location for this request."""
+    asset_base_key = asset.get('assetLocation', {}).get('Key', f"{base_assets_prefix}{asset_id}/")
+    return asset_file_paths(bucket_name, asset_base_key, client=s3)
+
+
+def upload_key_for(paths, file_path):
+    """The S3 key an upload's relativeKey names in the asset (``AssetFilePaths.request_key_for``).
+
+    Raises:
+        VAMSGeneralErrorResponse: The path names no key the asset holds.
     """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-    
-    Args:
-        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-        
-    Returns:
-        The properly resolved S3 key without duplication
-    """
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-    
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-    
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
+    key = paths.request_key_for(file_path)
+    if key is None:
+        raise VAMSGeneralErrorResponse(FILE_PATH_NOT_IN_ASSET_MESSAGE)
+    return key
 
 def is_preview_file(file_path: str) -> bool:
     """Check if file is a preview file (.previewFile.X pattern)
@@ -681,7 +696,7 @@ def get_base_file_path(preview_file_path: str) -> str:
     # Split at .previewFile. and take the first part
     return preview_file_path.split(PREVIEW_FILE_PATTERN)[0]
 
-def validate_preview_files_with_base_files(files_in_request, asset_base_key, bucket_name):
+def validate_preview_files_with_base_files(files_in_request, paths, bucket_name):
     """Validate that all preview files in the request have corresponding base files
     
     This function checks if all .previewFile. files in the request have their associated
@@ -689,7 +704,7 @@ def validate_preview_files_with_base_files(files_in_request, asset_base_key, buc
     
     Args:
         files_in_request: List of file details in the current request
-        asset_base_key: The base key for the asset in S3
+        paths: The asset's path mapping for this request (``upload_paths_for``)
         bucket_name: The S3 bucket name
         
     Returns:
@@ -726,7 +741,7 @@ def validate_preview_files_with_base_files(files_in_request, asset_base_key, buc
             continue
         
         # If not in request, check if it exists in S3
-        base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+        base_file_key = upload_key_for(paths, base_file_path)
         try:
             s3.head_object(Bucket=bucket_name, Key=base_file_key)
             # Base file exists in S3, so this preview file is valid
@@ -806,26 +821,15 @@ def find_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     preview_files = []
     
     try:
-        # Get the directory and filename parts
-        directory = os.path.dirname(base_file_key)
-        filename = os.path.basename(base_file_key)
-        
-        # Create the prefix for listing objects
-        prefix = f"{directory}/" if directory else ""
-        
-        # Create the pattern to match preview files for this base file
-        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
-        
-        # List objects in the directory
+        # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+        prefix = f"{base_file_key}{PREVIEW_FILE_PATTERN}"
+
         paginator = s3.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
-                key = obj['Key']
-                base_filename = os.path.basename(key)
-                
-                # Check if this is a preview file for our base file
-                if base_filename.startswith(pattern):
-                    preview_files.append(key)
+                # A preview is {base key}.previewFile.{ext}; a longer key that only shares the prefix is not one
+                if _is_preview_of(base_file_key, obj['Key']):
+                    preview_files.append(obj['Key'])
         
         # Sort the preview files alphabetically
         preview_files.sort()
@@ -1035,7 +1039,8 @@ def landed_synchronously(file_results) -> bool:
     return any(result.success and not result.largeFileAsynchronousHandling for result in file_results)
 
 
-def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: str, expected_parts: list) -> tuple:
+def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: str, expected_parts: list,
+                                         raise_errors: bool = False) -> tuple:
     """Calculate total file size by listing parts of an incomplete multipart upload
     
     Args:
@@ -1043,6 +1048,8 @@ def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: 
         key: The S3 object key
         upload_id: The multipart upload ID
         expected_parts: List of expected part objects with PartNumber and ETag
+        raise_errors: Raise a failed read's exception instead of logging it and returning it as the
+            error message, for a caller that decides how to log it
         
     Returns:
         Tuple of (total_size, success, error_message)
@@ -1086,8 +1093,80 @@ def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: 
         return total_file_size, True, None
         
     except Exception as e:
+        if raise_errors:
+            raise
         logger.exception(f"Error calculating file size from parts: {e}")
         return 0, False, f"Error verifying upload parts: {str(e)}"
+
+
+def _is_no_such_upload(error) -> bool:
+    return isinstance(error, ClientError) and error.response.get('Error', {}).get('Code') == 'NoSuchUpload'
+
+
+def multipart_upload_exists(bucket_name: str, key: str, upload_id_s3: str) -> bool:
+    """Whether the multipart upload `upload_id_s3` is open under `key`. S3 binds an upload id to the
+    key it was created under, so only that key answers."""
+    try:
+        s3.list_parts(Bucket=bucket_name, Key=key, UploadId=upload_id_s3, MaxParts=1)
+        return True
+    except ClientError as e:
+        if not _is_no_such_upload(e):
+            logger.warning(f"Could not read multipart upload {upload_id_s3}: {e}")
+        return False
+
+
+def abort_staged_multipart_upload(bucket_name: str, temp_s3_key: str, upload_id_s3: str,
+                                  legacy_temp_s3_key: Optional[str] = None):
+    """Abort the multipart upload `upload_id_s3` of a file staged under `temp_s3_key`.
+
+    LEGACY STAGING KEY (#1928, see common/s3PathPatterns.legacy_staged_upload_key): an upload
+    initialized before per-upload staging created its multipart upload under the per-path key. When
+    the upload is not open under `temp_s3_key` but is under `legacy_temp_s3_key`, the abort is sent
+    there. Decided by ListParts, not by the abort's answer: S3 answers 204 to an abort of an upload
+    it no longer holds open (one already completed, #1123), so an abort's answer does not say where
+    the upload is. Raises what S3 raised; the callers log it and carry on."""
+    key = temp_s3_key
+    if (legacy_temp_s3_key and not multipart_upload_exists(bucket_name, temp_s3_key, upload_id_s3)
+            and multipart_upload_exists(bucket_name, legacy_temp_s3_key, upload_id_s3)):
+        logger.info(f"Multipart upload {upload_id_s3} was initialized before per-upload staging, "
+                    f"so it is aborted under its per-path staging key")
+        key = legacy_temp_s3_key
+    s3.abort_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id_s3)
+
+
+def locate_staged_multipart_upload(bucket_name: str, temp_s3_key: str, legacy_temp_s3_key: Optional[str],
+                                   upload_id_s3: str, expected_parts: list) -> tuple:
+    """The staging key of the multipart upload `upload_id_s3` and its parts' total size, as
+    (key, total_size, success, error_message).
+
+    The parts are read under the per-upload key `temp_s3_key`. Only when that read fails is
+    `legacy_temp_s3_key` tried (LEGACY STAGING KEY, #1928): an upload initialized before per-upload
+    staging still completes after the upgrade. The legacy key is used only when the upload's own S3
+    upload id is open under it, so a file staged there by another upload is never taken for this
+    one. An upload open under neither key keeps the first read's error.
+
+    The first read's S3 error is logged at ERROR only when it stands. For an upload completed under
+    the legacy key, the first read answers NoSuchUpload by design (#1971), so that error is not
+    logged; any other first-read error that the legacy key then recovers is logged as a warning."""
+    first_read_error = None
+    try:
+        total_size, success, error = calculate_total_file_size_from_parts(
+            bucket_name, temp_s3_key, upload_id_s3, expected_parts, raise_errors=True)
+    except Exception as e:
+        first_read_error = e
+        total_size, success, error = 0, False, f"Error verifying upload parts: {str(e)}"
+    if success or not legacy_temp_s3_key or not multipart_upload_exists(bucket_name, legacy_temp_s3_key, upload_id_s3):
+        if first_read_error is not None:
+            logger.error(f"Error calculating file size from parts: {first_read_error}", exc_info=first_read_error)
+        return temp_s3_key, total_size, success, error
+    if first_read_error is not None and not _is_no_such_upload(first_read_error):
+        logger.warning(f"Reading the parts of multipart upload {upload_id_s3} under its per-upload staging "
+                       f"key failed: {first_read_error}")
+    logger.info(f"Multipart upload {upload_id_s3} was initialized before per-upload staging, "
+                f"so it is completed under its per-path staging key")
+    total_size, success, error = calculate_total_file_size_from_parts(
+        bucket_name, legacy_temp_s3_key, upload_id_s3, expected_parts)
+    return legacy_temp_s3_key, total_size, success, error
 
 #######################
 # API Implementations
@@ -1136,6 +1215,14 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
+    upload_paths = upload_paths_for(bucket_name, asset, baseAssetsPrefix, assetId)
+
+    # Generate the upload ID ahead of the per-file checks too: each file is staged in a folder named
+    # for it, and the key-length rule measures that staging key.
+    uploadId = f"y{str(uuid.uuid4())}"
+    # The longest final key a file uploaded into this bucket area can have: its staging key must fit
+    # the S3 object key limit.
+    max_upload_key_bytes = max_uploaded_file_key_bytes(baseAssetsPrefix)
 
     # Every remaining per-file rule is checked here, before any upload is initiated. Each reads only
     # relativeKey, file_size, uploadType and the asset's location, so none of it depends on the
@@ -1160,31 +1247,32 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         if uploadType == "assetFile":
             # Get the asset's base key from assetLocation
             asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
-            final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+            final_s3_key = upload_key_for(upload_paths, file.relativeKey)
         else:  # assetPreview
             #We only want the filename and none of the path if there is a path
             filename = os.path.basename(file.relativeKey)
             final_s3_key = f"{baseAssetsPrefix}{PREVIEW_PREFIX}{assetId}/{filename}"
 
-        # Determine temporary S3 key by adding temp prefix to final key
-        temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+        # The file is staged in this upload's own folder under the temp-uploads prefix, so a concurrent
+        # upload of the same path stages elsewhere and neither completion touches the other's file.
+        temp_s3_key = staged_upload_key(baseAssetsPrefix, uploadId, final_s3_key)
 
         # The request model bounded relativeKey; the keys S3 measures carry the asset prefix and, for
-        # the temporary object, the temp-uploads prefix as well, so a relativeKey inside the limit can
-        # resolve to a key S3 refuses. Refuse both forms here, with a generic message that does not echo
-        # the key, so S3's KeyTooLongError never surfaces as a 500 after an earlier file's multipart
-        # upload has already been created.
-        if exceeds_s3_object_key_limit(final_s3_key) or exceeds_s3_object_key_limit(temp_s3_key):
-            raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
+        # the temporary object, the temp-uploads prefix and the upload's folder as well, so a relativeKey
+        # inside the limit can resolve to a key S3 refuses. A final key over the upload bound is refused
+        # here with a message that names the bound and does not echo the key, so S3's KeyTooLongError
+        # never surfaces as a 500 after an earlier file's multipart upload has already been created. The
+        # staging key is checked against the S3 limit too; the two agree by construction (both derive
+        # from staged_upload_key's layout).
+        if (exceeds_s3_object_key_limit(final_s3_key, max_upload_key_bytes)
+                or exceeds_s3_object_key_limit(temp_s3_key)):
+            raise VAMSGeneralErrorResponse(upload_key_too_long_message(max_upload_key_bytes))
 
         temp_s3_keys.append(temp_s3_key)
 
     # Additional business logic validation
     if uploadType == "assetPreview" and asset.get('previewLocation'):
         logger.info(f"Asset {assetId} already has a preview. The existing preview will be replaced.")
-    
-    # Generate upload ID
-    uploadId = f"y{str(uuid.uuid4())}"
     
     # Calculate expiration time (7 days from now)
     now = datetime.utcnow()
@@ -1265,7 +1353,8 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         totalParts=total_parts,
         status="initialized",
         UserId=user_id,  # Include user ID for rate limiting
-        files=[file.relativeKey for file in request_model.files]
+        files=[file.relativeKey for file in request_model.files],
+        stagingLayout=UPLOAD_STAGING_LAYOUT_PER_UPLOAD,
     )
     save_upload_details(upload_record)
     
@@ -1341,6 +1430,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
+    upload_paths = upload_paths_for(bucket_name, asset, baseAssetsPrefix, assetId)
     source_bucket = request_model.sourceBucket or bucket_name
 
     # Get database details to check file upload restrictions
@@ -1429,7 +1519,18 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             if uploadType == "assetFile":
                 # Get the asset's base key from assetLocation
                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
-                final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+                final_s3_key = upload_key_for(upload_paths, file.relativeKey)
+                # A workflow output never replaces a single-file asset's object (it holds the location)
+                if upload_paths.names_object(final_s3_key):
+                    logger.warning(f"Workflow output {file.relativeKey!r} names the object of single-file asset {assetId}")
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3="external",
+                        success=False,
+                        error=OWN_FILE_OUTPUT_REFUSAL
+                    ))
+                    has_failures = True
+                    continue
             else:  # assetPreview
                 #We only want the filename and none of the path if there is a path
                 filename = os.path.basename(file.relativeKey)
@@ -1546,7 +1647,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             if uploadType == "assetFile" and is_preview_file(file.relativeKey):
                 # Get the base file path
                 base_file_path = get_base_file_path(file.relativeKey)
-                base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+                base_file_key = upload_key_for(upload_paths, base_file_path)
                 
                 # Check if the base file exists in the current request
                 base_file_in_request = False
@@ -1648,7 +1749,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             # Validate preview files have base files
             is_valid, error_message, invalid_files = validate_preview_files_with_base_files(
                 files_for_validation, 
-                asset_base_key, 
+                upload_paths, 
                 bucket_name
             )
             
@@ -1696,7 +1797,7 @@ def complete_external_upload(uploadId: str, request_model: CompleteExternalUploa
             # If this is a preview file in an assetFile upload, delete any existing preview files for the base file
             if uploadType == "assetFile" and is_preview_file(file_detail['relativeKey']):
                 base_file_path = get_base_file_path(file_detail['relativeKey'])
-                base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+                base_file_key = upload_key_for(upload_paths, base_file_path)
                 deleted_files = delete_existing_preview_files(bucket_name, base_file_key)
                 if deleted_files:
                     logger.info(f"Deleted {len(deleted_files)} existing preview files for {base_file_path}")
@@ -1897,6 +1998,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     bucketDetails = get_default_bucket_details(asset['bucketId'])
     bucket_name = bucketDetails['bucketName']
     baseAssetsPrefix = bucketDetails['baseAssetsPrefix']
+    upload_paths = upload_paths_for(bucket_name, asset, baseAssetsPrefix, assetId)
     
     # Get database details to check file upload restrictions
     database = get_database_details(databaseId)
@@ -1965,14 +2067,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                             try:
                                 # Construct temp key to abort the upload
                                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
-                                final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
-                                temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+                                final_s3_key = upload_key_for(upload_paths, file.relativeKey)
+                                temp_s3_key = staged_upload_key(baseAssetsPrefix, uploadId, final_s3_key)
                                 
-                                s3.abort_multipart_upload(
-                                    Bucket=bucket_name,
-                                    Key=temp_s3_key,
-                                    UploadId=file.uploadIdS3
-                                )
+                                abort_staged_multipart_upload(
+                                    bucket_name, temp_s3_key, file.uploadIdS3,
+                                    legacy_staging_key_for(upload_details, baseAssetsPrefix, final_s3_key))
                             except Exception as abort_error:
                                 logger.warning(f"Error aborting multipart upload for invalid extension: {abort_error}")
                         continue
@@ -1981,13 +2081,19 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             if uploadType == "assetFile":
                 # Get the asset's base key from assetLocation
                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
-                final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+                final_s3_key = upload_key_for(upload_paths, file.relativeKey)
             else:  # assetPreview
                 #We only want the filename and none of the path if there is a path
                 filename = os.path.basename(file.relativeKey)
                 final_s3_key = f"{baseAssetsPrefix}{PREVIEW_PREFIX}{assetId}/{filename}"
                 
-            temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
+            # The file's staging key in this upload's own folder (as initialization built it), and, for
+            # an upload initialized before per-upload staging, the per-path key it used (LEGACY STAGING
+            # KEY, #1928): a multipart upload found only under the legacy key is completed or aborted
+            # there. An upload initialized since has no legacy key.
+            # A zero-byte file is created by this completion, so it always uses the per-upload key.
+            temp_s3_key = staged_upload_key(baseAssetsPrefix, uploadId, final_s3_key)
+            legacy_temp_s3_key = legacy_staging_key_for(upload_details, baseAssetsPrefix, final_s3_key)
             
             # The branches below can create an object under final_s3_key -- the zero-byte branch
             # writes one directly, the multipart branch completes one -- so the name-level
@@ -2018,11 +2124,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 # Abort the multipart upload if one exists (zero-byte files never created one)
                 if file.uploadIdS3 != "zero-byte":
                     try:
-                        s3.abort_multipart_upload(
-                            Bucket=bucket_name,
-                            Key=temp_s3_key,
-                            UploadId=file.uploadIdS3
-                        )
+                        abort_staged_multipart_upload(bucket_name, temp_s3_key, file.uploadIdS3, legacy_temp_s3_key)
                     except Exception as abort_error:
                         logger.warning(f"Error aborting multipart upload for rejected file name: {abort_error}")
                 
@@ -2073,11 +2175,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 logger.info(f"No parts provided for file {file.relativeKey}, cancelling its upload")
                 
                 try:
-                    s3.abort_multipart_upload(
-                        Bucket=bucket_name,
-                        Key=temp_s3_key,
-                        UploadId=file.uploadIdS3
-                    )
+                    abort_staged_multipart_upload(bucket_name, temp_s3_key, file.uploadIdS3, legacy_temp_s3_key)
                 except Exception as abort_error:
                     logger.warning(f"Error aborting multipart upload for cancelled file: {abort_error}")
                 
@@ -2107,10 +2205,13 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             # Log the parts we received
             logger.info(f"Received {len(actual_parts)} parts for file {file.relativeKey}: {actual_parts}")
             
-            # Calculate total file size by listing parts before completing upload
-            total_file_size, size_calc_success, size_calc_error = calculate_total_file_size_from_parts(
-                bucket_name, temp_s3_key, file.uploadIdS3, file.parts
+            # Calculate total file size by listing parts before completing upload. This also settles
+            # the staging key: from here on temp_s3_key is the key the multipart upload is open under,
+            # the legacy per-path key for an upload initialized before per-upload staging.
+            temp_s3_key, total_file_size, size_calc_success, size_calc_error = locate_staged_multipart_upload(
+                bucket_name, temp_s3_key, legacy_temp_s3_key, file.uploadIdS3, file.parts
             )
+            legacy_temp_s3_key = None  # settled: the aborts below need no fallback
             
             if not size_calc_success:
                 file_results.append(FileCompletionResult(
@@ -2237,9 +2338,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     # Default to 0 for unknown file sizes (will process synchronously)
                     file_size = 0
                 
-                # Verify the uploadId matches
+                # Verify the uploadId matches. The staged object is under this upload's own key, so
+                # another upload's id here means the object was not written by this upload's parts;
+                # it is refused and deleted, which removes only this upload's staged object. (An
+                # upload completed under its LEGACY per-path key is handled as before per-upload
+                # staging.)
                 if s3_upload_id != uploadId:
-                    # Delete the uploaded file since metadata doesn't match
                     delete_s3_object(bucket_name, temp_s3_key)
                     
                     file_results.append(FileCompletionResult(
@@ -2353,7 +2457,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 
                 # Get the base file path
                 base_file_path = get_base_file_path(file.relativeKey)
-                base_file_key = normalize_s3_path(asset_base_key, base_file_path)
+                base_file_key = upload_key_for(upload_paths, base_file_path)
                 
                 # Check if the base file exists in the current request
                 base_file_in_request = False
@@ -2412,13 +2516,10 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
         except Exception as e:
             logger.exception(f"Error completing multipart upload for {file.relativeKey}: {e}")
             
-            # Abort the multipart upload to clean up S3 resources
+            # Abort the multipart upload to clean up S3 resources (temp_s3_key is defined in the outer
+            # try block; legacy_temp_s3_key is None once the staging key was settled)
             try:
-                s3.abort_multipart_upload(
-                    Bucket=bucket_name,
-                    Key=temp_s3_key,  # Use temp_s3_key directly since it's defined in the outer try block
-                    UploadId=file.uploadIdS3
-                )
+                abort_staged_multipart_upload(bucket_name, temp_s3_key, file.uploadIdS3, legacy_temp_s3_key)
             except Exception as abort_error:
                 logger.exception(f"Error aborting multipart upload: {abort_error}")
             
@@ -2463,7 +2564,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
             # Validate preview files have base files
             is_valid, error_message, invalid_files = validate_preview_files_with_base_files(
                 files_for_validation, 
-                asset_base_key, 
+                upload_paths, 
                 bucket_name
             )
             

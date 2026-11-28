@@ -129,7 +129,7 @@ class TestSearchHandler:
                 mock_enforcer_instance.enforceAPI.return_value = True
                 mock_enforcer.return_value = mock_enforcer_instance
 
-                with patch('handlers.search.search.get_ssm_parameter_value') as mock_ssm:
+                with patch('handlers.search.search.get_parameter_value') as mock_ssm:
                     mock_ssm.side_effect = lambda param, region, env: {
                         'AOS_ENDPOINT_PARAM': 'https://test-endpoint.us-east-1.aoss.amazonaws.com',
                         'AOS_INDEX_NAME_PARAM': 'test-index'
@@ -174,7 +174,7 @@ class TestSearchHandler:
                 mock_enforcer_instance.enforce.return_value = True
                 mock_enforcer.return_value = mock_enforcer_instance
 
-                with patch('handlers.search.search.get_ssm_parameter_value') as mock_ssm:
+                with patch('handlers.search.search.get_parameter_value') as mock_ssm:
                     mock_ssm.side_effect = lambda param, region, env: {
                         'AOS_ENDPOINT_PARAM': 'https://test-endpoint.us-east-1.aoss.amazonaws.com',
                         'AOS_INDEX_NAME_PARAM': 'test-index'
@@ -378,7 +378,7 @@ class TestSearchManager:
 
     def test_search_query_execution(self):
         """Test search query execution."""
-        with patch('handlers.search.search.get_ssm_parameter_value') as mock_ssm:
+        with patch('handlers.search.search.get_parameter_value') as mock_ssm:
             mock_ssm.side_effect = lambda param, region, env: {
                 'AOS_ENDPOINT_PARAM': 'https://test-endpoint.us-east-1.aoss.amazonaws.com',
                 'AOS_INDEX_NAME_PARAM': 'test-index'
@@ -400,7 +400,7 @@ class TestSearchManager:
 
     def test_search_error_handling(self):
         """Test search error handling."""
-        with patch('handlers.search.search.get_ssm_parameter_value') as mock_ssm:
+        with patch('handlers.search.search.get_parameter_value') as mock_ssm:
             mock_ssm.side_effect = lambda param, region, env: {
                 'AOS_ENDPOINT_PARAM': 'https://test-endpoint.us-east-1.aoss.amazonaws.com',
                 'AOS_INDEX_NAME_PARAM': 'test-index'

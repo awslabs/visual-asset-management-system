@@ -59,7 +59,8 @@ def construct_metadataLabeling_definition(event) -> dict:
         "inputFile": {
             "bucketName": input_s3_asset_file_bucket,
             "objectKey": input_s3_asset_file_key,
-            "fileExtension": input_s3_asset_extension
+            "fileExtension": input_s3_asset_extension,
+            "assetRootS3Key": event.get("assetRootS3Key", ""),
         },
         "outputFiles": {
             "bucketName": inputOutput_s3_assetAuxiliary_files_bucket,

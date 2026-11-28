@@ -4,11 +4,13 @@
 import os
 import boto3
 import json
+from urllib.parse import quote
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from common.validators import validate
 from customLogging.logger import safeLogger
 from common.constants import UNALLOWED_MIME_LIST, UNALLOWED_FILE_EXTENSION_LIST
+from common.assetLocations import AssetFilePaths
 
 logger = safeLogger(service_name="S3Common")
 
@@ -138,6 +140,28 @@ def list_all_object_versions(bucket: str, prefix: str, client=None, max_keys: in
     return {'Versions': versions, 'DeleteMarkers': delete_markers}
 
 
+def key_has_any_version(bucket: str, key: str, client=None) -> bool:
+    """Whether an exact key has any version or delete marker, from one ListObjectVersions call.
+
+    ``MaxKeys=1`` answers it (backend Rule 14): keys come back ascending, so the queried key's newest
+    entry is the one entry returned whenever the key has any, and an entry for a longer sibling key
+    means the key has none. Errors propagate: a caller that cannot tell must not guess.
+    """
+    s3 = client or s3c
+    response = s3.list_object_versions(Bucket=bucket, Prefix=key, MaxKeys=1)
+    entries = response.get('Versions', []) + response.get('DeleteMarkers', [])
+    return any(entry.get('Key') == key for entry in entries)
+
+
+def asset_file_paths(bucket: str, location, client=None) -> AssetFilePaths:
+    """``common.assetLocations.AssetFilePaths`` for an asset location in ``bucket``, for one request.
+
+    Its one S3 read (does the companion entry named like a single-file location's object exist) is
+    ``key_has_any_version`` with ``client``. A folder location makes no read.
+    """
+    return AssetFilePaths(location, key_exists=lambda key: key_has_any_version(bucket, key, client=client))
+
+
 def list_all_objects(bucket: str, prefix: str, client=None, max_objects: int = None) -> list:
     """List objects under a prefix, paging to exhaustion (or up to max_objects).
 
@@ -226,15 +250,56 @@ def validateS3AssetExtensionsAndContentType(bucket: str, prefixKey: str):
 SVG_RESPONSE_CONTENT_TYPE = 'image/svg+xml'
 SVG_RESPONSE_CONTENT_DISPOSITION = 'attachment'
 
+# A download URL (attachment=True) asks S3 to answer with an attachment disposition naming the file
+# by its key, whatever Content-Type or Content-Disposition the object was stored with, so opening the
+# link saves the file under its own name. The bound is on the value as it is signed into the URL's
+# query string (percent-encoded the way SigV4 encodes a query value), so it caps what the disposition
+# adds to each URL: at most about 670 bytes, about 0.9 MB over a full bulk response of 1,500 URLs. It
+# does not bound the response itself; the bulk route has no response-size guard. Every name of up
+# to 255 ASCII letters, digits and "-._~" fits; a name that does not fit (long non-ASCII names
+# first: each three-byte character takes 16 characters) is signed as a bare attachment, and the
+# browser then names the file from the URL path, which ends in the same key.
+ATTACHMENT_DISPOSITION_MAX_LENGTH = 640
+# The characters SigV4 leaves unencoded in a query value (botocore.utils.SAFE_CHARS).
+SIGNED_QUERY_SAFE_CHARS = '-._~'
 
-def presigned_get_object_params(params: dict) -> dict:
-    """Return a copy of GetObject ``params`` with the response overrides the object key needs.
+
+def attachment_content_disposition(key: str) -> str:
+    """The ``Content-Disposition`` that saves an object as a file named by the key's final segment.
+
+    RFC 6266 form, plain ASCII whatever the key holds:
+    ``attachment; filename="<fallback>"; filename*=UTF-8''<name, percent-encoded>``. The fallback
+    replaces every character outside printable ASCII with ``_`` and escapes ``"`` and ``\\``; the
+    extended value (RFC 8187) percent-encodes every UTF-8 byte outside the unreserved set, and
+    browsers use it in preference to the fallback. A key ending in ``/`` (a folder marker) names no
+    file and gets ``attachment`` alone, as does a name whose value, percent-encoded as it is signed
+    into the URL, would pass ``ATTACHMENT_DISPOSITION_MAX_LENGTH``.
+    """
+    name = str(key or '').rsplit('/', 1)[-1]
+    if not name:
+        return 'attachment'
+    fallback = ''.join(ch if ' ' <= ch <= '~' else '_' for ch in name)
+    fallback = fallback.replace('\\', '\\\\').replace('"', '\\"')
+    value = "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (fallback, quote(name, safe=''))
+    if len(quote(value, safe=SIGNED_QUERY_SAFE_CHARS)) > ATTACHMENT_DISPOSITION_MAX_LENGTH:
+        return 'attachment'
+    return value
+
+
+def presigned_get_object_params(params: dict, attachment: bool = False) -> dict:
+    """Return a copy of GetObject ``params`` with the response overrides the URL needs.
 
     A key whose final name ends in ``.svg`` (any case) gets ``ResponseContentType`` image/svg+xml and
-    ``ResponseContentDisposition`` attachment. Every other key is returned unchanged.
+    ``ResponseContentDisposition`` attachment. With ``attachment`` (a download URL, never a stream or
+    preview URL) every key gets ``ResponseContentDisposition`` from
+    ``attachment_content_disposition``, which names the file. Without it, every other key is
+    returned unchanged.
     """
     signed = dict(params)
-    if str(signed.get('Key') or '').lower().endswith('.svg'):
+    key = str(signed.get('Key') or '')
+    if key.lower().endswith('.svg'):
         signed['ResponseContentType'] = SVG_RESPONSE_CONTENT_TYPE
         signed['ResponseContentDisposition'] = SVG_RESPONSE_CONTENT_DISPOSITION
+    if attachment:
+        signed['ResponseContentDisposition'] = attachment_content_disposition(key)
     return signed

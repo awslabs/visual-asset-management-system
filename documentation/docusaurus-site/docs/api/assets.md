@@ -141,15 +141,15 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 }
 ```
 
-| Field               | Type          | Required | Description                                                                                                                                                                          |
-| ------------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `databaseId`        | string        | Yes      | Target database identifier.                                                                                                                                                          |
-| `assetName`         | string        | Yes      | Display name for the asset (1-256 characters).                                                                                                                                       |
-| `description`       | string        | Yes      | Asset description (4-256 characters).                                                                                                                                                |
-| `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                                                                                                 |
-| `assetId`           | string        | No       | Explicit asset identifier (2-255 characters), ASCII characters only. Cannot contain forward slashes. Auto-generated if omitted.                                                      |
-| `tags`              | array[string] | No       | Tags for categorization. Each name must resolve in the asset's database or `GLOBAL`, and every required tag type that has tags must be represented. See [Tags](../concepts/tags.md). |
-| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket to associate with the new asset.                                                                                               |
+| Field               | Type          | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `databaseId`        | string        | Yes      | Target database identifier.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `assetName`         | string        | Yes      | Display name for the asset (1-256 characters).                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `description`       | string        | Yes      | Asset description (4-256 characters).                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `assetId`           | string        | No       | Explicit asset identifier (2-255 characters), ASCII characters only. Cannot contain forward slashes. Cannot be `pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace` or `workspaces`. Must not be the ID of another asset in any database, including an archived asset. Auto-generated if omitted.                                                                                                                                                                            |
+| `tags`              | array[string] | No       | Tags for categorization. Each name must resolve in the asset's database or `GLOBAL`, and every required tag type that has tags must be represented. See [Tags](../concepts/tags.md).                                                                                                                                                                                                                                                                                                                               |
+| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket to associate with the new asset. A key ending in `/` is a folder; any other key is one object with its folder `{key}/` and previews; the file routes list and address that object at `/{file name}` (see [Files](files.md#list-files)). A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace` or `workspaces`) as any path segment under the bucket's base prefix is refused with 400. |
 
 **Response:**
 
@@ -162,12 +162,12 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 
 **Error Responses:**
 
-| Status | Description                                       |
-| ------ | ------------------------------------------------- |
-| `400`  | Invalid parameters or validation error.           |
-| `403`  | Not authorized to create assets in this database. |
-| `404`  | Database not found.                               |
-| `500`  | Internal server error.                            |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters or validation error, including `The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location.`, `The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID.` and, for an `assetId` that another asset already uses in any database, including an archived asset, `Asset with specified ID already exists`. |
+| `403`  | Not authorized to create assets in this database.                                                                                                                                                                                                                                                                                                                                                                   |
+| `404`  | Database not found.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ---
 
@@ -186,15 +186,15 @@ Both stages require `PUT` permission on the asset (`objectType: "asset"`) in add
 
 #### Initialize request body
 
-| Field             | Type          | Required | Description                                                                                                          |
-| ----------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`      | string        | Yes      | Target database identifier (4-63 characters of letters, numbers, `-` and `_`).                                       |
-| `assetId`         | string        | Yes      | Asset identifier (2-255 characters), ASCII characters only. Every file's `relativeKey` must begin with `{assetId}/`. |
-| `assetName`       | string        | Yes      | Display name for the asset (1-256 characters).                                                                       |
-| `description`     | string        | Yes      | Asset description (4-256 characters).                                                                                |
-| `files`           | array         | Yes      | Files to upload; at least one entry, each with a unique `relativeKey`.                                               |
-| `isDistributable` | boolean       | No       | Whether the asset can be downloaded. Defaults to `true`.                                                             |
-| `tags`            | array[string] | No       | Tags for categorization, applied when the asset is created. See [Tags](../concepts/tags.md).                         |
+| Field             | Type          | Required | Description                                                                                                                                                                                                                    |
+| ----------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `databaseId`      | string        | Yes      | Target database identifier (4-63 characters of letters, numbers, `-` and `_`).                                                                                                                                                 |
+| `assetId`         | string        | Yes      | Asset identifier (2-255 characters), ASCII characters only. Every file's `relativeKey` must begin with `{assetId}/`. An identifier that an asset in another database uses, including an archived asset, is refused with `400`. |
+| `assetName`       | string        | Yes      | Display name for the asset (1-256 characters).                                                                                                                                                                                 |
+| `description`     | string        | Yes      | Asset description (4-256 characters).                                                                                                                                                                                          |
+| `files`           | array         | Yes      | Files to upload; at least one entry, each with a unique `relativeKey`.                                                                                                                                                         |
+| `isDistributable` | boolean       | No       | Whether the asset can be downloaded. Defaults to `true`.                                                                                                                                                                       |
+| `tags`            | array[string] | No       | Tags for categorization, applied when the asset is created. See [Tags](../concepts/tags.md).                                                                                                                                   |
 
 Each entry in `files` is an object:
 
@@ -203,6 +203,8 @@ Each entry in `files` is an object:
 | `relativeKey` | string  | Yes      | Relative file path for the upload. Must begin with `{assetId}/`.                      |
 | `file_size`   | integer | No       | File size in bytes. Either `file_size` or `num_parts` must be provided.               |
 | `num_parts`   | integer | No       | Number of multipart upload parts. Either `file_size` or `num_parts` must be provided. |
+
+A file's key, including its asset location, is held to the same bound as an upload: 998 bytes of UTF-8 in a bucket registered at its root, less the bucket's base prefix otherwise. A longer key is refused with `400` at the initialize stage. That check needs the asset's bucket, so a missing asset has already been created when it runs. See [Upload File](files.md#upload-file).
 
 ```json
 {
@@ -363,7 +365,7 @@ Retrieves detailed information about a specific asset, including version informa
 
 `PUT /database/{databaseId}/assets/{assetId}`
 
-Updates the editable fields of an existing asset. Only the provided fields are updated; omitted fields and fields sent as `null` remain unchanged, so at least one field must carry a non-null value. An empty `tags` array clears the tag list, subject to the required tag types described for `tags` below.
+Updates the editable fields of an existing asset. Only the provided fields are updated; omitted fields and fields sent as `null` remain unchanged, so at least one field must carry a non-null value. An empty `tags` array clears the tag list, subject to the required tag types described for `tags` below. A change to `assetName` or `tags` is also authorized against the asset as it will be stored: the caller needs `GET` on the stored asset and `GET` and `PUT` on the changed one, or the request answers `403` and changes nothing.
 
 **Request Parameters:**
 
@@ -404,12 +406,12 @@ Updates the editable fields of an existing asset. Only the provided fields are u
 
 **Error Responses:**
 
-| Status | Description                             |
-| ------ | --------------------------------------- |
-| `400`  | Invalid parameters or validation error. |
-| `403`  | Not authorized to update this asset.    |
-| `404`  | Asset not found.                        |
-| `500`  | Internal server error.                  |
+| Status | Description                                                              |
+| ------ | ------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or validation error.                                  |
+| `403`  | Not authorized to update this asset, or to give it the new name or tags. |
+| `404`  | Asset not found.                                                         |
+| `500`  | Internal server error.                                                   |
 
 ---
 
@@ -660,15 +662,17 @@ Version resolution is applied per file: `assetVersionId`/`assetVersionIdAlias` p
 
 Bulk requests return one entry per requested key. File paths that do not exist or are not downloadable are skipped (reported with `success: false` and an `error` reason, plus a warning in `message`); the request fails with `400` only when no URL can be generated at all. The top-level `downloadUrl` carries the first successful URL for compatibility with single-URL consumers.
 
+Every `assetFile` URL downloads its file as an attachment: Amazon S3 answers with `Content-Disposition: attachment`, so opening the URL in a browser saves the file whatever content type or download name the file was stored with. A file URL also names the file by the last segment of its path, as `filename` (printable ASCII, with each other character as `_`) and `filename*` (RFC 8187, the exact name); the two are always sent together. A folder URL carries `attachment` alone, as does a file whose named header would exceed 640 characters once percent-encoded in the URL: every name of up to 255 ASCII letters, digits and `-._~` is named, and a name in three-byte characters, such as Chinese or Japanese, up to about 35 characters. Without a name in the header, the browser names the file from the URL path, which ends in the same name. The `assetPreview` URL is served inline. To display a file's content, use the [stream endpoint](files.md#stream-endpoints).
+
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                            |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, version parameters used with preview downloads, or asset is not distributable. |
-| `403`  | Not authorized to download this asset.                                                                                                                                                                 |
-| `404`  | Database, asset, version, or file not found.                                                                                                                                                           |
-| `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                 |
-| `500`  | Internal server error.                                                                                                                                                                                 |
+| Status | Description                                                                                                                                                                                                                             |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, version parameters used with preview downloads, asset version or file not found, or asset is not distributable. |
+| `403`  | Not authorized to download this asset. A caller who may not download it receives `403` whether or not the asset exists.                                                                                                                 |
+| `404`  | Asset not found (`message` "Asset not found"); answered only to a caller allowed to download the asset.                                                                                                                                 |
+| `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                                                  |
+| `500`  | Internal server error.                                                                                                                                                                                                                  |
 
 ---
 
@@ -724,7 +728,7 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 | `startingToken`               | string        | --      | Pagination token from a previous response.                            |
 
 :::note[Presigned URLs Follow the Asset's Distributable Flag]
-`generatePresignedUrls` applies the same controls as the [Download Asset](#download-asset) endpoint. A URL is issued only for a file of an asset whose `isDistributable` is `true`, and never for a folder or an archived file. An asset that is not distributable is still exported with its files, metadata, and relationships; each of its files carries `presignedFileDownloadUrl: null`, and its `isdistributable` field tells the client why. A file whose extension or content type is on the executable blocklist is listed but receives no download URL, as the download endpoint refuses it. Every URL the export issues is recorded in the file download audit log, one entry per file, with a `downloadType` of `export`.
+`generatePresignedUrls` applies the same controls as the [Download Asset](#download-asset) endpoint. A URL is issued only for a file of an asset whose `isDistributable` is `true`, and never for a folder or an archived file. An asset that is not distributable is still exported with its files, metadata, and relationships; each of its files carries `presignedFileDownloadUrl: null`, and its `isdistributable` field tells the client why. A file whose extension or content type is on the executable blocklist is listed but receives no download URL, as the download endpoint refuses it. Each URL downloads its file as an attachment, named as the [Download Asset](#download-asset) file URLs are. Every URL the export issues is recorded in the file download audit log, one entry per file, with a `downloadType` of `export`.
 :::
 
 **Response:**

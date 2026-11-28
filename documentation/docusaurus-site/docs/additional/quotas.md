@@ -71,11 +71,14 @@ On-demand mode has no provisioned throughput to configure. Amazon DynamoDB autom
 | -------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | Maximum object size        | 5 TB (Amazon S3 service limit)                                                                             |
 | Maximum object key length  | 1,024 bytes of UTF-8 (Amazon S3 service limit); an asset file key over this limit is rejected with a `400` |
+| Maximum uploaded file key  | 998 bytes of UTF-8, including the asset's location, at a bucket root; less the base prefix (see below)     |
 | Multipart upload threshold | 5 GB (parts required above this size)                                                                      |
 | Maximum parts per upload   | 10,000 (Amazon S3 service limit)                                                                           |
 | Part size range            | 5 MB to 5 GB                                                                                               |
 | VAMS upload part size      | 150 MB                                                                                                     |
 | Bucket encryption          | AWS KMS (when CMK enabled) or Amazon S3-managed                                                            |
+
+VAMS stages each upload at `{baseAssetsPrefix}temp-uploads/{upload tag}/{file key}`, with a 12-character tag per upload, before it copies the file to its key. That staging key must also fit the 1,024-byte limit, so a file key, including its asset location, may be at most 998 bytes of UTF-8 in a bucket registered at its root, and the length of the bucket's base prefix less than that otherwise. Upload initialization refuses a longer key with a `400` and the message `VAMS General Error: File key is too long to upload: a file key, including its asset location, may be at most N bytes`, where N is the bound for the asset's bucket.
 
 ### Amazon OpenSearch
 

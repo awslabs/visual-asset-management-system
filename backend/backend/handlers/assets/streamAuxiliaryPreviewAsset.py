@@ -5,6 +5,7 @@ import os
 import boto3
 import json
 import base64
+from typing import Optional
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
@@ -12,6 +13,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate, exceeds_s3_object_key_limit
+from common.assetLocations import AssetFilePaths
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -74,35 +76,22 @@ def get_asset_details(databaseId, assetId):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving asset")
 
-def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
+# The refusal of a path that names nothing in the asset's auxiliary data ('..' segments, or outside it).
+# A fixed message: it echoes no part of the request.
+FILE_PATH_NOT_IN_ASSET_MESSAGE = "The file path does not name a file in this asset."
+
+
+def resolve_aux_preview_key(database_id: str, location_key: str, object_key: str) -> Optional[str]:
+    """The auxiliary-bucket key of a viewer data path ``{file}/preview/...`` in one asset, or None.
+
+    ``common.assetLocations.AssetFilePaths.aux_stream_key_for``: a path with a leading ``/`` is the file's
+    asset-relative path; a path without one is the file's full S3 key (the ``key`` the file list returns, what
+    the web viewers send), the auxiliary key ``{databaseId}/{location}/...``, or the asset-relative path. The
+    result is always under ``{databaseId}/`` plus a key the asset's location holds. This function reads no
+    asset-bucket object, so the mapping is the one that needs no S3 read.
     """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-    
-    Args:
-        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-        
-    Returns:
-        The properly resolved S3 key without duplication
-    """
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-    
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-    
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
+    return AssetFilePaths(location_key).aux_stream_key_for(database_id, object_key)
+
 
 def handle_head_request(event, claims_and_roles):
     """Handle HEAD requests to check file availability and permissions
@@ -142,31 +131,36 @@ def handle_head_request(event, claims_and_roles):
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
     
-    # Get asset details and check if it exists
+    # Get asset details; existence and the distributable flag are answered only after authorization,
+    # so a refused caller gets the same 403 for a missing asset as for an existing one. A found
+    # record is checked as an annotated copy; for a missing one the request's ids stand in.
     asset_object = get_asset_details(databaseId, assetId)
-    if not asset_object:
-        message = f"Asset not found in database"
-        logger.error(message)
-        return general_error(body={'message': message}, status_code=404, event=event)
-    
-    asset_object.update({"object__type": "asset"})
-
-    # Check if asset is distributable
-    if not asset_object.get('isDistributable', False):
-        message = "Asset is not currently allowing file distribution"
-        logger.error(message)
-        return general_error(body={'message': message}, status_code=403, event=event)
+    if asset_object:
+        authorization_object = {**asset_object, 'object__type': 'asset'}
+    else:
+        authorization_object = {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
 
     # Check authorization
     operation_allowed_on_asset = False
     if len(claims_and_roles["tokens"]) > 0:
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if casbin_enforcer.enforceAPI(event, "GET"):
-            if casbin_enforcer.enforce(asset_object, "GET"):
+            if casbin_enforcer.enforce(authorization_object, "GET"):
                 operation_allowed_on_asset = True
 
     if not operation_allowed_on_asset:
         return authorization_error()
+
+    if not asset_object:
+        message = f"Asset not found in database"
+        logger.error(message)
+        return general_error(body={'message': message}, status_code=404, event=event)
+
+    # Check if asset is distributable
+    if not asset_object.get('isDistributable', False):
+        message = "Asset is not currently allowing file distribution"
+        logger.error(message)
+        return general_error(body={'message': message}, status_code=403, event=event)
 
     # Get the location of the base asset key
     assetLocationKey = asset_object.get('assetLocation', {}).get("Key")
@@ -176,9 +170,12 @@ def handle_head_request(event, claims_and_roles):
         return general_error(body={'message': message}, status_code=404, event=event)
     
     # Auxiliary preview objects live under the database-scoped per-file layout
-    # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
-    # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
-    object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
+    # {databaseId}/{file key}/preview/... . The resolve keeps every key under {databaseId}/ plus a key
+    # this asset's location holds, so a caller cannot fetch files outside this asset.
+    object_key = resolve_aux_preview_key(databaseId, assetLocationKey, object_key)
+    if object_key is None:
+        logger.error(f"Auxiliary stream path names no key of asset {databaseId}/{assetId}")
+        return validation_error(body={'message': FILE_PATH_NOT_IN_ASSET_MESSAGE}, event=event)
 
     # The validator bounded the asset-relative part; the resolved key carries the database and asset
     # prefix as well and is what S3 measures. Refuse it here so an over-long key never reaches head_object.
@@ -312,45 +309,51 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         operation_allowed_on_asset = False
 
-        # Get asset details and check if it exists
+        # Get asset details; existence and the distributable flag are answered only after
+        # authorization, so a refused caller gets the same 403 for a missing asset as for an
+        # existing one. A found record is checked as an annotated copy; for a missing one the
+        # request's ids stand in.
         asset_object = get_asset_details(databaseId, assetId)
-        if not asset_object:
-            message = f"Asset not found in database"
-            logger.error(message)
-            # Create custom headers for streaming response
-            streaming_headers = {
-                'Access-Control-Allow-Headers': 'Range',
-                'Access-Control-Allow-Origin': '*',
-            }
-            error_response = general_error(body={"message": message}, status_code=404, event=event)
-            error_response['headers'].update(streaming_headers)
-            return error_response
-
-        asset_object.update({"object__type": "asset"})
-
-        logger.info(asset_object)
-
-        # Check if asset is distributable
-        if not asset_object.get('isDistributable', False):
-            message = "Asset is not currently allowing file distribution"
-            logger.error(message)
-            streaming_headers = {
-                'Access-Control-Allow-Headers': 'Range',
-                'Access-Control-Allow-Origin': '*',
-            }
-            error_response = general_error(body={"message": message}, status_code=403, event=event)
-            error_response['headers'].update(streaming_headers)
-            return error_response
+        if asset_object:
+            authorization_object = {**asset_object, 'object__type': 'asset'}
+        else:
+            authorization_object = {'databaseId': databaseId, 'assetId': assetId, 'object__type': 'asset'}
 
         # Check API authorization
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event, http_method):
                 # Check object-level authorization
-                if casbin_enforcer.enforce(asset_object, http_method):
+                if casbin_enforcer.enforce(authorization_object, http_method):
                     operation_allowed_on_asset = True
 
         if operation_allowed_on_asset:
+            if not asset_object:
+                message = f"Asset not found in database"
+                logger.error(message)
+                # Create custom headers for streaming response
+                streaming_headers = {
+                    'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
+                }
+                error_response = general_error(body={"message": message}, status_code=404, event=event)
+                error_response['headers'].update(streaming_headers)
+                return error_response
+
+            logger.info(asset_object)
+
+            # Check if asset is distributable
+            if not asset_object.get('isDistributable', False):
+                message = "Asset is not currently allowing file distribution"
+                logger.error(message)
+                streaming_headers = {
+                    'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
+                }
+                error_response = general_error(body={"message": message}, status_code=403, event=event)
+                error_response['headers'].update(streaming_headers)
+                return error_response
+
             try:
                 # Get the location of the base asset key and normalize the object_key we are passing in
                 # (also ensures security of not fetching asset key files outside of provided asset ID)
@@ -368,9 +371,19 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     return error_response
 
                 # Auxiliary preview objects live under the database-scoped per-file layout
-                # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
-                # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
-                object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
+                # {databaseId}/{file key}/preview/... . The resolve keeps every key under {databaseId}/ plus a
+                # key this asset's location holds, so a caller cannot fetch files outside this asset.
+                object_key = resolve_aux_preview_key(databaseId, assetLocationKey, object_key)
+                if object_key is None:
+                    logger.error(f"Auxiliary stream path names no key of asset {databaseId}/{assetId}")
+                    streaming_headers = {
+                        'Access-Control-Allow-Headers': 'Range',
+                        'Access-Control-Allow-Origin': '*',
+                        'Cache-Control': 'no-cache, no-store',
+                    }
+                    error_response = validation_error(body={'message': FILE_PATH_NOT_IN_ASSET_MESSAGE}, event=event)
+                    error_response['headers'].update(streaming_headers)
+                    return error_response
 
                 # The validator bounded the asset-relative part; the resolved key carries the database and
                 # asset prefix as well and is what S3 measures. Refuse it here so an over-long key never

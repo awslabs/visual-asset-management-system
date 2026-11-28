@@ -88,10 +88,10 @@ Parameters reach the pipeline through the template selected for the run. Deploym
 }
 ```
 
-| Parameter                                 | Value when absent | Description                                                                                                                                               |
-| ----------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `includeAllAssetFileHierarchyFiles`       | `"False"`         | When `"True"`, downloads all files in the asset directory hierarchy (useful for models with separate texture or material files).                          |
-| `seedMetadataGenerationWithInputMetadata` | `"False"`         | When `"True"`, passes existing asset metadata, file metadata, and file attributes to the LLM to help refine label generation and reduce outlier keywords. |
+| Parameter                                 | Value when absent | Description                                                                                                                                                                                                                             |
+| ----------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `includeAllAssetFileHierarchyFiles`       | `"False"`         | When `"True"`, downloads all files in the input file's directory (useful for models with separate texture or material files); for the file of an asset created on a single existing object, the files of its companion folder `{key}/`. |
+| `seedMetadataGenerationWithInputMetadata` | `"False"`         | When `"True"`, passes existing asset metadata, file metadata, and file attributes to the LLM to help refine label generation and reduce outlier keywords.                                                                               |
 
 The template allows per-run edits, so a run can supply a replacement configuration body without changing the registered template.
 

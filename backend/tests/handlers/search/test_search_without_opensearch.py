@@ -18,6 +18,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from botocore.exceptions import ClientError
 
+from backend.tests.ssmParametersStub import serve_parameters_from
+
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
 os.environ.setdefault("DATABASE_STORAGE_TABLE_NAME", "test-db-table")
 os.environ.setdefault("OPENSEARCH_ASSET_INDEX_SSM_PARAM", "/test/asset-index")
@@ -111,5 +113,12 @@ class TestSearchWithoutOpenSearch:
         assert json.loads(response["body"])["message"] == NOT_AVAILABLE
 
     def test_enabled_deployment_still_requires_its_parameters(self, monkeypatch, ssm_client):
-        with pytest.raises(Exception, match="configuration parameter"):
-            _load(monkeypatch, ssm_client, "false")
+        """An enabled deployment reads its parameters on first use, not at import (#1820), so a
+        missing one fails the request with the handler's internal error rather than the import."""
+        module = _load(monkeypatch, ssm_client, "false")
+        assert ssm_client.get_parameter.call_count == 0
+        serve_parameters_from(module, ssm_client)
+        response = module.lambda_handler(_event("POST", "/search", {"query": "x"}), None)
+        assert response["statusCode"] == 500
+        assert ssm_client.get_parameter.called, "the request read no parameter"
+        assert "/test/" not in response["body"]

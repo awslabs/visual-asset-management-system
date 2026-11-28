@@ -29,6 +29,7 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success, va
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from common.dynamodb import to_update_expr, query_all_items
 from common.s3 import is_object_version_archived, list_all_object_versions
+from common.assetLocations import AssetFilePaths
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
     GetAssetVersionRequestModel, GetAssetVersionsRequestModel, AssetVersionFileModel,
@@ -486,14 +487,16 @@ def validate_s3_files_exist(bucket: str, prefix: str, files: List[AssetFileVersi
         List of files that don't exist or are archived
     """
     invalid_files = []
-    
-    # Ensure prefix ends with a slash if it doesn't already
-    if not prefix.endswith('/'):
-        prefix = prefix + '/'
-    
+
+    # A version's file path names a key under the location (a single file's companion folder)
+    version_paths = AssetFilePaths(prefix)
+
     for file in files:
-        full_key = prefix + file.relativeKey.lstrip('/')
-        
+        full_key = version_paths.key_for(file.relativeKey)
+        if full_key is None:
+            invalid_files.append(file.relativeKey)
+            continue
+
         try:
             # Check if file exists with specified version
             response = s3_client.head_object(
@@ -1175,14 +1178,10 @@ def save_asset_metadata_version(databaseId: str, assetId: str, assetVersionId: s
         for file in files_to_version:
             relative_key = file['relativeKey']
             
-            # Remove asset ID prefix if present
-            if relative_key.startswith(assetId + '/'):
-                path_without_asset = relative_key[len(assetId) + 1:]
-            else:
-                path_without_asset = relative_key
-            
-            # Prepend "/" to match metadata filePath format
-            file_path = "/" + path_without_asset.lstrip('/')
+            # A version entry is the file's path in the asset, so it keys the metadata filePath with a
+            # leading "/". An entry that starts with the asset ID ('A1/x') is the file of a subfolder named
+            # like the asset ('/A1/x'), not the root file '/x'.
+            file_path = "/" + relative_key.lstrip('/')
             versioned_file_paths.add(file_path)
         
         logger.info(f"Versioning metadata for {len(versioned_file_paths)} file paths (including asset-level)")
@@ -1495,14 +1494,10 @@ def revert_asset_metadata_version(databaseId: str, assetId: str, target_assetVer
         for file in files_to_version:
             relative_key = file['relativeKey']
             
-            # Remove asset ID prefix if present
-            if relative_key.startswith(assetId + '/'):
-                path_without_asset = relative_key[len(assetId) + 1:]
-            else:
-                path_without_asset = relative_key
-            
-            # Prepend "/" to match metadata filePath format
-            file_path = "/" + path_without_asset.lstrip('/')
+            # A version entry is the file's path in the asset, so it keys the metadata filePath with a
+            # leading "/". An entry that starts with the asset ID ('A1/x') is the file of a subfolder named
+            # like the asset ('/A1/x'), not the root file '/x'.
+            file_path = "/" + relative_key.lstrip('/')
             versioned_file_paths.add(file_path)
         
         logger.info(f"Reverting metadata for {len(versioned_file_paths)} file paths (including asset-level)")
@@ -1774,7 +1769,7 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
             if file.relativeKey not in invalid_files:
                 # Get additional metadata
                 try:
-                    full_key = prefix + file.relativeKey.lstrip('/')
+                    full_key = AssetFilePaths(prefix).key_for(file.relativeKey)
                     response = s3_client.head_object(
                         Bucket=bucket,
                         Key=full_key,
@@ -1887,7 +1882,10 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         (None, relative_key) when the file should be skipped."""
         relative_key = file['relativeKey']
         source_version_id = file['versionId']
-        full_key = prefix + relative_key.lstrip('/')
+        # The path names a key under the location (a single file's companion folder)
+        full_key = AssetFilePaths(prefix).key_for(relative_key)
+        if not full_key:
+            return None, relative_key
 
         try:
             # Check if the file version still exists (wasn't permanently deleted)

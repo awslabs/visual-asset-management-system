@@ -19,6 +19,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backend.tests.ssmParametersStub import serve_parameters_from
+
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
 os.environ.setdefault("DATABASE_STORAGE_TABLE_NAME", "test-db-table")
 os.environ.setdefault("OPENSEARCH_ASSET_INDEX_SSM_PARAM", "/test/asset-index")
@@ -75,6 +77,9 @@ def search_module():
         for name, mod in saved.items():
             if mod is not None:
                 sys.modules[name] = mod
+    # The aos/* settings are read through common.ssmParameters on first OpenSearch use; this module's
+    # reads go to the stubbed client, so a manager built outside the boto3 patch above reaches no AWS.
+    serve_parameters_from(module, _ssm_stub)
     return module
 
 

@@ -22,6 +22,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
+from common.assetLocations import contains
 from customLogging.logger import safeLogger
 from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items
 from common.s3 import is_object_version_archived, list_all_object_versions
@@ -630,7 +631,10 @@ def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, 
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         if 'Contents' in page:
             for obj in page.get('Contents', []):
-                files.append(obj['Key'])
+                # The prefix also matches keys that only share its characters; a single-file
+                # location holds its own key, its companion folder and its own previews only
+                if contains(prefix, obj['Key']):
+                    files.append(obj['Key'])
 
     def _archive_one(key):
         try:
@@ -764,6 +768,8 @@ def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None
                 if not delete_marker.get('IsLatest'):
                     continue
                 key = delete_marker['Key']
+                if not contains(prefix, key):
+                    continue
                 relative_path = normalize_history_file_path(
                     key[len(prefix):] if key.startswith(prefix) else key
                 )
@@ -1343,8 +1349,39 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
     logger.info(f"Updating asset {assetId} in database {databaseId}")
     
     # Update only the editable fields. `edited_attributes` accumulates exactly what this
-    # request changes, so the write below touches nothing else on the record.
+    # request changes, so the write below touches nothing else on the record. `stored_asset` is
+    # the row as read, before the edits below are applied to `asset`.
+    stored_asset = dict(asset)
     edited_attributes = {}
+
+    # A name and a tag list can carry object-level authority, so the check above, made against
+    # the stored record, is satisfied by the very values the edit replaces. A constraint matches
+    # its action exactly (`r.act == p.act`), and a rule that gates visibility is written as a GET
+    # rule while the edit itself is a PUT, so a PUT-only check never consults it. A change to
+    # either is therefore authorized for GET as well: the caller must already reach the asset they
+    # are renaming or retagging, and must still reach the record they are about to write. A name or
+    # tag that keeps the asset out of their reach can neither be dropped nor attached. The changed
+    # record differs from the stored one only in the changed name and tags, so the decision
+    # isolates the edit; PUT on the stored record is established above, and an edit that resubmits
+    # the stored name and tags is gated exactly once.
+    renamed = 'assetName' in update_data and update_data['assetName'] != stored_asset.get('assetName')
+    retagged = 'tags' in update_data and (
+        sorted(update_data['tags']) != sorted(stored_asset.get('tags') or []))
+    if renamed or retagged:
+        stored_record = {**stored_asset, 'object__type': 'asset'}
+        changed_record = dict(stored_record)
+        if renamed:
+            changed_record['assetName'] = update_data['assetName']
+        if retagged:
+            changed_record['tags'] = update_data['tags']
+        change_enforcer = CasbinEnforcer(claims_and_roles)
+        for enforced_asset, enforced_action in (
+            (stored_record, "GET"),
+            (changed_record, "GET"),
+            (changed_record, "PUT"),
+        ):
+            if not change_enforcer.enforce(enforced_asset, enforced_action):
+                raise AuthorizationDenied()
 
     if 'assetName' in update_data:
         asset['assetName'] = update_data['assetName']
@@ -1374,27 +1411,6 @@ def update_asset(databaseId, assetId, update_data, claims_and_roles):
         # simply cannot add it again, because it no longer resolves in scope.
         existing_tags = asset.get('tags') or []
         added_tags = [tag for tag in new_tags if tag not in existing_tags]
-
-        # A tag can carry object-level authority, so the check above — made against the stored
-        # tag list — is satisfied by the very tags a tag edit replaces. A constraint matches its
-        # action exactly (`r.act == p.act`), and a tag that gates visibility is written as a GET
-        # rule while the edit itself is a PUT, so a PUT-only check never consults it. A tag change
-        # is therefore authorized for GET as well: the caller must already reach the asset they are
-        # retagging, and must still reach the record they are about to write. A tag that keeps the
-        # asset out of their reach can neither be dropped nor attached. The two objects differ only
-        # in the tag list, so the decision isolates the tag change; PUT on the stored tag list is
-        # established above, and an unchanged tag list is still gated exactly once.
-        if sorted(new_tags) != sorted(existing_tags):
-            stored_asset = {**asset, 'object__type': 'asset'}
-            post_mutation_asset = {**stored_asset, 'tags': new_tags}
-            tag_change_enforcer = CasbinEnforcer(claims_and_roles)
-            for enforced_asset, enforced_action in (
-                (stored_asset, "GET"),
-                (post_mutation_asset, "GET"),
-                (post_mutation_asset, "PUT"),
-            ):
-                if not tag_change_enforcer.enforce(enforced_asset, enforced_action):
-                    raise AuthorizationDenied()
 
         # The shared validators raise ValueError, which this handler does not translate — it
         # would surface as a 500. Re-raised as VAMSGeneralErrorResponse so a rejected tag is a
@@ -1802,8 +1818,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 # Get bucket from assetLocation or use default
                 logger.info(f"Deleting S3 asset objects and all versions with prefix {prefix} from bucket {bucket_name}")
                 
-                # Delete all objects and all versions with this prefix
-                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix)
+                # Delete all objects and all versions this location holds
+                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix, location=prefix)
                 deleted_items["s3_objects"].extend(deleted_keys)
                 
                 # Also delete any auxiliary files
@@ -1815,8 +1831,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 # Get bucket from assetLocation or use default
                 logger.info(f"Deleting S3 preview objects and all versions with prefix {prefix} from bucket {bucket_name}")
                 
-                # Delete all objects and all versions with this prefix
-                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix)
+                # Delete all objects and all versions this location holds
+                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix, location=prefix)
                 deleted_items["s3_objects"].extend(deleted_keys)
         
         # 2. Delete from asset table (both active and archived locations)
@@ -1843,14 +1859,15 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         # 5. Delete from asset uploads table if available
         if asset_upload_table:
             try:
-                # Query using the GSI to find uploads for this asset
-                response = asset_upload_table.query(
+                # Query using the GSI to find uploads for this asset, every page: each row found is
+                # deleted, so a row past the first page would otherwise be left behind. A row is
+                # deleted only when it names this asset's database.
+                for item in query_all_items(
+                    asset_upload_table,
                     IndexName='AssetIdGSI',
                     KeyConditionExpression=Key('assetId').eq(assetId)
-                )
-                
-                for item in response.get('Items', []):
-                    if 'uploadId' in item:
+                ):
+                    if 'uploadId' in item and item.get('databaseId') in (databaseId, original_db_id):
                         asset_upload_table.delete_item(Key={'uploadId': item['uploadId'], 'assetId': assetId})
                         deleted_items["dynamodb_tables"].append(f"{asset_upload_table_name} (uploadId={item['uploadId']}, assetId={assetId})")
             except Exception as e:
@@ -1859,12 +1876,11 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         # 6. Delete from comments table if available
         if comment_table:
             try:
-                # Query to find all comments for this asset
-                response = comment_table.query(
+                # Query to find all comments for this asset, every page (as for the uploads above)
+                for item in query_all_items(
+                    comment_table,
                     KeyConditionExpression=Key('assetId').eq(assetId)
-                )
-                
-                for item in response.get('Items', []):
+                ):
                     if 'assetVersionId:commentId' in item:
                         comment_table.delete_item(Key={
                             'assetId': assetId,

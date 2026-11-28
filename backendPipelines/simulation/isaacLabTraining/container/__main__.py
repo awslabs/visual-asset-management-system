@@ -18,6 +18,7 @@ import traceback
 import boto3
 from utils.aws.s3 import S3Client
 from utils.training.config import PipelineConfig
+from utils.training.checkpoints import find_checkpoints
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -449,10 +450,11 @@ def upload_training_results(s3: S3Client, config: PipelineConfig, checkpoint_dir
     """Upload trained policy and checkpoints to VAMS asset bucket.
 
     Output structure:
-    - {output_s3_path}checkpoints/*.pt (model checkpoints)
+    - {output_s3_path}checkpoints/* (model checkpoints: model_*.pt for rsl_rl, *.pth for rl_games,
+      agent_*.pt and best_agent.pt for skrl)
     - {output_s3_path}metrics.csv (training metrics from TensorBoard)
     - {output_s3_path}*.txt (converted .diff files)
-    - {output_s3_path}train-config.json (input configuration)
+    - {output_s3_path}train-config.json (the run settings)
     """
     if not config.output_s3_path:
         print("No output S3 path configured, skipping upload")
@@ -463,26 +465,35 @@ def upload_training_results(s3: S3Client, config: PipelineConfig, checkpoint_dir
 
     print(f"Uploading training results for execution {job_uuid} to {base_output_path}")
 
-    # Upload model checkpoints
+    # Upload model checkpoints. Each library lays its run folder out differently, so the files come
+    # from the per-library table in utils/training/checkpoints.py. They are stored flat under
+    # checkpoints/ by file name, as the rsl_rl ones always were.
     checkpoint_output_path = f"{base_output_path}checkpoints/"
-    
-    policy_patterns = [
-        f"{LOCAL_LOG_PATH}/**/model_*.pt",
-        f"{checkpoint_dir}/**/model_*.pt",
-    ]
 
-    for pattern in policy_patterns:
-        for policy_path in glob.glob(pattern, recursive=True):
-            filename = os.path.basename(policy_path)
-            s3_path = f"{checkpoint_output_path}{filename}"
-            print(f"Uploading {policy_path} -> {s3_path}")
-            s3.upload_file(policy_path, s3_path)
+    uploaded = {}
+    for policy_path in find_checkpoints([LOCAL_LOG_PATH, checkpoint_dir], config.rl_library):
+        filename = os.path.basename(policy_path)
+        if filename in uploaded:
+            print(f"WARNING: {policy_path} has the same file name as {uploaded[filename]}; "
+                  f"the newer file replaces it in {checkpoint_output_path}")
+        s3_path = f"{checkpoint_output_path}{filename}"
+        print(f"Uploading {policy_path} -> {s3_path}")
+        s3.upload_file(policy_path, s3_path)
+        uploaded[filename] = policy_path
 
-    # Upload logs
+    if not uploaded:
+        print(f"ERROR: no {config.rl_library} checkpoint found under {LOCAL_LOG_PATH} or "
+              f"{checkpoint_dir}; nothing was uploaded to {checkpoint_output_path}")
+
+    # Upload logs and the input config first, so a failed run keeps its diagnostics
     upload_logs(s3, config)
-
-    # Upload input config
     upload_config(s3, config, job_config)
+
+    if not uploaded:
+        # A training run that produced no policy is a failed run (issue #1315). Raise rather than
+        # exit: main() owns the Step Functions failure callbacks.
+        raise RuntimeError(
+            f"Training finished but no {config.rl_library} checkpoint was found to upload")
 
 
 def upload_evaluation_results(s3: S3Client, config: PipelineConfig, job_config: dict):
@@ -492,7 +503,7 @@ def upload_evaluation_results(s3: S3Client, config: PipelineConfig, job_config: 
     - {output_s3_path}metrics.csv (evaluation metrics from TensorBoard)
     - {output_s3_path}*.txt (converted .diff files)
     - {output_s3_path}videos/*.mp4 (evaluation videos, when recordVideo is set)
-    - {output_s3_path}evaluate-config.json (input configuration)
+    - {output_s3_path}evaluate-config.json (the run settings)
 
     Note: Videos are always generated because the --video flag is required for play.py to
     terminate, so recordVideo decides whether the recording is uploaded rather than whether it
@@ -688,18 +699,26 @@ def upload_logs(s3: S3Client, config: PipelineConfig):
                 print(f"Warning: Failed to upload {log_path}: {e}")
 
 
+# What the uploaded run record keeps of the job configuration: the run's settings. The workflow's
+# callback fields and the input, output and metadata locations are used to run the job and are
+# left out of a file that sits beside the run's outputs.
+RECORDED_CONFIG_KEYS = ("jobName", "trainingConfig", "customEnvironmentS3Uri", "stageAssetFiles")
+
+
 def upload_config(s3: S3Client, config: PipelineConfig, job_config: dict):
-    """Upload the input configuration to the output directory for reference."""
+    """Upload the run's settings to the output directory for reference."""
     base_output_path = resolve_output_base_path(config.output_s3_path)
 
     # Determine config filename based on mode
     config_filename = f"{config.mode}-config.json"
     config_s3_path = f"{base_output_path}{config_filename}"
     
-    # Write config to temp file
+    # Write the run's settings to a temp file; the workflow's callback fields and the input, output
+    # and metadata locations are left out.
+    recorded = {key: job_config[key] for key in RECORDED_CONFIG_KEYS if key in job_config}
     temp_config_path = f"/tmp/{config_filename}"
     with open(temp_config_path, "w") as f:
-        json.dump(job_config, f, indent=2)
+        json.dump(recorded, f, indent=2)
     
     print(f"Uploading config {temp_config_path} -> {config_s3_path}")
     try:

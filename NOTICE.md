@@ -74,7 +74,7 @@ This software includes third party software subject to the following copyrights:
 | axios                               | ^1.6.0        | MIT                     |
 | buffer                              | ^6.0.3        | MIT                     |
 | dompurify                           | ^3.4.17       | (MPL-2.0 OR Apache-2.0) |
-| fast-xml-parser                     | ^5.9.0        | MIT                     |
+| fast-xml-parser                     | ^5.12.0       | MIT                     |
 | fcs                                 | ^0.1.2        | MIT                     |
 | file-system-access                  | 1.0.4         | MIT                     |
 | geojson                             | ^0.5.0        | MIT                     |
@@ -107,7 +107,7 @@ This software includes third party software subject to the following copyrights:
 | typescript                          | ^5.0.0        | Apache-2.0              |
 | vite                                | ^8.1.6        | MIT                     |
 | web-vitals                          | ^1.1.2        | Apache-2.0              |
-| zod                                 | ^3.23.8       | MIT                     |
+| zod                                 | ^4.6.7        | MIT                     |
 
 `jodit` is not declared directly — it arrives with `jodit-react` and the version shown is the one resolved in the lockfile. `fast-xml-parser` is carried transitively and pinned by the `overrides` block in `web/package.json`.
 

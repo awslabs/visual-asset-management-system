@@ -33,10 +33,11 @@ jest.mock("./dependencies", () => ({
 }));
 
 /**
- * The aux preview stream endpoint prepends {databaseId}/{assetLocationKey} to the proxy path
- * (streamAuxiliaryPreviewAsset.resolve_asset_file_path), and the writer key is
- * {databaseId}/{assetFileKey}/preview (executionRecords.aux_preview_file_prefix). The proxy path
- * must therefore be asset-RELATIVE — a leading assetId segment duplicates the asset location.
+ * The point cloud branch names each file by the key the host gives (the full S3 key the file list
+ * returns) through the shared `auxiliaryPreviewStreamUrl` helper. The auxiliary preview stream reads a
+ * full key and an asset-relative path alike (#1855), so the viewer no longer cuts a leading assetId
+ * segment off the key: that guess missed every asset whose location is not `{assetId}/` and named the
+ * wrong file for one in a subfolder named like the asset.
  */
 describe("VeerumViewerComponent auxiliary preview key", () => {
     const controller = {
@@ -73,19 +74,29 @@ describe("VeerumViewerComponent auxiliary preview key", () => {
             />
         );
 
-    it("strips the leading assetId segment from the full asset-bucket key", async () => {
+    it("sends the full asset-bucket key as the host gives it", async () => {
         renderViewer({ multiFileKeys: ["asset-1/scans/pump.e57"] });
 
         await waitFor(() => expect((global as any).fetch).toHaveBeenCalled());
 
-        expect(streamedKeys()).toEqual(["scans/pump.e57/preview/PotreeViewer/metadata.json"]);
+        expect(streamedKeys()).toEqual([
+            "asset-1/scans/pump.e57/preview/PotreeViewer/metadata.json",
+        ]);
         expect(((global as any).fetch as jest.Mock).mock.calls[0][0]).toBe(
             "https://vams.example.com/api/database/db1/assets/asset-1/auxiliaryPreviewAssets/" +
-                "stream/scans/pump.e57/preview/PotreeViewer/metadata.json"
+                "stream/asset-1/scans/pump.e57/preview/PotreeViewer/metadata.json"
         );
     });
 
-    it("leaves an already asset-relative key untouched", async () => {
+    it("keeps the leading slash of a path in the asset (D1)", async () => {
+        renderViewer({ multiFileKeys: ["/asset-1/scan.las"] });
+
+        await waitFor(() => expect((global as any).fetch).toHaveBeenCalled());
+
+        expect(streamedKeys()).toEqual(["/asset-1/scan.las/preview/PotreeViewer/metadata.json"]);
+    });
+
+    it("sends an asset-relative key from a host without the full key unchanged", async () => {
         renderViewer({ multiFileKeys: ["scans/pump.e57"] });
 
         await waitFor(() => expect((global as any).fetch).toHaveBeenCalled());
@@ -93,7 +104,7 @@ describe("VeerumViewerComponent auxiliary preview key", () => {
         expect(streamedKeys()).toEqual(["scans/pump.e57/preview/PotreeViewer/metadata.json"]);
     });
 
-    it("preserves a custom asset base prefix that only contains the assetId deeper in the key", async () => {
+    it("sends the key of an asset in a bucket with a base prefix unchanged", async () => {
         renderViewer({ multiFileKeys: ["custom/base/asset-1/scan.las"] });
 
         await waitFor(() => expect((global as any).fetch).toHaveBeenCalled());
@@ -103,22 +114,34 @@ describe("VeerumViewerComponent auxiliary preview key", () => {
         ]);
     });
 
-    it("strips the assetId from every file of a multi-file selection", async () => {
+    it("keeps a subfolder named like the asset in the key", async () => {
+        renderViewer({ multiFileKeys: ["asset-1/asset-1/scan.las"] });
+
+        await waitFor(() => expect((global as any).fetch).toHaveBeenCalled());
+
+        expect(streamedKeys()).toEqual([
+            "asset-1/asset-1/scan.las/preview/PotreeViewer/metadata.json",
+        ]);
+    });
+
+    it("sends each file of a multi-file selection by its own key", async () => {
         renderViewer({ multiFileKeys: ["asset-1/a.laz", "asset-1/nested/b.ply"] });
 
         await waitFor(() => expect(((global as any).fetch as jest.Mock).mock.calls.length).toBe(2));
 
         expect(streamedKeys()).toEqual([
-            "a.laz/preview/PotreeViewer/metadata.json",
-            "nested/b.ply/preview/PotreeViewer/metadata.json",
+            "asset-1/a.laz/preview/PotreeViewer/metadata.json",
+            "asset-1/nested/b.ply/preview/PotreeViewer/metadata.json",
         ]);
     });
 
-    it("strips the assetId from the single-file assetKey path", async () => {
-        renderViewer({ assetKey: "asset-1/scans/pump.e57" });
+    it("sends the single-file assetKey path by its full key, each segment encoded", async () => {
+        renderViewer({ assetKey: "asset-1/scans/pump 1.e57" });
 
         await waitFor(() => expect((global as any).fetch).toHaveBeenCalled());
 
-        expect(streamedKeys()).toEqual(["scans/pump.e57/preview/PotreeViewer/metadata.json"]);
+        expect(streamedKeys()).toEqual([
+            "asset-1/scans/pump%201.e57/preview/PotreeViewer/metadata.json",
+        ]);
     });
 });

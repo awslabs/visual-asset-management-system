@@ -258,7 +258,16 @@ class DownloadManager:
         """Async context manager entry."""
         connector = aiohttp.TCPConnector(limit=self.max_parallel * 2)
         timeout = aiohttp.ClientTimeout(total=self.timeout)
-        self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+        # Each file is saved byte for byte as Amazon S3 stores it, as `aws s3 cp` saves it: a body
+        # stored with a Content-Encoding (a gzip-compressed glTF, for example) is not decoded, so
+        # the bytes written match the response's Content-Length and the size VAMS lists for the
+        # file. `identity` asks every hop not to add an encoding the session would leave in place.
+        self.session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout,
+            auto_decompress=False,
+            headers={'Accept-Encoding': 'identity'},
+        )
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):

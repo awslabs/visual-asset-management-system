@@ -12,7 +12,7 @@ import urllib.parse
 from datetime import datetime
 from customLogging.logger import safeLogger
 from common.resourceNames import get_table_name, ResourceKeys
-from handlers.assets.createAsset import create_asset
+from handlers.assets.createAsset import create_asset, AssetIdInUseError
 from handlers.assets.assetCount import update_asset_count
 from models.assetsV3 import CreateAssetRequestModel
 from handlers.databases.createDatabase import create_database
@@ -36,6 +36,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY,
     VAMS_CHANGE_SOURCE_DIRECT,
     normalize_history_file_path,
+    replace_metadata_copy_args,
 )
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment
 from common.s3 import is_object_version_archived
@@ -826,7 +827,13 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
     
     return created_db_id
 
-def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) -> Optional[str]:
+# restore_archived_asset's outcome when the asset has neither an archived nor a live record any more
+# (it was permanently deleted after the caller looked it up). The caller handles the key like any other
+# key with no asset.
+ARCHIVED_RECORD_GONE = object()
+
+
+def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict):
     """Restore an archived asset record after a direct S3 upload to its prefix.
 
     DynamoDB-only unarchive: the asset record moves back from the
@@ -835,14 +842,19 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) 
     define the asset's contents; users unarchive individual old files via the
     file unarchive API as needed.
 
+    Only the archived record as stored now is restored. ``archived_asset`` comes from an eventually
+    consistent index read kept in a 60-second container cache, so the record is read again with a
+    consistent read; when it is gone, nothing is written from the caller's image (#1799).
+
     Concurrency: a batch of ObjectCreated events for the same archived asset can
     race here. The live-partition write is conditional on no live record
     existing, and the archived-record delete is keyed exactly, so the restore
     happens once; losers treat the asset as already restored.
 
     Returns:
-        The live database ID on success (or when already restored), None on error
-        or when the asset's database has been deleted.
+        The live database ID on success (or when already restored); ARCHIVED_RECORD_GONE when the
+        asset has no archived and no live record (permanently deleted); None on error or when the
+        asset's database has been deleted.
     """
     archived_db_id = archived_asset.get('databaseId', '')
     if not archived_db_id.endswith('#deleted'):
@@ -858,7 +870,22 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) 
             logger.warning(f"Not restoring archived asset {asset_id}: database {live_db_id} has been deleted")
             return None
 
-        restored = {k: v for k, v in archived_asset.items()
+        # Copy the archived row as stored now: the caller's image comes from an eventually consistent
+        # index read and a container cache, and can predate a write to the row or its deletion.
+        current = table.get_item(Key={'databaseId': archived_db_id, 'assetId': asset_id},
+                                 ConsistentRead=True).get('Item')
+        if not current:
+            asset_cache.delete(f"{bucket_id}:{asset_id}")
+            asset_cache.delete(f"{bucket_id}:{asset_id}:archived")
+            # No archived row: a concurrent event restored it, or the asset was permanently deleted.
+            live = table.get_item(Key={'databaseId': live_db_id, 'assetId': asset_id},
+                                  ConsistentRead=True).get('Item')
+            if live:
+                logger.info(f"Asset {asset_id} already restored in {live_db_id} by a concurrent event")
+                return live_db_id
+            logger.info(f"Not restoring asset {asset_id}: its archived record no longer exists")
+            return ARCHIVED_RECORD_GONE
+        restored = {k: v for k, v in current.items()
                     if k not in ('status', 'archivedAt', 'archivedBy', 'archivedReason')}
         restored['databaseId'] = live_db_id
         restored['unarchivedAt'] = datetime.utcnow().isoformat()
@@ -914,6 +941,9 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         
     Returns:
         str: Asset ID if created successfully, None otherwise
+
+    Raises:
+        AssetIdInUseError: if an asset in any database already carries asset_id; nothing is created
     """
     try:
         # Create asset request model
@@ -944,6 +974,8 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         asset_cache.set(cache_key, new_asset)
         
         return response.assetId
+    except AssetIdInUseError:
+        raise
     except Exception as e:
         logger.exception(f"Error creating asset: {e}")
         return None
@@ -1101,17 +1133,16 @@ def update_s3_metadata(bucket_name: str, object_key: str, database_id: str, asse
             VAMS_CHANGE_SOURCE_METADATA_KEY: desired_change_source,
         }
 
-        # Use boto3 resource copy() which automatically handles multipart for large files
+        # Use boto3 resource copy() which automatically handles multipart for large files.
+        # A REPLACE copy resets the content type and the other system-defined headers the
+        # request does not restate, so restate them from the head of the key being copied.
         copy_source = {
             'Bucket': bucket_name,
             'Key': effective_key
         }
         s3_resource.Object(bucket_name, effective_key).copy(
             copy_source,
-            ExtraArgs={
-                'Metadata': metadata,
-                'MetadataDirective': 'REPLACE'
-            }
+            ExtraArgs=replace_metadata_copy_args(response, metadata)
         )
 
         logger.info(f"Updated metadata for {effective_key}")
@@ -1656,7 +1687,8 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
               failures still forward to the indexers so OpenSearch and other
               registered indexers can reconcile their own records. Only records
               that are truly out of scope (wrong bucket/prefix, reserved folders,
-              init files, folder markers, malformed records) are withheld.
+              init files, folder markers, malformed records, a folder whose asset
+              ID another asset already uses) are withheld.
             - message: string with details about the processing result
     """
     try:
@@ -1780,15 +1812,22 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
                     )
                     return True, True, f"Skipped stale create event for archived asset {asset_id}"
                 restored_database_id = restore_archived_asset(bucket_id, asset_id, archived_asset)
-                if not restored_database_id:
+                if restored_database_id is ARCHIVED_RECORD_GONE:
+                    # Deleted since the lookup: handled below like any other key with no asset.
+                    logger.info(
+                        f"Archived asset {asset_id} no longer exists; "
+                        f"treating {object_key} as a key with no asset"
+                    )
+                elif not restored_database_id:
                     logger.error(f"Failed to restore archived asset {asset_id}")
                     return False, True, f"Failed to restore archived asset {asset_id}"
-                logger.info(
-                    f"Restored archived asset {asset_id} to database {restored_database_id} "
-                    f"after direct S3 upload of {object_key}"
-                )
-                database_id_to_use = restored_database_id
-            else:
+                else:
+                    logger.info(
+                        f"Restored archived asset {asset_id} to database {restored_database_id} "
+                        f"after direct S3 upload of {object_key}"
+                    )
+                    database_id_to_use = restored_database_id
+            if not database_id_to_use:
                 # Get or create database for this bucket/prefix
                 database_id_to_use = get_or_create_database_for_bucket(bucket_id, bucket_name, prefix)
 
@@ -1811,7 +1850,15 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
 
                 # Create the asset
                 logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
-                created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
+                try:
+                    created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
+                except AssetIdInUseError:
+                    # The folder name is an asset ID another asset already uses, so no asset is
+                    # created. The file then belongs to no asset and is not forwarded to the indexers.
+                    logger.error(
+                        f"No asset created for {object_key}: asset ID {asset_id} is already used by another asset"
+                    )
+                    return False, False, f"Asset ID {asset_id} is already used by another asset"
                 if not created_asset_id:
                     logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
                     return False, True, f"Failed to create asset {asset_id} in database {database_id_to_use}"
@@ -2083,7 +2130,8 @@ def lambda_handler_created(event, context):
     processing failed or was skipped, so OpenSearch and other registered
     indexers can reconcile their records independently. Only truly
     out-of-scope records (wrong bucket/prefix, reserved folders, init files,
-    folder markers, malformed records) are withheld from the indexers.
+    folder markers, malformed records, a folder whose asset ID another asset
+    already uses) are withheld from the indexers.
 
     Args:
         event: The event from the event source (SQS, SNS, or direct S3)

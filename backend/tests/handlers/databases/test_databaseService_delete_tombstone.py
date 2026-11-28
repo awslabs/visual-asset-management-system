@@ -3,7 +3,7 @@
 
 """`delete_database` moves the record to `<databaseId>#deleted` without the Casbin type marker.
 
-The handler adds `object__type` to the record it authorizes. The tombstone written afterwards must
+The handler authorizes the record annotated with `object__type`. The tombstone written afterwards must
 not carry it, the same rule `update_database` follows for the live record.
 """
 

@@ -78,6 +78,28 @@ def list_all_object_versions(bucket, prefix, client=None, max_keys=None,
     }
 
 
+def key_has_any_version(bucket, key, client=None):
+    """Mirror of the real helper: one ``MaxKeys=1`` ListObjectVersions call, matched on the exact key.
+
+    Without a client, or with a client whose listing is not a dict (a bare MagicMock), the key is taken to
+    exist, which keeps a single-file location on its earlier path mapping.
+    """
+    if client is None:
+        return True
+    response = client.list_object_versions(Bucket=bucket, Prefix=key, MaxKeys=1)
+    if not isinstance(response, dict):
+        return True
+    entries = list(response.get("Versions", []) or []) + list(response.get("DeleteMarkers", []) or [])
+    return any(isinstance(entry, dict) and entry.get("Key") == key for entry in entries)
+
+
+def asset_file_paths(bucket, location, client=None):
+    """Mirror of the real helper: the real ``AssetFilePaths`` with ``key_has_any_version`` as its S3 read."""
+    from common.assetLocations import AssetFilePaths
+
+    return AssetFilePaths(location, key_exists=lambda key: key_has_any_version(bucket, key, client=client))
+
+
 def list_all_objects(bucket, prefix, client=None, max_objects=None):
     """Mock: return objects under a prefix via the provided client, or empty.
 
@@ -96,15 +118,35 @@ def list_all_objects(bucket, prefix, client=None, max_objects=None):
 
 
 # Same rule as the real module: presigned asset/preview downloads of an SVG key carry the SVG
-# response type and an attachment disposition; every other key is unchanged.
+# response type and an attachment disposition; a download URL (attachment=True) carries an
+# attachment disposition naming the file; every other key is unchanged.
 SVG_RESPONSE_CONTENT_TYPE = 'image/svg+xml'
 SVG_RESPONSE_CONTENT_DISPOSITION = 'attachment'
+ATTACHMENT_DISPOSITION_MAX_LENGTH = 640
+SIGNED_QUERY_SAFE_CHARS = '-._~'
 
 
-def presigned_get_object_params(params):
+def attachment_content_disposition(key):
+    """Mirror of the real helper (pure function, no AWS calls)."""
+    from urllib.parse import quote
+    name = str(key or '').rsplit('/', 1)[-1]
+    if not name:
+        return 'attachment'
+    fallback = ''.join(ch if ' ' <= ch <= '~' else '_' for ch in name)
+    fallback = fallback.replace('\\', '\\\\').replace('"', '\\"')
+    value = "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (fallback, quote(name, safe=''))
+    if len(quote(value, safe=SIGNED_QUERY_SAFE_CHARS)) > ATTACHMENT_DISPOSITION_MAX_LENGTH:
+        return 'attachment'
+    return value
+
+
+def presigned_get_object_params(params, attachment=False):
     """Mirror of the real helper (pure function, no AWS calls)."""
     signed = dict(params)
-    if str(signed.get('Key') or '').lower().endswith('.svg'):
+    key = str(signed.get('Key') or '')
+    if key.lower().endswith('.svg'):
         signed['ResponseContentType'] = SVG_RESPONSE_CONTENT_TYPE
         signed['ResponseContentDisposition'] = SVG_RESPONSE_CONTENT_DISPOSITION
+    if attachment:
+        signed['ResponseContentDisposition'] = attachment_content_disposition(key)
     return signed

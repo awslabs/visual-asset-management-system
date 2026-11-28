@@ -14,7 +14,7 @@ Read the AWS blog post [GPU-Accelerated Robotic Simulation Training with NVIDIA 
 | **Configuration flag** | `app.pipelines.useIsaacLabTraining.enabled`                                                                                       |
 | **Execution type**     | Lambda (asynchronous with callback)                                                                                               |
 | **Launch**             | Manual only -- neither workflow registers a trigger                                                                               |
-| **Compute**            | AWS Batch with GPU instances (G6, G6E, G5 families)                                                                               |
+| **Compute**            | AWS Batch with single-GPU instances (G6, GR6, G6E, G5 families)                                                                   |
 | **Storage**            | Amazon Elastic File System (Amazon EFS) for checkpoints                                                                           |
 | **Training timeout**   | 8 hours for the workflow step, including the wait for a GPU instance and the image pull. The AWS Batch job limit is also 8 hours. |
 | **Evaluation timeout** | 2 hours for the workflow step, including the wait for a GPU instance                                                              |
@@ -66,23 +66,56 @@ Add the following to your `config.json` under `app.pipelines`:
                 "acceptNvidiaEula": true,
                 "useCodeBuild": true,
                 "autoRegisterWithVAMS": true,
-                "keepWarmInstance": false
+                "keepWarmInstance": false,
+                "instanceTypes": ["g6.4xlarge", "g6e.2xlarge", "g5.4xlarge"]
             }
         }
     }
 }
 ```
 
-| Option                 | Default | Description                                                                                                                                                                                                                                                                   |
-| ---------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`              | `false` | Enable or disable the pipeline deployment.                                                                                                                                                                                                                                    |
-| `acceptNvidiaEula`     | `false` | **Required when enabled.** You must accept the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license) by setting this to `true`. Deployment fails if this is `false` when the pipeline is enabled. |
-| `useCodeBuild`         | `false` | Build the container image via AWS CodeBuild + ECR instead of local Docker. Recommended for the large Isaac Lab GPU image.                                                                                                                                                     |
-| `autoRegisterWithVAMS` | `true`  | Automatically register both the `isaaclab-training` and `isaaclab-evaluation` pipelines and workflows with VAMS at deploy time.                                                                                                                                               |
-| `keepWarmInstance`     | `false` | When `true`, maintains one warm GPU instance (8 vCPUs for g6.2xlarge) in the AWS Batch compute environment. Reduces cold-start latency at the cost of continuous GPU instance charges.                                                                                        |
+| Option                 | Default                                                                                                                                                             | Description                                                                                                                                                                                                                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`              | `false`                                                                                                                                                             | Enable or disable the pipeline deployment.                                                                                                                                                                                                                                                          |
+| `acceptNvidiaEula`     | `false`                                                                                                                                                             | **Required when enabled.** You must accept the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license) by setting this to `true`. Deployment fails if this is `false` when the pipeline is enabled.                       |
+| `useCodeBuild`         | `false`                                                                                                                                                             | Build the container image via AWS CodeBuild + ECR instead of local Docker. Recommended for the large Isaac Lab GPU image.                                                                                                                                                                           |
+| `autoRegisterWithVAMS` | `true`                                                                                                                                                              | Automatically register both the `isaaclab-training` and `isaaclab-evaluation` pipelines and workflows with VAMS at deploy time.                                                                                                                                                                     |
+| `keepWarmInstance`     | `false`                                                                                                                                                             | When `true`, maintains one warm GPU instance in the AWS Batch compute environment. The floor is the 8 vCPUs one job needs, and every instance type in `instanceTypes` can run the job, so the warm instance can take it. Reduces cold-start latency at the cost of continuous GPU instance charges. |
+| `instanceTypes`        | `["g6.4xlarge", "g6.8xlarge", "g6.16xlarge", "gr6.4xlarge", "gr6.8xlarge", "g6e.2xlarge", "g6e.4xlarge", "g6e.8xlarge", "g5.4xlarge", "g5.8xlarge", "g5.16xlarge"]` | The GPU instance types the compute environment may launch. See [Instance types](#instance-types).                                                                                                                                                                                                   |
 
 :::warning[NVIDIA EULA acceptance required]
 The Isaac Lab container is built from the NVIDIA NGC base image. You must review and accept the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license) before enabling this pipeline. The CDK deployment will fail with a validation error if `acceptNvidiaEula` is not set to `true`.
+:::
+
+## Instance types
+
+One Isaac Lab job asks AWS Batch for 8 vCPUs, 32,768 MiB of memory and 1 GPU. The compute environment holds only the types in `app.pipelines.useIsaacLabTraining.instanceTypes`, with no CPU-only instance classes added. AWS Batch accepts a compute environment whose instance types cannot hold the job and then leaves the job `RUNNABLE` with no error, so VAMS checks every type when the configuration loads and fails the deployment for one that cannot run the job. Each type needs:
+
+-   **One NVIDIA GPU with RT cores and 16 GB or more of video memory.** Isaac Sim needs both. The G5 (A10G, 24 GB), G6 and GR6 (L4, 24 GB) and G6E (L40S, 48 GB) families qualify. The G4dn (T4) and P-series (V100, A100, H100) families do not.
+-   **A single GPU.** A multi-GPU size such as `g6e.12xlarge` leaves the other GPUs idle and billed.
+-   **At least 8 vCPUs.**
+-   **More registered memory than 32,768 MiB.** The Amazon ECS agent registers less than the installed memory, so `g5.2xlarge` and `g6.2xlarge` (32 GiB installed) never hold the job.
+
+The default list meets all four:
+
+| Instance type | GPU     | vCPUs | Memory  |
+| ------------- | ------- | ----- | ------- |
+| g6.4xlarge    | 1x L4   | 16    | 64 GiB  |
+| g6.8xlarge    | 1x L4   | 32    | 128 GiB |
+| g6.16xlarge   | 1x L4   | 64    | 256 GiB |
+| gr6.4xlarge   | 1x L4   | 16    | 128 GiB |
+| gr6.8xlarge   | 1x L4   | 32    | 256 GiB |
+| g6e.2xlarge   | 1x L40S | 8     | 64 GiB  |
+| g6e.4xlarge   | 1x L40S | 16    | 128 GiB |
+| g6e.8xlarge   | 1x L40S | 32    | 256 GiB |
+| g5.4xlarge    | 1x A10G | 16    | 64 GiB  |
+| g5.8xlarge    | 1x A10G | 32    | 128 GiB |
+| g5.16xlarge   | 1x A10G | 64    | 256 GiB |
+
+A type VAMS does not know, such as one from a newly released family, is accepted with a warning that asks you to confirm it offers the same. Narrowing the list reduces the places AWS Batch can find capacity: when EC2 has no On-Demand capacity for the listed types in the deployment's subnets, the job stays `RUNNABLE` until the workflow's heartbeat fails the run.
+
+:::note[AWS GovCloud (US) and AWS European Sovereign Cloud]
+Instance type availability varies by Region. Before you enable the pipeline in either partition, confirm that the types you list are offered in the Region and Availability Zones of your subnets, for example with `aws ec2 describe-instance-type-offerings --location-type availability-zone --filters Name=instance-type,Values=g6e.2xlarge --region <region>`, and remove the ones that are not.
 :::
 
 ## Container Build Options
@@ -130,15 +163,16 @@ When `useCodeBuild: false`, the container is built locally during CDK deployment
 
 :::note[The Amazon EFS file system is removed with the stack]
 This pipeline's Amazon EFS file system uses a `DESTROY` removal policy, so it is deleted on teardown and
-needs no manual step — and its contents are not retained. Training checkpoints written there do not
-repopulate themselves, so copy anything you need to keep before tearing the stack down. This pipeline
+needs no manual step — and its contents are not retained. Training does not write its checkpoints
+there: Isaac Lab writes them under the container's `logs` folder and the pipeline uploads them to the
+asset (see [Training output](#training-output)), which is where to find them. This pipeline
 creates no Amazon S3 model cache bucket of its own. See
 [AWS resources](../architecture/aws-resources.md#amazon-efs).
 :::
 
 ## Prerequisites
 
--   **GPU instance availability** -- Request quota increases for G6, G6E, or G5 instance families in your deployment region if needed. The compute environment uses `BEST_FIT_PROGRESSIVE` allocation across multiple instance types for optimal availability.
+-   **GPU instance availability** -- Request quota increases for the G6, G6E, or G5 instance families in your deployment region if needed. The compute environment uses `BEST_FIT_PROGRESSIVE` allocation across the instance types listed in `instanceTypes`. Confirm that each type is offered in your Region and Availability Zones, because AWS Batch can find capacity only among the types it is given. See [Instance types](#instance-types).
 -   **VPC with NAT Gateway** -- The pipeline requires private subnets with internet access (via NAT Gateway) because the Isaac Lab container needs to download NVIDIA Omniverse assets at runtime. Its compute runs in `pipelineNetwork.privateSubnets.pipeline`, which the VPC builder creates as `PRIVATE_WITH_EGRESS`.
 
 :::warning[Air-gapped deployments]
@@ -188,14 +222,24 @@ The rl_games configuration of `Isaac-AutoMate-Assembly-Direct-v0` collects 32 st
 
 Training results are added to the asset the run executed against. Both Isaac Lab workflows set `defaultOutputFileBaseExecutionPathExtension` to `/{{executionId}}/`, which places each output in a folder named for the workflow execution, immediately before the file name (see [Output path prefix](../api/workflows.md#output-path-prefix)):
 
-| Output                                 | Format  | Description                                                              |
-| -------------------------------------- | ------- | ------------------------------------------------------------------------ |
-| `checkpoints/<executionId>/model_*.pt` | PyTorch | Model checkpoint files saved during training                             |
-| `<executionId>/metrics.csv`            | CSV     | Training metrics exported from TensorBoard event files                   |
-| `<executionId>/*_git_diff.txt`         | Text    | Configuration diff files (converted from `.diff` for VAMS compatibility) |
-| `<executionId>/train-config.json`      | JSON    | Input configuration saved for reference                                  |
+| Output                            | Format  | Description                                                                   |
+| --------------------------------- | ------- | ----------------------------------------------------------------------------- |
+| `checkpoints/<executionId>/*`     | PyTorch | Model checkpoint files saved during training, named by the RL library (below) |
+| `<executionId>/metrics.csv`       | CSV     | Training metrics exported from TensorBoard event files                        |
+| `<executionId>/*_git_diff.txt`    | Text    | Configuration diff files (converted from `.diff` for VAMS compatibility)      |
+| `<executionId>/train-config.json` | JSON    | The run settings saved for reference                                          |
 
 For example, a run whose execution id is `3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a` writes its last rsl_rl checkpoint to `checkpoints/3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a/model_99.pt`.
+
+The files that reach `checkpoints/<executionId>/` depend on `rlLibrary` (Isaac Lab 2.3.0 layouts):
+
+| `rlLibrary` | Files uploaded                                                                                |
+| ----------- | --------------------------------------------------------------------------------------------- |
+| `rsl_rl`    | `model_<iteration>.pt`                                                                        |
+| `rl_games`  | `<name>.pth` (best reward) and `last_<name>_ep_<epoch>_rew_<reward>.pth` (periodic and final) |
+| `skrl`      | `agent_<timestep>.pt` and `best_agent.pt`                                                     |
+
+A run that writes none of these fails with `no <library> checkpoint was found to upload`, after its logs and configuration are uploaded. An evaluation with no `checkpointPath` takes the `.pt` or `.pth` file of the chosen library with the highest epoch, iteration or timestep in the run folder written most recently. `best_agent.pt` and the rl_games `<name>.pth` rank below numbered checkpoints, so name them in `checkpointPath` to evaluate the best one.
 
 ## Evaluation mode
 
@@ -232,7 +276,7 @@ The **Template tag** column names the execute-form field that supplies each para
 | `trainingConfig.recordVideo`     | `RECORD_VIDEO`      | `false`                      | Whether the evaluation video is uploaded to the asset. Recording always happens, because the Isaac Lab play script requires `--video` to terminate; this controls publication only.                                                              |
 | `trainingConfig.rlLibrary`       | `RL_LIBRARY`        | `"rsl_rl"`                   | RL library the policy was trained with. Selects the Isaac Lab play script, so it must match the library used for training. Options: `"rsl_rl"`, `"rl_games"`, `"skrl"`; any other value fails the execution rather than falling back.            |
 | `trainingConfig.checkpointPath`  | `CHECKPOINT_PATH`   | `null`                       | Path to the policy file within the asset, for example `checkpoints/<executionId>/model_300.pt` for a checkpoint a training run wrote. Leaving the field blank evaluates the highest-numbered checkpoint in the run folder written most recently. |
-| `trainingConfig.policyS3Uri`     | --                  | `null`                       | Amazon S3 URI to a `.pt` policy file. Operator-supplied, and must name the executing asset's own bucket. Omit it to use `checkpointPath` or auto-discovery.                                                                                      |
+| `trainingConfig.policyS3Uri`     | --                  | `null`                       | Amazon S3 URI to a `.pt` or `.pth` policy file. Operator-supplied, and must name the executing asset's own bucket. Omit it to use `checkpointPath` or auto-discovery.                                                                            |
 
 ### Evaluation output
 
@@ -242,7 +286,7 @@ Evaluation outputs use the same per-execution folders as training:
 | ------------------------------------ | ------ | -------------------------------------------------------------------- |
 | `<executionId>/metrics.csv`          | CSV    | Evaluation metrics from TensorBoard                                  |
 | `videos/<executionId>/*.mp4`         | MP4    | Evaluation episode recordings, uploaded when `recordVideo` is `true` |
-| `<executionId>/evaluate-config.json` | JSON   | Input configuration saved for reference                              |
+| `<executionId>/evaluate-config.json` | JSON   | The run settings saved for reference                                 |
 
 ## Custom environments
 

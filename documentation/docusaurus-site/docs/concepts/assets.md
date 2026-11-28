@@ -29,7 +29,7 @@ To create an asset, provide the following fields:
 | `bucketExistingKey` | No       | Optional. Points to an existing key in the database's Amazon S3 bucket to register as the asset's location without uploading new files.         |
 
 :::info[Asset ID restrictions]
-The `assetId` cannot contain forward slashes (`/`) because it is used as an Amazon S3 prefix component. If you provide a custom `assetId`, choose a value that is unique within the database and made up of ASCII characters — two identifiers that render identically but differ in a non-ASCII character are two separate assets, which an operator reading an asset listing or an audit record cannot tell apart. The restriction applies where you name a new asset; an identifier already stored stays valid everywhere it is used, and an asset VAMS discovers in an external Amazon S3 bucket takes its identifier from the folder name it is found under.
+The `assetId` cannot contain forward slashes (`/`) because it is used as an Amazon S3 prefix component. If you provide a custom `assetId`, choose a value made up of ASCII characters — two identifiers that render identically but differ in a non-ASCII character are two separate assets, which an operator reading an asset listing or an audit record cannot tell apart. The restriction applies where you name a new asset; an identifier already stored stays valid everywhere it is used, and an asset VAMS discovers in an external Amazon S3 bucket takes its identifier from the folder name it is found under. An `assetId` that another asset already uses, in any database and including an archived asset, is refused, and a folder named after such an identifier does not become an asset.
 :::
 
 ### Example: creating an asset

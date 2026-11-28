@@ -13,6 +13,7 @@ For asset-level operations, see [Assets](assets.md). For file metadata, see [Met
 -   **Primary File Type**: A designation that marks a file as the primary representative of a particular type within an asset (e.g., the primary `.ifc` file).
 -   **Preview File**: A generated preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file.
 -   **Archive**: Soft-deletion of a file using S3 delete markers. Archived files can be unarchived.
+-   **File path**: How a request names a file of the asset (`filePath`, `sourcePath`, `destinationPath`, an upload's `relativeKey`, a stream path, a file metadata `filePath`, a workflow input's `relativeFileKey`). Send the file's path in the asset with its leading `/`, the file list's `relativePath`. A value with a leading `/` is always a path in the asset: `/a1/cloud.laz` in an asset stored at `a1/` is the file `a1/a1/cloud.laz` of a subfolder named like the asset. A value without a leading `/` is the file's full S3 key (the file list's `key`) when it is one of the asset's keys, and otherwise a path in the asset.
 
 ---
 
@@ -73,6 +74,8 @@ Returns a list of all files in the specified asset, including file metadata, siz
 ```
 
 `key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns.
+
+An asset created from one Amazon S3 object (a `bucketExistingKey` without a trailing `/`) lists that object at `/{file name}` and its previews at `/{file name}.previewFile.{ext}`, and every file route takes that path or the object's `key`. Its other files are in its companion folder `{key}/` and keep the path after `{key}`. While the companion folder holds a file of the object's own name (`{key}/{file name}`), that file keeps the path `/{file name}`, and the object keeps the path `/`, which no file route except download by the location key reaches.
 
 `changeSource` and `changeUserId` describe how the current version of each file was created. When `changeSource` is `workflowExecution`, `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote it; they are `null` for every other change source, and in `basic` mode, which performs no per-object read.
 
@@ -152,6 +155,8 @@ The `versions` list is present only when `includeVersions` is `true`. `changeWor
 
 Moves or renames a file within the asset. This copies the file to the new location and deletes the original.
 
+A `sourcePath` of `/`, or one that resolves to the entry the file list shows at `/`, names the top-level asset folder: for an asset stored at `a1/`, its full key `a1/`, and for an asset created from one Amazon S3 object, `/` or its companion folder `{key}/`. These requests return `400` with a `message` that contains `Cannot move or rename the top-level asset folder`, and nothing is moved. `/a1/` is the subfolder named like the asset (key `a1/a1/`).
+
 **Request Parameters:**
 
 | Parameter    | Location | Type   | Required | Description          |
@@ -185,11 +190,11 @@ Moves or renames a file within the asset. This copies the file to the new locati
 
 **Error Responses:**
 
-| Status | Description                                                                                                                  |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, source file not found, destination already exists, or the destination file name has a blocked extension. |
-| `403`  | Not authorized to modify files in this asset.                                                                                |
-| `500`  | Internal server error.                                                                                                       |
+| Status | Description                                                                                                                                                                                                                                                                                                                                              |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, source file not found, destination already exists, the source is the top-level asset folder, or the destination file name has a blocked extension. The file of an asset created from one Amazon S3 object cannot be moved or renamed: `The file of a single-file asset cannot be moved or renamed. Copy it to another path instead.` |
+| `403`  | Not authorized to modify files in this asset.                                                                                                                                                                                                                                                                                                            |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                   |
 
 ---
 
@@ -248,7 +253,9 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 `DELETE /database/{databaseId}/assets/{assetId}/deleteFile`
 
-Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files.
+Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files. It also removes the file's metadata, attributes and version records, so the asset's versions no longer list the file.
+
+A `filePath` of `/` names the top-level asset folder, and so does a path that resolves to the entry the file list shows at `/`, whether `isPrefix` is `true` or `false`: for an asset stored at `a1/`, its full key `a1/`, and for an asset created from one Amazon S3 object, its companion folder `{key}/`. These requests return `400` with a `message` that contains `Cannot delete the top-level asset folder`, and nothing is deleted. A path with a leading `/` is a path in the asset, so `/a1/` is the subfolder named like the asset (key `a1/a1/`) and deletes only that subfolder; `/a1` and `a1`, without the trailing `/`, are the path prefix `a1/a1` under the location. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
 
 :::danger[Irreversible Operation]
 This permanently deletes the file and all its versions. Consider using [Archive File](#archive-file) for soft-deletion instead.
@@ -289,11 +296,11 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 
 **Error Responses:**
 
-| Status | Description                                                                        |
-| ------ | ---------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, or file not found. |
-| `403`  | Not authorized to delete files in this asset.                                      |
-| `500`  | Internal server error.                                                             |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, the top-level asset folder, or file not found. With `isPrefix` set to `true`, a path that names the file of an asset created from one Amazon S3 object, or one of its previews, is refused: `A prefix operation cannot name the file of a single-file asset or its previews. Use the operation without the prefix option.` |
+| `403`  | Not authorized to delete files in this asset.                                                                                                                                                                                                                                                                                                                                              |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                                     |
 
 ---
 
@@ -302,6 +309,8 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 `DELETE /database/{databaseId}/assets/{assetId}/archiveFile`
 
 Soft-deletes a file by creating an S3 delete marker. The file can be restored using [Unarchive File](#unarchive-file).
+
+A `filePath` of `/`, or a path that resolves to the entry the file list shows at `/` (`isPrefix` `true` or `false`), such as `a1/` (its full key) for an asset stored at `a1/` or the companion folder `{key}/` of an asset created from one Amazon S3 object, returns `400` with a `message` that contains `Cannot archive the top-level asset folder`, and nothing is archived. `/a1/` is the subfolder named like the asset (key `a1/a1/`) and archives only that subfolder; `/a1` and `a1`, without the trailing `/`, are the path prefix `a1/a1` under the location. An empty `filePath` is refused as an invalid parameter (`400`) before any file is looked up.
 
 **Request Parameters:**
 
@@ -336,11 +345,11 @@ Soft-deletes a file by creating an S3 delete marker. The file can be restored us
 
 **Error Responses:**
 
-| Status | Description                                                |
-| ------ | ---------------------------------------------------------- |
-| `400`  | Invalid parameters, or file not found or already archived. |
-| `403`  | Not authorized to archive files in this asset.             |
-| `500`  | Internal server error.                                     |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                        |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, the top-level asset folder, or file not found or already archived. With `isPrefix` set to `true`, a path that names the file of an asset created from one Amazon S3 object, or one of its previews, is refused: `A prefix operation cannot name the file of a single-file asset or its previews. Use the operation without the prefix option.` |
+| `403`  | Not authorized to archive files in this asset.                                                                                                                                                                                                                                                                                                                     |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                             |
 
 ---
 
@@ -439,6 +448,8 @@ Creates a new folder (zero-byte S3 object with trailing slash) within the asset'
 
 Reverts a file to a specific previous S3 version by copying the old version as the new current version.
 
+A `filePath` of `/`, or one that resolves to the entry the file list shows at `/` (for an asset stored at `a1/`, its full key `a1/`; for an asset created from one Amazon S3 object, its companion folder `{key}/`), names the top-level asset folder. These requests return `400` with a `message` that contains `Cannot revert the top-level asset folder`, and nothing changes.
+
 **Request Parameters:**
 
 | Parameter    | Location | Type   | Required | Description                     |
@@ -473,11 +484,11 @@ Reverts a file to a specific previous S3 version by copying the old version as t
 
 **Error Responses:**
 
-| Status | Description                                       |
-| ------ | ------------------------------------------------- |
-| `400`  | Invalid parameters, or file or version not found. |
-| `403`  | Not authorized to revert file versions.           |
-| `500`  | Internal server error.                            |
+| Status | Description                                                                   |
+| ------ | ----------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, the top-level asset folder, or file or version not found. |
+| `403`  | Not authorized to revert file versions.                                       |
+| `500`  | Internal server error.                                                        |
 
 ---
 
@@ -572,6 +583,8 @@ Each entry in `files` is an object:
 | `file_size`   | integer | No       | File size in bytes. Either `file_size` or `num_parts` must be provided.               |
 | `num_parts`   | integer | No       | Number of multipart upload parts. Either `file_size` or `num_parts` must be provided. |
 
+A file's key, which is its asset's location followed by its `relativeKey`, may be at most 998 bytes of UTF-8 in a bucket registered at its root, and the length of the bucket's base prefix less than that otherwise. The upload is staged under a longer key that must fit the 1,024-byte Amazon S3 limit. A longer key is refused with `400` (`VAMS General Error: File key is too long to upload: a file key, including its asset location, may be at most N bytes`, where N is the bound for the asset's bucket), and no multipart upload is created for any file in the request. See [Amazon S3 quotas](../additional/quotas.md#amazon-s3).
+
 **Response:**
 
 ```json
@@ -598,7 +611,7 @@ Each entry in `files` is an object:
 
 | Status | Description                                                                                                                          |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, asset not found, blocked file extension, or blocked MIME type.                                                   |
+| `400`  | Invalid parameters, asset not found, blocked file extension or MIME type, or a file key over the upload bound described above.       |
 | `403`  | Not authorized to upload files to this asset.                                                                                        |
 | `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60). |
 | `500`  | Internal server error.                                                                                                               |
@@ -739,11 +752,11 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                   |
-| ------ | ----------------------------------------------------------------------------- |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable. |
-| `404`  | File not found.                                                               |
-| `500`  | Internal server error.                                                        |
+| Status | Description                                                                                                                                        |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable. |
+| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                    |
+| `500`  | Internal server error.                                                                                                                             |
 
 ---
 
@@ -759,11 +772,18 @@ Returns file metadata without the file body.
 
 **Request Parameters:**
 
-| Parameter    | Location | Type   | Required | Description                                         |
-| ------------ | -------- | ------ | -------- | --------------------------------------------------- |
-| `databaseId` | path     | string | Yes      | Database identifier.                                |
-| `assetId`    | path     | string | Yes      | Asset identifier.                                   |
-| `{proxy+}`   | path     | string | Yes      | The relative file path within the auxiliary bucket. |
+| Parameter    | Location | Type   | Required | Description                                                    |
+| ------------ | -------- | ------ | -------- | -------------------------------------------------------------- |
+| `databaseId` | path     | string | Yes      | Database identifier.                                           |
+| `assetId`    | path     | string | Yes      | Asset identifier.                                              |
+| `{proxy+}`   | path     | string | Yes      | The viewer data path `{file}/preview/{data path}` (see below). |
+
+A file's viewer data lives in its own `preview/` folder, so the path is the file, then `/preview/`, then the data path a pipeline wrote (for example `scans/site.laz/preview/PotreeViewer/metadata.json`). The file part names a file the asset holds in either form, for folder and single-file assets:
+
+-   its path in the asset with its leading `/`, the file list's `relativePath` (`/scans/site.laz`, so the request path has two slashes after `stream`);
+-   its full S3 key, the `key` the file list returns (`vams/a1/scans/site.laz` for an asset in a bucket registered under the base prefix `vams/`), the form the web viewers send for a file the list showed.
+
+A leading `/` marks the path in the asset: `/a1/cloud.laz` in an asset stored at `a1/` is the file `a1/a1/cloud.laz` of a subfolder named like the asset, never `a1/cloud.laz`. A path without a leading `/` that starts with the key of a file the asset holds, followed by `/preview/`, is read as the full key, and any other path as the path in the asset. In an asset created from one Amazon S3 object, this route reads the object's own path `/{file name}` as the file `{key}/{file name}` of its companion folder, so name the object's viewer data by the object's key. URL-encode each segment and keep the slashes, so a viewer that reads the files beside `metadata.json` can resolve them. A path that names no file of this asset is refused with `400` and the `message` `The file path does not name a file in this asset.`
 
 **Response:**
 
@@ -771,11 +791,12 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                   |
-| ------ | ----------------------------------------------------------------------------- |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable. |
-| `404`  | File not found.                                                               |
-| `500`  | Internal server error.                                                        |
+| Status | Description                                                                                                                                         |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters or unallowed file type, or the path names no file of this asset (`message` `The file path does not name a file in this asset.`). |
+| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable.  |
+| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                     |
+| `500`  | Internal server error.                                                                                                                              |
 
 ---
 

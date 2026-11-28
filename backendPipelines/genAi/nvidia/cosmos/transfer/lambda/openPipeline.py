@@ -226,6 +226,9 @@ def lambda_handler(event, context):
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
         "assetId": asset_id,
         "databaseId": database_id,
+        # The root of the input's asset (manifest assetRootS3Key); empty from an older Lambda or
+        # without a manifest.
+        "inputAssetRootS3Key": event.get("inputAssetRootS3Key", ""),
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token

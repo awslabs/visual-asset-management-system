@@ -385,8 +385,8 @@ class ExecuteInputFileModel(BaseModel, extra='ignore'):
         # relativeFileKey is asset-relative and must begin with "/" ("/" = whole asset,
         # "/folder/" = a folder, "/folder/file" = a file). Enforce the leading slash and reject
         # ".." traversal segments so it can't be an absolute S3 key or escape the asset prefix.
-        # (The RELATIVE_FILE_PATH validator's min-length-3 rule is NOT used here because the "/"
-        # whole-asset and "/x" short forms are legitimate selections.)
+        # (The RELATIVE_FILE_PATH validator's minimum-length rule is NOT used here because the "/"
+        # whole-asset form is a legitimate selection.)
         key = values.get("relativeFileKey")
         if key is not None:
             if not key.startswith("/"):
