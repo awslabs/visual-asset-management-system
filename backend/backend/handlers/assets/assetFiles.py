@@ -2782,6 +2782,10 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     source_key = resolve_asset_file_path(paths, source_path)
     dest_key = resolve_asset_file_path(paths, dest_path)
 
+    # The key listed at '/' is the top-level asset folder (see delete_file)
+    if paths.path_for(source_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot move or rename the top-level asset folder")
+
     # The object of a single-file asset is the asset's location: moving it would leave the asset empty
     if paths.names_object(source_key):
         raise VAMSGeneralErrorResponse(OWN_FILE_MOVE_REFUSAL)
@@ -2930,6 +2934,10 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
     bucket, base_key = get_asset_s3_location(asset)
     paths = file_paths_for(bucket, base_key)
     full_key = resolve_asset_file_path(paths, file_path)
+
+    # The key listed at '/' is the top-level asset folder (see delete_file)
+    if paths.path_for(full_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot revert the top-level asset folder")
     
     # Check if file exists
     try:
