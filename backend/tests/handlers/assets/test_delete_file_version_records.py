@@ -16,6 +16,9 @@ built from a file list stores the paths as the caller wrote them, often as the f
 """
 
 import os
+import threading
+import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import boto3
@@ -125,7 +128,8 @@ def test_a_refused_write_is_logged_as_an_error_and_reports_no_row_deleted(versio
 
     deleted = af.delete_file_version_records("db1", "a1", ["/x.txt"])
 
-    assert refusing_table.delete_item.call_args_list[0].kwargs == {"Key": {PK: "db1:a1:1", "fileKey": "x.txt"}}
+    called = [c.kwargs for c in refusing_table.delete_item.call_args_list]
+    assert {"Key": {PK: "db1:a1:1", "fileKey": "x.txt"}} in called
     assert deleted == 0
     logger.exception.assert_called_once()
     assert "AccessDeniedException" in logger.exception.call_args.args[0]
@@ -152,9 +156,9 @@ def test_a_write_refused_part_way_reports_the_rows_deleted_before_it(versions_ta
     assert len([row for row in _rows(versions_table, "a1") if row[1] == "x.txt"]) == 1
 
 
-def test_rows_are_deleted_one_at_a_time_with_no_batch_write(versions_table, monkeypatch):
+def test_each_row_goes_through_its_own_delete_item_with_no_batch_write(versions_table, monkeypatch):
     """The role holds DeleteItem on this table and no BatchWriteItem: every row of a file that more
-    asset versions list than one batch carries (25) goes, through DeleteItem alone."""
+    asset versions list than one batch carries (25) goes, one DeleteItem per row."""
     for version in range(3, 33):
         versions_table.put_item(Item={PK: f"db1:a1:{version}", "fileKey": "x.txt", "databaseId:assetId": "db1:a1"})
     watched = MagicMock(wraps=versions_table)
@@ -170,6 +174,187 @@ def test_rows_are_deleted_one_at_a_time_with_no_batch_write(versions_table, monk
     watched.batch_writer.assert_not_called()
     assert _rows(versions_table, "a1") == [("db1:a1:2", "keep.txt"), ("db1:a1:2", "sub/y.txt")]
     assert _rows(versions_table, "a2") == [("db1:a2:1", "x.txt"), ("db1:a2:2", "/x.txt")]
+
+
+class _FakeVersionsTable:
+    """The asset file versions table for row counts moto would make slow: the GSI query is paged
+    (1,000 rows a page) and each DeleteItem takes a little time, so overlapping calls can be counted."""
+
+    def __init__(self, rows, delete_seconds=0.002, refuse=None):
+        self.rows = [{PK: f"db1:{asset}:{version}", "fileKey": key, "databaseId:assetId": f"db1:{asset}"}
+                     for asset, version, key in rows]
+        self.remaining = {(row[PK], row["fileKey"]) for row in self.rows}
+        self.delete_seconds = delete_seconds
+        self.refuse = refuse or (lambda key, attempt: None)
+        self.lock = threading.Lock()
+        self.attempts = {}
+        self.calls = 0
+        self.active = 0
+        self.max_active = 0
+
+    def query(self, **kwargs):
+        start = kwargs.get("ExclusiveStartKey", {}).get("i", 0)
+        page = self.rows[start:start + 1000]
+        response = {"Items": [dict(row) for row in page]}
+        if start + 1000 < len(self.rows):
+            response["LastEvaluatedKey"] = {"i": start + 1000}
+        return response
+
+    def delete_item(self, Key):
+        key = (Key[PK], Key["fileKey"])
+        with self.lock:
+            self.calls += 1
+            attempt = self.attempts[key] = self.attempts.get(key, 0) + 1
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            time.sleep(self.delete_seconds)
+            error = self.refuse(key, attempt)
+            if error is not None:
+                raise error
+            with self.lock:
+                self.remaining.discard(key)
+        finally:
+            with self.lock:
+                self.active -= 1
+
+    def batch_writer(self, *args, **kwargs):
+        raise AssertionError("a batch write was used")
+
+
+def _throttled(operation="DeleteItem"):
+    return ClientError({"Error": {"Code": "ProvisionedThroughputExceededException", "Message": "slow down"}},
+                       operation)
+
+
+def _many_rows(versions, files_per_version):
+    return [("a1", str(v), f"part{f}.txt") for v in range(versions) for f in range(files_per_version)] + [("a1", "0", "keep.txt")]
+
+
+@pytest.fixture
+def no_waits(monkeypatch):
+    """The throttle retry waits are recorded, not slept."""
+    waits = []
+    monkeypatch.setattr(af, "time", SimpleNamespace(monotonic=time.monotonic, sleep=waits.append), raising=False)
+    return waits
+
+
+def test_many_rows_are_deleted_through_delete_item_alone_a_bounded_number_at_a_time(monkeypatch):
+    table = _FakeVersionsTable(_many_rows(versions=300, files_per_version=4))
+    monkeypatch.setattr(af, "asset_version_files_table", table)
+    monkeypatch.setattr(af, "_invocation_context", None, raising=False)
+
+    deleted = af.delete_file_version_records("db1", "a1", [f"/part{f}.txt" for f in range(4)])
+
+    assert deleted == 1200
+    assert table.calls == 1200
+    assert table.remaining == {("db1:a1:0", "keep.txt")}
+    assert table.max_active > 1
+    assert table.max_active <= af.VERSION_ROWS_DELETE_WORKERS
+
+
+def test_a_throttled_delete_is_retried_and_the_row_goes(versions_table, monkeypatch, no_waits):
+    throttled = {}
+    watched = MagicMock(wraps=versions_table)
+    watched.query.side_effect = versions_table.query
+    watched.batch_writer.side_effect = AssertionError("a batch write was used")
+
+    def delete_item(**kwargs):
+        key = (kwargs["Key"][PK], kwargs["Key"]["fileKey"])
+        throttled[key] = throttled.get(key, 0) + 1
+        if throttled[key] <= 2:
+            raise _throttled()
+        return versions_table.delete_item(**kwargs)
+
+    watched.delete_item.side_effect = delete_item
+    monkeypatch.setattr(af, "asset_version_files_table", watched)
+    logger = MagicMock()
+    monkeypatch.setattr(af, "logger", logger)
+
+    deleted = af.delete_file_version_records("db1", "a1", ["/x.txt"])
+
+    assert deleted == 2
+    assert throttled == {("db1:a1:1", "x.txt"): 3, ("db1:a1:2", "x.txt"): 3}
+    assert sorted(no_waits) == [0.5, 0.5, 1.0, 1.0]
+    assert _rows(versions_table, "a1") == [("db1:a1:2", "keep.txt"), ("db1:a1:2", "sub/y.txt")]
+    logger.exception.assert_not_called()
+    logger.error.assert_not_called()
+
+
+def test_a_row_still_throttled_after_its_retries_stops_the_delete_and_the_count_is_what_went(
+        monkeypatch, no_waits):
+    stuck = ("db1:a1:0", "part0.txt")
+    table = _FakeVersionsTable(_many_rows(versions=100, files_per_version=4), delete_seconds=0.001,
+                               refuse=lambda key, attempt: _throttled() if key == stuck else None)
+    monkeypatch.setattr(af, "asset_version_files_table", table)
+    monkeypatch.setattr(af, "_invocation_context", None, raising=False)
+    logger = MagicMock()
+    monkeypatch.setattr(af, "logger", logger)
+
+    deleted = af.delete_file_version_records("db1", "a1", [f"/part{f}.txt" for f in range(4)])
+
+    gone = 401 - len(table.remaining)
+    assert deleted == gone
+    assert 0 < deleted < 400
+    assert table.attempts[stuck] == af.VERSION_ROW_THROTTLE_RETRIES + 1
+    assert table.calls - table.attempts[stuck] < 400
+    logger.exception.assert_called_once()
+    assert "ProvisionedThroughputExceededException" in logger.exception.call_args.args[0]
+    logger.error.assert_called_once()
+    assert f"{deleted} deleted, {400 - deleted} left listed" in logger.error.call_args.args[0]
+
+
+def test_no_row_delete_starts_once_the_invocation_is_near_its_time_limit(monkeypatch):
+    table = _FakeVersionsTable(_many_rows(versions=10, files_per_version=4))
+    monkeypatch.setattr(af, "asset_version_files_table", table)
+    monkeypatch.setattr(af, "_invocation_context", SimpleNamespace(get_remaining_time_in_millis=lambda: 30_000),
+                        raising=False)
+    logger = MagicMock()
+    monkeypatch.setattr(af, "logger", logger)
+
+    deleted = af.delete_file_version_records("db1", "a1", ["/part0.txt", "/part1.txt", "/part2.txt", "/part3.txt"])
+
+    assert deleted == 0
+    assert table.calls == 0
+    logger.error.assert_called_once()
+    message = logger.error.call_args.args[0]
+    assert "time limit" in message and "0 deleted, 40 left listed" in message and "4 file(s)" in message
+    logger.exception.assert_not_called()
+
+
+def test_the_delete_stops_part_way_at_the_time_limit_and_reports_the_rows_deleted(monkeypatch):
+    table = _FakeVersionsTable(_many_rows(versions=50, files_per_version=4), delete_seconds=0)
+    monkeypatch.setattr(af, "asset_version_files_table", table)
+    monkeypatch.setattr(af, "_version_rows_delete_deadline", lambda: 100.0, raising=False)
+    ticks = {"n": 0}
+
+    def monotonic():
+        ticks["n"] += 1
+        return 50.0 if ticks["n"] <= 30 else 150.0
+
+    monkeypatch.setattr(af, "time", SimpleNamespace(monotonic=monotonic, sleep=time.sleep), raising=False)
+    logger = MagicMock()
+    monkeypatch.setattr(af, "logger", logger)
+
+    deleted = af.delete_file_version_records("db1", "a1", [f"/part{f}.txt" for f in range(4)])
+
+    assert deleted == 30
+    assert table.calls == 30
+    assert len(table.remaining) == 200 - 30 + 1
+    assert "because the invocation's time limit was near: 30 deleted, 170 left listed" in logger.error.call_args.args[0]
+    logger.exception.assert_not_called()
+
+
+def test_the_time_limit_comes_from_the_recorded_lambda_context(monkeypatch):
+    monkeypatch.setattr(af, "_invocation_context", None, raising=False)
+    assert af._version_rows_delete_deadline() is None
+
+    af.record_invocation_context({})
+    assert af._version_rows_delete_deadline() is None
+
+    af.record_invocation_context(SimpleNamespace(get_remaining_time_in_millis=lambda: 900_000))
+    left = af._version_rows_delete_deadline() - time.monotonic()
+    assert 900 - af.VERSION_ROWS_DELETE_TIME_MARGIN_SECONDS - 5 < left <= 900 - af.VERSION_ROWS_DELETE_TIME_MARGIN_SECONDS
 
 
 ROUTE_ROWS = [

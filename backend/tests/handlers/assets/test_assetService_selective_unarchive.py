@@ -64,6 +64,7 @@ def _load():
     files_stub.delete_files_metadata = MagicMock()
     files_stub.delete_auxiliary_files_of_keys = MagicMock()
     files_stub.delete_file_version_records = MagicMock()
+    files_stub.record_invocation_context = MagicMock()
     files_stub.aux_bucket_asset_file_base = (
         lambda db, key: f"{(db or '').strip('/')}/{(key or '').strip('/')}/"
     )
