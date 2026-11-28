@@ -75,7 +75,6 @@ constraints = [
     { name = "kiwisolver", specifier = "==1.5.1" },
     { name = "lazy-loader", specifier = "==0.6" },
     { name = "litellm", specifier = "==1.100.0" },
-    { name = "litellm-enterprise", specifier = "==0.1.62" },
     { name = "litellm-proxy-extras", specifier = "==0.4.91" },
     { name = "llvmlite", specifier = "==0.50.0" },
     { name = "manifold3d", specifier = "==3.5.5" },
@@ -179,6 +178,7 @@ constraints = [
     { name = "yarl", specifier = "==1.25.1" },
     { name = "zipp", specifier = "==4.1.2" },
 ]
+overrides = [{ name = "litellm-enterprise", marker = "sys_platform == 'never'" }]
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -1026,7 +1026,6 @@ proxy = [
     { name = "gunicorn" },
     { name = "hiredis" },
     { name = "inquirerpy" },
-    { name = "litellm-enterprise" },
     { name = "litellm-proxy-extras" },
     { name = "mcp" },
     { name = "orjson" },
@@ -1044,15 +1043,6 @@ proxy = [
     { name = "uvicorn" },
     { name = "uvloop" },
     { name = "websockets" },
-]
-
-[[package]]
-name = "litellm-enterprise"
-version = "0.1.62"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d6/94/86e0927db64cfbe91fb93a35145b879d0cebc1f46efdc6774367d867e4f9/litellm_enterprise-0.1.62.tar.gz", hash = "sha256:2ce78366557335de557ee72ad86c92b2b062b0e07e31dff2139576feda849489", size = 84192, upload-time = "2026-08-30T02:26:49.181Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/33/0c/b86801eb87540ac98559b8dd470761fdd901b329b9befc24ae11e55f6908/litellm_enterprise-0.1.62-py3-none-any.whl", hash = "sha256:337697160896d52079290ffe8051c3dee450653d271cb29723af6db8546eb7d9", size = 152743, upload-time = "2026-08-30T02:26:47.977Z" },
 ]
 
 [[package]]

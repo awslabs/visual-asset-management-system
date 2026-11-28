@@ -81,5 +81,10 @@ new, the PR that moves it needs a live SAM 3D run.
 -   **kaolin** is NVIDIA's wheel, which PyPI does not carry, so pip-audit cannot read it and it is not in the lock: the
     Dockerfile's `KAOLIN_WHEEL_URL` and `KAOLIN_WHEEL_SHA256` and the `wheelSha256` of its `out-of-lock.json` entry move
     together, and its `Requires-Dist` lines are in `pyproject.toml`.
--   **nvidia-pyindex** is left out through `override-dependencies`: its only effect is to add NVIDIA's index to pip's
-    configuration when it installs. The build's `pip check` allows the one line that reports it missing.
+-   **nvidia-pyindex** and **smplx** are left out through `override-dependencies`: nvidia-pyindex's only effect is to
+    add NVIDIA's index to pip's configuration when it installs, and no SAM 3D code imports smplx, whose licence permits
+    non-commercial research use only. The build's `pip check` allows the one line that reports each missing.
+
+The Blender agent leaves **litellm-enterprise** out the same way: `litellm[proxy]` names it under BerriAI's
+proprietary licence, and the bridge runs without it (its Dockerfile imports the proxy server with the package absent).
+`imageTo3dLocks.test.ts` fails when a re-lock brings either package back.

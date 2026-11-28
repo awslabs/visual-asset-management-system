@@ -88,7 +88,7 @@ dependencies = [
     "scikit-image==0.23.1",
     "sentence-transformers==2.6.1",
     "simplejson==3.19.2",
-    "smplx==0.1.28",
+    # smplx==0.1.28: left out (see override-dependencies)
     "spconv-cu121==2.3.8",
     "tensorboard==2.16.2",
     "timm==0.9.16",
@@ -228,9 +228,13 @@ environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 #   nvidia-pyindex: its only effect is to add pypi.ngc.nvidia.com to pip's configuration when it installs. This
 #   build does not use that index (it does not resolve from the build subnet) and installs nothing by resolution,
 #   so the package is left out; the build allows its one unmet line in pip check.
+#   smplx: the Max Planck SMPL-X body model library, under a non-commercial research licence that binds on
+#   installing. No SAM 3D code at SAM3D_COMMIT imports it, and the build imports upstream's inference module without
+#   it, so it is left out; the build allows its one unmet line in pip check. It needs only numpy and torch, which stay.
 override-dependencies = [
     "xatlas==0.0.11",
     "nvidia-pyindex ; sys_platform == 'never'",
+    "smplx ; sys_platform == 'never'",
 ]
 
 # The resolved set, one line per installed package. Kept equal to frozen-set.txt by locks/tools/sync_constraints.py.
@@ -606,7 +610,6 @@ constraint-dependencies = [
     "six==1.17.0",
     "smdebug-rulesconfig==1.0.1",
     "smmap==5.0.3",
-    "smplx==0.1.28",
     "soundfile==0.14.0",
     "soupsieve==2.10",
     "soxr==1.1.0",

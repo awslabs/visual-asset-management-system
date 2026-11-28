@@ -1169,9 +1169,6 @@ smdebug-rulesconfig==1.0.1 ; platform_machine == 'x86_64' and sys_platform == 'l
 smmap==5.0.3 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
     --hash=sha256:4d9debb8b99007ae47165abc08670bd74cb74b5227dda7f643eccc4e9eb5642c \
     --hash=sha256:c106e05d5a61449cf6ba9a1e650227ecfb141590d2a98412103ff35d89fc7b2f
-smplx==0.1.28 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
-    --hash=sha256:c3a1e2c3069cdf7a4b34fd250c2484c8bb1a4fd9c14490da9359af5fbc64fbe6 \
-    --hash=sha256:e8ff3d278a015c097dc86d44a38475da4ac170042943c84c08eee433629406a7
 soundfile==0.14.0 ; platform_machine == 'x86_64' and sys_platform == 'linux' \
     --hash=sha256:1e38bac1853412871318e82a1ba69a8be677619b56025bbfcccdb41b6cafe82d \
     --hash=sha256:8ba81ae3a89fd5ab3bef8a8eb481fbbe794e806309675a89b4df48b8d31908a8 \
