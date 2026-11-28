@@ -245,6 +245,15 @@ Each file is saved byte for byte as it is stored, as `aws s3 cp` saves it. A fil
 
 The command exits non-zero when any file did not arrive, so a partial transfer is distinguishable from a complete one. The report still goes to stdout: `overall_success` gives the outcome, and each entry in `failed_downloads` names a file in `relative_key` with the reason in `error`. A file the service declines to issue a download URL for is counted as a failure like any other — an asset that is not distributable, for example, lists its files but permits none of them to be fetched, and that reads as `failed_downloads` entries rather than an empty success. When nothing at all could be prepared, the error message names the reason.
 
+A download that would write a file and a folder of the same name, such as `/a.txt` and `/a.txt/b.txt`, is refused before any file is written, because no local folder can hold both. This applies to whole-asset, `--recursive`, asset-version and `--asset-link-children-tree-depth` downloads, and the command exits non-zero with an error that names both paths and how to download each on its own:
+
+```bash
+vamscli assets download /local/path -d my-db -a my-asset --file-key "/a.txt"
+vamscli assets download /local/path -d my-db -a my-asset --file-key "/a.txt/" --recursive
+```
+
+An asset converted from a single file by the v2.6 to v2.7 upgrade step `assetLocationFileToFolder` holds such a pair when its file had a companion folder (`/model.glb` and `/model.glb/...`). With `--flatten-download-tree` every file goes into one folder, so this check does not apply.
+
 ---
 
 ## assets export
