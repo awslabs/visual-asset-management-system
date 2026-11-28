@@ -685,6 +685,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Upload sequence in CLI JSON output** — `vamscli file upload --json-output` reports each sequence result's `sequence_number` (the upload sequence it belongs to) instead of `null`. (issue #1988)
 -   **Login cancelled at the version prompt** — `vamscli auth login` cancels the login when the version-mismatch prompt is ended with Ctrl+C or end of input, instead of reporting a failed version check and signing the user in. (issue #1911)
 -   **Permanent delete of a missing asset** — Permanently deleting an asset that does not exist answers `404` "Asset not found" instead of `400`, as the asset `GET` does. (issue #1904)
+-   **Unsubscribe by profile email** — Unsubscribing from an asset's notifications removes the email subscription of a user whose profile email differs from their user ID; only the subscription record changed before, and the notifications kept arriving. (issue #2028)
 
 **Documentation:**
 
