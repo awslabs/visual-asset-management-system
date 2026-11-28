@@ -286,6 +286,15 @@ class TestTempDownloadPath:
         assert (tmp_path / name).read_bytes() == b'abc'
         assert [p.name for p in tmp_path.iterdir()] == [name]
 
+    def test_name_over_255_bytes_is_refused_before_any_request(self, tmp_path):
+        name = 'a' * 252 + '.txt'
+        info = DownloadFileInfo(f'/{name}', tmp_path / name, 'http://x/a', 3)
+        manager = make_manager(FakeStreamResponse(chunks=[b'abc'], content_length=3))
+        with pytest.raises(DownloadError, match='File name too long'):
+            run_download(manager, info)
+        manager.session.get.assert_not_called()
+        assert list(tmp_path.iterdir()) == []
+
     def test_multibyte_name_is_measured_in_bytes(self, tmp_path):
         name = '\u6587' * 80 + '.txt'  # 80 characters, 244 bytes
         assert len(name) < 255 < len(name.encode()) + len('.vamsdownload')

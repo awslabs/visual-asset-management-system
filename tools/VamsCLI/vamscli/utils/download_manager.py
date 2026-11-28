@@ -471,6 +471,12 @@ class DownloadManager:
         # Ensure local directory exists
         file_info.local_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # A name over the file-system limit cannot be saved, so refuse it before any transfer
+        if len(os.fsencode(file_info.local_path.name)) > MAX_FILE_NAME_BYTES:
+            raise DownloadError(
+                f"File name too long ({MAX_FILE_NAME_BYTES} bytes at most): {file_info.relative_key}"
+            )
+
         # Download to a temporary file so failed transfers never leave a
         # partial file at the final path, then atomically replace
         temp_path = temp_download_path(file_info.local_path)
