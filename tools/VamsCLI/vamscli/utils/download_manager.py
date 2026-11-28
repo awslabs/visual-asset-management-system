@@ -5,6 +5,7 @@ import aiohttp
 import aiofiles
 import time
 import os
+import hashlib
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable, NamedTuple
 from pathlib import Path
@@ -171,6 +172,33 @@ def generate_presigned_urls(api_client: APIClient, database_id: str, asset_id: s
                 results[key] = {'error': 'URL generation failed'}
 
     return results
+
+
+TEMP_DOWNLOAD_SUFFIX = '.vamsdownload'
+MAX_FILE_NAME_BYTES = 255  # file-name limit of common Linux and macOS file systems
+
+
+def file_name_length(name: str, windows: Optional[bool] = None) -> int:
+    """Length of a file name in the unit its file system limits: bytes, or UTF-16 code units on Windows (NTFS)."""
+    if windows is None:
+        windows = os.name == 'nt'
+    if windows:
+        return len(name.encode('utf-16-le', 'surrogatepass')) // 2
+    return len(os.fsencode(name))
+
+
+def temp_download_path(local_path: Path) -> Path:
+    """Path of the temporary file a download is written to before it is renamed into place.
+
+    It sits beside the destination as `<name>.vamsdownload`. A name that would pass the
+    255-byte file-name limit once the suffix is added (a final name of 243 to 255 bytes,
+    which is itself valid) gets a short hashed name in the same folder instead.
+    """
+    temp_name = local_path.name + TEMP_DOWNLOAD_SUFFIX
+    if len(temp_name.encode('utf-8')) <= MAX_FILE_NAME_BYTES:
+        return local_path.with_name(temp_name)
+    digest = hashlib.sha256(local_path.name.encode('utf-8')).hexdigest()[:16]
+    return local_path.with_name(f'.{digest}{TEMP_DOWNLOAD_SUFFIX}')
 
 
 class DownloadProgress:
@@ -452,9 +480,15 @@ class DownloadManager:
         # Ensure local directory exists
         file_info.local_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # A name over the file-system limit cannot be saved, so refuse it before any transfer
+        if file_name_length(file_info.local_path.name) > MAX_FILE_NAME_BYTES:
+            raise DownloadError(
+                f"File name too long ({MAX_FILE_NAME_BYTES} bytes at most, 255 UTF-16 units on Windows): {file_info.relative_key}"
+            )
+
         # Download to a temporary file so failed transfers never leave a
         # partial file at the final path, then atomically replace
-        temp_path = file_info.local_path.with_name(file_info.local_path.name + '.vamsdownload')
+        temp_path = temp_download_path(file_info.local_path)
 
         try:
             async with self.session.get(file_info.download_url) as response:
