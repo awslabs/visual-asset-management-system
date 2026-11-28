@@ -5,6 +5,7 @@ import aiohttp
 import aiofiles
 import time
 import os
+import hashlib
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable, NamedTuple
 from pathlib import Path
@@ -171,6 +172,24 @@ def generate_presigned_urls(api_client: APIClient, database_id: str, asset_id: s
                 results[key] = {'error': 'URL generation failed'}
 
     return results
+
+
+TEMP_DOWNLOAD_SUFFIX = '.vamsdownload'
+MAX_FILE_NAME_BYTES = 255  # file-name limit of common Linux and macOS file systems
+
+
+def temp_download_path(local_path: Path) -> Path:
+    """Path of the temporary file a download is written to before it is renamed into place.
+
+    It sits beside the destination as `<name>.vamsdownload`. A name that would pass the
+    255-byte file-name limit once the suffix is added (a final name of 243 to 255 bytes,
+    which is itself valid) gets a short hashed name in the same folder instead.
+    """
+    temp_name = local_path.name + TEMP_DOWNLOAD_SUFFIX
+    if len(temp_name.encode('utf-8')) <= MAX_FILE_NAME_BYTES:
+        return local_path.with_name(temp_name)
+    digest = hashlib.sha256(local_path.name.encode('utf-8')).hexdigest()[:16]
+    return local_path.with_name(f'.{digest}{TEMP_DOWNLOAD_SUFFIX}')
 
 
 class DownloadProgress:
@@ -454,7 +473,7 @@ class DownloadManager:
 
         # Download to a temporary file so failed transfers never leave a
         # partial file at the final path, then atomically replace
-        temp_path = file_info.local_path.with_name(file_info.local_path.name + '.vamsdownload')
+        temp_path = temp_download_path(file_info.local_path)
 
         try:
             async with self.session.get(file_info.download_url) as response:

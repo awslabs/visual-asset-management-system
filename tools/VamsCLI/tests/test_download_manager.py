@@ -9,7 +9,7 @@ import pytest
 from vamscli.constants import MAX_DOWNLOAD_KEYS_PER_REQUEST
 from vamscli.utils.download_manager import (
     DownloadFileInfo, DownloadManager, DownloadProgress, parse_remote_timestamp,
-    generate_presigned_urls
+    generate_presigned_urls, temp_download_path
 )
 from vamscli.utils.exceptions import APIError, DownloadError
 
@@ -270,3 +270,31 @@ class TestDownloadFileInfoCompatibility:
     def test_full_construction(self):
         info = DownloadFileInfo('/key', Path('/tmp/x'), 'https://url', 10, 'v1', 123.0)
         assert info.last_modified == 123.0
+
+
+class TestTempDownloadPath:
+    def test_short_name_keeps_suffix_beside_destination(self, tmp_path):
+        assert temp_download_path(tmp_path / 'file.txt') == tmp_path / 'file.txt.vamsdownload'
+
+    def test_name_of_250_bytes_downloads_without_file_name_too_long(self, tmp_path):
+        name = 'a' * 246 + '.txt'
+        assert len(name.encode()) == 250
+        info = DownloadFileInfo(f'/{name}', tmp_path / name, 'http://x/a', 3)
+        manager = make_manager(FakeStreamResponse(chunks=[b'abc'], content_length=3))
+        result = run_download(manager, info)
+        assert result['size'] == 3
+        assert (tmp_path / name).read_bytes() == b'abc'
+        assert [p.name for p in tmp_path.iterdir()] == [name]
+
+    def test_multibyte_name_is_measured_in_bytes(self, tmp_path):
+        name = '\u6587' * 80 + '.txt'  # 80 characters, 244 bytes
+        assert len(name) < 255 < len(name.encode()) + len('.vamsdownload')
+        temp = temp_download_path(tmp_path / name)
+        assert temp.parent == tmp_path
+        assert len(temp.name.encode()) <= 255
+        assert temp.name.endswith('.vamsdownload')
+
+    def test_two_long_names_get_different_temp_names(self, tmp_path):
+        a = temp_download_path(tmp_path / ('a' * 250))
+        b = temp_download_path(tmp_path / ('b' * 250))
+        assert a != b
