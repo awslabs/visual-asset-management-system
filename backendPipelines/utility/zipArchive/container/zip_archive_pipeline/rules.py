@@ -24,9 +24,8 @@ CORE_BLOCKED_CONTENT_TYPES = (
     "application/java-archive", "application/x-python-code", "text/x-python-source",
     "text/x-java-source", "application/x-sh", "application/java-vm", "application/x-msdownload",
     "application/x-php", "application/x-ms-dos-executable", "application/x-ini", "application/x-inf",
-    "application/x-sql", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/x-ms-shortcut", "application/x-bat-script",
-    "application/vnd.ms-word.document.macroenabled.12", "application/javascript", "application/x-vbs",
+    "application/x-sql", "application/x-ms-shortcut", "application/x-bat-script",
+    "application/vnd.ms-word.document.macroenabled.12", "application/x-vbs",
     "application/x-powershell", "application/x-msdos-program", "application/vbscript",
     "application/powershell",
 )

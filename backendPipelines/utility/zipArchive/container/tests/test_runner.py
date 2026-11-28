@@ -579,7 +579,13 @@ def test_output_names_are_safe():
 
 @pytest.mark.parametrize("key,ctype,blocked", [
     ("a.EXE", "", True), ("a.exe.", "", True), ("a.exe::$DATA", "", True), ("a:b.exe", "", True),
-    ("notes:v2.txt", "", False), ("a.glb", "Application/X-MSDownload", True), ("a.glb", "model/gltf-binary", False)])
+    ("notes:v2.txt", "", False), ("a.glb", "Application/X-MSDownload", True), ("a.glb", "model/gltf-binary", False),
+    # A Word document and a JavaScript file stored with their real types are archived; the
+    # macro-enabled Word document is refused by its extension and by its type.
+    ("report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", False),
+    ("viewer.js", "application/javascript", False),
+    ("macro.docm", "application/octet-stream", True),
+    ("renamed.docx", "application/vnd.ms-word.document.macroEnabled.12", True)])
 def test_blocklist_matching_mirrors_backend(key, ctype, blocked):
     assert is_blocked(key, ctype, CORE_BLOCKED_EXTENSIONS, CORE_BLOCKED_CONTENT_TYPES) is blocked
 
