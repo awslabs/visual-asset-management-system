@@ -2406,14 +2406,14 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
             else:
                 break
 
-        # Batch delete the matching records; the count is the rows written once the batch flushed
-        with asset_version_files_table.batch_writer() as batch:
-            for item in records_to_delete:
-                batch.delete_item(Key={
-                    'databaseId:assetId:assetVersionId': item['databaseId:assetId:assetVersionId'],
-                    'fileKey': item['fileKey']
-                })
-        deleted_count = len(records_to_delete)
+        # One DeleteItem per row (one per asset version that lists the file): the role holds
+        # DeleteItem on this table and no batch write. The count is the rows deleted.
+        for item in records_to_delete:
+            asset_version_files_table.delete_item(Key={
+                'databaseId:assetId:assetVersionId': item['databaseId:assetId:assetVersionId'],
+                'fileKey': item['fileKey']
+            })
+            deleted_count += 1
 
         if deleted_count > 0:
             logger.info(f"Deleted {deleted_count} version snapshot records for {len(normalized_paths)} file(s) in {db_asset_key}")
@@ -3233,6 +3233,11 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     # Use smart path resolution to avoid duplication
     source_key = resolve_asset_file_path(base_key, source_path)
     dest_key = resolve_asset_file_path(base_key, dest_path)
+
+    # The key listed at '/' is the top-level asset folder (see delete_file)
+    if relative_path_in(base_key, source_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot move or rename the top-level asset folder")
+
     # Moving deletes the source, so a source key another live asset also holds is left alone
     nested = nested_locations_for(asset, bucket, base_key, destructive=True)
     refuse_nested_key(nested, source_key, "Source file not found.")
@@ -3386,6 +3391,11 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+
+    # The key listed at '/' is the top-level asset folder (see delete_file)
+    if relative_path_in(base_key, full_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot revert the top-level asset folder")
+
     refuse_unwritable_key(asset, bucket, base_key, full_key, "File not found.")
     
     # Check if file exists

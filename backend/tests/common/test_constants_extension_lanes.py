@@ -574,6 +574,16 @@ class TestConsumersReadTheMergedStructures:
         assert s3_mod.validateUnallowedFileExtensionAndContentType("/a/model.XYZ", "") is True
         assert s3_mod.validateUnallowedFileExtensionAndContentType("/a/model.bin", "Application/X-Widget") is True
 
+    def test_a_lane_blocks_again_a_type_core_does_not_block(self):
+        """Core does not block `application/javascript`; a deployment that wants it refused appends it
+        through its custom constants, and the helper then refuses it in every spelling it normalizes."""
+        s3_mod = _load_s3(load_constants(custom=custom_lane(mimes=["application/javascript"])))
+        for content_type in ("application/javascript", "Application/JavaScript; charset=utf-8"):
+            assert s3_mod.validateUnallowedFileExtensionAndContentType("/a/viewer.js", content_type) is False
+        # Control: the shipped (empty) lanes serve the same file.
+        assert _load_s3(C).validateUnallowedFileExtensionAndContentType(
+            "/a/viewer.js", "application/javascript") is True
+
     def test_a_populated_merge_keeps_the_412_list_hygiene(self):
         """tests/common/test_s3_blocklist_case_insensitive.py checks the merged lists of the shipped
         tree; whatever a lane adds must keep them lower-case, unrepeated and dotted, which the merge
