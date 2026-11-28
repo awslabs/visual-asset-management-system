@@ -6,7 +6,7 @@ Subscriptions provide email notifications when asset versions change. You can su
 
 A subscription is made of three parts: the **event** to watch for, the **entity** to watch, and the **subscribers** to notify. The event is an asset version change, and the entity is a single asset, so one subscription monitors one asset for changes to its content.
 
-Subscribers are named by user ID. VAMS resolves each subscriber's email address from their user profile when it sends a notification, so a subscriber needs an email address on their profile to receive one.
+Subscribers are named by user ID. VAMS resolves each subscriber's email address from their user profile when the subscriber is added to the subscription (on create or update), not when a notification is sent, so a subscriber needs an email address on their profile at that moment. A later change to the profile email does not move an existing subscription: notifications keep going to the address that was subscribed.
 
 For the field-level reference, see the [Subscriptions API](../api/subscriptions.md#create-a-subscription).
 
