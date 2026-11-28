@@ -4502,7 +4502,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to unarchive this asset.
+                    description: Not authorized to unarchive this asset. Decided before existence; an asset ID with no asset record is evaluated as an archived asset of the database, so a caller without permission on its archived assets gets 403 rather than 400.
                     content:
                         application/json:
                             schema:
