@@ -65,33 +65,42 @@ class TestFileRecordPath:
     """The web sends a file's full key; every accepted form keys the record by the path the file is listed at."""
 
     def _path(self, file_path, companion=False, location=LOCATION, asset_found=True):
+        # The route hands over the asset record it already authorized (None stands for no record)
         s3 = MagicMock()
         s3.list_object_versions.return_value = _versions_listing(companion)
-        table = MagicMock()
-        table.get_item.return_value = {"Item": _asset(location)} if asset_found else {}
-        with patch.object(metadataService, "asset_storage_table", table), \
-                patch.object(metadataService, "get_bucket_details", return_value={"bucketName": "b"}), \
+        with patch.object(metadataService, "get_bucket_details", return_value={"bucketName": "b"}), \
                 patch.object(metadataService, "s3", s3):
-            return metadataService.file_record_path("db1", "asset1", file_path)
+            return metadataService.file_record_path(_asset(location) if asset_found else None, "asset1", file_path)
 
-    @pytest.mark.parametrize("file_path", ["/model.glb", "/p1/model.glb"])
+    # The request models keep the caller's form (#1943): the web sends the full key without a leading '/'
+    @pytest.mark.parametrize("file_path", ["/model.glb", "p1/model.glb"])
     def test_the_objects_path_and_its_full_key_key_the_object(self, file_path):
         assert self._path(file_path) == "/model.glb"
 
     def test_with_a_companion_entry_the_full_key_keeps_its_earlier_path(self):
-        assert self._path("/p1/model.glb", companion=True) == "/p1/model.glb"
+        assert self._path("p1/model.glb", companion=True) == "/p1/model.glb"
         assert self._path("/model.glb", companion=True) == "/model.glb"
 
-    @pytest.mark.parametrize("file_path", ["/sub/x.obj", "/p1/model.glb/sub/x.obj"])
+    @pytest.mark.parametrize("file_path", ["/sub/x.obj", "p1/model.glb/sub/x.obj"])
     def test_a_companion_entrys_path_and_full_key_key_the_entry(self, file_path):
         assert self._path(file_path) == "/sub/x.obj"
 
-    def test_the_asset_id_segment_is_dropped_as_before_without_a_read(self):
-        assert self._path("/asset1/x.txt", asset_found=False) == "/x.txt"
+    def test_a_leading_slash_and_the_full_key_is_a_companion_entry(self):
+        """#1943: '/{file key}/x' is the path of the companion entry '{file key}/{file key}/x'."""
+        assert self._path("/p1/model.glb/sub/x.obj") == "/p1/model.glb/sub/x.obj"
+
+    def test_a_path_that_starts_with_the_asset_id_is_a_path_in_the_asset(self):
+        """#1943: the '/{assetId}/' segment is no longer dropped; the full key names the root file."""
+        assert self._path("/asset1/x.txt", location="asset1/") == "/asset1/x.txt"
+        assert self._path("asset1/x.txt", location="asset1/") == "/x.txt"
+        assert self._path("/x.txt", location="asset1/") == "/x.txt"
 
     def test_an_unknown_asset_keeps_the_path_given(self):
         assert self._path("/p1/model.glb", asset_found=False) == "/p1/model.glb"
+        assert self._path("/asset1/x.txt", asset_found=False) == "/asset1/x.txt"
+        assert self._path("p1/model.glb", asset_found=False) == "/p1/model.glb"
 
     def test_a_folder_location_keys_its_full_key_by_the_path_after_the_folder(self):
-        assert self._path("/custom/path/x.glb", location="custom/path/") == "/x.glb"
+        assert self._path("custom/path/x.glb", location="custom/path/") == "/x.glb"
         assert self._path("/x.glb", location="custom/path/") == "/x.glb"
+        assert self._path("/custom/path/x.glb", location="custom/path/") == "/custom/path/x.glb"

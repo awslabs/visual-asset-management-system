@@ -317,6 +317,27 @@ class TestRerunReconstruction:
         assert le._to_asset_relative_key("/custom/root/f.txt", "custom/root/") == "/f.txt"
         assert le._to_asset_relative_key("/x.glb", "") == "/x.glb"        # no root -> unchanged
 
+    @pytest.mark.parametrize("full_key,root,expected", [
+        # A single-file asset's own preview sits beside its object, outside '{file key}/'
+        ("/p/model.glb.previewFile.png", "p/model.glb", "/model.glb.previewFile.png"),
+        ("p/model.glb.previewFile.png", "/p/model.glb", "/model.glb.previewFile.png"),
+        # Unchanged: the object, its companion entries and a folder root
+        ("/p/model.glb", "p/model.glb", "/"),
+        ("/p/model.glb/model.glb", "p/model.glb", "/model.glb"),
+        ("/p/model.glb/sub/x.obj", "p/model.glb", "/sub/x.obj"),
+        ("/a1/a1/x.glb", "a1/", "/a1/x.glb"),
+    ])
+    def test_a_rerun_names_each_input_by_a_path_that_reads_back_to_its_key(self, full_key, root, expected):
+        """A re-run of a single-file asset's own preview names it by its listed path; '/' followed by its full
+        key is a path in the asset and names the companion entry 'p/model.glb/p/model.glb.previewFile.png'."""
+        from common.assetLocations import AssetFilePaths
+        relative = le._to_asset_relative_key(full_key, root)
+        assert relative == expected
+        if expected != "/":
+            # The input key exists in the bucket; no other key does
+            paths = AssetFilePaths(root, key_exists=lambda key: key == full_key.lstrip("/"))
+            assert paths.request_key_for(relative) == full_key.lstrip("/")
+
     def test_reconstructs_template_less_override(self):
         # A template-less override run: no templateId; re-run must carry the raw (untruncated) override.
         with patch(f"{MOD}._query_all", side_effect=[

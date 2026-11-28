@@ -2149,8 +2149,9 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     full_key = resolve_asset_file_path(paths, file_path)
     if is_prefix and paths.is_single_file and not full_key.startswith(paths.location + '/'):
         raise VAMSGeneralErrorResponse(OWN_FILE_PREFIX_REFUSAL)
-    # A prefix that resolves to the location folder itself is the top-level asset folder
-    if is_prefix and not paths.is_single_file and full_key == paths.location:
+    # The key listed at '/' is the top-level asset folder, named as a folder or as a single key: a folder
+    # location itself, or a single-file location's companion folder {key}/
+    if paths.path_for(full_key) == "/":
         raise VAMSGeneralErrorResponse("Cannot delete the top-level asset folder")
     
     # Check if path exists (including archived files)
@@ -2196,6 +2197,8 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     
     # Delete file(s)
     affected_files = []
+    # The deleted files' listed paths, for their version records (the request may name a file by its key)
+    deleted_paths = []
     
     if is_prefix:
         # Delete all files under prefix including all versions
@@ -2210,6 +2213,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
             if path is not None:
                 relative_path = path.lstrip('/')
                 affected_files.append(relative_path)
+                deleted_paths.append(path)
                 
                 # Delete metadata for non-folder files
                 if not key.endswith('/'):
@@ -2227,6 +2231,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
                 rel_preview_path = relative_path_of(paths, preview_file, '/' + preview_file)
                 
                 affected_files.append(rel_preview_path)
+                deleted_paths.append(rel_preview_path)
                 logger.info(f"Deleted preview file: {rel_preview_path}")
         
         # Delete the main file including all versions
@@ -2239,14 +2244,17 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
             raise VAMSGeneralErrorResponse(f"Failed to delete file.")
         
         affected_files.append(file_path)
+        listed_path = relative_path_of(paths, full_key, file_path)
+        deleted_paths.append(listed_path)
         
         # Delete metadata for the main file (not a folder since we checked earlier), keyed by the
         # path the file is listed at, whichever form the request named it by
-        relative_path = relative_path_of(paths, full_key, file_path).lstrip('/')
+        relative_path = listed_path.lstrip('/')
         delete_file_metadata(databaseId, assetId, relative_path)
 
-    # Clean up version snapshot records in DynamoDB for deleted files
-    delete_file_version_records(databaseId, assetId, affected_files)
+    # Clean up version snapshot records in DynamoDB for deleted files, by their listed paths: a request
+    # that names a file by its full key must not delete the records of the file listed at that path
+    delete_file_version_records(databaseId, assetId, deleted_paths)
 
     # Send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -2319,8 +2327,9 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
     full_key = resolve_asset_file_path(paths, file_path)
     if is_prefix and paths.is_single_file and not full_key.startswith(paths.location + '/'):
         raise VAMSGeneralErrorResponse(OWN_FILE_PREFIX_REFUSAL)
-    # A prefix that resolves to the location folder itself is the top-level asset folder
-    if is_prefix and not paths.is_single_file and full_key == paths.location:
+    # The key listed at '/' is the top-level asset folder, named as a folder or as a single key: a folder
+    # location itself, or a single-file location's companion folder {key}/
+    if paths.path_for(full_key) == "/":
         raise VAMSGeneralErrorResponse("Cannot archive the top-level asset folder")
     
     # Check if path exists and if it's already archived
@@ -2717,10 +2726,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         aux_dest += 'preview/'
     copy_auxiliary_files(aux_source[0], aux_dest, *aux_source[1:])
 
-    # Copy metadata and attributes to the destination (merge with existing); the source is keyed by the
-    # path it is listed at, whichever form the request named it by
+    # Copy metadata and attributes to the destination (merge with existing); both files are keyed by the
+    # path they are listed at, whichever form the request named them by
     source_rel = relative_path_of(source_paths, source_key, source_path).lstrip('/')
-    dest_rel = dest_path.lstrip('/')
+    dest_rel = relative_path_of(dest_paths, dest_key, dest_path).lstrip('/')
     actual_dest_asset = dest_asset_id if is_cross_asset else assetId
     metadata_copied = _copy_file_metadata_to_destination(
         databaseId, assetId, source_rel,
@@ -2772,6 +2781,10 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     paths = file_paths_for(bucket, base_key)
     source_key = resolve_asset_file_path(paths, source_path)
     dest_key = resolve_asset_file_path(paths, dest_path)
+
+    # The key listed at '/' is the top-level asset folder (see delete_file)
+    if paths.path_for(source_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot move or rename the top-level asset folder")
 
     # The object of a single-file asset is the asset's location: moving it would leave the asset empty
     if paths.names_object(source_key):
@@ -2877,9 +2890,10 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
         aux_bucket_asset_file_base(databaseId, dest_key)
     )
 
-    # Move metadata and attributes: copy to new path (merge), then delete from old path
-    source_rel = source_path.lstrip('/')
-    dest_rel = dest_path.lstrip('/')
+    # Move metadata and attributes: copy to new path (merge), then delete from old path, keyed by the
+    # paths the files are listed at, whichever form the request named them by
+    source_rel = relative_path_of(paths, source_key, source_path).lstrip('/')
+    dest_rel = relative_path_of(paths, dest_key, dest_path).lstrip('/')
     metadata_moved = _copy_file_metadata_to_destination(
         databaseId, assetId, source_rel,
         databaseId, assetId, dest_rel
@@ -2920,6 +2934,10 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
     bucket, base_key = get_asset_s3_location(asset)
     paths = file_paths_for(bucket, base_key)
     full_key = resolve_asset_file_path(paths, file_path)
+
+    # The key listed at '/' is the top-level asset folder (see delete_file)
+    if paths.path_for(full_key) == "/":
+        raise VAMSGeneralErrorResponse("Cannot revert the top-level asset folder")
     
     # Check if file exists
     try:

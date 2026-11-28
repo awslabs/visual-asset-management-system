@@ -167,6 +167,16 @@ When `childTreeView=true`, the `children` field contains a recursive tree struct
 One tree read walks at most 100 levels and returns at most 10,000 nodes. A hierarchy that reaches either ceiling comes back with the nodes gathered so far and `treeTruncated` set to `true`; walk the remainder by requesting the tree for an asset further down it. A walk that fails partway returns a `400` response rather than a partial tree, so a failed read is distinguishable from an asset that has no children.
 :::
 
+Permission on the asset is decided before the API reports whether it exists, so a caller who may not view the asset receives `403` whether or not it exists.
+
+### Error responses
+
+| Status | Description                                                                                        |
+| ------ | -------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, asset not found (`Asset not found in database`), or the child tree walk failed |
+| `403`  | Not authorized (requires GET permission on the asset)                                              |
+| `500`  | Internal server error                                                                              |
+
 ---
 
 ## Get a single asset link
@@ -199,6 +209,16 @@ GET /asset-links/single/{assetLinkId}
     }
 }
 ```
+
+Permission on both linked assets is decided before the API reports whether they exist, so a caller who may not view both receives `403` whether or not they exist.
+
+### Error responses
+
+| Status | Description                                                                  |
+| ------ | ---------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, asset link not found, or a linked asset no longer exists |
+| `403`  | Not authorized (requires GET permission on both linked assets)               |
+| `500`  | Internal server error                                                        |
 
 ---
 
@@ -242,12 +262,11 @@ PUT /asset-links/{assetLinkId}
 
 ### Error responses
 
-| Status | Description                                                    |
-| ------ | -------------------------------------------------------------- |
-| `400`  | Validation error or alias conflict                             |
-| `403`  | Not authorized (requires PUT permission on both linked assets) |
-| `404`  | Asset link not found                                           |
-| `500`  | Internal server error                                          |
+| Status | Description                                                                                                  |
+| ------ | ------------------------------------------------------------------------------------------------------------ |
+| `400`  | Validation error, alias conflict, asset link not found, or a linked asset no longer exists                   |
+| `403`  | Not authorized (requires PUT permission on both linked assets), whether or not the linked assets still exist |
+| `500`  | Internal server error                                                                                        |
 
 ---
 
@@ -277,9 +296,8 @@ DELETE /asset-links/{assetLinkId}
 
 | Status | Description                                                                         |
 | ------ | ----------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters                                                                  |
+| `400`  | Invalid parameters, or asset link not found                                         |
 | `403`  | Not authorized (requires DELETE permission on every linked asset that still exists) |
-| `404`  | Asset link not found                                                                |
 | `500`  | Internal server error                                                               |
 
 ---

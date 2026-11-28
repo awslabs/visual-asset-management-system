@@ -370,10 +370,11 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
         if version_id:
             params['VersionId'] = version_id
 
-        # SVG keys get the image/svg+xml type and an attachment disposition (common.s3)
+        # A download URL saves the file under its own name (an attachment disposition); SVG keys
+        # also get the image/svg+xml type (common.s3)
         url = s3.generate_presigned_url(
             'get_object',
-            Params=presigned_get_object_params(params),
+            Params=presigned_get_object_params(params, attachment=True),
             ExpiresIn=int(token_timeout)
         )
         return url, version_id
