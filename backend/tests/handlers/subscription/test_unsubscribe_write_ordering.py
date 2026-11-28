@@ -28,6 +28,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from backend.backend.handlers.subscription import unsubscribeService
+from backend.backend.handlers.subscription import subscriptionService
 
 ASSET_ID = "test-asset-id"
 DATABASE_ID = "test-database-id"
@@ -42,6 +43,7 @@ SUBSCRIPTION_ARNS = {
     USER: f"{TOPIC}:11111111-1111-1111-1111-111111111111",
     OTHER_USER: f"{TOPIC}:22222222-2222-2222-2222-222222222222",
     PROFILE_EMAIL: f"{TOPIC}:33333333-3333-3333-3333-333333333333",
+    PROFILE_EMAIL.upper(): f"{TOPIC}:44444444-4444-4444-4444-444444444444",
 }
 NOT_FOUND_MESSAGE = "Subscription does not exists for eventName."
 
@@ -109,6 +111,10 @@ class Wiring:
             unsubscribeService, "get_asset",
             lambda database_id, asset_id: {"databaseId": database_id, "snsTopic": TOPIC})
         monkeypatch.setattr(unsubscribeService, "get_subscription_obj", lambda body: row)
+        # The lookup is exercised separately; the default mirrors a user with no profile email:
+        # the submitted value is the address the topic holds.
+        monkeypatch.setattr(
+            subscriptionService, "get_userProfile_Email", lambda user_id: user_id)
 
     def _record(self, name):
         def side_effect(**kwargs):
@@ -214,12 +220,42 @@ class TestProfileEmailEndpoint:
         wiring = Wiring(
             monkeypatch, _row(USER_ID, OTHER_USER), topic_subscribers=(PROFILE_EMAIL, OTHER_USER))
         monkeypatch.setattr(
-            unsubscribeService, "_resolve_profile_email", lambda user_id: PROFILE_EMAIL)
+            subscriptionService, "get_userProfile_Email", lambda user_id: PROFILE_EMAIL)
 
         response = unsubscribeService.delete_subscription(_body(USER_ID))
 
         assert response["statusCode"] == 200
         assert wiring.unsubscribed_arns() == [SUBSCRIPTION_ARNS[PROFILE_EMAIL]]
+        assert wiring.stored_subscribers() == [OTHER_USER]
+
+    def test_email_shaped_user_id_with_a_different_profile_email(self, monkeypatch):
+        # A user ID that is itself an email can still have a different profile email, so the
+        # lookup must run for it too (#2028).
+        wiring = Wiring(
+            monkeypatch, _row(USER, OTHER_USER), topic_subscribers=(PROFILE_EMAIL, OTHER_USER))
+        monkeypatch.setattr(
+            subscriptionService, "get_userProfile_Email", lambda user_id: PROFILE_EMAIL)
+
+        response = unsubscribeService.delete_subscription(_body(USER))
+
+        assert response["statusCode"] == 200
+        assert wiring.unsubscribed_arns() == [SUBSCRIPTION_ARNS[PROFILE_EMAIL]]
+        assert wiring.stored_subscribers() == [OTHER_USER]
+
+    def test_endpoint_match_is_case_insensitive(self, monkeypatch):
+        # The topic can hold the address in a different case than the profile value.
+        wiring = Wiring(
+            monkeypatch,
+            _row(USER_ID, OTHER_USER),
+            topic_subscribers=(PROFILE_EMAIL.upper(), OTHER_USER),
+        )
+        monkeypatch.setattr(
+            subscriptionService, "get_userProfile_Email", lambda user_id: PROFILE_EMAIL)
+
+        response = unsubscribeService.delete_subscription(_body(USER_ID))
+
+        assert response["statusCode"] == 200
+        assert wiring.unsubscribed_arns() == [SUBSCRIPTION_ARNS[PROFILE_EMAIL.upper()]]
         assert wiring.stored_subscribers() == [OTHER_USER]
 
 

@@ -68,7 +68,12 @@ def delete_sns_subscriptions(database_id, asset_id, subscribers, delete_sns=Fals
         return
 
     resp = sns_client.list_subscriptions_by_topic(TopicArn=asset_obj.get("snsTopic"))
-    subscription_arns = [subscription['SubscriptionArn'] for subscription in resp['Subscriptions'] if subscription['Endpoint'] in subscribers]
+    wanted_endpoints = {endpoint.lower() for endpoint in subscribers}
+    subscription_arns = [
+        subscription['SubscriptionArn']
+        for subscription in resp['Subscriptions']
+        if subscription['Endpoint'].lower() in wanted_endpoints
+    ]
 
     for subscription_arn in subscription_arns:
         if subscription_arn != "PendingConfirmation":
@@ -106,7 +111,7 @@ def get_subscription_obj(body):
 
 def _resolve_profile_email(user_id):
     """The address the asset topic uses for a user: the profile email, like the subscribe path."""
-    from handlers.subscription.subscriptionService import (  # noqa: WPS433 (lazy import)
+    from .subscriptionService import (  # noqa: WPS433 (lazy import)
         get_userProfile_Email,
     )
 
@@ -131,17 +136,13 @@ def delete_subscription(body):
     # for a subscriber the row no longer lists -- a retry after a failure between the two writes
     # still owes the SNS half, and it is a no-op for an endpoint the topic never carried.
     if body["entityName"] == "Asset":
-        # The topic carries resolved addresses: the profile email, or the user ID when it is
-        # already email-shaped. Resolve a plain user ID the same way the subscribe path does,
-        # otherwise the endpoint never matches and only the row is rewritten (#2028).
+        # The topic carries resolved addresses: the profile email, or the value as submitted
+        # when no profile email is set. Resolve every submitted value -- an email-shaped user
+        # ID can still have a different profile email -- and keep the submitted one as a match
+        # too, so a topic endpoint stored under it is released as well (#2028).
         endpoints = set(body["subscribers"])
-        for subscriber in body["subscribers"]:
-            (valid, _) = validate({
-                'subscriber': {'value': subscriber, 'validator': 'EMAIL'}
-            })
-            if valid:
-                continue
-            email = _resolve_profile_email(subscriber)
+        for submitted in body["subscribers"]:
+            email = _resolve_profile_email(submitted)
             if email != "INVALID_FORMAT":
                 endpoints.add(email)
 
