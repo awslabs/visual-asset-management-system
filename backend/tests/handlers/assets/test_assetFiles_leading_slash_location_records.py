@@ -162,6 +162,20 @@ class TestDeleteClearsTheFilesOwnRecords:
 
 
 @pytest.mark.unit
+class TestMoveCarriesTheFilesOwnRecords:
+    @pytest.mark.parametrize("asset", LOCATIONS, indirect=True)
+    def test_a_file_moved_by_its_path(self, asset, monkeypatch):
+        monkeypatch.setattr(af, "move_auxiliary_files", lambda *args, **kwargs: None)
+
+        af.move_file(DB, asset["id"], "/x.txt", "/moved.txt", CLAIMS)
+
+        kept = [path for path in asset["files"] if path != "/x.txt"] + ["/moved.txt", "/"]
+        left = _record_paths(asset)
+        assert left["metadata"] == sorted(kept)
+        assert left["attributes"] == sorted(kept)
+
+
+@pytest.mark.unit
 class TestArchiveRecordsTheFilesOwnPath:
     @pytest.mark.parametrize("asset", LOCATIONS, indirect=True)
     def test_a_file_archive(self, asset):
