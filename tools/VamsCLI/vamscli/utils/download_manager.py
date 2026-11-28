@@ -99,6 +99,42 @@ def confined_local_paths(root: Path, entries: List[tuple]) -> List[tuple]:
     return results
 
 
+def file_folder_collision(relative_paths: List[str]) -> Optional[tuple]:
+    """``(file_path, other_path)`` when one file's local path is also a folder of another file's, else None.
+
+    An asset can hold a file ``/a.txt`` and files under ``/a.txt/`` (two ordinary keys in Amazon S3), and a
+    converted single-file asset holds ``/model.glb`` and ``/model.glb/...``. No local folder holds a file
+    and a folder of one name, so one of the two could not be written. Local paths drop empty segments (as
+    ``confined_local_path`` joins them) and are compared with ``os.path.normcase``. The first file listed
+    that is such a folder is returned with the first path listed under it (#2070)."""
+    def local_segments(path: str) -> List[str]:
+        return [segment for segment in (path or '').split('/') if segment and segment != '.']
+
+    files = {}
+    for path in relative_paths:
+        files.setdefault(os.path.normcase('/'.join(local_segments(path))), path)
+    for path in relative_paths:
+        segments = local_segments(path)
+        for depth in range(1, len(segments)):
+            folder = os.path.normcase('/'.join(segments[:depth]))
+            if folder in files:
+                return files[folder], path
+    return None
+
+
+def check_no_file_folder_collision(relative_paths: List[str]) -> None:
+    """Raise ``FileDownloadError`` before anything is written when two files of one download cannot both
+    be written locally (``file_folder_collision``): it names both and how to download each on its own."""
+    collision = file_folder_collision(relative_paths)
+    if collision:
+        file_path, other_path = collision
+        folder = file_path.rstrip('/') + '/'
+        raise FileDownloadError(
+            f"Cannot download both '{file_path}' and '{other_path}': '{file_path}' is a file and "
+            f"'{other_path}' is in a folder of the same name, and no local folder can hold both. Download the "
+            f"file or the folder on its own: --file-key '{file_path}', or --file-key '{folder}' --recursive.")
+
+
 def parse_remote_timestamp(timestamp: Optional[str]) -> Optional[float]:
     """Parse an ISO-8601 timestamp from the API into epoch seconds."""
     if not timestamp:

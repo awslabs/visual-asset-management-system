@@ -93,7 +93,7 @@ tools/VamsCLI/
       retry_config.py        # Retry settings with env var overrides
       features.py            # Feature switch utilities
       upload_manager.py      # Multi-part upload orchestration
-      download_manager.py    # Parallel download orchestration (atomic writes, size verify, mtime preservation; confined_local_path keeps each file under the download directory; saves the stored bytes, never decoding a Content-Encoding: tests/test_download_content_encoding.py)
+      download_manager.py    # Parallel download orchestration (atomic writes, size verify, mtime preservation; confined_local_path keeps each file under the download directory; saves the stored bytes, never decoding a Content-Encoding: tests/test_download_content_encoding.py; check_no_file_folder_collision refuses a download holding a file and a folder of one name before anything is written: tests/test_download_file_folder_collision.py)
       file_processor.py      # File validation and processing
       sync_engine.py         # Sync plan computation (local/remote diff)
       vamsignore.py          # .vamsignore gitignore-style pattern matching
