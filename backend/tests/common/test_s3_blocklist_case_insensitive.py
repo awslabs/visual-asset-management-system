@@ -162,7 +162,8 @@ class TestContentTypeCase:
 # adds a lane entry must not fail it.
 DOCUMENTED_EXTENSIONS = {
     ".jar", ".java", ".com", ".php", ".reg", ".pif", ".bak", ".dll", ".exe", ".nat",
-    ".cmd", ".lnk", ".docm", ".vbs", ".bat",
+    ".cmd", ".lnk", ".docm", ".dotm", ".xlsm", ".xltm", ".xlam", ".pptm", ".potm",
+    ".ppsm", ".ppam", ".sldm", ".vbs", ".bat",
 }
 DOCUMENTED_MIME_TYPES = {
     "application/java-archive",
@@ -180,6 +181,15 @@ DOCUMENTED_MIME_TYPES = {
     "application/x-ms-shortcut",
     "application/x-bat-script",
     "application/vnd.ms-word.document.macroenabled.12",
+    "application/vnd.ms-word.template.macroenabled.12",
+    "application/vnd.ms-excel.sheet.macroenabled.12",
+    "application/vnd.ms-excel.template.macroenabled.12",
+    "application/vnd.ms-excel.addin.macroenabled.12",
+    "application/vnd.ms-powerpoint.presentation.macroenabled.12",
+    "application/vnd.ms-powerpoint.template.macroenabled.12",
+    "application/vnd.ms-powerpoint.slideshow.macroenabled.12",
+    "application/vnd.ms-powerpoint.addin.macroenabled.12",
+    "application/vnd.ms-powerpoint.slide.macroenabled.12",
     "application/x-vbs",
     "application/x-powershell",
     "application/x-msdos-program",

@@ -577,6 +577,20 @@ def test_output_names_are_safe():
     assert runner.safe_output_name("", "tar.gz") == "archive.tar.gz"
 
 
+# (extension, the registered MIME type as Amazon S3 reports it)
+MACRO_ENABLED_TYPES = [
+    (".dotm", "application/vnd.ms-word.template.macroEnabled.12"),
+    (".xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12"),
+    (".xltm", "application/vnd.ms-excel.template.macroEnabled.12"),
+    (".xlam", "application/vnd.ms-excel.addin.macroEnabled.12"),
+    (".pptm", "application/vnd.ms-powerpoint.presentation.macroEnabled.12"),
+    (".potm", "application/vnd.ms-powerpoint.template.macroEnabled.12"),
+    (".ppsm", "application/vnd.ms-powerpoint.slideshow.macroEnabled.12"),
+    (".ppam", "application/vnd.ms-powerpoint.addin.macroEnabled.12"),
+    (".sldm", "application/vnd.ms-powerpoint.slide.macroEnabled.12"),
+]
+
+
 @pytest.mark.parametrize("key,ctype,blocked", [
     ("a.EXE", "", True), ("a.exe.", "", True), ("a.exe::$DATA", "", True), ("a:b.exe", "", True),
     ("notes:v2.txt", "", False), ("a.glb", "Application/X-MSDownload", True), ("a.glb", "model/gltf-binary", False),
@@ -585,7 +599,15 @@ def test_output_names_are_safe():
     ("report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", False),
     ("viewer.js", "application/javascript", False),
     ("macro.docm", "application/octet-stream", True),
-    ("renamed.docx", "application/vnd.ms-word.document.macroEnabled.12", True)])
+    ("renamed.docx", "application/vnd.ms-word.document.macroEnabled.12", True),
+    # Macro-free Excel and PowerPoint files and the Excel binary workbook are archived; every macro-enabled Office file is refused
+    # by its extension and by its type.
+    ("sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", False),
+    ("deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", False),
+    ("module.mjs", "text/javascript", False),
+    ("book.xlsb", "application/vnd.ms-excel.sheet.binary.macroEnabled.12", False),
+    *[case for ext, ctype in MACRO_ENABLED_TYPES
+      for case in ((f"macro{ext}", "application/octet-stream", True), ("renamed.dat", ctype, True))]])
 def test_blocklist_matching_mirrors_backend(key, ctype, blocked):
     assert is_blocked(key, ctype, CORE_BLOCKED_EXTENSIONS, CORE_BLOCKED_CONTENT_TYPES) is blocked
 
