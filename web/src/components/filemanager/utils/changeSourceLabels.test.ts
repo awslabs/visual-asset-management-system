@@ -25,6 +25,7 @@ const BACKEND_CHANGE_SOURCE_VALUES = [
     "assetUnarchive",
     "fileRevert",
     "fileMetadataUpdate",
+    "fileRelocate",
 ];
 
 describe("getChangeSourceLabel", () => {

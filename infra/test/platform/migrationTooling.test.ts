@@ -588,8 +588,9 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
     });
 
     it("walks no Amazon S3 bucket itself; the backfills hand the walk to the reindexer", () => {
-        // Only assetLocationFolderKeys reads Amazon S3: one HeadObject, the versions of one exact key at a
-        // time, one single-key listing under '{key}/', and one single-version listing under '{key}/'.
+        // Only the two location steps reach Amazon S3. assetLocationFolderKeys reads one HeadObject, the
+        // versions of one exact key at a time, one single-key listing under '{key}/', and one single-version
+        // listing under '{key}/'; assetLocationFileToFolder makes its calls from its own module (pinned below).
         const start = script.indexOf("# STEP: assetLocationFolderKeys\n");
         const end = script.indexOf("# STEP: orphanedTriggers\n");
         expect(start).toBeGreaterThan(-1);
@@ -611,7 +612,18 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
         ]);
         const exact = locationStep.slice(locationStep.indexOf("def exact_key_versions("));
         expect(exact.slice(0, 900)).toContain("if entry['Key'] == key");
-        expect(script).not.toMatch(/auxiliary/i);
+        // The auxiliary bucket, which holds vams.preparedDownloads/, is named only where
+        // assetLocationFileToFolder resolves it for a move, and the move reaches only a file's preview/ keys.
+        const fileToFolderRun = script.slice(
+            script.indexOf("def run_asset_location_file_to_folder_step("),
+            script.indexOf("# STEP: orphanedTriggers\n")
+        );
+        expect(fileToFolderRun).toMatch(/ASSET_AUXILIARY_BUCKET/);
+        expect(script.split(fileToFolderRun).join("")).not.toMatch(/auxiliary/i);
+        const module = readMigrationFile(release, "asset_location_file_to_folder.py");
+        expect(module).not.toMatch(/preparedDownloads/);
+        const auxMove = module.slice(module.indexOf("def move_auxiliary("));
+        expect(auxMove.slice(0, 600)).toMatch(/\/preview\/"/);
     });
 
     it("moves the copy's records without overwriting, and leaves vectors and execution history", () => {
@@ -1289,5 +1301,216 @@ describe("reindex_utility.py --tag-synced reaches its readiness check with the b
         expect(outcome.result?.objectsSeen).toBe(0);
         expect(outcome.sessionResources).toEqual(["dynamodb"]);
         expect(outcome.scans).toEqual(["vams-test-s3AssetBucketsStorageTable"]);
+    });
+});
+
+describe("the v2.6 to v2.7 assetLocationFileToFolder step", () => {
+    // The step converts asset locations that name a file into folders. It runs on an operator
+    // machine without the backend, so its copies of the backend's names are pinned to the backend here.
+    const release = MIGRATIONS.find((m) => m.dir === "v2.6_to_v2.7");
+    if (!release) throw new Error("the v2.6_to_v2.7 migration is not listed");
+    const script = readMigrationFile(release, release.script);
+    const module = readMigrationFile(release, "asset_location_file_to_folder.py");
+    const readme = readMigrationFile(release, release.readme);
+    const config = JSON.parse(readMigrationFile(release, release.configFile));
+    const backend = (relative: string) =>
+        fs.readFileSync(path.join(__dirname, "..", "../../backend/backend", relative), "utf8");
+
+    function pyString(source: string, name: string): string {
+        const match = new RegExp(`^${name}\\s*=\\s*(?:'([^']*)'|"([^"]*)"|(\\d+))\\s*$`, "m").exec(
+            source
+        );
+        if (!match) throw new Error(`${name} is not assigned a literal`);
+        return match[1] ?? match[2] ?? match[3];
+    }
+
+    it("runs right after assetLocationFolderKeys and not after it failed, and is gated", () => {
+        const steps = Array.from(
+            (/^STEP_CHOICES\s*=\s*\(([^)]*)\)/m.exec(script)?.[1] ?? "").matchAll(/'([A-Za-z]+)'/g)
+        ).map((m) => m[1]);
+        // commentSubscriptionKeys, which reads no location, runs before both location steps
+        expect(steps.slice(0, 3)).toEqual([
+            "commentSubscriptionKeys",
+            "assetLocationFolderKeys",
+            "assetLocationFileToFolder",
+        ]);
+        expect(pyString(module, "STEP")).toBe("assetLocationFileToFolder");
+        const body = script.slice(script.indexOf("def main("));
+        const folderKeys = body.indexOf("run_asset_location_folder_keys_step(");
+        const convert = body.indexOf("run_asset_location_file_to_folder_step(");
+        expect(convert).toBeGreaterThan(folderKeys);
+        expect(convert).toBeLessThan(body.indexOf("run_orphaned_triggers_step("));
+        expect(body.indexOf("step_plan.append('assetLocationFileToFolder')")).toBeGreaterThan(
+            body.indexOf("step_plan.append('assetLocationFolderKeys')")
+        );
+        expect(body.indexOf("step_plan.append('assetLocationFileToFolder')")).toBeLessThan(
+            body.indexOf("step_plan.append('orphanedTriggers')")
+        );
+        expect(body).toMatch(/if run_file_to_folder and location_keys_unfinished:/);
+        expect(body).toMatch(/gated=run_location_keys or run_file_to_folder or /);
+        // A conversion that did not finish keeps the billed backfills from analysing files at old paths.
+        expect(body).toMatch(
+            /backfills_wait = file_to_folder_failed and not dry_run and not location_keys_unfinished/
+        );
+        expect(body).toMatch(/if run_vector_backfill and backfills_wait:/);
+    });
+
+    it("stamps a move's copies with the backend's relocation source, which starts no trigger", () => {
+        // A copy stamped fileMove ran the fileUpload workflows and re-embedded every copied version (D15)
+        const keys = backend("common/s3MetadataKeys.py");
+        const relocation =
+            /VAMS_CHANGE_SOURCE_RELOCATION_VALUES[^=]*=\s*frozenset\(\s*\{([^}]*)\}/.exec(keys);
+        expect(relocation?.[1]).toContain("VAMS_CHANGE_SOURCE_FILE_RELOCATE");
+        expect(module).toContain("CHANGE_SOURCE_METADATA_KEY: CHANGE_SOURCE_FILE_RELOCATE,");
+        expect(module).not.toMatch(/'fileMove'/);
+        const matching = backend("common/workflows/triggerMatching.py");
+        expect(matching).toContain("if change_source in RELOCATION_CHANGE_SOURCES:");
+    });
+
+    it("notes a multipart copy's upload and aborts it when the move is resumed", () => {
+        const execute = module.slice(
+            module.indexOf("def _execute("),
+            module.indexOf("def _stop_move(")
+        );
+        expect(execute).toContain("abort_noted_upload(s3_client, bucket, candidate.conversion)");
+        expect(module).toContain("events.register('after-call.s3.CreateMultipartUpload'");
+        expect(readme).toContain("`AbortIncompleteMultipartUpload`");
+    });
+
+    it("reads a path in the asset by one leading slash, as the backend's object_key_for_path does", () => {
+        // '//x' is the key with an empty segment after the location; stripping every '/' made it 'x' (#1977)
+        const mirror = module.slice(module.indexOf("def object_key_for_path("));
+        expect(mirror.slice(0, mirror.indexOf("\ndef "))).toContain("relative = relative[1:]");
+        const shipped = backend("common/assetLocations.py");
+        const backendPath = shipped.slice(shipped.indexOf("def object_key_for_path("));
+        expect(backendPath.slice(0, backendPath.indexOf("\ndef "))).toContain(
+            "relative = relative[1:]"
+        );
+        for (const use of [
+            "if object_key_for_path(target, old) in keys_with_versions",
+            "return object_key_for_path(target, old) in target_keys",
+            "if legacy_form(old) is not None:",
+        ]) {
+            expect(module).toContain(use);
+        }
+        expect(module).not.toMatch(/target \+ old\.lstrip\('\/'\)|old\.lstrip\('\/'\)\] =/);
+    });
+
+    it("ships with no resolutions, so a copied config never moves a file", () => {
+        expect(config.asset_location_file_to_folder_resolutions).toBeNull();
+        expect(config.dry_run).toBe(true);
+    });
+
+    it("names the backend's preview pattern, vector keys, touch record and move metadata", () => {
+        const pairs: ReadonlyArray<[string, string, string]> = [
+            ["PREVIEW_FILE_PATTERN", "common/s3PathPatterns.py", "PREVIEW_FILE_PATTERN"],
+            ["VECTOR_PARTITION_KEY", "common/vectorsearch/vectorStore.py", "PARTITION_KEY"],
+            ["VECTOR_SORT_KEY", "common/vectorsearch/vectorStore.py", "SORT_KEY"],
+            [
+                "VECTOR_FILE_PATH_KEY_BUDGET",
+                "common/indexing/documentIds.py",
+                "FILE_PATH_KEY_BUDGET",
+            ],
+            ["VECTOR_SORT_KEY_MAX_BYTES", "common/indexing/documentIds.py", "SORT_KEY_MAX_BYTES"],
+            [
+                "REINDEX_METADATA_RECORD_KEY",
+                "common/dynamoDbMetadataKeys.py",
+                "REINDEX_METADATA_RECORD_KEY",
+            ],
+            [
+                "CHANGE_SOURCE_METADATA_KEY",
+                "common/s3MetadataKeys.py",
+                "VAMS_CHANGE_SOURCE_METADATA_KEY",
+            ],
+            [
+                "CHANGE_USER_ID_METADATA_KEY",
+                "common/s3MetadataKeys.py",
+                "VAMS_CHANGE_USER_ID_METADATA_KEY",
+            ],
+            [
+                "CHANGE_FILE_VERSION_FROM_METADATA_KEY",
+                "common/s3MetadataKeys.py",
+                "VAMS_CHANGE_ASSET_FILE_VERSION_FROM_METADATA_KEY",
+            ],
+            [
+                "CHANGE_SOURCE_FILE_RELOCATE",
+                "common/s3MetadataKeys.py",
+                "VAMS_CHANGE_SOURCE_FILE_RELOCATE",
+            ],
+            ["HISTORY_CHANGE_SOURCE", "common/assetHistory.py", "CHANGE_SOURCE_EDIT"],
+        ];
+        for (const [name, file, backendName] of pairs) {
+            expect({ name, value: pyString(module, name) }).toEqual({
+                name,
+                value: pyString(backend(file), backendName),
+            });
+        }
+        // The row marker assetLocationFolderKeys writes, which the step waits for
+        expect(pyString(module, "COPY_DONE_ATTRIBUTE")).toBe(
+            pyString(script, "COPY_DONE_ATTRIBUTE")
+        );
+    });
+
+    it("never deletes an object version, and writes every record move as put-if-absent", () => {
+        expect(module).not.toMatch(/delete_object_version|delete_objects\(/);
+        for (const call of module.match(/\.delete_object\([^)]*\)/g) ?? []) {
+            expect(call).not.toContain("VersionId");
+        }
+        // A record is moved as assetLocationFolderKeys moves one: read again consistently, compared with the
+        // listing, written only where no record is, and deleted only while every attribute is as read.
+        const move = module.slice(
+            module.indexOf("def move_record("),
+            module.indexOf("\ndef move_item(")
+        );
+        expect(move).toContain("ConsistentRead=True");
+        expect(move).toContain("if current != item:");
+        expect(move).toContain("'ConditionExpression': 'attribute_not_exists(#k)'");
+        expect(move).toContain('unchanged.append(f"#a{index} = :a{index}")');
+        expect(move).toContain("return 'changed' if reasons[1].get('Item') else 'gone'");
+        const step0 = script.slice(script.indexOf("def move_record("));
+        expect(step0.slice(0, 3000)).toContain('unchanged.append(f"#a{index} = :a{index}")');
+        // The row flip is conditional on the file key and on no conversion having started.
+        const flip = module.slice(module.indexOf("def flip_row("));
+        expect(flip.slice(0, 1600)).toContain("#al.#k = :from AND attribute_not_exists(#c)");
+    });
+
+    /** boto3 call -> the IAM action the README must name for it. */
+    const MODULE_CALLS: ReadonlyArray<[RegExp, string]> = [
+        ...CALL_TO_ACTION,
+        [/\.copy\(/, "s3:PutObject"],
+        [/\.copy\(/, "s3:GetObjectVersion"],
+        [/\.get_bucket_versioning\(/, "s3:GetBucketVersioning"],
+        [/\.get_object_tagging\(/, "s3:GetObjectVersionTagging"],
+        [/\.put_object_tagging\(/, "s3:PutObjectVersionTagging"],
+        [/\.list_objects_v2\(/, "s3:ListBucket"],
+        [/\.head_object\(/, "s3:GetObject"],
+    ];
+
+    it("documents an IAM action for every call the step module makes", () => {
+        const missing = MODULE_CALLS.filter(
+            ([call, action]) => call.test(module) && !readme.includes(action)
+        ).map(([, action]) => action);
+        expect(missing).toEqual([]);
+        // control: the module makes the calls the list expects
+        expect(MODULE_CALLS.filter(([call]) => call.test(module)).length).toBeGreaterThan(10);
+    });
+
+    it("is documented in the README and the upgrade guide, with its report name", () => {
+        expect(readme).toContain(
+            "### Step 0b — Asset location file to folder (`assetLocationFileToFolder`)"
+        );
+        expect(readme).toContain(
+            "assetLocationFileToFolder-<dry-run|execute>-report-<UTC time>.jsonl"
+        );
+        expect(readme).toContain("asset_location_file_to_folder_resolutions");
+        expect(module).toMatch(/f"\{STEP\}-\{mode\}-report-\{stamp\}\.jsonl"/);
+        const page = fs.readFileSync(
+            path.join(DOCS_ROOT, "deployment/update-the-solution.md"),
+            "utf8"
+        );
+        const checklist = page.slice(page.indexOf("\n## Breaking changes checklist\n"));
+        expect(checklist).toMatch(
+            /\| Existing-key assets are folders only[^\n]*\| v2\.6 to v2\.7 /
+        );
     });
 });

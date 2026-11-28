@@ -202,19 +202,20 @@ VAMS records change provenance for each file version, capturing how the version 
 
 Each tracked file version records a change source, the responsible user, and -- where applicable -- the workflow or source location that produced it. The change source is returned as the `changeSource` field on file and version responses.
 
-| Change source        | Description                                                       |
-| -------------------- | ----------------------------------------------------------------- |
-| `direct`             | The version was changed outside VAMS (a direct Amazon S3 upload). |
-| `upload`             | The version was created through a VAMS file upload.               |
-| `workflowExecution`  | The version was produced by a pipeline workflow execution.        |
-| `fileCopy`           | The version was created by copying a file.                        |
-| `fileMove`           | The version was created by moving a file.                         |
-| `fileRename`         | The version was created by renaming a file.                       |
-| `fileArchive`        | The version is a delete marker created by archiving the file.     |
-| `fileUnarchive`      | The version was created by unarchiving (restoring) the file.      |
-| `assetArchive`       | The version is a delete marker created by archiving the asset.    |
-| `fileRevert`         | The version was created by reverting the file to a prior version. |
-| `fileMetadataUpdate` | The version was created by changing the file's primary type.      |
+| Change source        | Description                                                                                                                 |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `direct`             | The version was changed outside VAMS (a direct Amazon S3 upload).                                                           |
+| `upload`             | The version was created through a VAMS file upload.                                                                         |
+| `workflowExecution`  | The version was produced by a pipeline workflow execution.                                                                  |
+| `fileCopy`           | The version was created by copying a file.                                                                                  |
+| `fileMove`           | The version was created by moving a file.                                                                                   |
+| `fileRename`         | The version was created by renaming a file.                                                                                 |
+| `fileArchive`        | The version is a delete marker created by archiving the file.                                                               |
+| `fileUnarchive`      | The version was created by unarchiving (restoring) the file.                                                                |
+| `assetArchive`       | The version is a delete marker created by archiving the asset.                                                              |
+| `fileRevert`         | The version was created by reverting the file to a prior version.                                                           |
+| `fileMetadataUpdate` | The version was created by changing the file's primary type.                                                                |
+| `fileRelocate`       | The version was copied to a new key by the v2.7 upgrade step `assetLocationFileToFolder` (a `move`); it starts no workflow. |
 
 For copy, move, and rename operations, the source location (`changeAssetIdFrom`, `changeDatabaseIdFrom`, `changeAssetFilePathFrom`) and the source Amazon S3 version (`changeAssetFileVersionFrom`) are recorded. For file revert operations, `changeAssetFileVersionFrom` records the Amazon S3 version that was reverted to; for a primary type change, the version whose content the new version keeps. For workflow-produced versions, the originating `changeWorkflowId` and `changeWorkflowExecutionId` are recorded.
 

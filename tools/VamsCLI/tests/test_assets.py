@@ -200,6 +200,42 @@ class TestAssetCreateCommand:
             assert '✗ Asset Already Exists' in result.output
             assert 'vamscli assets get' in result.output
     
+    def test_create_help_says_bucket_key_names_a_folder(self, cli_runner):
+        """--bucket-key takes an existing folder; a file key is refused by the API."""
+        result = cli_runner.invoke(cli, ['assets', 'create', '--help'])
+        assert result.exit_code == 0
+        help_text = ' '.join(result.output.split())
+        assert "--bucket-key TEXT [OPTIONAL] Existing S3 folder key (ending in '/') to create the asset on;" in help_text
+        assert 'a key that names a file is refused' in help_text
+
+    def test_create_with_bucket_key_sends_it_as_bucket_existing_key(self, cli_runner, assets_command_mocks):
+        with assets_command_mocks as mocks:
+            mocks['api_client'].create_asset.return_value = {'assetId': 'scan-asset', 'message': 'Asset created'}
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'create', '-d', 'test-database', '--name', 'Scan', '--description', 'Site scan',
+                '--distributable', '--bucket-key', 'projects/site-7/'
+            ])
+
+            assert result.exit_code == 0, result.output
+            call_args = mocks['api_client'].create_asset.call_args[0][0]
+            assert call_args['bucketExistingKey'] == 'projects/site-7/'
+
+    def test_create_with_a_file_bucket_key_prints_the_refusal(self, cli_runner, assets_command_mocks):
+        message = ("The specified bucketExistingKey names a file. It must name a folder (a key ending in /) "
+                   "that holds the asset's files.")
+        with assets_command_mocks as mocks:
+            mocks['api_client'].create_asset.side_effect = InvalidAssetDataError(f"Invalid asset data: {message}")
+
+            result = cli_runner.invoke(cli, [
+                'assets', 'create', '-d', 'test-database', '--name', 'Scan', '--description', 'Site scan',
+                '--distributable', '--bucket-key', 'projects/site-7/scan.e57'
+            ])
+
+            assert result.exit_code == 1
+            assert '✗ Invalid Asset Data' in result.output
+            assert message in ' '.join(result.output.split())
+
     def test_create_database_not_found(self, cli_runner, assets_command_mocks):
         """Test asset creation with database not found."""
         with assets_command_mocks as mocks:

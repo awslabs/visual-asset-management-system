@@ -46,7 +46,10 @@ def _create(base_prefix, existing_key):
     m.get_default_bucket_details = MagicMock(return_value={
         "bucketId": "b1", "bucketName": "asset-bucket", "baseAssetsPrefix": base_prefix})
     m.resolve_colocated_bucket_ids = MagicMock(return_value=["b1"])
-    m.check_s3_key_exists = MagicMock(return_value=True)
+    # Every key names a folder: a marker object for a key ending in '/', else objects under `{key}/` and
+    # nothing at the key itself (a key that names an object is refused after the reserved-folder check).
+    m.check_s3_key_exists = MagicMock(return_value=(existing_key or "").endswith("/"))
+    m.check_s3_folder_has_objects = MagicMock(return_value=True)
     m.assert_existing_key_not_owned = MagicMock(side_effect=_ReachedOwnershipCheck)
     request = m.CreateAssetRequestModel(
         databaseId="db-one", assetName="asset-a", description="a description", isDistributable=True, tags=[],

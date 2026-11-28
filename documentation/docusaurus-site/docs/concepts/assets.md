@@ -18,15 +18,15 @@ Each asset acts as a container that groups related files under a single identity
 
 To create an asset, provide the following fields:
 
-| Field               | Required | Description                                                                                                                                     |
-| ------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`        | Yes      | The database this asset belongs to. 4-63 characters, must match an existing database.                                                           |
-| `assetId`           | No       | Unique identifier within the database. If omitted, VAMS generates one. ASCII characters only, cannot contain forward slashes, 2-255 characters. |
-| `assetName`         | Yes      | Human-readable display name. 1-256 characters, alphanumeric plus `-`, `_`, `.`, and spaces.                                                     |
-| `description`       | Yes      | Describes the asset. 4-256 characters.                                                                                                          |
-| `isDistributable`   | Yes      | Boolean flag controlling whether files in this asset can be downloaded.                                                                         |
-| `tags`              | No       | Array of string tags for categorization. Each tag up to 256 characters.                                                                         |
-| `bucketExistingKey` | No       | Optional. Points to an existing key in the database's Amazon S3 bucket to register as the asset's location without uploading new files.         |
+| Field               | Required | Description                                                                                                                                                                    |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `databaseId`        | Yes      | The database this asset belongs to. 4-63 characters, must match an existing database.                                                                                          |
+| `assetId`           | No       | Unique identifier within the database. If omitted, VAMS generates one. ASCII characters only, cannot contain forward slashes, 2-255 characters.                                |
+| `assetName`         | Yes      | Human-readable display name. 1-256 characters, alphanumeric plus `-`, `_`, `.`, and spaces.                                                                                    |
+| `description`       | Yes      | Describes the asset. 4-256 characters.                                                                                                                                         |
+| `isDistributable`   | Yes      | Boolean flag controlling whether files in this asset can be downloaded.                                                                                                        |
+| `tags`              | No       | Array of string tags for categorization. Each tag up to 256 characters.                                                                                                        |
+| `bucketExistingKey` | No       | Optional. Points to an existing folder in the database's Amazon S3 bucket to register as the asset's location without uploading new files. A key that names a file is refused. |
 
 :::info[Asset ID restrictions]
 The `assetId` cannot contain forward slashes (`/`) because it is used as an Amazon S3 prefix component. If you provide a custom `assetId`, choose a value that is unique within the database and made up of ASCII characters — two identifiers that render identically but differ in a non-ASCII character are two separate assets, which an operator reading an asset listing or an audit record cannot tell apart. The restriction applies where you name a new asset; an identifier already stored stays valid everywhere it is used, and an asset VAMS discovers in an external Amazon S3 bucket takes its identifier from the folder name it is found under.
@@ -61,7 +61,7 @@ s3://vams-assets-bucket/assets/scan-001/
     scan-001/textures/normal.png
 ```
 
-An asset created from a single object key (a `bucketExistingKey` with no trailing `/`) holds that object at `/{file name}`, its companion folder `{key}/` and its previews; see [Files](../api/files.md#list-files).
+An asset created from a single object key before v2.7 (a `bucketExistingKey` that named a file, which v2.7 refuses), until the upgrade step `assetLocationFileToFolder` converts it to a folder asset, holds that object at `/{file name}`, its companion folder `{key}/` and its previews; see [Files](../api/files.md#list-files).
 
 A file belongs to the deepest stored location that contains it. Creating an asset whose location sits inside
 another asset's folder is refused, but a deployment can still hold such a pair (the `assetLocationIndex`

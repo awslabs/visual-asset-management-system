@@ -804,15 +804,15 @@ class TestBucketExistingKeyBranchUnchanged:
         _wire(m, owned_records=[])
 
         m.create_asset(
-            _request_model(m, bucket_existing_key="other-root/file.txt"),
+            _request_model(m, bucket_existing_key="other-root/files/"),
             {"tokens": ["user1"]},
         )
 
         saved = m.save_asset_details.call_args.args[0]
-        assert saved["assetLocation"]["Key"] == _BASE_PREFIX + "other-root/file.txt"
+        assert saved["assetLocation"]["Key"] == _BASE_PREFIX + "other-root/files/"
         # And the ownership check saw the resolved key, not the raw input.
         assert m.check_s3_key_exists.call_args.args == (
-            _BUCKET_NAME, _BASE_PREFIX + "other-root/file.txt")
+            _BUCKET_NAME, _BASE_PREFIX + "other-root/files/")
 
     def test_missing_key_in_s3_is_rejected(self):
         m = _load(fresh=True)
@@ -1429,11 +1429,11 @@ class TestAnAssetMayNotOwnThePrefixRoot:
         _assert_nothing_persisted(m)
 
     @pytest.mark.parametrize("supplied,resolves_to,why", [
-        ("assets", _BASE_PREFIX + "assets",
+        ("assets", _BASE_PREFIX + "assets/",
          "normalize_s3_path PREPENDS the base when the key does not already start with it, so the "
          "root's own name asks for a folder NAMED assets beneath the root, which is legitimate"),
         ("supplied/", _BASE_PREFIX + "supplied/", "an ordinary folder under the root"),
-        ("assetsOther/model.glb", _BASE_PREFIX + "assetsOther/model.glb",
+        ("assetsOther/models/", _BASE_PREFIX + "assetsOther/models/",
          "shares the root's leading characters but is not the root; the comparison is equality on "
          "prefix-folder semantics, not a string prefix"),
     ])
@@ -1446,6 +1446,10 @@ class TestAnAssetMayNotOwnThePrefixRoot:
         """
         m = _load(fresh=True)
         _wire(m, owned_records=[])
+        if not supplied.endswith("/"):
+            # A folder given without its '/': nothing is stored at the key, objects are under it
+            m.check_s3_key_exists = MagicMock(return_value=False)
+            m.check_s3_folder_has_objects = MagicMock(return_value=True)
 
         response = m.create_asset(
             _request_model(m, bucket_existing_key=supplied), {"tokens": ["user1"]})
@@ -1496,8 +1500,8 @@ class TestAnAssetMayNotOwnThePrefixRoot:
         _wire(m, owned_records=[], base_prefix="")
 
         response = m.create_asset(
-            _request_model(m, bucket_existing_key="model.glb"), {"tokens": ["user1"]})
+            _request_model(m, bucket_existing_key="models/"), {"tokens": ["user1"]})
 
         saved = m.save_asset_details.call_args.args[0]
-        assert saved["assetLocation"]["Key"] == "model.glb", (
+        assert saved["assetLocation"]["Key"] == "models/", (
             "a key under an empty root must still be accepted")

@@ -9,11 +9,13 @@ Download as Zip is available when your administrator enables it for the deployme
 -   Any mix of files and folders from one asset, or the whole asset.
 -   The current files, or the file versions recorded in an asset version.
 -   Only assets that are distributable and not archived.
--   Only assets whose location is a folder. Download the files of an asset created from a single Amazon S3 object directly instead.
+-   Only assets whose location is a folder. Download the files of an asset created on a single Amazon S3 object before v2.7, which the v2.6 to v2.7 upgrade step `assetLocationFileToFolder` has not converted to a folder, directly instead.
 
 The archive holds the files the **File Manager** lists. The generated preview images of files (`{file}.previewFile.{ext}`, such as `model.glb.previewFile.png`), which the file list does not show, are left out of every zip download, under a folder, in the whole asset and in an asset version alike. A selection that holds nothing but such preview files is refused with **The selection has no files**.
 
 VAMS refuses the whole archive, rather than leaving files out, when a selected file is archived, a deleted version, in an archive storage class (Amazon S3 Glacier Flexible Retrieval or Glacier Deep Archive), or has a blocked executable file type, and when the selection exceeds the deployment's limits on file count or total size. The reason names the file, so you can adjust the selection and try again.
+
+VAMS also refuses an archive that holds a file and a folder of the same name, such as the file `/a.txt` and the file `/a.txt/b.txt`, because no folder can hold both when the archive is extracted. The reason names the file and one path in the folder (`'/a.txt' is a file and '/a.txt/b.txt' is in a folder of the same name`). Download the file and the folder separately: select the file alone in one zip download and the folder alone in another. An asset converted from a single file by the v2.6 to v2.7 upgrade step `assetLocationFileToFolder` holds such a pair when its file had a companion folder, for example `/model.glb` and `/model.glb/notes.txt`, so its whole asset is refused the same way.
 
 ## Creating a zip download
 

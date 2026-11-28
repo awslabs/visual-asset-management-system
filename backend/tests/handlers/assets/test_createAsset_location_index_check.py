@@ -16,6 +16,8 @@ al = sys.modules['common.assetLocations']
 
 IN_USE = "The specified bucketExistingKey is already in use by another asset"
 MISSING = "The specified bucketExistingKey does not exist in the asset's database default S3 bucket"
+FILE_KEY = ("The specified bucketExistingKey names a file. It must name a folder (a key ending in /) that "
+            "holds the asset's files.")
 
 
 def _entry(database_id="other-db", asset_id="owner-1", location="projects/alpha/"):
@@ -132,14 +134,16 @@ class TestExistingKeyFolderWithoutMarker:
         m.check_s3_folder_has_objects.assert_called_once_with("vams-assets", "projects/synced/")
         m.assert_existing_key_not_owned.assert_called_once_with(["b1"], "projects/synced/", "vams-assets")
 
-    def test_a_key_that_names_an_object_stays_a_single_file_location(self):
-        # Objects under `{key}/` are the single file's companion folder, so they do not make it a folder.
+    def test_a_key_that_names_an_object_is_refused_even_with_objects_under_it(self):
+        # An asset is created on a folder: objects under `{key}/` do not make a file key a folder.
         m = _load_create_asset(fresh=True)
         self._wire(m, head_hits=True, folder_has_objects=True)
-        row = self._create(m, "projects/model.glb")
-        assert row["assetLocation"] == {"Key": "projects/model.glb"}
+        with pytest.raises(m.VAMSGeneralErrorResponse) as raised:
+            self._create(m, "projects/model.glb")
+        assert str(raised.value).endswith(FILE_KEY)
+        m.asset_table.put_item.assert_not_called()
         m.check_s3_folder_has_objects.assert_not_called()
-        m.assert_existing_key_not_owned.assert_called_once_with(["b1"], "projects/model.glb", "vams-assets")
+        m.assert_existing_key_not_owned.assert_not_called()
 
     def test_the_folder_probe_reads_one_entry_under_the_folder(self):
         m = _load_create_asset(fresh=True)

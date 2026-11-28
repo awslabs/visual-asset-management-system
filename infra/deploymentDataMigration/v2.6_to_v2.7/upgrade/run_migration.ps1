@@ -1,5 +1,6 @@
-# PowerShell script to run the VAMS v2.6 to v2.7 migration (asset location folder keys, orphaned trigger
-# cleanup, vector index backfill, system-pipeline retirement report, asset location index backfill)
+# PowerShell script to run the VAMS v2.6 to v2.7 migration (asset location folder keys, asset location file
+# to folder, orphaned trigger cleanup, vector index backfill, system-pipeline retirement report, asset
+# location index backfill)
 # Usage: .\run_migration.ps1 [-ConfigFile <path>] [-Execute] [-Resume] [-ClearVectors] [-Async]
 #                            [-GenerateMetadataForExistingFiles]
 #                            [-Steps <step>] [-Limit <n>] [-Profile <name>] [-Region <name>]
@@ -19,7 +20,7 @@ param(
     [switch]$ClearVectors,
     [switch]$Async,
     [switch]$GenerateMetadataForExistingFiles,
-    [ValidateSet("all", "assetLocationFolderKeys", "orphanedTriggers", "vectorBackfill", "metadataBackfill", "systemPipelineRetirement", "commentSubscriptionKeys", "assetLocationIndex", "bucketReadConstraints")]
+    [ValidateSet("all", "assetLocationFolderKeys", "assetLocationFileToFolder", "orphanedTriggers", "vectorBackfill", "metadataBackfill", "systemPipelineRetirement", "commentSubscriptionKeys", "assetLocationIndex", "bucketReadConstraints")]
     [string]$Steps,
     [int]$Limit,
     [string]$Profile,
@@ -82,7 +83,7 @@ if ($RealRun) {
 } else {
     Write-Host "Mode: DRY RUN (no changes will be made; pass -Execute for a real run)" -ForegroundColor Yellow
 }
-if ($Resume)       { $ExtraArgs += "--resume";        Write-Host "Mode: RESUME (assetLocationFolderKeys continues from its saved checkpoint)" -ForegroundColor Yellow }
+if ($Resume)       { $ExtraArgs += "--resume";        Write-Host "Mode: RESUME (assetLocationFolderKeys and assetLocationFileToFolder continue from their saved checkpoints)" -ForegroundColor Yellow }
 if ($ClearVectors) { $ExtraArgs += "--clear-vectors"; Write-Host "Mode: CLEAR VECTORS (every stored vector is deleted before re-embedding)" -ForegroundColor Yellow }
 if ($Async)        { $ExtraArgs += "--async";         Write-Host "Mode: ASYNCHRONOUS (reindexer results in CloudWatch Logs)" -ForegroundColor Yellow }
 if ($GenerateMetadataForExistingFiles) { $ExtraArgs += "--generate-metadata-for-existing-files"; Write-Host "Mode: GENERATE METADATA FOR EXISTING FILES (metadataBackfill, vector search off)" -ForegroundColor Yellow }
@@ -129,6 +130,12 @@ try {
             Write-Host "     says 'Completion marker written'; if not, run -Steps assetLocationIndex -Execute again"
             Write-Host "  5. Read the comment and subscription keys summary: for each id listed as 'ambiguous', name its database in"
             Write-Host "     comment_subscription_resolution_file and run -Steps commentSubscriptionKeys -Execute again"
+            Write-Host "  6. Read the assetLocationFileToFolder report: decide a move or include-siblings for each refused asset"
+            Write-Host "     in a resolutions file (asset_location_file_to_folder_resolutions), then run"
+            Write-Host "     -Steps assetLocationFileToFolder -Execute again"
+            Write-Host "  7. Read the bucketReadConstraints report: add a bucket constraint by hand for each role listed 'unreadable'"
+            Write-Host "     that lists buckets or creates or updates databases, and for each user listed 'userGrantNotChanged'"
+            Write-Host "     that needs one"
         } else {
             Write-Host "This was a dry run: no rows were deleted and no executions were launched." -ForegroundColor Yellow
             Write-Host "Review the summaries above, then set `"dry_run`": false in the config and re-run with -Execute to apply them."

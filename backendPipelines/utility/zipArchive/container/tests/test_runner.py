@@ -290,6 +290,30 @@ class TestZipDownloadMode:
         assert table.row["status"] == "FAILED"
         assert s3.completed == {} and s3.uploads == {} and s3.aborted == []
 
+    @pytest.mark.parametrize("folder_key", ["a.glb/b.txt", "a.glb/"], ids=["file-in-folder", "empty-folder"])
+    def test_a_file_and_a_folder_of_its_name_refuse_the_archive_before_the_upload(self, s3, folder_key):
+        """#2070: 'a.glb' and 'a.glb/...' cannot both be extracted; the job fails with both paths in its
+        errorMessage, which the job status shows, and nothing is uploaded."""
+        s3.add(BASE + folder_key, b"" if folder_key.endswith("/") else b"B", content_type="")
+        job, table = _zip_job(s3, _manifest(entries=[{"type": "asset", "key": BASE, "relativePath": "/"}]))
+        with pytest.raises(runner.ArchiveFailure) as e:
+            job.run()
+        assert e.value.refusal
+        for text in (e.value.reason, table.row["errorMessage"]):
+            assert "'/a.glb'" in text and repr("/" + folder_key) in text and "download them separately" in text
+        assert table.row["status"] == "FAILED"
+        assert s3.completed == {} and s3.uploads == {} and s3.aborted == []
+
+    def test_the_file_alone_and_the_folder_alone_still_archive(self, s3):
+        s3.add(BASE + "a.glb/b.txt", b"B")
+        job, _ = _zip_job(s3, _manifest(entries=[{"type": "file", "key": BASE + "a.glb", "relativePath": "/a.glb"}]))
+        assert job.run()["status"] == "succeeded"
+        s3.completed.clear()
+        job, _ = _zip_job(s3, _manifest(entries=[{"type": "folder", "key": BASE + "a.glb/", "relativePath": "/a.glb/"}]))
+        assert job.run()["status"] == "succeeded"
+        with zipfile.ZipFile(io.BytesIO(next(iter(s3.completed.values())))) as z:
+            assert z.namelist() == ["a.glb/b.txt"]
+
     def test_deleted_pinned_version_refused(self, s3):
         s3.add(BASE + "gone.glb", b"", version="dm", delete_marker=True)
         job, table = _zip_job(s3, _manifest(pinned=[{"key": BASE + "gone.glb", "relativePath": "/gone.glb", "versionId": "dm", "size": 0}]))

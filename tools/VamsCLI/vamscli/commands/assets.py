@@ -30,7 +30,7 @@ from ..utils.download_manager import (
     DownloadManager, DownloadFileInfo, DownloadProgress, StreamingDownloadProgress,
     FileTreeBuilder, AssetTreeTraverser, format_file_size, format_duration,
     parse_remote_timestamp, generate_presigned_urls, confined_local_path, confined_local_paths,
-    DOWNLOAD_PATH_OUTSIDE_TARGET_REASON,
+    DOWNLOAD_PATH_OUTSIDE_TARGET_REASON, check_no_file_folder_collision,
 )
 
 
@@ -235,7 +235,8 @@ def assets():
 @click.option('--description', help='[REQUIRED unless using --json-input] Asset description')
 @click.option('--distributable/--no-distributable', default=None, help='[REQUIRED unless using --json-input] Whether the asset is distributable')
 @click.option('--tags', multiple=True, help='[OPTIONAL] Asset tags (can be used multiple times)')
-@click.option('--bucket-key', help='[OPTIONAL] Existing S3 bucket key to use')
+@click.option('--bucket-key', help="[OPTIONAL] Existing S3 folder key (ending in '/') to create the asset on; "
+                                   "a key that names a file is refused")
 @click.option('--json-input', help='[OPTIONAL] JSON input file path or JSON string with all asset data')
 @click.option('--json-output', is_flag=True, help='[OPTIONAL] Output raw JSON response')
 @click.pass_context
@@ -1516,6 +1517,11 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                             'includeArchived': 'false'
                         })
                         target_files = [f for f in asset_files if not f.get('isFolder')]
+                        # Before any file is written: a file and a folder of one name (#2070)
+                        try:
+                            check_no_file_folder_collision([f.get('relativePath', '') for f in target_files])
+                        except FileDownloadError as e:
+                            raise FileDownloadError(f"Asset '{asset_id}': {e}")
                         
                         # Generate download info for each file. No two files share a local path
                         # (confined_local_paths), so '/x' and '//x' never replace each other on disk.
@@ -1563,6 +1569,9 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                         # Handle flattening
                         if flatten_download_tree:
                             target_files = FileTreeBuilder.flatten_file_list(target_files)
+                        else:
+                            # Before any file is written: a file and a folder of one name (#2070)
+                            check_no_file_folder_collision([f.get('relativePath', '') for f in target_files])
 
                         use_streaming = not flatten_download_tree and not file_previews
                         if use_streaming:
@@ -1739,6 +1748,8 @@ def download(ctx: click.Context, local_path: Optional[str], database: str, asset
                     
                     if not target_files:
                         raise FileDownloadError(f"Asset '{asset}' currently has no files to download")
+                    # Before any file is written: a file and a folder of one name (#2070)
+                    check_no_file_folder_collision([f.get('relativePath', '') for f in target_files])
 
                     # Stream: generate presigned URLs and download in parallel
                     output_status(f"Downloading {len(target_files)} file(s) (streaming)...", json_output)

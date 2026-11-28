@@ -17,8 +17,9 @@ Matching rules (per trigger row's triggerConfig):
     only for uploads in its own database (mirrors the workflow execute database-scope rule).
   - Disabled trigger rows (enabled=false) never fire.
   - Provenance (the object's vams-changesource): a metadata-only rewrite of a file (change source
-    fileMetadataUpdate) is not an upload and fires nothing; a restore (`RESTORE_CHANGE_SOURCES`) never
-    fires; a workflow-written object fires only under the chaining rule of `chaining_allows_trigger`.
+    fileMetadataUpdate) is not an upload and fires nothing; a restore (`RESTORE_CHANGE_SOURCES`) and a
+    relocation (`RELOCATION_CHANGE_SOURCES`) never fire; a workflow-written object fires only under the
+    chaining rule of `chaining_allows_trigger`.
 The built execute body carries pipelineExecutionParameters from the trigger's defaultTemplateIds map
 (keyed "pipelineDatabaseId:pipelineId" -> templateId), triggerType="fileUpload", and the uploaded
 input file — except for an arity-"none" workflow, which takes no input files and uses the uploaded
@@ -29,6 +30,7 @@ from customLogging.logger import safeLogger
 from common.workflows import executionValidation as ev
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE,
+    VAMS_CHANGE_SOURCE_RELOCATION_VALUES,
     VAMS_CHANGE_SOURCE_RESTORE_VALUES,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
 )
@@ -48,6 +50,11 @@ ARITY_NONE = "none"
 # on unchanged bytes and rewrite their outputs. `upload`, `direct`, `fileCopy`, `fileMove`, `fileRename`
 # and `fileRevert` stay eligible.
 RESTORE_CHANGE_SOURCES = VAMS_CHANGE_SOURCE_RESTORE_VALUES
+# Change sources that never fire a trigger either: a relocation (`fileRelocate`, the upgrade step that moves
+# a single-file asset's file into its own folder) copies versions the file already held to a new key at the
+# same asset path. The triggers fired on that content when it was written, and a run on the copy would
+# re-analyse it at Amazon Bedrock cost and could replace its existing preview.
+RELOCATION_CHANGE_SOURCES = VAMS_CHANGE_SOURCE_RELOCATION_VALUES
 
 
 def chaining_allows_trigger(candidate_workflow_id, change_source, change_workflow_id,
@@ -63,16 +70,17 @@ def chaining_allows_trigger(candidate_workflow_id, change_source, change_workflo
     3. The file was written by ANOTHER workflow — eligible only when this workflow opts in via
        `allowWorkflowTriggerChaining`. That is what lets a preview or metadata workflow run on a
        conversion pipeline's output, while keeping chained triggering off by default.
-    4. The file was RESTORED (a `RESTORE_CHANGE_SOURCES` value: `fileUnarchive`, `assetUnarchive`) —
-       never eligible, whatever wrote the content originally and whatever the flag says. The version
-       carries content the file already had, and the triggers already fired on it. This case is decided
-       before the others, since the source alone settles it.
+    4. The file was RESTORED (a `RESTORE_CHANGE_SOURCES` value: `fileUnarchive`, `assetUnarchive`) or
+       RELOCATED (a `RELOCATION_CHANGE_SOURCES` value: `fileRelocate`) — never eligible, whatever wrote
+       the content originally and whatever the flag says. The version carries content the file already
+       had, and the triggers already fired on it. This case is decided before the others, since the
+       source alone settles it.
 
     A workflow-sourced record with no recorded originating workflow id is treated as "another
     workflow": it cannot be proven to be self-output, and the conservative reading is the one that
     still requires an explicit opt-in.
     """
-    if change_source in RESTORE_CHANGE_SOURCES:
+    if change_source in RESTORE_CHANGE_SOURCES or change_source in RELOCATION_CHANGE_SOURCES:
         return False
     if change_source != VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
         return True
@@ -172,6 +180,10 @@ def match_fileupload_triggers(trigger_rows, database_id, asset_id, relative_file
         # The source alone decides for every row; the rows are not consulted and no workflow is read.
         logger.info(f"Skipping fileUpload triggers for {database_id}:{asset_id}{relative_file_key} — the "
                     f"object was written by '{change_source}', which restores content already stored")
+        return matches
+    if change_source in RELOCATION_CHANGE_SOURCES:
+        logger.info(f"Skipping fileUpload triggers for {database_id}:{asset_id}{relative_file_key} — the "
+                    f"object was written by '{change_source}', which relocates a version the file already held")
         return matches
     for trigger_row in trigger_rows or []:
         # The row's `triggerType` is its SORT KEY, which is the bare type for a workflow's first trigger

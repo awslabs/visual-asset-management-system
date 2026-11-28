@@ -22,6 +22,7 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_FILE_RENAME,
     VAMS_CHANGE_SOURCE_FILE_REVERT,
     VAMS_CHANGE_SOURCE_FILE_UNARCHIVE,
+    VAMS_CHANGE_SOURCE_RELOCATION_VALUES,
     VAMS_CHANGE_SOURCE_RESTORE_VALUES,
     VAMS_CHANGE_SOURCE_UPLOAD,
     VAMS_CHANGE_SOURCE_VALUES,
@@ -73,6 +74,8 @@ class TestRestoreSourceSet:
         nothing: the bytes are unchanged), or an eligible ordinary write."""
         classified = set(RESTORE_SOURCES) | {VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION} | set(ELIGIBLE_SOURCES)
         classified |= {VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE}
+        # A relocation (`fileRelocate`) never fires either (test_triggerMatching_relocation_sources.py).
+        classified |= set(VAMS_CHANGE_SOURCE_RELOCATION_VALUES)
         # Archive sources create no S3 object version (a delete marker is not a version), so they never
         # reach the trigger path; they are listed so the classification stays total.
         classified |= {"fileArchive", "assetArchive"}

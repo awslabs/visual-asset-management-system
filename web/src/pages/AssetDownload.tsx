@@ -19,6 +19,11 @@ import {
 } from "@cloudscape-design/components";
 import { usePageTitle } from "../hooks/usePageTitle";
 import Synonyms from "../synonyms";
+import {
+    fileFolderCollision,
+    localPathOwners,
+    SAME_LOCAL_PATH_REASON,
+} from "../utils/localPathCollision";
 
 // Utility class for managing concurrent downloads
 class DownloadQueue {
@@ -94,6 +99,33 @@ const createDirectoryStructure = async (directoryHandle: any, path: string): Pro
     }
 
     return currentHandle;
+};
+
+// A local file system error that the same write meets again on a retry: a file where a folder is needed,
+// or a folder where a file is needed
+const NON_RETRYABLE_WRITE_ERRORS = new Set(["TypeMismatchError"]);
+
+const isNonRetryableWriteError = (error: unknown): boolean =>
+    error instanceof DOMException && NON_RETRYABLE_WRITE_ERRORS.has(error.name);
+
+/** The reason a row failed, as the page shows it with the row. */
+const describeDownloadError = (error: unknown): string => {
+    if (error instanceof DOMException) {
+        switch (error.name) {
+            case "TypeMismatchError":
+                return "the target folder already has a folder where this file goes, or a file where its folder goes";
+            case "NotAllowedError":
+                return "the browser was not allowed to write to the selected folder";
+            case "NotFoundError":
+                return "the selected folder, or a folder in this file's path, was removed during the download";
+            case "QuotaExceededError":
+                return "there is not enough space to write the file";
+        }
+    }
+    if (error instanceof Error && error.message) {
+        return error.message;
+    }
+    return "the file could not be downloaded";
 };
 
 // Download a single file
@@ -221,11 +253,16 @@ const downloadSingleFile = async (
                 error
             );
 
-            if (retries > maxRetries) {
-                // Update status to "Failed" after all retries
+            // A write the local folder refuses for a type mismatch fails the same way every time
+            if (retries > maxRetries || isNonRetryableWriteError(error)) {
+                // Update status to "Failed" after all retries, with the reason the page shows
                 dispatch({
                     type: "UPDATE_STATUS",
-                    payload: { relativePath: file.relativePath, status: "Failed" },
+                    payload: {
+                        relativePath: file.relativePath,
+                        status: "Failed",
+                        error: describeDownloadError(error),
+                    },
                 });
                 return false;
             }
@@ -251,22 +288,42 @@ const downloadFilesInParallel = async (
 ): Promise<void> => {
     const downloadQueue = new DownloadQueue(concurrencyLimit);
 
+    // Keeping the asset's paths, "/x" and "//x" (#1977) are both written at "x": before any write, the file
+    // without an empty segment is kept and every other file of that local path fails with the file kept, so
+    // neither replaces the other (#2084). Flatten mode refuses repeated names before it starts.
+    const takenBy = flattenHierarchy
+        ? files.map(() => null)
+        : localPathOwners(files.map((file) => file.relativePath));
+    files.forEach((file, index) => {
+        if (takenBy[index] !== null) {
+            dispatch({
+                type: "UPDATE_STATUS",
+                payload: {
+                    relativePath: file.relativePath,
+                    status: "Failed",
+                    error: `${SAME_LOCAL_PATH_REASON} (${takenBy[index]})`,
+                },
+            });
+        }
+    });
+    const toWrite = files.filter((_, index) => takenBy[index] === null);
+
     // Bulk-generate presigned URLs up front (one API call per 1500 files).
     // All files resolve to their current version (or the selected asset
     // version); any key missing from the bulk result falls back to a per-file
     // URL request inside downloadSingleFile.
     let urlByKey = new Map<string, string>();
-    if (files.length > 1) {
+    if (toWrite.length > 1) {
         urlByKey = await generateBulkDownloadUrlMap(
             databaseId,
             assetId,
-            files.map((f) => f.keyPrefix),
+            toWrite.map((f) => f.keyPrefix),
             assetVersionId
         );
     }
 
     // Create an array of promises for all file downloads
-    const downloadPromises = files.map((file) =>
+    const downloadPromises = toWrite.map((file) =>
         downloadQueue.add(() =>
             downloadSingleFile(
                 assetId,
@@ -287,9 +344,9 @@ const downloadFilesInParallel = async (
 
     console.log(`All downloads completed: ${results.length} files processed`);
 
-    // Ensure all files are properly marked as completed or failed
+    // Ensure all files written are properly marked as completed or failed; a row already Failed keeps its reason
     results.forEach((result, index) => {
-        const file = files[index];
+        const file = toWrite[index];
         if (result.status === "fulfilled" && result.value === true) {
             // Double-check that the file is marked as completed
             dispatch({
@@ -308,6 +365,10 @@ const downloadFilesInParallel = async (
                 payload: {
                     relativePath: file.relativePath,
                     status: "Failed",
+                    error:
+                        result.status === "rejected"
+                            ? describeDownloadError(result.reason)
+                            : undefined,
                 },
             });
         }
@@ -480,10 +541,17 @@ function assetDownloadReducer(
                         `Status update for ${item.relativePath}: ${action.payload.status}, progress: ${progress}%`
                     );
 
+                    // A Failed row keeps a reason (the one given, else the one it has); any other status has none
+                    const error =
+                        action.payload.status === "Failed"
+                            ? action.payload.error || item.error
+                            : undefined;
+
                     return {
                         ...item,
                         status: action.payload.status,
                         progress: progress,
+                        error,
                     };
                 } else {
                     return item;
@@ -507,6 +575,7 @@ function assetDownloadReducer(
                         progress: 100, // Always set to 100% for completed files
                         loaded: loaded,
                         total: total,
+                        error: undefined,
                     };
                 } else {
                     return item;
@@ -547,6 +616,7 @@ function assetDownloadReducer(
                 startedAt: Date.now(),
                 loaded: 0,
                 total: item.size || 0, // Preserve the file size information
+                error: undefined,
                 // versionId is preserved via the spread operator
             }));
 
@@ -637,6 +707,11 @@ export default function AssetDownloadsPage() {
     const flattenedFiles = fileTree ? flattenFileTree(fileTree) : [];
     const duplicateFileNames = flattenHierarchy ? detectDuplicateFileNames(flattenedFiles) : [];
     const hasDuplicates = duplicateFileNames.length > 0;
+    // Keeping the asset's paths, a file named like another file's folder cannot be written (#2074)
+    const pathCollision = flattenHierarchy
+        ? null
+        : fileFolderCollision(flattenedFiles.map((file) => file.relativePath));
+    const downloadBlocked = flattenHierarchy ? hasDuplicates : pathCollision !== null;
 
     // Update final download paths when flatten mode or selected folder changes
     const updatedTableItems = fileUploadTableItemsState.map((item) => ({
@@ -654,7 +729,7 @@ export default function AssetDownloadsPage() {
         // Unreachable without a tree — the early return above replaces the entire download UI, including
         // the button that calls this. Guarded rather than asserted with `!`, so the type stays honest if
         // that return is ever moved or removed.
-        if (!fileTree) return;
+        if (!fileTree || downloadBlocked) return;
         setIsDownloading(true);
 
         try {
@@ -723,6 +798,15 @@ export default function AssetDownloadsPage() {
 
     const stats = getDownloadStats();
     const allComplete = isAllComplete();
+    // A failed row never shows as success: an error when nothing arrived, a warning otherwise
+    const summaryStatus =
+        stats.failed > 0
+            ? allComplete && stats.completed === 0
+                ? "error"
+                : "warning"
+            : allComplete
+            ? "success"
+            : "in-progress";
 
     // No router state means there is nothing to download: the folder tree is chosen in the file manager
     // and handed over on navigation, so it cannot be reconstructed from the URL alone. Placed after every
@@ -798,6 +882,13 @@ export default function AssetDownloadsPage() {
                                         : `Keep ${Synonyms.Asset} Paths on Download`}
                                 </Toggle>
 
+                                {/* Error Alert for a file named like another file's folder */}
+                                {pathCollision && (
+                                    <Alert type="error" header="File and Folder With the Same Name">
+                                        {`"${pathCollision.file}" is a file and "${pathCollision.other}" is in a folder of the same name, so they cannot both be downloaded with the ${Synonyms.asset}'s paths: no folder can hold a file and a folder of one name. Download the file and the folder separately, or switch to "Flatten ${Synonyms.Asset} Paths on Download".`}
+                                    </Alert>
+                                )}
+
                                 {/* Error Alert for Duplicate Files */}
                                 {flattenHierarchy && hasDuplicates && (
                                     <Alert type="error" header="Duplicate File Names Detected">
@@ -816,9 +907,7 @@ export default function AssetDownloadsPage() {
                                         variant="primary"
                                         onClick={handleDownload}
                                         loading={isDownloading}
-                                        disabled={
-                                            isDownloading || (flattenHierarchy && hasDuplicates)
-                                        }
+                                        disabled={isDownloading || downloadBlocked}
                                     >
                                         {resume ? "Start Download" : "Restart Download"}
                                     </Button>
@@ -837,7 +926,7 @@ export default function AssetDownloadsPage() {
                                 </SpaceBetween>
 
                                 <Box>
-                                    <StatusIndicator type={allComplete ? "success" : "in-progress"}>
+                                    <StatusIndicator type={summaryStatus}>
                                         {stats.completed} of {stats.total} files completed
                                         {stats.failed > 0 && `, ${stats.failed} failed`}
                                         {stats.inProgress > 0 &&

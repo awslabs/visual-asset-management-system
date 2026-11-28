@@ -26,6 +26,7 @@ from common.validators import new_asset_id_regex, object_name_regex, validate
 from common.eventLogSummary import event_log_summary
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_RELOCATION_VALUES,
     VAMS_CHANGE_USER_ID_METADATA_KEY,
     VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
     VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY,
@@ -2033,8 +2034,16 @@ def write_file_version_history(database_id, asset_id, relative_file_path, versio
     Best-effort: no-op when the table is not configured, and never raises -- a
     history-write failure must not break the bucket sync / indexing flow. The
     put_item overwrites the same PK+SK (last-write-wins, idempotent on re-sync).
+
+    A relocated version (`VAMS_CHANGE_SOURCE_RELOCATION_VALUES`) gets no row here: its writer moves the
+    row of the version it was copied from to it, with that version's provenance, so a row written here
+    would replace that provenance or make the writer's move find its target taken.
     """
     if not asset_file_version_history_table:
+        return
+    if (s3_metadata or {}).get(VAMS_CHANGE_SOURCE_METADATA_KEY) in VAMS_CHANGE_SOURCE_RELOCATION_VALUES:
+        logger.info(f"No history row written for {asset_id}/{relative_file_path} version {version_id}: a "
+                    "relocated version keeps the row its writer moved to it")
         return
     try:
         record = build_history_record(

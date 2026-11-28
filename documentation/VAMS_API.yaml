@@ -189,7 +189,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/createAssetResponse"
                 "400":
-                    description: Invalid parameters or validation error, including a bucketExistingKey inside a folder VAMS reserves for system use (a message that contains "The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location.") and an assetId equal to the name of such a folder (a message that contains "The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID.").
+                    description: Invalid parameters or validation error, including a bucketExistingKey inside a folder VAMS reserves for system use (a message that contains "The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location."), a bucketExistingKey that names a file (a message that contains "The specified bucketExistingKey names a file. It must name a folder (a key ending in /) that holds the asset's files.") and an assetId equal to the name of such a folder (a message that contains "The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID.").
                     content:
                         application/json:
                             schema:
@@ -2168,7 +2168,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/zip:
         post:
             summary: "Create a Download as Zip job for files, folders, or the whole asset."
-            description: "Creates a zip download job that packages the selected files, folders, or the whole asset into one zip (ZIP64), tar, or tar.gz archive in the background. The job is owned by the authenticated caller, and only the caller can cancel or delete it. A caller whose role grants the all-users list route (GET /database/{databaseId}/assets/{assetId}/download/zip-all-users) and who holds asset GET permission also sees the job in that list. The download URL route also signs another user's finished archive for a caller who holds asset GET permission and may download from the asset. The request requires API access to this route and asset GET permission, the same asset action a file download requires. The asset must be distributable and not archived. The whole job is refused when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Folder and whole-asset entries are checked within a bounded pre-scan; members beyond that budget are checked by the Zip Archive job before it writes, and a refusal there ends the job FAILED with a reason naming the file. Error messages never echo a requested version ID or alias. A single-file asset (one created from a bucketExistingKey without a trailing '/') is refused with 400: download its files directly instead. Answers 404 when Download as Zip is not enabled for the deployment (app.pipelines.useZipDownloads.enabled)."
+            description: "Creates a zip download job that packages the selected files, folders, or the whole asset into one zip (ZIP64), tar, or tar.gz archive in the background. The job is owned by the authenticated caller, and only the caller can cancel or delete it. A caller whose role grants the all-users list route (GET /database/{databaseId}/assets/{assetId}/download/zip-all-users) and who holds asset GET permission also sees the job in that list. The download URL route also signs another user's finished archive for a caller who holds asset GET permission and may download from the asset. The request requires API access to this route and asset GET permission, the same asset action a file download requires. The asset must be distributable and not archived. The whole job is refused when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Folder and whole-asset entries are checked within a bounded pre-scan; members beyond that budget are checked by the Zip Archive job before it writes, and a refusal there ends the job FAILED with a reason naming the file. Error messages never echo a requested version ID or alias. A single-file asset (one created before v2.7 from a bucketExistingKey that named a file, and not yet converted to a folder by the upgrade step assetLocationFileToFolder) is refused with 400: download its files directly instead. Answers 404 when Download as Zip is not enabled for the deployment (app.pipelines.useZipDownloads.enabled)."
             requestBody:
                 required: true
                 content:
@@ -3705,7 +3705,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or confirmation required. A missing file also answers 400, as does the top-level asset folder (`/`, or a path that resolves to the asset's location folder or to a single-object asset's companion folder, with or without isPrefix); an empty filePath is an invalid parameter. A delete Amazon S3 does not complete also answers 400; the files it deleted lose their records and the remaining files are kept.
+                    description: Invalid parameters or confirmation required. A missing file also answers 400, as does the top-level asset folder (`/`, or a path that resolves to the asset's location folder or to a single-object asset's companion folder, with or without isPrefix); an empty filePath is an invalid parameter. A delete Amazon S3 does not complete also answers 400; the files it deleted lose their records and the remaining files are kept. A delete of a moved file whose v2.6 to v2.7 upgrade move (assetLocationFileToFolder) is still pending answers 400 too.
                     content:
                         application/json:
                             schema:
@@ -4397,7 +4397,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/assetOperationResponse"
                 "400":
-                    description: Invalid parameters, or Amazon S3 did not delete every object version of the asset. The asset keeps its records and remaining files, so the delete can be retried; the files that were deleted lose their records.
+                    description: Invalid parameters, or Amazon S3 did not delete every object version of the asset. The asset keeps its records and remaining files, so the delete can be retried; the files that were deleted lose their records. Also returned, with nothing deleted, while the asset's v2.6 to v2.7 upgrade move (assetLocationFileToFolder) is still pending.
                     content:
                         application/json:
                             schema:
@@ -13365,7 +13365,7 @@ components:
                 bucketExistingKey:
                     type: string
                     maxLength: 1024
-                    description: "Existing key in the database default Amazon S3 bucket for the new asset. A key ending in `/` is a folder; any other key is one object, the asset's file, with its companion folder `{key}/` and its previews. A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces` or `vams.preparedDownloads`) as any path segment under the bucket's base prefix is refused with 400."
+                    description: "Existing folder in the database default Amazon S3 bucket that holds the new asset's files. A key ending in `/` names that folder; a key without the trailing `/` names the folder `{key}/` when nothing is stored at the key itself and objects are stored under it. A key that names a file (an object is stored at the key) is refused with 400, even when objects are also stored under `{key}/`. A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces` or `vams.preparedDownloads`) as any path segment under the bucket's base prefix is refused with 400."
             required:
                 - databaseId
                 - assetName
@@ -18810,7 +18810,7 @@ components:
                     description: "Path to the preview file for this file: the newest non-archived `.previewFile.` object, or, in a listing with includeArchived=true, the newest archived one when the file has no other. Empty string if no preview file exists."
                 changeSource:
                     type: string
-                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate). Blank or absent for versions created before change provenance tracking was introduced."
+                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate, fileRelocate). Blank or absent for versions created before change provenance tracking was introduced."
                 changeUserId:
                     type: string
                     description: "User (or SYSTEM_USER) that created the current file version. Blank or absent for legacy versions."
@@ -18884,7 +18884,7 @@ components:
                     description: "Path to the preview file for this file: the newest non-archived `.previewFile.` object when several exist. Empty string if no preview file exists."
                 changeSource:
                     type: string
-                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate). Blank or absent for versions created before change provenance tracking was introduced."
+                    description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate, fileRelocate). Blank or absent for versions created before change provenance tracking was introduced."
                 changeUserId:
                     type: string
                     description: "User (or SYSTEM_USER) that created the current file version. Blank or absent for legacy versions."
@@ -18934,7 +18934,7 @@ components:
                                 nullable: true
                             changeSource:
                                 type: string
-                                description: "How this file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, assetArchive, fileRevert, fileMetadataUpdate). Blank or absent for legacy versions."
+                                description: "How this file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileArchive, fileUnarchive, assetArchive, fileRevert, fileMetadataUpdate, fileRelocate). Blank or absent for legacy versions."
                             changeUserId:
                                 type: string
                                 description: "User (or SYSTEM_USER) that created this version. Blank or absent for legacy versions."

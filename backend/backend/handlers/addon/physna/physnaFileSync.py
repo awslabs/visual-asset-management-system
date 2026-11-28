@@ -33,6 +33,7 @@ from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
+from common.s3MetadataKeys import VAMS_CHANGE_SOURCE_METADATA_KEY, VAMS_CHANGE_SOURCE_RELOCATION_VALUES
 from common.assetLocations import object_key_for
 from common.fileAttribution import AMBIGUOUS, attribute_object, binding_of, stored_location
 from common.s3 import region_routing_s3_client
@@ -227,6 +228,7 @@ def _resolve_asset_from_s3_event(bucket_name: str, s3_key: str,
         "bucketName": bucket_name,
         "s3Key": s3_key,
         "assetDetails": attribution.asset_row,
+        "changeSource": str((head.get("Metadata") or {}).get(VAMS_CHANGE_SOURCE_METADATA_KEY) or ""),
     }
 
 
@@ -1191,6 +1193,17 @@ def _handle_s3_record(record: Dict[str, Any]) -> bool:
             resolved["assetId"],
             relative,
             skip_s3_existence_check=True,
+        )
+        return True
+
+    if resolved.get("changeSource") in VAMS_CHANGE_SOURCE_RELOCATION_VALUES:
+        # A relocation (the upgrade step that moves a single-file asset's file into its own folder)
+        # copies versions the file already held to a new key at the same asset path. The Physna copy is
+        # keyed by that path and holds the same bytes, so it is kept: a re-upload would re-run Physna's
+        # processing once per copied version.
+        logger.info(
+            f"Keeping the Physna copy of {resolved['databaseId']}/{resolved['assetId']}{relative}: "
+            f"the object was written by '{resolved['changeSource']}', which relocates a stored version."
         )
         return True
 

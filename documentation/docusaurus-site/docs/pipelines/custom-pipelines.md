@@ -348,7 +348,7 @@ An asset file's key is the asset's root key followed by the file's relative path
 `{assetRoot}{relative_path}/{filename}`, where the relative path has zero or more subdirectories. The
 root is usually `{baseAssetsPrefix}{assetId}/`. An asset created on an existing bucket folder
 (`bucketExistingKey`) keeps that folder as its root, so its keys need not contain the asset ID.
-An asset created from a single object key (a `bucketExistingKey` with no trailing `/`) holds that object at `/{file name}`, its companion folder `{key}/` and its previews; see [Files](../api/files.md#list-files).
+An asset created from a single object key before v2.7 (a `bucketExistingKey` that named a file, which v2.7 refuses), until the upgrade step `assetLocationFileToFolder` converts it to a folder asset, holds that object at `/{file name}`, its companion folder `{key}/` and its previews; see [Files](../api/files.md#list-files).
 
 The output paths point to the run's output folders, not to the asset. The process-output step writes
 each file it finds there to the same relative path within the asset.
@@ -507,8 +507,8 @@ Four behaviors are worth knowing:
     (`""` otherwise). A folder input (a `key` ending in `/`, or the whole asset) whose asset holds the
     location of another asset inside it also carries `excludeLocations`, those stored locations, in every step's manifest: their
     keys are the other assets' files, so a pipeline that lists the folder leaves out every key one of
-    them holds (a folder location holds every key under it; a single-file location its own key, the keys
-    under `{key}/` and its previews). Read S3 with `bucket`, through a client for `bucketRegion`
+    them holds (a folder location holds every key under it; a single-file location, which an asset
+    created on a file before v2.7 keeps until the upgrade converts it, its own key, the keys under `{key}/` and its previews). Read S3 with `bucket`, through a client for `bucketRegion`
     (`manifestHelper.s3_client_for_region`); the resolved inputs expose the first file's Region as
     `inputBucketRegion` and the output bucket's as `outputBucketRegion`. From the second step of a
     workflow on, an input that an earlier step rewrote is read from the run's output bucket, so its

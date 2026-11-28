@@ -73,6 +73,7 @@ from common.resourceNames import ResourceKeys, get_bucket_name, get_table_name
 from common.s3 import bucket_region_fields, list_all_object_versions, list_all_objects, region_routing_s3_client
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_RELOCATION_VALUES,
     VAMS_CHANGE_SOURCE_RESTORE_VALUES,
 )
 from common.assetLocations import object_key_for
@@ -692,6 +693,15 @@ def handle_s3_record(record: Dict[str, Any], bucket_name_hint: Optional[str],
     key_path = vector_file_key_path(file_path)
 
     if event_name.startswith('ObjectCreated'):
+        if change_source in VAMS_CHANGE_SOURCE_RELOCATION_VALUES:
+            # A relocation (the upgrade step that moves a single-file asset's file into its own folder)
+            # copies versions the file already held to a new key at the same asset path, and the writer
+            # moves the file's items to the copies' version ids itself. Nothing changes here: no item is
+            # flipped (an archived file stays archived until the writer's own delete marker says so), and
+            # no embedding is queued, even for a file with no item, which vectorBackfill embeds once.
+            logger.info(f"{pk}{key_path}: ObjectCreated by '{change_source}' relocates a stored version; "
+                        "the writer moves the file's items, nothing to do")
+            return Outcome(True, 'ignore', 'relocated version')
         if change_source in VAMS_CHANGE_SOURCE_RESTORE_VALUES:
             # An unarchive copies the file's newest content version forward under a new version id. The
             # items of that content are the file's latest ones already, and no run will embed the copy,

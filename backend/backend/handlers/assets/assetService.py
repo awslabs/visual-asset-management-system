@@ -41,6 +41,9 @@ from common.assetLocations import (
     UNARCHIVE_LOCATION_IN_USE_REFUSAL, NestedLocations, contains, fill_location_attributes, held_objects,
     is_folder_location, normalize_base_prefix, relative_path_in, unarchive_conflicts,
 )
+from common.assetLocationConversion import (
+    MOVE_PENDING_REFUSAL, MovedVersionsDeleteIncomplete, delete_moved_source_versions, is_pending_move,
+)
 from common.fileAttribution import nested_locations_of_asset
 from common.assetHistory import (
     CHANGE_SOURCE_EDIT,
@@ -1806,10 +1809,21 @@ def _delete_asset_objects_for_permanent_deletion(asset, bucket_name, database_id
     removes) and their auxiliary data, the asset keeps everything else, and the delete raises so it can
     be retried. Each key has its own asset-relative path, so a kept file keeps its records. The records
     are removed in batches, not one file at a time.
+
+    An asset a v2.6 to v2.7 ``move`` converted first loses the old versions the move left at its former file
+    key and previews, outside the location (``common.assetLocationConversion``): before the location, whose
+    copies name them, so a retry after a refused S3 call still finds them.
     """
     location = None
     removed_keys, kept_keys = [], []
     files_complete, complete = True, True
+
+    try:
+        deleted_items["s3_objects"].extend(delete_moved_source_versions(s3, bucket_name, asset))
+    except MovedVersionsDeleteIncomplete:
+        logger.error(f"Permanent delete of asset {asset_id} stopped with the asset kept: the old versions of "
+                     f"its moved file could not all be deleted")
+        raise VAMSGeneralErrorResponse(ASSET_DELETE_INCOMPLETE_MESSAGE)
 
     if "assetLocation" in asset and "Key" in asset["assetLocation"]:
         location = asset["assetLocation"]["Key"]
@@ -1884,6 +1898,11 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
 
     if not asset:
         raise VAMSAssetNotFoundResponse()
+
+    # A v2.6 to v2.7 move still copying the asset's file into its folder holds the file outside the location
+    # until it finishes; the delete waits for the upgrade step to finish it
+    if is_pending_move(asset):
+        raise VAMSGeneralErrorResponse(MOVE_PENDING_REFUSAL)
 
     #Get bucket details for asset
     bucketDetails = get_asset_bucket_details(asset)

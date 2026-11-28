@@ -34,7 +34,7 @@ class TestChangeProvenanceKeys:
             "direct", "upload", "workflowExecution", "fileCopy",
             "fileMove", "fileRename", "fileArchive", "fileUnarchive",
             "assetArchive", "assetUnarchive", "fileRevert",
-            "fileMetadataUpdate",
+            "fileMetadataUpdate", "fileRelocate",
         })
 
     def test_provenance_keys_are_system_excluded(self):

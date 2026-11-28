@@ -44,6 +44,8 @@ from common.dynamodb import query_all_items
 from common.s3MetadataKeys import (
     SEARCHABLE_VAMS_METADATA_KEYS,
     is_system_metadata_key,
+    VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_RELOCATION_VALUES,
 )
 from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
@@ -773,6 +775,16 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
         asset_id = attribution.asset_id
         asset_details = attribution.asset_row
         relative_path = attribution.relative_path
+
+        change_source = (s3_response.get('Metadata') or {}).get(VAMS_CHANGE_SOURCE_METADATA_KEY)
+        if event_name.startswith('ObjectCreated') and change_source in VAMS_CHANGE_SOURCE_RELOCATION_VALUES:
+            # A relocation (the upgrade step that moves a single-file asset's file into its own folder) copies
+            # every version the file held to a new key at the same asset path. The entity is keyed by that
+            # path; the step's search re-index of the path, through the file metadata stream, sends it once
+            # with the new key and the newest version, so no entity is sent per copied version here.
+            logger.info(f"Not sending {database_id}/{asset_id}{relative_path} to Garnet: the object was "
+                        f"written by '{change_source}', which relocates a stored version")
+            return True
 
         # Get bucket details
         bucket_details = get_bucket_details(asset_details.get('bucketId'))
